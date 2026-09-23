@@ -6,6 +6,8 @@ import { RailTile } from './index';
 describe('RailTile', () => {
   it('marks the active route', () => {
     render(<RailTile active icon={MessagesSquare} label="Chats" />);
-    expect(screen.getByRole('button', { name: 'Chats' }).getAttribute('aria-current')).toBe('page');
+    const button = screen.getByRole('button', { name: 'Chats' });
+    expect(button.getAttribute('aria-current')).toBe('page');
+    expect(button.className).toContain('text-[10.5px]');
   });
 });

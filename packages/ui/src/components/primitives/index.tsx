@@ -1,4 +1,4 @@
-import { useId, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { useId, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { siGithub, siSupabase } from 'simple-icons';
 import { BadgeCheck, Plus, Sparkles } from 'lucide-react';
@@ -156,17 +156,19 @@ export function BrandIcon({
 }) {
   const icon = brandIcons[slug.toLowerCase()];
   const name = label ?? slug;
+  const style = icon ? ({ '--brand': `#${icon.hex}` } as CSSProperties) : undefined;
   return (
     <span
       aria-label={name}
       className={cn(
-        'inline-flex size-6 shrink-0 items-center justify-center rounded-full border border-border-hair bg-white/[0.06] text-text-1',
+        'inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-border-hair bg-white/[0.06] text-[var(--brand,var(--text-1))]',
         className,
       )}
       role="img"
+      style={style}
     >
       {icon ? (
-        <svg aria-hidden="true" className="size-[14px] fill-current" viewBox="0 0 24 24">
+        <svg aria-hidden="true" className="size-4 fill-current" viewBox="0 0 24 24">
           <path d={icon.path} />
         </svg>
       ) : (

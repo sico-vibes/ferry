@@ -7,6 +7,10 @@ describe('SidebarItem', () => {
   it('supports active state and a separate menu action', () => {
     const action = vi.fn();
     render(<SidebarItem active icon={Lightbulb} label="Best Available" onClick={action} />);
+    expect(screen.getByText('Best Available').className).toContain('truncate');
+    expect(
+      screen.getByRole('button', { name: 'Best Available' }).parentElement?.className,
+    ).toContain('text-[13px]');
     expect(
       screen.getByRole('button', { name: 'Best Available' }).getAttribute('aria-current'),
     ).toBe('true');
