@@ -226,3 +226,43 @@ Hover: +4% white overlay. Press: scale .98. Focus: 2px ring `--blue-500` @40% + 
 - [ ] Hero: white logo tile, circuit traces with 2 accent nodes, gradient headline, dotted grid fade.
 - [ ] No raw color literals in components (lint).
 - [ ] 125% and 150% scaling screenshots have no clipping/overflow.
+
+## 7. Extending the DNA (rules for every screen not in the reference)
+
+The reference covers Home only. Everything else Ferry grows into must look like it was always part of it. Follow these patterns; if a new need doesn't fit, extend this section first, then build.
+
+### 7.1 Page pattern
+Canvas → **page header** (title `15/22 600` + subtitle `13 text-2` + one primary action pill on the right; optional pill sub-nav under it) → **section cards** (`--bg-card`, hairline, radius 14, padding 16, section title `12/16 500 text-2`). Settings-style pages add a 240px left nav inside the canvas. Explore, Library, Settings, Onboarding all use this.
+
+### 7.2 Status semantics (fixed meanings, everywhere: UI + CLI)
+| Meaning | Color | Examples |
+|---|---|---|
+| Done / healthy | `--success` | tool ✓, provider ok, gate passed |
+| Active / info / primary | `--blue-500` | running, selected, links, focus |
+| Needs attention / warning | `--warn` | awaiting approval, low capacity, ≥80% quota |
+| Failed / destructive | `--danger` | tool ✗, key invalid, delete |
+| Learned / estimated data | `--brand-lilac` (dot only) | confidence "learned" |
+| Neutral / idle | `--text-3` | disabled, unknown |
+
+### 7.3 Data display
+Numbers use `tabular-nums`; changing counts animate (`CountUp`); compact formats (1.2K, 820K, $3.40). Quotas are always **bar + used/limit + reset countdown + confidence dot** (`QuotaWindowBar`). Times: relative under 7 days ("2m ago"), absolute after ("Oct 2, 2:05 PM").
+
+### 7.4 Emphasis budget
+The five gradient places (§1.2) never grow. New emphasis comes from, in order: blue accent → glow line (§2.8 recipe) → motion (subtle, reduced-motion aware) → size/weight. Brand violet stays on the logo (§2.9).
+
+### 7.5 Density & scale
+Two densities: **comfortable** (default, reference spacing) and **compact** (row heights −25%, panel padding 12, chat 13.5/22) for long agent runs. Long transcripts **group** consecutive tool calls into one collapsible summary row ("Explored 14 files · edited 3 · ran tests ✓") — expanded on demand, auto-expanded on failure or approval.
+
+### 7.6 Structural patterns (added as features require them)
+- **Tab status dots:** running (blue pulse), awaiting approval (amber), done (none), failed (red); approvals from background tabs raise a badge on the tab + an approvals tray.
+- **Repo context pill:** every session shows `repo · branch` (GitBranch icon, 12px) in the canvas header next to the model picker.
+- **Resizable right panel** (300–560px, drag handle = hairline that glows blue on hover) and a **bottom panel** (terminal, logs; 200–480px) toggled with Ctrl+`.
+- **Full-canvas review mode** for diffs and delegation results (Monaco diff inside the canvas, file list on the left, Accept/Reject/Rework bar on top).
+- **Contextual left sidebar:** its content follows the rail — Chats (profiles + integrations), Library (workspace tree), Explore (provider list); the right panel stays per-session (Chats · Plan · Changes).
+- **Compact Home:** after the first sessions exist, Home leads with the composer + "Continue" cards; the full hero shows on first run and empty states (setting to keep it).
+
+### 7.7 Accessibility floor
+Body/meta text on any surface must reach 4.5:1 (AA). `--text-3` may be lifted slightly to meet it on `--bg-canvas`; decorative text (disclaimers) keeps ≥ 4.5:1 too. Every icon-only control has an `aria-label`; focus ring per §4.13.
+
+### 7.8 CLI translation
+The CLI reuses the palette via truecolor: blue accent, §7.2 status colors, muted gray for secondary; the signature gradient appears only in the startup banner; the capacity ring becomes `≈ 420 steps ▰▰▰▰▰▰▱▱▱ 64%`.
