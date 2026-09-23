@@ -17,3 +17,6 @@ test-results/
 playwright-report/
 .DS_Store
 Thumbs.db
+
+# Third-party design references (not ours to redistribute) - local only
+design/reference/
