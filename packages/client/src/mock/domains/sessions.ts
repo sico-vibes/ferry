@@ -101,7 +101,7 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
           signal: ctrl.signal,
         })
         .then(() => {
-          if (!ctrl.signal.aborted) {
+          if (!ctrl.signal.aborted && s.status === 'running') {
             s.status = 'idle';
             s.updatedAt = clock.now().toISOString();
             updateSession(s);

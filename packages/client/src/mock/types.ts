@@ -36,4 +36,9 @@ export interface MockStore extends MockState {
     sessionId: import('@ferry/shared').SessionId,
     partId: import('@ferry/shared').PartId,
   ): Promise<'allowed_once' | 'allowed_always' | 'denied'>;
+  startDelegation(
+    sessionId: import('@ferry/shared').SessionId,
+    lane: string,
+    brief: string,
+  ): Promise<DelegationRun>;
 }

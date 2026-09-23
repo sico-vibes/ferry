@@ -179,6 +179,31 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
     waitForApproval(sessionId, partId) {
       return new Promise((resolve) => approvalWaiters.set(`${sessionId}:${partId}`, resolve));
     },
+    startDelegation(sessionId, laneName, brief) {
+      const lane = state.lanes.find((candidate) => candidate.name === laneName);
+      if (!lane) throw new MockNotFoundError('Lane', laneName);
+      const delegation: DelegationRun = {
+        id: newId('run') as RunId,
+        sessionId,
+        lane: lane.name,
+        implementer: lane.implementer,
+        brief,
+        status: 'queued',
+        startedAt: clock.now().toISOString(),
+        finishedAt: null,
+        progress: [],
+        finalMessage: null,
+        touchedFiles: [],
+        gateResults: [],
+        usage: null,
+        decision: null,
+      };
+      state.delegationRuns.push(delegation);
+      scheduleRun(delegation);
+      emit('delegation.updated', delegation);
+      persist();
+      return Promise.resolve(structuredClone(delegation));
+    },
   };
   const syncStore = () => Object.assign(store, state);
   const approvalWaiters = new Map<
