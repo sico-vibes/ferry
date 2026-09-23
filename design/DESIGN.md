@@ -3,6 +3,7 @@
 > Every UI brief references sections of this file. **Numbers here win over your eyes; the reference images win over your taste.**
 > References: `design/reference/home-left.png`, `design/reference/home-right.png` (two halves of one wide composition, each 736×920).
 > Zoomed crops (2×): `design/reference/crops/*.png` — open the ones named in your brief with your image viewer.
+> **The reference images are third-party work and are NOT in git** (`design/reference/` is gitignored). They exist only in the local checkout at `C:\dev\ferry\design\reference\`. Regenerate crops with `python scripts/crop_reference.py`.
 > Not part of the app: the browser chrome (traffic lights, URL bar), the device bezel, the `@SIREN.UIX` watermark, and the resource list (lucide.dev, heroicons…) on the right of image 2.
 
 ---
