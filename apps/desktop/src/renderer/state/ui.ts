@@ -15,6 +15,47 @@ export type SettingsSection =
   | 'About';
 export const clampRightWidth = (width: number) => Math.min(560, Math.max(300, width));
 export const clampBottomHeight = (height: number) => Math.min(480, Math.max(200, height));
+interface PersistedLayout {
+  leftCollapsed: boolean;
+  rightCollapsed: boolean;
+  rightWidth: number;
+  bottomOpen: boolean;
+  bottomHeight: number;
+  bottomTab: 'terminal' | 'agent-log';
+}
+const DEFAULT_LAYOUT: PersistedLayout = {
+  leftCollapsed: false,
+  rightCollapsed: false,
+  rightWidth: 300,
+  bottomOpen: false,
+  bottomHeight: 260,
+  bottomTab: 'terminal',
+};
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+export function parsePersistedLayout(value: unknown): PersistedLayout {
+  if (!isRecord(value)) return DEFAULT_LAYOUT;
+  const boolKeys = ['leftCollapsed', 'rightCollapsed', 'bottomOpen'] as const;
+  const numericKeys = ['rightWidth', 'bottomHeight'] as const;
+  const invalidBoolean = boolKeys.some((key) => key in value && typeof value[key] !== 'boolean');
+  const invalidNumber = numericKeys.some(
+    (key) => key in value && (typeof value[key] !== 'number' || !Number.isFinite(value[key])),
+  );
+  const invalidTab =
+    'bottomTab' in value && value.bottomTab !== 'terminal' && value.bottomTab !== 'agent-log';
+  if (invalidBoolean || invalidNumber || invalidTab) return DEFAULT_LAYOUT;
+  return {
+    leftCollapsed: typeof value.leftCollapsed === 'boolean' ? value.leftCollapsed : false,
+    rightCollapsed: typeof value.rightCollapsed === 'boolean' ? value.rightCollapsed : false,
+    rightWidth: clampRightWidth(typeof value.rightWidth === 'number' ? value.rightWidth : 300),
+    bottomOpen: typeof value.bottomOpen === 'boolean' ? value.bottomOpen : false,
+    bottomHeight: clampBottomHeight(
+      typeof value.bottomHeight === 'number' ? value.bottomHeight : 260,
+    ),
+    bottomTab: value.bottomTab === 'agent-log' ? 'agent-log' : 'terminal',
+  };
+}
 export interface OpenTab {
   id: SessionId;
   title: string;
@@ -46,6 +87,7 @@ interface UIState {
   setSettingsSection: (section: SettingsSection) => void;
   setSelectedWorkspace: (id: string | null) => void;
   setExploreFilter: (filter: 'All' | 'Free' | 'Paid' | 'CLI') => void;
+  resetLayout: () => void;
 }
 interface PersistedUI {
   tabs: OpenTab[];
@@ -61,12 +103,14 @@ interface PersistedUI {
 function readPersisted(): Partial<PersistedUI> {
   try {
     const value = localStorage.getItem('ferry.ui');
-    return value ? (JSON.parse(value) as Partial<PersistedUI>) : {};
+    const parsed: unknown = value ? JSON.parse(value) : {};
+    return isRecord(parsed) ? parsed : {};
   } catch {
     return {};
   }
 }
 const saved = typeof localStorage === 'undefined' ? {} : readPersisted();
+const savedLayout = parsePersistedLayout(saved);
 function persist(state: UIState): void {
   try {
     localStorage.setItem(
@@ -99,13 +143,8 @@ export const useUI = create<UIState>((set) => {
   return {
     tabs: saved.tabs ?? [],
     activeId: saved.activeId ?? null,
-    leftCollapsed: saved.leftCollapsed ?? false,
-    rightCollapsed: saved.rightCollapsed ?? false,
+    ...savedLayout,
     rightTab: saved.rightTab ?? 'chats',
-    rightWidth: clampRightWidth(saved.rightWidth ?? 300),
-    bottomOpen: saved.bottomOpen ?? false,
-    bottomHeight: clampBottomHeight(saved.bottomHeight ?? 260),
-    bottomTab: saved.bottomTab ?? 'terminal',
     settingsSection: 'General',
     selectedWorkspaceId: null,
     exploreFilter: 'All',
@@ -158,6 +197,9 @@ export const useUI = create<UIState>((set) => {
     },
     setExploreFilter: (exploreFilter) => {
       update(() => ({ exploreFilter }));
+    },
+    resetLayout: () => {
+      update(() => ({ ...DEFAULT_LAYOUT }));
     },
   };
 });

@@ -106,6 +106,26 @@ try {
     });
     await page.screenshot({ path: join(screenshotDirectory, 'empty-states.png'), fullPage: false });
     await page.close();
+    const collapsedPage = await browser.newPage({
+      viewport: { width: 1440, height: 900 },
+      deviceScaleFactor: 1,
+      reducedMotion: 'reduce',
+    });
+    await collapsedPage.goto(url);
+    await collapsedPage.getByRole('button', { name: 'Collapse sidebar' }).waitFor();
+    await collapsedPage.getByRole('button', { name: 'Collapse sidebar' }).click();
+    await collapsedPage.getByRole('button', { name: 'Show sidebar' }).waitFor();
+    await collapsedPage.screenshot({
+      path: join(screenshotDirectory, 'collapsed-left.png'),
+      fullPage: false,
+    });
+    await collapsedPage.getByRole('button', { name: 'Collapse right panel' }).click();
+    await collapsedPage.getByRole('button', { name: 'Show panel' }).waitFor();
+    await collapsedPage.screenshot({
+      path: join(screenshotDirectory, 'collapsed-both.png'),
+      fullPage: false,
+    });
+    await collapsedPage.close();
   } finally {
     await browser.close();
   }

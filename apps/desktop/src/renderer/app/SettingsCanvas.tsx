@@ -736,6 +736,16 @@ export function SettingsCanvas() {
           <h1>Settings</h1>
           <p>Control how Ferry works across your workspaces.</p>
         </div>
+        {section === 'General' && (
+          <Pill
+            onClick={() => {
+              useUI.getState().resetLayout();
+            }}
+            variant="outline"
+          >
+            Reset layout
+          </Pill>
+        )}
       </header>
       <main className="settings-content settings-content-framed">{body()}</main>
       <Dialog

@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
-import { FileText } from 'lucide-react';
+import { FileText, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
 import { TabsBar, Toaster, TopRightCluster } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { useFerryEvents } from '../data/events';
@@ -144,59 +144,89 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       >
         <Sidebar activeNav={activeNav} />
         <main className="center-column">
-          <TabsBar
-            tabs={tabItems}
-            activeId={currentId}
-            onSelect={(id) => {
-              if (id === 'home') {
-                void navigate({ to: '/' });
-                return;
-              }
-              setActive(id as (typeof tabs)[number]['id']);
-              void navigate({ to: '/s/$sessionId', params: { sessionId: id } });
-            }}
-            {...(homeTab
-              ? {}
-              : {
-                  onClose: (id: string) => {
-                    closeTab(id as (typeof tabs)[number]['id']);
-                  },
-                })}
-            onAdd={() => void createChat()}
-            rightCluster={
-              <div className="top-cluster-with-terminal">
-                {!fullCanvasPage && (
-                  <button
-                    aria-label={bottomOpen ? 'Close terminal panel' : 'Open terminal panel'}
-                    className="header-icon"
-                    onClick={() => {
-                      useUI.getState().toggleBottom();
+          <div
+            className={`tabs-bar-frame ${leftCollapsed && !fullCanvasPage ? 'with-sidebar-toggle' : ''}`}
+          >
+            {!fullCanvasPage && leftCollapsed && (
+              <button
+                aria-label="Show sidebar"
+                className="header-icon"
+                onClick={() => {
+                  useUI.getState().toggleLeft();
+                }}
+                title="Show sidebar · Ctrl+B"
+                type="button"
+              >
+                <PanelLeftOpen aria-hidden="true" size={15} />
+              </button>
+            )}
+            <TabsBar
+              tabs={tabItems}
+              activeId={currentId}
+              onSelect={(id) => {
+                if (id === 'home') {
+                  void navigate({ to: '/' });
+                  return;
+                }
+                setActive(id as (typeof tabs)[number]['id']);
+                void navigate({ to: '/s/$sessionId', params: { sessionId: id } });
+              }}
+              {...(homeTab
+                ? {}
+                : {
+                    onClose: (id: string) => {
+                      closeTab(id as (typeof tabs)[number]['id']);
+                    },
+                  })}
+              onAdd={() => void createChat()}
+              rightCluster={
+                <div className="top-cluster-with-terminal">
+                  {!fullCanvasPage && (
+                    <button
+                      aria-label={bottomOpen ? 'Close terminal panel' : 'Open terminal panel'}
+                      className="header-icon"
+                      onClick={() => {
+                        useUI.getState().toggleBottom();
+                      }}
+                      title="Terminal (Ctrl+`)"
+                    >
+                      <FileText size={15} />
+                    </button>
+                  )}
+                  <TopRightCluster
+                    onAccount={() => void navigate({ to: '/settings' })}
+                    onConfiguration={() => {
+                      pushToast({
+                        kind: 'info',
+                        title: 'Configuration',
+                        body: 'Configuration controls arrive in a later update.',
+                      });
                     }}
-                    title="Terminal (Ctrl+`)"
-                  >
-                    <FileText size={15} />
-                  </button>
-                )}
-                <TopRightCluster
-                  onAccount={() => void navigate({ to: '/settings' })}
-                  onConfiguration={() => {
-                    pushToast({
-                      kind: 'info',
-                      title: 'Configuration',
-                      body: 'Configuration controls arrive in a later update.',
-                    });
-                  }}
-                  onShare={() => {
-                    pushToast({
-                      kind: 'success',
-                      title: 'Share',
-                      body: 'There is nothing to share yet.',
-                    });
-                  }}
-                />
-              </div>
-            }
-          />
+                    onShare={() => {
+                      pushToast({
+                        kind: 'success',
+                        title: 'Share',
+                        body: 'There is nothing to share yet.',
+                      });
+                    }}
+                  />
+                  {!fullCanvasPage && rightCollapsed && (
+                    <button
+                      aria-label="Show panel"
+                      className="header-icon"
+                      onClick={() => {
+                        useUI.getState().toggleRight();
+                      }}
+                      title="Show panel · Ctrl+Shift+B"
+                      type="button"
+                    >
+                      <PanelRightOpen aria-hidden="true" size={15} />
+                    </button>
+                  )}
+                </div>
+              }
+            />
+          </div>
           {settings?.developer.injectErrors && (
             <div className="offline-warning" role="status">
               Offline · showing saved demo data

@@ -30,6 +30,33 @@ try {
     await expect
       .poll(async () => (await page.locator('.right-panel').boundingBox())?.width)
       .toBeGreaterThan(rightBefore.width + 40);
+    const gridColumns = () =>
+      page
+        .locator('.app-grid')
+        .evaluate(
+          (element) => getComputedStyle(element).gridTemplateColumns.trim().split(/\s+/).length,
+        );
+    await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+    await expect(page.getByRole('button', { name: 'Show sidebar' })).toBeVisible();
+    await expect.poll(gridColumns).toBe(3);
+    await expect
+      .poll(async () => (await page.locator('.center-column').boundingBox())?.width)
+      .toBeGreaterThan(650);
+    await page.getByRole('button', { name: 'Show sidebar' }).click();
+    await page.getByRole('button', { name: 'Collapse right panel' }).click();
+    await expect(page.getByRole('button', { name: 'Show panel' })).toBeVisible();
+    await expect.poll(gridColumns).toBe(3);
+    await expect
+      .poll(async () => (await page.locator('.center-column').boundingBox())?.width)
+      .toBeGreaterThan(650);
+    await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+    await expect.poll(gridColumns).toBe(2);
+    await expect
+      .poll(async () => (await page.locator('.center-column').boundingBox())?.width)
+      .toBeGreaterThan(1100);
+    await page.getByRole('button', { name: 'Show sidebar' }).click();
+    await page.getByRole('button', { name: 'Show panel' }).click();
+    await expect(page.getByRole('button', { name: 'Collapse right panel' })).toBeVisible();
     await page
       .getByRole('textbox', { name: 'Message Ferry' })
       .fill('Switch models after quota handoff');

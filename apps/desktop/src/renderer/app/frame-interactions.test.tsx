@@ -7,7 +7,7 @@ import { useFerryEvents } from '../data/events';
 import { Sidebar } from './Sidebar';
 import { RightPanel } from './right-panel/RightPanel';
 import { useUI } from '../state/ui';
-import { clampBottomHeight, clampRightWidth } from '../state/ui';
+import { clampBottomHeight, clampRightWidth, parsePersistedLayout } from '../state/ui';
 import { mockShellOutput } from './BottomPanel';
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -62,6 +62,48 @@ describe('desktop frame interactions', () => {
       bottomOpen?: boolean;
     };
     expect(persisted).toMatchObject({ rightWidth: 410, bottomHeight: 330, bottomOpen: true });
+  });
+
+  it('validates persisted layout values and restores the default layout', () => {
+    expect(
+      parsePersistedLayout({
+        leftCollapsed: true,
+        rightCollapsed: false,
+        rightWidth: 900,
+        bottomOpen: true,
+        bottomHeight: 140,
+        bottomTab: 'agent-log',
+      }),
+    ).toEqual({
+      leftCollapsed: true,
+      rightCollapsed: false,
+      rightWidth: 560,
+      bottomOpen: true,
+      bottomHeight: 200,
+      bottomTab: 'agent-log',
+    });
+    expect(parsePersistedLayout({ leftCollapsed: 'collapsed', rightWidth: Number.NaN })).toEqual({
+      leftCollapsed: false,
+      rightCollapsed: false,
+      rightWidth: 300,
+      bottomOpen: false,
+      bottomHeight: 260,
+      bottomTab: 'terminal',
+    });
+
+    useUI.getState().toggleLeft();
+    useUI.getState().toggleRight();
+    useUI.getState().setRightWidth(480);
+    useUI.getState().toggleBottom();
+    useUI.getState().resetLayout();
+    expect(useUI.getState()).toMatchObject({
+      leftCollapsed: false,
+      rightCollapsed: false,
+      rightWidth: 300,
+      bottomOpen: false,
+      bottomHeight: 260,
+      bottomTab: 'terminal',
+    });
   });
 
   it('returns canned output from the mock shell', () => {
