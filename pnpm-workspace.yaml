@@ -1,5 +1,8 @@
 packages:
-  - 'apps/*'
-  - 'packages/*'
+  - "apps/*"
+  - "packages/*"
 onlyBuiltDependencies:
   - unrs-resolver
+  - esbuild
+  - "@swc/core"
+  - electron
