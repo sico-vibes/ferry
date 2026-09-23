@@ -27,10 +27,14 @@ export function useFerryEvents(): void {
         'session.delta',
         ({ sessionId }) => void cache.invalidateQueries({ queryKey: keys.session(sessionId) }),
       ),
+      client.on('task.updated', (task) => {
+        void cache.invalidateQueries({ queryKey: keys.session(task.sessionId) });
+      }),
       client.on('provider.updated', (provider) => {
         pushToast({ kind: 'info', title: `${provider.name} updated`, body: null });
       }),
       client.on('delegation.updated', (run) => {
+        void cache.invalidateQueries({ queryKey: ['delegation', run.sessionId] });
         pushToast({ kind: 'info', title: `Delegation ${run.status}`, body: run.lane });
       }),
       client.on('toast', pushToast),

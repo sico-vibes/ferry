@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { FileText } from 'lucide-react';
-import { TabsBar, TopRightCluster } from '@ferry/ui';
+import { TabsBar, Toaster, TopRightCluster } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { useFerryEvents } from '../data/events';
 import { keys, useSessions } from '../data/queries';
@@ -153,24 +153,13 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
         </main>
         {!rightCollapsed && <RightPanel onNewChat={() => void createChat()} />}
       </div>
-      <div aria-live="polite" className="toast-stack">
-        {toastItems.map((toast) => (
-          <div className={`toast toast-${toast.kind}`} key={toast.id}>
-            <div>
-              <strong>{toast.title}</strong>
-              {toast.body && <p>{toast.body}</p>}
-            </div>
-            <button
-              aria-label="Dismiss notification"
-              onClick={() => {
-                dismissToast(toast.id);
-              }}
-            >
-              ×
-            </button>
-          </div>
-        ))}
-      </div>
+      <Toaster
+        messages={toastItems.map((toast) => ({
+          id: String(toast.id),
+          kind: toast.kind,
+          text: toast.body ? `${toast.title}: ${toast.body}` : toast.title,
+        }))}
+      />
     </div>
   );
 }

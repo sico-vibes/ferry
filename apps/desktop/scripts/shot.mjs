@@ -22,14 +22,23 @@ try {
       });
       await page.goto(url);
       await page.getByText('Saved topics').waitFor();
-      await page.getByText('Best Available').waitFor();
+      await page.getByRole('main').getByRole('button', { name: 'Best Available' }).waitFor();
       await page.getByRole('img', { name: /capacity remaining/i }).waitFor();
       await page.evaluate(() => document.fonts.ready);
-      const suffix = scale === 1 ? '' : '@1.25';
       await page.screenshot({
-        path: join(screenshotDirectory, `home-frame${suffix}.png`),
+        path: join(screenshotDirectory, scale === 1 ? 'home.png' : 'home@1.25.png'),
         fullPage: false,
       });
+      if (scale === 1) {
+        await page.getByRole('textbox', { name: 'Message Ferry' }).fill('Fix the flaky tests');
+        await page.getByRole('button', { name: 'Send' }).click();
+        await page.getByRole('button', { name: 'Allow once' }).waitFor();
+        await page.getByRole('button', { name: 'Allow once' }).click();
+        await page.getByText(/Checkpoint/).waitFor();
+        await page.getByText(/No unrelated files changed/i).waitFor();
+        await page.getByRole('button', { name: 'Stop' }).waitFor({ state: 'detached' });
+        await page.screenshot({ path: join(screenshotDirectory, 'session.png'), fullPage: false });
+      }
       await page.close();
     }
   } finally {

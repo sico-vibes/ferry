@@ -1,10 +1,20 @@
 import { useMemo, useRef, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { MessageCircle, MoreHorizontal, PanelRight, Search, Share2, Star } from 'lucide-react';
+import {
+  Check,
+  FileCode2,
+  ListChecks,
+  MessageCircle,
+  MoreHorizontal,
+  PanelRight,
+  Search,
+  Share2,
+  Star,
+} from 'lucide-react';
 import { IconButton, KbdChip, NewChatButton } from '@ferry/ui';
 import { useFerryClient } from '../../data/client';
-import { keys, useSessions } from '../../data/queries';
+import { keys, useSessionDetail, useSessions } from '../../data/queries';
 import { useUI } from '../../state/ui';
 
 export function editedAt(iso: string, now = Date.now()): string {
@@ -31,6 +41,10 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
   const { data: sessions = [] } = useSessions(search);
   const openTab = useUI((state) => state.openTab);
   const toggleRight = useUI((state) => state.toggleRight);
+  const rightTab = useUI((state) => state.rightTab);
+  const setRightTab = useUI((state) => state.setRightTab);
+  const activeId = useUI((state) => state.activeId);
+  const { data: activeSession } = useSessionDetail(activeId ?? ('' as never));
   const setStar = useMutation({
     mutationFn: ({ id, starred }: { id: (typeof sessions)[number]['id']; starred: boolean }) =>
       client.sessions.setStarred(id, starred),
@@ -109,12 +123,163 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
         />
         <KbdChip>Ctrl F</KbdChip>
       </label>
+      <nav aria-label="Right panel tabs" className="right-tabs">
+        {(['chats', 'plan', 'changes'] as const).map((tab) => (
+          <button
+            aria-current={rightTab === tab ? 'page' : undefined}
+            className={rightTab === tab ? 'right-tab active' : 'right-tab'}
+            key={tab}
+            onClick={() => {
+              setRightTab(tab);
+            }}
+            type="button"
+          >
+            {tab === 'chats' ? 'Chats' : tab === 'plan' ? 'Plan' : 'Changes'}
+          </button>
+        ))}
+      </nav>
       <div className="right-panel-scroll">
-        {section('Saved topics', saved, true)}
-        <div className="blue-separator" />
-        {section('Recent chats', recent, false)}
-        {sessions.length === 0 && <p className="empty-search">No chats match that search.</p>}
+        {rightTab === 'chats' && (
+          <>
+            {section('Saved topics', saved, true)}
+            <div className="blue-separator" />
+            {section('Recent chats', recent, false)}
+            {sessions.length === 0 && <p className="empty-search">No chats match that search.</p>}
+          </>
+        )}
+        {rightTab === 'plan' && (
+          <section className="task-panel">
+            <h2>
+              <ListChecks size={14} /> Plan
+            </h2>
+            {activeSession?.taskRecord ? (
+              <>
+                <p className="task-goal">{activeSession.taskRecord.goal}</p>
+                <ol>
+                  {activeSession.taskRecord.plan.map((item) => (
+                    <li key={item.id} className={`task-item task-${item.status}`}>
+                      <span>
+                        {item.status === 'done' ? (
+                          <Check size={13} />
+                        ) : item.status === 'doing' ? (
+                          '◉'
+                        ) : (
+                          '○'
+                        )}
+                      </span>
+                      {item.text}
+                    </li>
+                  ))}
+                </ol>
+                {!!activeSession.taskRecord.decisions.length && (
+                  <>
+                    <h3>Decisions</h3>
+                    {activeSession.taskRecord.decisions.map((item) => (
+                      <p className="task-detail" key={item.text}>
+                        {item.text}
+                        <small>{item.why}</small>
+                      </p>
+                    ))}
+                  </>
+                )}
+                {!!activeSession.taskRecord.touchedFiles.length && (
+                  <>
+                    <h3>Touched files</h3>
+                    {activeSession.taskRecord.touchedFiles.map((item) => (
+                      <p className="task-detail" key={item.path}>
+                        <code>{item.path}</code>
+                        <small>{item.purpose}</small>
+                      </p>
+                    ))}
+                  </>
+                )}
+                {activeSession.taskRecord.nextStep && (
+                  <p className="task-next">
+                    <b>Next</b>
+                    {activeSession.taskRecord.nextStep}
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="empty-search">Open a session to see its live plan.</p>
+            )}
+          </section>
+        )}
+        {rightTab === 'changes' && <ChangesPanel detail={activeSession} />}
       </div>
     </aside>
+  );
+}
+
+function ChangesPanel({ detail }: { detail: ReturnType<typeof useSessionDetail>['data'] }) {
+  const [selected, setSelected] = useState<{
+    path: string;
+    before: string | null;
+    after: string | null;
+  } | null>(null);
+  const client = useFerryClient();
+  const { data: runs = [] } = useQuery({
+    queryKey: ['delegation', detail?.session.id],
+    queryFn: () => (detail ? client.delegation.runs(detail.session.id) : Promise.resolve([])),
+    enabled: Boolean(detail?.session.id),
+  });
+  const changes =
+    detail?.messages.flatMap((message) =>
+      message.parts.flatMap((part) => (part.type === 'tool_call' ? part.changes : [])),
+    ) ?? [];
+  const delegated = runs.flatMap((run) =>
+    run.touchedFiles.map((file) => ({
+      path: file.path,
+      status: 'modified' as const,
+      additions: 0,
+      deletions: 0,
+      before: null,
+      after: null,
+    })),
+  );
+  const unique = [
+    ...new Map([...changes, ...delegated].map((change) => [change.path, change])).values(),
+  ];
+  return (
+    <section className="task-panel">
+      <h2>
+        <FileCode2 size={14} /> Changes <span>{unique.length}</span>
+      </h2>
+      {unique.length ? (
+        unique.map((change) => (
+          <button
+            className="change-row"
+            key={change.path}
+            onClick={() => {
+              setSelected(change);
+            }}
+          >
+            <code>{change.path}</code>
+            <span className="text-success">+{change.additions}</span>
+            <span className="text-danger">−{change.deletions}</span>
+          </button>
+        ))
+      ) : (
+        <p className="empty-search">No changed files yet.</p>
+      )}
+      {selected && (
+        <div className="diff-view">
+          <header>
+            <strong>{selected.path}</strong>
+            <button
+              onClick={() => {
+                setSelected(null);
+              }}
+            >
+              Close
+            </button>
+          </header>
+          <div>
+            <pre>{selected.before ?? 'New file'}</pre>
+            <pre>{selected.after ?? 'File removed'}</pre>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }

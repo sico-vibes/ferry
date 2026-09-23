@@ -14,11 +14,37 @@ try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.goto(url);
     await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
-    await expect(page.getByText('Best Available')).toBeVisible();
+    await expect(
+      page.getByRole('main').getByRole('button', { name: 'Best Available' }),
+    ).toBeVisible();
     await expect(page.getByText('Saved topics')).toBeVisible();
     await expect(page.getByRole('img', { name: /capacity remaining/i })).toBeVisible();
-    await page.keyboard.press('Control+n');
-    await expect(page.locator('[role="tablist"] [role="tab"]')).toHaveCount(1);
+    await page
+      .getByRole('textbox', { name: 'Message Ferry' })
+      .fill('Switch models after quota handoff');
+    await page.getByRole('button', { name: 'Send' }).click();
+    await expect(page.getByRole('button', { name: /Switched.*nvidia/ })).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page.getByText(/retry policy is now centralized/i)).toBeVisible({
+      timeout: 10_000,
+    });
+    await page.getByRole('textbox', { name: 'Message Ferry' }).fill('Fix the flaky tests');
+    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: 'Allow once' }).click({ timeout: 10_000 });
+    await expect(page.getByText(/Checkpoint/)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/full suite passed/i).last()).toBeVisible({ timeout: 10_000 });
+    const title = await page.locator('[role="tablist"] [role="tab"]').first().innerText();
+    await page
+      .getByRole('button', { name: `Save ${title}` })
+      .first()
+      .click();
+    await page
+      .getByRole('navigation', { name: 'Right panel tabs' })
+      .getByRole('button', { name: 'Chats' })
+      .click();
+    await expect(page.getByText('Saved topics')).toBeVisible();
+    await expect(page.getByRole('button', { name: `Unsave ${title}` }).first()).toBeVisible();
   } finally {
     await browser.close();
   }

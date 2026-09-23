@@ -80,7 +80,9 @@ describe('desktop frame interactions', () => {
     const updated = await client.quota.capacity();
     if (updated.stepsLeftToday === capacity.stepsLeftToday)
       throw new Error('Expected the test quota to change');
-    await screen.findByText(`≈ ${String(updated.stepsLeftToday)} steps left today`);
+    await screen.findByRole('button', {
+      name: new RegExp(`${String(updated.stepsLeftToday)} steps left today`),
+    });
   });
 
   it('filters chats from the right panel search field', async () => {
