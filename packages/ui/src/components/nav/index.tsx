@@ -19,6 +19,7 @@ import {
 import { FerryMark } from '../../brand/FerryMark';
 import { GlowLine } from '../../effects/GlowLine';
 import { cn } from '../../lib/cn';
+import { DropdownMenu } from '../forms';
 import { BrandIcon, IconButton, MiniAdd, Pill, VerifiedBadge, focusRingClass } from '../primitives';
 
 const tileStyles = cva(
@@ -205,6 +206,7 @@ export function SidebarItem({
   active = false,
   onClick,
   showMenu = true,
+  menu,
 }: {
   icon: LucideIcon;
   label: string;
@@ -212,6 +214,7 @@ export function SidebarItem({
   shimmer?: boolean;
   onClick?: () => void;
   showMenu?: boolean;
+  menu?: ReactNode;
 }) {
   return (
     <div
@@ -243,15 +246,16 @@ export function SidebarItem({
         />
         <span className="truncate">{label}</span>
       </button>
-      {showMenu && (
-        <button
-          aria-label={`More actions for ${label}`}
-          className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full text-text-3 opacity-70 transition hover:bg-white/10 hover:text-white hover:opacity-100 focus-visible:opacity-100 ${focusRingClass}`}
-          type="button"
-        >
-          <MoreHorizontal aria-hidden="true" size={16} />
-        </button>
-      )}
+      {menu ??
+        (showMenu && (
+          <button
+            aria-label={`More actions for ${label}`}
+            className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full text-text-3 opacity-70 transition hover:bg-white/10 hover:text-white hover:opacity-100 focus-visible:opacity-100 ${focusRingClass}`}
+            type="button"
+          >
+            <MoreHorizontal aria-hidden="true" size={16} />
+          </button>
+        ))}
     </div>
   );
 }
@@ -385,9 +389,11 @@ export function TabsBar({
 export function TopRightCluster({
   onConfiguration,
   onShare,
+  onAccount,
 }: {
   onConfiguration?: () => void;
   onShare?: () => void;
+  onAccount?: () => void;
 }) {
   return (
     <div className="flex items-center gap-2.5">
@@ -400,13 +406,18 @@ export function TopRightCluster({
       <Pill variant="warm-outline" size="lg" onClick={onShare}>
         Share <Share2 aria-hidden="true" size={14} />
       </Pill>
-      <button
-        aria-label="Account"
-        className={`ml-1 flex size-9 items-center justify-center rounded-full bg-[image:var(--grad-avatar)] text-[var(--text-on-send)] shadow-[var(--shadow-avatar)] ${focusRingClass}`}
-        type="button"
-      >
-        <Crown aria-hidden="true" size={14} strokeWidth={2} />
-      </button>
+      <DropdownMenu
+        trigger={
+          <button
+            aria-label="Account menu"
+            className={`ml-1 flex size-9 items-center justify-center rounded-full bg-[image:var(--grad-avatar)] text-[var(--text-on-send)] shadow-[var(--shadow-avatar)] ${focusRingClass}`}
+            type="button"
+          >
+            <Crown aria-hidden="true" size={14} strokeWidth={2} />
+          </button>
+        }
+        items={[{ label: 'Settings', icon: <Settings size={14} />, onSelect: () => onAccount?.() }]}
+      />
     </div>
   );
 }

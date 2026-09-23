@@ -37,6 +37,8 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     : pathname === '/library'
       ? 'library'
       : 'chats';
+  const fullCanvasPage =
+    pathname === '/library' || pathname === '/settings' || pathname === '/onboarding';
   const createChat = async () => {
     const workspaces = await client.workspaces.list();
     const workspace = workspaces[0];
@@ -124,7 +126,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       className={`app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed ? 'right-is-collapsed' : ''}`}
     >
       <div className="title-strip" aria-hidden="true" />
-      <div className="app-grid">
+      <div className={`app-grid ${fullCanvasPage ? 'page-mode-grid' : ''}`}>
         <Sidebar activeNav={activeNav} />
         <main className="center-column">
           <TabsBar
@@ -148,6 +150,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
             onAdd={() => void createChat()}
             rightCluster={
               <TopRightCluster
+                onAccount={() => void navigate({ to: '/settings' })}
                 onConfiguration={() => {
                   pushToast({
                     kind: 'info',

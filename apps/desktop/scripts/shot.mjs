@@ -62,6 +62,33 @@ try {
       .waitFor();
     await explorePage.screenshot({ path: join(screenshotDirectory, 'usage.png'), fullPage: false });
     await explorePage.close();
+    const page = await browser.newPage({
+      viewport: { width: 1440, height: 900 },
+      deviceScaleFactor: 1,
+      reducedMotion: 'reduce',
+    });
+    await page.goto(`${url}/library`);
+    await page.getByRole('heading', { name: 'Library' }).waitFor();
+    await page.screenshot({ path: join(screenshotDirectory, 'library.png'), fullPage: false });
+    await page.goto(`${url}/settings`);
+    await page.getByRole('heading', { name: 'Settings' }).waitFor();
+    await page.screenshot({ path: join(screenshotDirectory, 'settings.png'), fullPage: false });
+    await page.locator('.settings-nav').getByRole('button', { name: 'Profiles' }).click();
+    await page
+      .locator('.settings-content')
+      .getByRole('button', { name: /Best Available/ })
+      .first()
+      .click();
+    await page.getByText('Tier per step kind').waitFor();
+    await page.screenshot({
+      path: join(screenshotDirectory, 'settings-profiles.png'),
+      fullPage: false,
+    });
+    await page.goto(`${url}/onboarding`);
+    await page.getByRole('button', { name: /Get started/ }).click();
+    await page.getByRole('heading', { name: 'Choose providers' }).waitFor();
+    await page.screenshot({ path: join(screenshotDirectory, 'onboarding.png'), fullPage: false });
+    await page.close();
   } finally {
     await browser.close();
   }

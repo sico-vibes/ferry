@@ -6,9 +6,18 @@ import {
   RouterProvider,
 } from '@tanstack/react-router';
 import { AppFrame } from './app/AppFrame';
-import { HomeCanvas, PlaceholderCanvas, SessionCanvas } from './app/Canvas';
+import { HomeCanvas, SessionCanvas } from './app/Canvas';
 import { ExploreCanvas } from './app/explore/Explore';
 import { UsageCanvas } from './app/explore/Usage';
+import { LibraryCanvas } from './app/LibraryCanvas';
+import { SettingsCanvas } from './app/SettingsCanvas';
+import { OnboardingCanvas } from './app/OnboardingCanvas';
+import { useSettings } from './data/queries';
+
+function HomeRoute() {
+  const { data: settings } = useSettings();
+  return settings?.onboardingComplete === false ? <OnboardingCanvas /> : <HomeCanvas />;
+}
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -20,7 +29,7 @@ const rootRoute = createRootRoute({
 const homeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
-  component: HomeCanvas,
+  component: HomeRoute,
 });
 const sessionRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -40,12 +49,17 @@ const usageRoute = createRoute({
 const libraryRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/library',
-  component: () => <PlaceholderCanvas title="Library" />,
+  component: LibraryCanvas,
 });
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
-  component: () => <PlaceholderCanvas title="Settings" />,
+  component: SettingsCanvas,
+});
+const onboardingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/onboarding',
+  component: OnboardingCanvas,
 });
 const routeTree = rootRoute.addChildren([
   homeRoute,
@@ -54,6 +68,7 @@ const routeTree = rootRoute.addChildren([
   usageRoute,
   libraryRoute,
   settingsRoute,
+  onboardingRoute,
 ]);
 const router = createRouter({ routeTree });
 

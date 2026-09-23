@@ -71,6 +71,20 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
+  /* DESIGN §2.7: the UI's default text is `body` (13/20). Anything without an explicit size
+     class inherits this instead of the browser's 16px. Form controls inherit too. */
+  body {
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+  }
+  button,
+  input,
+  select,
+  textarea {
+    font-size: inherit;
+    line-height: inherit;
+  }
+
   ::selection {
     background: var(--blue-500);
     color: var(--text-1);
