@@ -54,7 +54,7 @@ export function CanvasPanel({
       />
       {dots && <DotGrid className="absolute inset-0" centerX="50%" centerY="46%" />}
       {header && (
-        <header className="relative z-10 flex h-8 shrink-0 items-center justify-between">
+        <header className="relative z-10 flex h-8 w-full shrink-0 items-center justify-between">
           {header}
         </header>
       )}
@@ -78,12 +78,7 @@ export function ModelPickerTrigger({
       onClick={onClick}
       type="button"
     >
-      <span
-        aria-hidden="true"
-        className="inline-flex size-[14px] items-center justify-center rounded-full bg-[image:var(--grad-signature)] text-[9px] font-bold text-white"
-      >
-        F
-      </span>
+      <FerryMark className="text-text-2" decorative size={14} variant="mono" />
       <span>
         {mode === 'auto' ? 'Auto' : 'Manual'} · {modelName}
       </span>
@@ -146,7 +141,7 @@ export function Hero({ title, subtitle }: { title: [string, string]; subtitle: s
         <circle cx="302" cy="58" r="2.5" fill="var(--warn)" />
       </svg>
       <div className="relative mt-7 flex size-14 items-center justify-center rounded-[16px] bg-[var(--hero-tile)] shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
-        <FerryMark variant="mark" />
+        <FerryMark size={32} variant="brand" />
       </div>
       <h1 className="mt-5 flex flex-col text-hero font-semibold leading-[38px]">
         <GradientText>{title[0]}</GradientText>

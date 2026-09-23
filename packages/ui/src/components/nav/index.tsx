@@ -16,6 +16,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
+import { FerryMark } from '../../brand/FerryMark';
 import { GlowLine } from '../../effects/GlowLine';
 import { cn } from '../../lib/cn';
 import { BrandIcon, IconButton, MiniAdd, Pill, VerifiedBadge, focusRingClass } from '../primitives';
@@ -60,29 +61,7 @@ export function RailTile({
   );
 }
 
-export function FerryMark({ variant = 'tile' }: { variant?: 'tile' | 'mark' }) {
-  if (variant === 'mark') {
-    return (
-      <span
-        aria-label="Ferry"
-        className="bg-clip-text text-2xl font-bold text-transparent"
-        role="img"
-        style={{ backgroundImage: 'var(--grad-signature)' }}
-      >
-        F
-      </span>
-    );
-  }
-  return (
-    <span
-      aria-label="Ferry"
-      className="flex size-6 items-center justify-center rounded-md bg-[image:var(--grad-signature)] text-sm font-semibold text-white shadow-[0_2px_8px_var(--blue-glow)]"
-      role="img"
-    >
-      F
-    </span>
-  );
-}
+export { FerryMark };
 
 export function IconRail({
   active,
@@ -104,7 +83,9 @@ export function IconRail({
       aria-label="Primary"
       className="flex h-full w-16 shrink-0 flex-col items-center bg-transparent px-1 py-3"
     >
-      <div className="mb-5 flex h-8 items-center justify-center">{logo ?? <FerryMark />}</div>
+      <div className="mb-5 flex h-8 items-center justify-center">
+        {logo ?? <FerryMark size={28} variant="icon" />}
+      </div>
       <button
         aria-label="New chat"
         className={`mb-5 flex size-9 items-center justify-center rounded-full bg-blue-600 text-white shadow-[0_0_18px_var(--blue-glow)] transition hover:brightness-110 active:scale-[.98] ${focusRingClass}`}

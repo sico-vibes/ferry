@@ -1,0 +1,8 @@
+/* Ferry brand colors, sampled from the app icon (DESIGN.md §2.9). Logo use only. */
+:root {
+  --brand-ink: #090622;
+  --brand-lilac: #c8b5f5;
+  --brand-violet: #6552a3;
+  --brand-glow: rgba(200, 181, 245, 0.45);
+  --grad-brand: linear-gradient(135deg, #c8b5f5 0%, #8f7ae0 52%, #6552a3 100%);
+}

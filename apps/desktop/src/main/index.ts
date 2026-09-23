@@ -3,6 +3,9 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { WINDOW_BACKGROUND, WINDOW_SYMBOL } from './window-theme.js';
 
+// Packaged builds use the icon embedded in the .exe by electron-builder (build/icon.ico).
+const DEV_WINDOW_ICON = join(import.meta.dirname, '../../build/icon.ico');
+
 interface SavedBounds {
   x?: number;
   y?: number;
@@ -56,6 +59,7 @@ async function createWindow(): Promise<void> {
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: WINDOW_BACKGROUND, symbolColor: WINDOW_SYMBOL, height: 36 },
     backgroundColor: WINDOW_BACKGROUND,
+    ...(app.isPackaged ? {} : { icon: DEV_WINDOW_ICON }),
     show: false,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, preload },
   });
@@ -114,6 +118,7 @@ app.on('second-instance', () => {
 app
   .whenReady()
   .then(() => {
+    app.setAppUserModelId('dev.ferry.app');
     if (gotLock) openMainWindow();
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) openMainWindow();

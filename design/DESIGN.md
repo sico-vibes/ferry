@@ -82,6 +82,15 @@ All values live in `packages/ui/src/styles/tokens.css` as CSS variables and are 
 - Motion: hover/press 160ms ease-out; panels 220ms; gradient shimmer 6s linear infinite on the composer frame + active pill (disabled under `prefers-reduced-motion`); no motion on streaming text.
 - Glow recipe: `box-shadow: 0 0 12px 1px var(--blue-glow)` on a 1px line.
 
+### 2.9 Brand (Ferry logo — replaces any placeholder "F")
+Assets (owned by the user, committed): `packages/ui/src/assets/brand/ferry-mark.png` (black mark on transparent, 512², used as a **CSS mask**), `packages/ui/src/assets/brand/ferry-icon.png` (colored app icon, 512²), `apps/desktop/build/icon.{ico,png}` (Windows app icon), `apps/desktop/src/renderer/public/favicon.png`. Sources: `design/brand/`.
+Brand tokens (in `packages/ui/src/styles/brand.css`, sampled from the icon): `--brand-ink #090622` · `--brand-lilac #C8B5F5` · `--brand-violet #6552A3` · `--brand-glow rgba(200,181,245,0.45)` · `--grad-brand linear-gradient(135deg,#C8B5F5 0%,#8F7AE0 52%,#6552A3 100%)`.
+Usage (`FerryMark` variants):
+- `icon` — the colored app icon image. **Rail top logo** (28px).
+- `brand` — mark masked with `--grad-brand`. **Hero white tile** (mark ~30px inside the 56px tile).
+- `mono` — mark masked with `currentColor`. **Model picker glyph** (14px), **ModelBadge** (12px).
+The brand violet is the logo's color only; it does not join the UI palette (the 5 gradient places in §1 are unchanged).
+
 ## 3. Layout (reference frame 1440×900, dark)
 
 ```

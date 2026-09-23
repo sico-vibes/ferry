@@ -23,6 +23,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { FileChange, MessagePart, PlanItem, ToolName, ToolOutput } from '@ferry/shared';
+import { FerryMark } from '../../brand/FerryMark';
 import { CountUp } from '../data/CountUp';
 import { ReactBitsThinkingLine } from './ThinkingLine';
 import { AdaptedStatusMark } from './StatusMark';
@@ -54,9 +55,7 @@ export function UserMessage({ children }: { children: ReactNode }) {
 export function ModelBadge({ modelName }: { modelName: string }) {
   return (
     <span className="inline-flex items-center gap-1.5 text-meta font-medium text-text-3">
-      <span className="inline-flex size-4 items-center justify-center rounded-full bg-[image:var(--grad-signature)] text-[9px] font-bold text-white">
-        F
-      </span>
+      <FerryMark className="text-text-3" decorative size={12} variant="mono" />
       {modelName}
     </span>
   );
