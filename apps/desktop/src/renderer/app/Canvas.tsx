@@ -447,9 +447,9 @@ export function SessionCanvas() {
                 style={{
                   position: 'absolute',
                   top: 0,
-                  left: 0,
-                  width: '100%',
-                  transform: `translateY(${String(item.start)}px)`,
+                  left: '50%',
+                  width: 'min(760px, 100%)',
+                  transform: `translate(-50%, ${String(item.start)}px)`,
                 }}
               >
                 {message.role === 'user' ? (

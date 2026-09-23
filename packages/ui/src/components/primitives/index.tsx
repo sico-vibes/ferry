@@ -121,7 +121,7 @@ export function KbdChip({
   return (
     <kbd
       className={cn(
-        'rounded-md bg-raised px-1.5 py-0.5 text-meta font-medium text-text-2',
+        'rounded-md bg-raised px-1.5 py-0.5 font-sans text-[11px] leading-4 font-medium text-text-2',
         className,
       )}
     >

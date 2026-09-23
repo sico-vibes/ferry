@@ -85,6 +85,7 @@ try {
   const page = await browser.newPage({
     viewport: { width: 1440, height: 900 },
     deviceScaleFactor: scale,
+    reducedMotion: 'reduce',
   });
   for (const storyId of stories) {
     const storyUrl = `http://127.0.0.1:${address.port}/?story=${encodeURIComponent(storyId)}`;

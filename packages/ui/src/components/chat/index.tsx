@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { Children, isValidElement, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -82,15 +82,27 @@ export function MarkdownPart({ content }: { content: string }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          pre: ({ children }) => <pre>{children}</pre>,
+          pre: ({ children }) => {
+            const child = Children.toArray(children)[0];
+            if (!isValidElement<{ children?: ReactNode; className?: string }>(child))
+              return <pre>{children}</pre>;
+            const code = child.props.children;
+            return (
+              <pre>
+                <CodeBlock
+                  {...(child.props.className ? { className: child.props.className } : {})}
+                  code={(typeof code === 'string' || typeof code === 'number'
+                    ? String(code)
+                    : ''
+                  ).replace(/\n$/, '')}
+                />
+              </pre>
+            );
+          },
           code: ({ children, className }) => (
-            <CodeBlock
-              {...(className ? { className } : {})}
-              code={(typeof children === 'string' || typeof children === 'number'
-                ? String(children)
-                : ''
-              ).replace(/\n$/, '')}
-            />
+            <code className={cn(className, 'rounded-md bg-raised px-1.5 py-0.5 font-mono')}>
+              {children}
+            </code>
           ),
         }}
       >
@@ -289,7 +301,7 @@ export function ToolCallBlock({
           {output && (
             <>
               <FilteredOutputBadge {...(onShowFull ? { onShowFull } : {})} output={output} />
-              <pre className="max-h-[280px] overflow-auto rounded-lg bg-input p-2.5 font-mono text-[11px] leading-4 text-text-2">
+              <pre className="max-h-[280px] overflow-auto whitespace-pre-wrap break-all rounded-lg bg-input p-2.5 font-mono text-[11px] leading-4 text-text-2">
                 {output.text}
               </pre>
             </>
@@ -339,7 +351,9 @@ export function ApprovalCard({
         </span>
       </div>
       <p className="text-label text-text-2">{kind}</p>
-      <pre className="rounded-lg bg-input p-2 font-mono text-[11px] text-text-3">{detail}</pre>
+      <pre className="whitespace-pre-wrap break-all rounded-lg bg-input p-2 font-mono text-[11px] text-text-3">
+        {detail}
+      </pre>
       {resolved ? (
         <p className="text-label text-text-3">{state.replace('_', ' ')} · resolved</p>
       ) : (

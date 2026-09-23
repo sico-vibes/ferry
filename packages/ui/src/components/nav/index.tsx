@@ -222,7 +222,6 @@ export function SidebarItem({
   icon: Icon,
   label,
   active = false,
-  shimmer = false,
   onClick,
   showMenu = true,
 }: {
@@ -245,8 +244,6 @@ export function SidebarItem({
         active
           ? {
               backgroundImage: 'var(--grad-signature)',
-              backgroundSize: shimmer ? '200% 100%' : undefined,
-              animation: shimmer ? 'ferry-shimmer 6s linear infinite' : undefined,
             }
           : undefined
       }

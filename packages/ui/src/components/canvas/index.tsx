@@ -318,27 +318,25 @@ export function Composer({
       else if (value.trim()) onSend();
     }
   }
-  const topBand = banner
-    ? {
-        height: 30,
-        content: (
-          <div className="flex h-full items-center justify-between gap-3 px-3 text-label font-medium text-white/90">
-            <span className="flex min-w-0 items-center gap-2 truncate">
-              <Timer size={14} />
-              {banner.text}
-            </span>
-            <button
-              className="flex shrink-0 items-center gap-1 font-semibold text-warn hover:brightness-125"
-              onClick={banner.onAction}
-              type="button"
-            >
-              {banner.actionLabel}
-              <ArrowUpRight size={14} />
-            </button>
-          </div>
-        ),
-      }
-    : null;
+  const topBand = {
+    height: banner ? 30 : 3,
+    content: banner ? (
+      <div className="flex h-full items-center justify-between gap-3 px-3 text-label font-medium text-white/90">
+        <span className="flex min-w-0 items-center gap-2 truncate">
+          <Timer size={14} />
+          {banner.text}
+        </span>
+        <button
+          className="flex shrink-0 items-center gap-1 font-semibold text-warn hover:brightness-125"
+          onClick={banner.onAction}
+          type="button"
+        >
+          {banner.actionLabel}
+          <ArrowUpRight size={14} />
+        </button>
+      </div>
+    ) : null,
+  };
   return (
     <div className="mt-auto pt-5">
       <GradientBorder
@@ -347,7 +345,7 @@ export function Composer({
         width={3}
         radius="panel"
         shimmer
-        {...(topBand ? { topBand } : {})}
+        topBand={topBand}
       >
         <div className="flex min-h-[148px] flex-col rounded-[14px] bg-input p-3">
           <textarea

@@ -105,12 +105,20 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     };
   }, [toastItems, dismissToast]);
 
-  const tabItems = tabs.map((tab) => ({
-    id: tab.id,
-    label: labels.get(tab.id) ?? tab.title,
-    icon: FileText,
-  }));
-  const currentId = pathname.startsWith('/s/') ? pathname.slice('/s/'.length) : (activeId ?? '');
+  const tabItems =
+    tabs.length === 0 && pathname === '/'
+      ? [{ id: 'home', label: 'New Chat', icon: FileText }]
+      : tabs.map((tab) => ({
+          id: tab.id,
+          label: labels.get(tab.id) ?? tab.title,
+          icon: FileText,
+        }));
+  const homeTab = tabs.length === 0 && pathname === '/';
+  const currentId = pathname.startsWith('/s/')
+    ? pathname.slice('/s/'.length)
+    : homeTab
+      ? 'home'
+      : (activeId ?? '');
   return (
     <div
       className={`app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed ? 'right-is-collapsed' : ''}`}
@@ -123,12 +131,20 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
             tabs={tabItems}
             activeId={currentId}
             onSelect={(id) => {
+              if (id === 'home') {
+                void navigate({ to: '/' });
+                return;
+              }
               setActive(id as (typeof tabs)[number]['id']);
               void navigate({ to: '/s/$sessionId', params: { sessionId: id } });
             }}
-            onClose={(id) => {
-              closeTab(id as (typeof tabs)[number]['id']);
-            }}
+            {...(homeTab
+              ? {}
+              : {
+                  onClose: (id: string) => {
+                    closeTab(id as (typeof tabs)[number]['id']);
+                  },
+                })}
             onAdd={() => void createChat()}
             rightCluster={
               <TopRightCluster

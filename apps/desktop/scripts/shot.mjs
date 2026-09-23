@@ -19,6 +19,7 @@ try {
       const page = await browser.newPage({
         viewport: { width: 1440, height: 900 },
         deviceScaleFactor: scale,
+        reducedMotion: 'reduce',
       });
       await page.goto(url);
       await page.getByText('Saved topics').waitFor();

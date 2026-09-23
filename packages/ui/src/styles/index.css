@@ -2,6 +2,7 @@
 @import './tokens.css';
 @import './effects.css';
 @source '../';
+@source "../**/*.{ts,tsx}";
 
 @theme inline {
   --color-app: var(--bg-app);
