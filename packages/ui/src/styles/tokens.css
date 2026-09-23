@@ -29,7 +29,7 @@
   --warn: #F5A524;
   --success: #22C55E;
   --danger: #EF4444;
-  --grad-signature: linear-gradient(90deg,#3D84EC 0%,#A0797C 38%,#CF9E37 68%,#C6B01C 100%);
+  --grad-signature: linear-gradient(90deg,#3D84EC 0%,#C97C8E 36%,#E08A4C 64%,#D9C12A 100%);
   --grad-composer: linear-gradient(100deg,#8E8830 0%,#A99A55 14%,#B0674A 42%,#8F593D 55%,#655971 75%,#476192 90%,#3F608D 100%);
   --grad-headline: linear-gradient(90deg,#E9A23B 0%,#E6B24A 40%,#8FB2FF 70%,#3D84EC 100%);
   --grad-send: linear-gradient(90deg,#CFB32B 0%,#8FB86A 45%,#4286EB 100%);

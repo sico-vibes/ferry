@@ -62,7 +62,7 @@ All values live in `packages/ui/src/styles/tokens.css` as CSS variables and are 
 ### 2.5 Gradients (the only places color is allowed to be loud)
 | Token | Value | Use |
 |---|---|---|
-| `--grad-signature` | `linear-gradient(90deg,#3D84EC 0%,#A0797C 38%,#CF9E37 68%,#C6B01C 100%)` | active pinned item |
+| `--grad-signature` | `linear-gradient(90deg,#3D84EC 0%,#C97C8E 36%,#E08A4C 64%,#D9C12A 100%)` | active pinned item |
 | `--grad-composer` | `linear-gradient(100deg,#8E8830 0%,#A99A55 14%,#B0674A 42%,#8F593D 55%,#655971 75%,#476192 90%,#3F608D 100%)` | composer frame + banner band |
 | `--grad-headline` | `linear-gradient(90deg,#E9A23B 0%,#E6B24A 40%,#8FB2FF 70%,#3D84EC 100%)` | hero headline text (`background-clip:text`) |
 | `--grad-send` | `linear-gradient(90deg,#CFB32B 0%,#8FB86A 45%,#4286EB 100%)` | Send button |
@@ -136,7 +136,7 @@ All values live in `packages/ui/src/styles/tokens.css` as CSS variables and are 
 - **Underglow:** pseudo-element 70% width, 1px `--blue-500` line centered 1px under the bottom edge + `filter: blur(0.5px)` + glow shadow.
 
 ### 4.4 Integrations — `crops/integrations.png`
-- Item = 24px circle tile (`rgba(255,255,255,0.06)`) holding an 14px brand icon + name + **verified badge** (14px, filled blue `BadgeCheck`) when connected; disconnected items: name `--text-2`, no badge.
+- Item = 28px circle tile (`rgba(255,255,255,0.06)`) holding a 16px **brand-colored** icon (simple-icons hex — brand marks are the one exception to the monochrome rule, as in the reference) + name `13/20 500` + **verified badge placed inline right after the name** (14px, filled blue `BadgeCheck`, 6px gap) when connected; disconnected items: name `--text-2`, icon at 60% opacity, no badge. Row height 40, gap 12.
 
 ### 4.5 Capacity card — `crops/capacity-card.png`
 - Separate card under the sidebar panel (gap 10), h64, radius 14, `--bg-capacity`, border `rgba(61,132,236,0.28)`.

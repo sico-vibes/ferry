@@ -7,3 +7,4 @@ design/reference
 .delegate
 **/*.md
 packages/ui/src/styles/tokens.css
+**/vendor/**

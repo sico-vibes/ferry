@@ -1,0 +1,106 @@
+@import 'tailwindcss';
+@import './tokens.css';
+@import './effects.css';
+@source '../';
+
+@theme inline {
+  --color-app: var(--bg-app);
+  --color-panel: var(--bg-panel);
+  --color-canvas: var(--bg-canvas);
+  --color-card: var(--bg-card);
+  --color-raised: var(--bg-raised);
+  --color-input: var(--bg-input);
+  --color-pill-dark: var(--bg-pill-dark);
+  --color-pill: var(--bg-pill);
+  --color-icon-circle: var(--bg-icon-circle);
+  --color-blue-tint: var(--bg-blue-tint);
+  --color-rail-tile: var(--bg-rail-tile);
+  --color-rail-tile-active: var(--bg-rail-tile-active);
+  --color-text-1: var(--text-1);
+  --color-white: var(--text-on-gradient);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-link: var(--text-link);
+  --color-blue-500: var(--blue-500);
+  --color-blue-600: var(--blue-600);
+  --color-blue-mini: var(--blue-mini);
+  --color-star: var(--star);
+  --color-warn: var(--warn);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-border-hair: var(--border-hair);
+  --color-border-soft: var(--border-soft);
+  --color-border-strong: var(--border-strong);
+
+  --radius-panel: var(--r-panel);
+  --radius-canvas: var(--r-canvas);
+  --radius-card: var(--r-card);
+  --radius-tile: var(--r-tile);
+  --radius-input: var(--r-input);
+  --radius-item: var(--r-item);
+  --radius-pill: var(--r-pill);
+
+  --font-sans: 'Inter Variable', system-ui, sans-serif;
+
+  --text-meta: 11px;
+  --text-meta--line-height: 16px;
+  --text-label: 12px;
+  --text-label--line-height: 16px;
+  --text-body: 13px;
+  --text-body--line-height: 20px;
+  --text-title: 15px;
+  --text-title--line-height: 22px;
+  --text-chat: 14.5px;
+  --text-chat--line-height: 24px;
+  --text-hero: 30px;
+  --text-hero--line-height: 38px;
+  --text-hero--letter-spacing: -0.01em;
+}
+
+@layer base {
+  html,
+  body {
+    min-height: 100%;
+    background: var(--bg-app);
+    color: var(--text-1);
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background: var(--blue-500);
+    color: var(--text-1);
+  }
+
+  * {
+    scrollbar-color: var(--bg-raised) var(--bg-app);
+    scrollbar-width: thin;
+  }
+}
+
+@keyframes ferry-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@keyframes ferry-dash {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
