@@ -33,7 +33,7 @@ Numbers in DESIGN.md are authoritative. Use tokens only — no raw color literal
 </acceptance>
 
 <gates>
-pnpm install && pnpm check
+.\tools\pnpm.cmd check
 (+ task-specific commands)
 </gates>
 

@@ -1,0 +1,5 @@
+dist
+out
+coverage
+pnpm-lock.yaml
+design/reference

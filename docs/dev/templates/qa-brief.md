@@ -16,7 +16,7 @@ Edge cases to probe (e.g. Windows paths, long text, empty states, keyboard-only,
 
 <tasks>
 1. Add tests covering the acceptance criteria and edge cases (colocated `*.test.ts(x)` or `test/`).
-2. Run `pnpm install && pnpm check` and any e2e/screenshot commands listed here.
+2. Run `.\tools\pnpm.cmd check` and any e2e/screenshot commands listed here.
 3. Exploratory run: <commands to run and what to look for>.
 </tasks>
 
