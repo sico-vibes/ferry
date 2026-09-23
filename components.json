@@ -1,0 +1,23 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "new-york",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "packages/ui/src/styles/index.css",
+    "baseColor": "neutral",
+    "cssVariables": true
+  },
+  "aliases": {
+    "components": "@ferry-ui/vendor",
+    "ui": "@ferry-ui/vendor",
+    "utils": "@ferry-ui/lib/cn",
+    "lib": "@ferry-ui/lib",
+    "hooks": "@ferry-ui/hooks"
+  },
+  "iconLibrary": "lucide",
+  "registries": {
+    "@react-bits": "https://reactbits.dev/r/{name}.json"
+  }
+}

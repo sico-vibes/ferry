@@ -1,0 +1,11 @@
+{
+  "//": "Root config exists only so the shadcn CLI/MCP can resolve aliases; packages have their own tsconfig.",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@ferry-ui/*": ["packages/ui/src/*"]
+    }
+  },
+  "files": []
+}
