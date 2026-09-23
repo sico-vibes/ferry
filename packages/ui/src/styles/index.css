@@ -11,9 +11,13 @@
   --color-raised: var(--bg-raised);
   --color-input: var(--bg-input);
   --color-pill-dark: var(--bg-pill-dark);
+  --color-pill: var(--bg-pill);
+  --color-icon-circle: var(--bg-icon-circle);
+  --color-blue-tint: var(--bg-blue-tint);
   --color-rail-tile: var(--bg-rail-tile);
   --color-rail-tile-active: var(--bg-rail-tile-active);
   --color-text-1: var(--text-1);
+  --color-white: var(--text-on-gradient);
   --color-text-2: var(--text-2);
   --color-text-3: var(--text-3);
   --color-link: var(--text-link);

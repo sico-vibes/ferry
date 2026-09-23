@@ -15,3 +15,6 @@ export type { GradientBorderProps } from './effects/GradientBorder';
 export { GradientText } from './effects/GradientText';
 export type { GradientTextProps } from './effects/GradientText';
 export { cn } from './lib/cn';
+export * from './components/primitives';
+export * from './components/nav';
+export * from './components/data';
