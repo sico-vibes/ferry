@@ -5,7 +5,17 @@
   "type": "module",
   "description": "Ferry desktop app",
   "main": "./out/main/index.js",
-  "scripts": {},
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "dev:web": "vite --config vite.web.config.ts --host 127.0.0.1 --port 5173",
+    "typecheck": "tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.renderer.json",
+    "lint": "eslint src *.config.ts",
+    "test": "vitest run",
+    "shot": "node scripts/shot.mjs",
+    "test:e2e": "node scripts/e2e.mjs"
+  },
   "dependencies": {
     "@ferry/client": "workspace:*",
     "@ferry/shared": "workspace:*",

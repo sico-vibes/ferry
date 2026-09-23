@@ -7,6 +7,8 @@
     "node": ">=22"
   },
   "scripts": {
+    "app": "pnpm --filter @ferry/desktop dev",
+    "app:web": "pnpm --filter @ferry/desktop dev:web",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "lint:fix": "turbo run lint -- --fix",
