@@ -31,6 +31,7 @@ export interface MockState {
   selections: Map<string, string>;
 }
 export interface MockStore extends MockState {
+  nextId(prefix: string): string;
   consumeSteps(providerId: Provider['id'], count: number): import('@ferry/shared').CapacitySummary;
   waitForApproval(
     sessionId: import('@ferry/shared').SessionId,

@@ -34,8 +34,8 @@ export const echoRunner: ScenarioRunner = {
     const session = store.sessions.find((s) => s.id === sessionId);
     if (!session) return;
     const text = `Mock mode: I would work on “${userText}” here.`;
-    const msgId = `message_${Math.random().toString(36).slice(2)}` as Message['id'];
-    const partId = `part_${Math.random().toString(36).slice(2)}` as MessagePart['id'];
+    const msgId = store.nextId('message') as Message['id'];
+    const partId = store.nextId('part') as MessagePart['id'];
     const part: MessagePart = { type: 'text', id: partId, text };
     for (const chunk of [
       text.slice(0, Math.ceil(text.length / 3)),

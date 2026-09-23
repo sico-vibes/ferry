@@ -35,6 +35,13 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
       await before();
       const p = state.providers.find((p) => p.id === id);
       if (!p) throw new MockNotFoundError('Provider', id);
+      if (p.keyStatus === 'not_applicable')
+        return {
+          ok: true,
+          latencyMs: null,
+          message: 'CLI detected — no API key needed',
+          windows: [],
+        };
       if (p.keyStatus === 'missing' || p.keyStatus === 'invalid')
         return {
           ok: false,

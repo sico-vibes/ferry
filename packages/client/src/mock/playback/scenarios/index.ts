@@ -15,7 +15,7 @@ const change = {
   before:
     'export function retryDelay(attempt: number) {\n  return Math.min(500 * 2 ** attempt, 8_000);\n}\n\nexport function shouldRetry(status: number) {\n  return status >= 500;\n}',
   after:
-    'export function retryDelay(attempt: number) {\n  const boundedAttempt = Math.max(0, attempt);\n  const exponential = 500 * 2 ** boundedAttempt;\n  const jitter = Math.random() * 250;\n  return Math.min(exponential + jitter, 8_000);\n}\n\nexport function shouldRetry(status: number) {\n  return status >= 500;\n}',
+    'export function retryDelay(attempt: number) {\n  const boundedAttempt = Math.max(0, attempt);\n  const exponential = 500 * 2 ** boundedAttempt;\n  const jitter = Math.min(boundedAttempt * 37, 250);\n  return Math.min(exponential + jitter, 8_000);\n}\n\nexport function shouldRetry(status: number) {\n  return status >= 500;\n}',
 };
 
 const fixTests: Step[] = [

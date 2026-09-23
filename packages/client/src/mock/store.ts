@@ -128,8 +128,8 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
     selections: new Map(),
   });
   let state = initial();
-  const saved = storage.load();
   try {
+    const saved = storage.load();
     if (saved && typeof saved === 'object' && (saved as { version?: unknown }).version === 1) {
       const restored = persistenceSchema((saved as { data: unknown }).data);
       state = {
@@ -168,16 +168,21 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
       provider.stepsLeftToday = Math.max(0, (provider.stepsLeftToday ?? 0) - Math.max(0, count));
       const window = provider.windows.find((candidate) => candidate.metric === 'requests');
       if (window) {
-        window.used += Math.max(0, count);
+        const requested = window.used + Math.max(0, count);
+        window.used = window.limit === null ? requested : Math.min(window.limit, requested);
         if (window.limit !== null) window.remaining = Math.max(0, window.limit - window.used);
       }
-      const summary = computeCapacity(state.providers, clock.now());
+      const summary = computeCapacity(state.providers, clock.now(), state.models);
       persist();
       emit('quota.updated', summary);
       return summary;
     },
     waitForApproval(sessionId, partId) {
       return new Promise((resolve) => approvalWaiters.set(`${sessionId}:${partId}`, resolve));
+    },
+    nextId(prefix) {
+      const suffix = Array.from({ length: 20 }, () => rng.int(0, 35).toString(36)).join('');
+      return `${prefix}_${suffix}`;
     },
     startDelegation(sessionId, laneName, brief) {
       const lane = state.lanes.find((candidate) => candidate.name === laneName);
@@ -338,7 +343,7 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
     persist();
   }
   function capacity(): CapacitySummary {
-    return computeCapacity(state.providers, clock.now());
+    return computeCapacity(state.providers, clock.now(), state.models);
   }
 
   return {

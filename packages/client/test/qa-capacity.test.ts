@@ -56,7 +56,7 @@ describe('QA capacity and reset windows', () => {
     expect(gemini.stepsLeftToday).toBe(0);
   });
 
-  it.fails('clamps capacity instead of throwing when a provider is over-consumed', () => {
+  it('clamps capacity instead of throwing when a provider is over-consumed', () => {
     const client = createMockFerryClient({ clock: createFakeClock(now).clock });
     const gemini = client.__state().providers.find((provider) => provider.id === 'gemini');
     if (!gemini) throw new Error('Gemini fixture missing');

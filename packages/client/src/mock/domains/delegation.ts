@@ -67,6 +67,7 @@ export function createDelegationDomain(
     async cancel(id) {
       await before();
       const r = run(id);
+      if (r.status === 'completed' || r.status === 'failed' || r.status === 'cancelled') return;
       r.status = 'cancelled';
       r.finishedAt = clock.now().toISOString();
       emit('delegation.updated', r);
@@ -75,6 +76,9 @@ export function createDelegationDomain(
     async decide(id, decision) {
       await before();
       const r = run(id);
+      if (decision === 'rework' && r.status === 'cancelled') {
+        throw new Error('A cancelled delegation run cannot be reworked');
+      }
       r.decision = decision;
       if (decision === 'rework') {
         r.status = 'running';

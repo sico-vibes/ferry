@@ -66,7 +66,7 @@ describe('QA persistence', () => {
     expect(await createMockFerryClient({ storage: invalid }).profiles.list()).toHaveLength(4);
   });
 
-  it.fails('falls back to fixtures when the storage adapter itself throws', async () => {
+  it('falls back to fixtures when the storage adapter itself throws', async () => {
     const throwing = {
       load: (): unknown => {
         throw new Error('corrupt storage');
