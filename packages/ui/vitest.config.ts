@@ -6,6 +6,6 @@ export default defineConfig({
     setupFiles: ['./test/setup.ts'],
     environment: 'node',
     // Type-aware ESLint runs inside tests are slow, especially under parallel turbo runs.
-    testTimeout: 30_000,
+    testTimeout: 120_000,
   },
 });

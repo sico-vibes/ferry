@@ -21,7 +21,7 @@ import { cn } from '../../lib/cn';
 import { BrandIcon, IconButton, MiniAdd, Pill, VerifiedBadge, focusRingClass } from '../primitives';
 
 const tileStyles = cva(
-  'flex min-h-[64px] w-14 flex-col items-center gap-1.5 text-meta font-medium transition duration-150 ease-out',
+  'flex min-h-[64px] w-14 flex-col items-center gap-1.5 text-[10.5px] leading-[14px] font-medium transition duration-150 ease-out',
   {
     variants: { active: { true: 'text-text-1', false: 'text-text-3 hover:text-text-2' } },
     defaultVariants: { active: false },
@@ -60,7 +60,19 @@ export function RailTile({
   );
 }
 
-function FerryMark() {
+export function FerryMark({ variant = 'tile' }: { variant?: 'tile' | 'mark' }) {
+  if (variant === 'mark') {
+    return (
+      <span
+        aria-label="Ferry"
+        className="bg-clip-text text-2xl font-bold text-transparent"
+        role="img"
+        style={{ backgroundImage: 'var(--grad-signature)' }}
+      >
+        F
+      </span>
+    );
+  }
   return (
     <span
       aria-label="Ferry"
@@ -224,7 +236,7 @@ export function SidebarItem({
   return (
     <div
       className={cn(
-        'group relative flex h-9 items-center gap-2.5 overflow-hidden rounded-item px-2.5 text-body transition duration-150 ease-out',
+        'group relative flex h-9 items-center gap-2.5 overflow-hidden rounded-item px-2.5 text-[13px] leading-5 font-normal transition duration-150 ease-out',
         active
           ? 'text-white shadow-[inset_0_1px_0_var(--highlight-top)]'
           : 'text-text-1 hover:bg-white/[0.04]',
@@ -276,17 +288,21 @@ export function IntegrationItem({
   status?: 'connected' | 'disconnected' | 'error';
 }) {
   return (
-    <div className="flex h-8 items-center gap-2.5 px-2">
-      <BrandIcon label={label} slug={slug} />
+    <div className="flex h-10 items-center gap-3 px-2">
+      <BrandIcon
+        label={label}
+        slug={slug}
+        {...(status === 'disconnected' ? { className: 'opacity-60' } : {})}
+      />
       <span
         className={cn(
-          'min-w-0 flex-1 truncate text-body',
+          'truncate text-[13px] leading-5 font-medium',
           status === 'disconnected' ? 'text-text-2' : 'text-text-1',
         )}
       >
         {label}
       </span>
-      {status === 'connected' && <VerifiedBadge />}
+      {status === 'connected' && <VerifiedBadge className="ml-[-6px]" />}
       {status === 'error' && (
         <span aria-label="Connection error" className="size-2 rounded-full bg-danger" role="img" />
       )}

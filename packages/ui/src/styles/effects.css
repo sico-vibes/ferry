@@ -9,4 +9,15 @@
   --ring-track: rgba(255, 255, 255, 0.1);
   --bg-theme-toggle: radial-gradient(circle, rgba(61, 132, 236, 0.25), rgba(61, 132, 236, 0.08));
   --shadow-avatar: 0 2px 12px rgba(0, 0, 0, 0.25);
+  --circuit-line: rgba(255, 255, 255, 0.2);
+  --lang-ts: #3178c6;
+  --lang-js: #e8b83a;
+  --lang-py: #e8b83a;
+  --lang-go: #00add8;
+  --lang-rust: #de7b45;
+  --lang-other: #1e8e3e;
+  --spotlight: rgba(61, 132, 236, 0.1);
+  --hero-tile: #f4f4f6;
+  --hero-mark: #5969ad;
+  --chip-text: #d0d2d8;
 }

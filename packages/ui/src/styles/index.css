@@ -95,6 +95,17 @@
   }
 }
 
+@keyframes ferry-text-shine {
+  from {
+    color: var(--text-2);
+    text-shadow: -3rem 0 1.2rem var(--text-1);
+  }
+  to {
+    color: var(--text-2);
+    text-shadow: 3rem 0 1.2rem var(--text-1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

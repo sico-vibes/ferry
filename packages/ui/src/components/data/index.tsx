@@ -2,6 +2,7 @@ import { motion, useReducedMotion } from 'motion/react';
 import { useId } from 'react';
 import { ArrowUpRight } from 'lucide-react';
 import { cn } from '../../lib/cn';
+import { CountUp } from './CountUp';
 
 export interface RingGaugeProps {
   value: number;
@@ -99,7 +100,7 @@ export function CapacityCard({
       />
       <span className="pointer-events-none relative z-10 flex min-w-0 flex-col gap-0.5">
         <span className="truncate text-body font-semibold text-text-1">
-          ≈ {stepsLeft} steps left today
+          ≈ <CountUp to={stepsLeft} /> steps left today
         </span>
         <button
           className="pointer-events-auto inline-flex w-fit items-center gap-1 text-meta font-medium text-link hover:brightness-125 focus-visible:outline-none focus-visible:underline"
@@ -116,3 +117,6 @@ export function CapacityCard({
     </div>
   );
 }
+
+export { AnimatedList } from './AnimatedList';
+export { CountUp } from './CountUp';
