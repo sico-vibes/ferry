@@ -39,6 +39,15 @@ try {
         await page.getByText(/No unrelated files changed/i).waitFor();
         await page.getByRole('button', { name: 'Stop' }).waitFor({ state: 'detached' });
         await page.screenshot({ path: join(screenshotDirectory, 'session.png'), fullPage: false });
+        await page.getByRole('button', { name: 'Open terminal panel' }).click();
+        await page.locator('.xterm-helper-textarea').click();
+        await page.keyboard.type('git status');
+        await page.keyboard.press('Enter');
+        await page.getByText('working tree clean').waitFor();
+        await page.screenshot({
+          path: join(screenshotDirectory, 'bottom-panel.png'),
+          fullPage: false,
+        });
       }
       await page.close();
     }
@@ -73,7 +82,7 @@ try {
     await page.goto(`${url}/settings`);
     await page.getByRole('heading', { name: 'Settings' }).waitFor();
     await page.screenshot({ path: join(screenshotDirectory, 'settings.png'), fullPage: false });
-    await page.locator('.settings-nav').getByRole('button', { name: 'Profiles' }).click();
+    await page.locator('.context-settings-nav').getByRole('button', { name: 'Profiles' }).click();
     await page
       .locator('.settings-content')
       .getByRole('button', { name: /Best Available/ })
@@ -88,6 +97,14 @@ try {
     await page.getByRole('button', { name: /Get started/ }).click();
     await page.getByRole('heading', { name: 'Choose providers' }).waitFor();
     await page.screenshot({ path: join(screenshotDirectory, 'onboarding.png'), fullPage: false });
+    await page.goto(`${url}/library`);
+    await page.getByRole('heading', { name: 'Library' }).waitFor();
+    await page.evaluate(() => {
+      const canvas = document.querySelector('.canvas-slot');
+      if (!canvas) return;
+      canvas.innerHTML = `<section class="canvas ferry-page"><header class="page-header"><div><h1>Empty, loading and error states</h1><p>Reusable feedback patterns</p></div></header><div class="grid grid-cols-3 gap-5"><div class="page-state empty-state"><span class="page-state-illustration">⌂</span><p>No workspaces yet</p><span class="page-state-cta">Open your first folder →</span></div><div class="skeleton-stack"><span class="skeleton-row"></span><span class="skeleton-row"></span><span class="skeleton-row"></span></div><div class="page-state error-state" role="alert"><span class="page-state-illustration">!</span><p>Provider probe failed</p><span class="page-state-cta">Review provider →</span></div></div></section>`;
+    });
+    await page.screenshot({ path: join(screenshotDirectory, 'empty-states.png'), fullPage: false });
     await page.close();
   } finally {
     await browser.close();

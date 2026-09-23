@@ -5,11 +5,12 @@ import { FileText } from 'lucide-react';
 import { TabsBar, Toaster, TopRightCluster } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { useFerryEvents } from '../data/events';
-import { keys, useSessions } from '../data/queries';
+import { keys, useSessions, useSettings } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
 import { Sidebar } from './Sidebar';
 import { RightPanel } from './right-panel/RightPanel';
+import { BottomPanel } from './BottomPanel';
 
 export function AppFrame({ children }: { children: React.ReactNode }) {
   const client = useFerryClient();
@@ -18,6 +19,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   useFerryEvents();
   const { data: sessions = [] } = useSessions();
+  const { data: settings } = useSettings();
   const tabs = useUI((state) => state.tabs);
   const activeId = useUI((state) => state.activeId);
   const leftCollapsed = useUI((state) => state.leftCollapsed);
@@ -32,13 +34,20 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     () => new Map(sessions.map((session) => [session.id, session.title])),
     [sessions],
   );
-  const activeNav = pathname.startsWith('/explore')
-    ? 'explore'
-    : pathname === '/library'
-      ? 'library'
-      : 'chats';
-  const fullCanvasPage =
-    pathname === '/library' || pathname === '/settings' || pathname === '/onboarding';
+  const onboardingPage =
+    pathname === '/onboarding' || (pathname === '/' && settings?.onboardingComplete === false);
+  const activeNav = onboardingPage
+    ? null
+    : pathname.startsWith('/explore')
+      ? 'explore'
+      : pathname === '/library'
+        ? 'library'
+        : pathname === '/' || pathname.startsWith('/s/')
+          ? 'chats'
+          : null;
+  const fullCanvasPage = onboardingPage;
+  const rightWidth = useUI((state) => state.rightWidth);
+  const bottomOpen = useUI((state) => state.bottomOpen);
   const createChat = async () => {
     const workspaces = await client.workspaces.list();
     const workspace = workspaces[0];
@@ -86,6 +95,9 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           setActive(next.id);
           void navigate({ to: '/s/$sessionId', params: { sessionId: next.id } });
         }
+      } else if (key === '`') {
+        event.preventDefault();
+        useUI.getState().toggleBottom();
       }
     };
     window.addEventListener('keydown', handler);
@@ -126,7 +138,10 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       className={`app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed ? 'right-is-collapsed' : ''}`}
     >
       <div className="title-strip" aria-hidden="true" />
-      <div className={`app-grid ${fullCanvasPage ? 'page-mode-grid' : ''}`}>
+      <div
+        className={`app-grid ${fullCanvasPage ? 'page-mode-grid' : ''}`}
+        style={{ '--right-width': `${String(rightWidth)}px` } as React.CSSProperties}
+      >
         <Sidebar activeNav={activeNav} />
         <main className="center-column">
           <TabsBar
@@ -149,26 +164,46 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
                 })}
             onAdd={() => void createChat()}
             rightCluster={
-              <TopRightCluster
-                onAccount={() => void navigate({ to: '/settings' })}
-                onConfiguration={() => {
-                  pushToast({
-                    kind: 'info',
-                    title: 'Configuration',
-                    body: 'Configuration controls arrive in a later update.',
-                  });
-                }}
-                onShare={() => {
-                  pushToast({
-                    kind: 'success',
-                    title: 'Share',
-                    body: 'There is nothing to share yet.',
-                  });
-                }}
-              />
+              <div className="top-cluster-with-terminal">
+                {!fullCanvasPage && (
+                  <button
+                    aria-label={bottomOpen ? 'Close terminal panel' : 'Open terminal panel'}
+                    className="header-icon"
+                    onClick={() => {
+                      useUI.getState().toggleBottom();
+                    }}
+                    title="Terminal (Ctrl+`)"
+                  >
+                    <FileText size={15} />
+                  </button>
+                )}
+                <TopRightCluster
+                  onAccount={() => void navigate({ to: '/settings' })}
+                  onConfiguration={() => {
+                    pushToast({
+                      kind: 'info',
+                      title: 'Configuration',
+                      body: 'Configuration controls arrive in a later update.',
+                    });
+                  }}
+                  onShare={() => {
+                    pushToast({
+                      kind: 'success',
+                      title: 'Share',
+                      body: 'There is nothing to share yet.',
+                    });
+                  }}
+                />
+              </div>
             }
           />
+          {settings?.developer.injectErrors && (
+            <div className="offline-warning" role="status">
+              Offline · showing saved demo data
+            </div>
+          )}
           <div className="canvas-slot">{children}</div>
+          {bottomOpen && !fullCanvasPage && <BottomPanel />}
         </main>
         {!rightCollapsed && <RightPanel onNewChat={() => void createChat()} />}
       </div>

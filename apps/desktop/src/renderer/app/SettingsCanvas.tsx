@@ -4,6 +4,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useFerryClient } from '../data/client';
 import { keys, useProfiles, useSettings } from '../data/queries';
 import { useToasts } from '../state/toasts';
+import { useUI } from '../state/ui';
 import {
   Checkbox,
   Dialog,
@@ -16,31 +17,6 @@ import {
   TextField,
 } from '@ferry/ui';
 import type { Profile, StepKind, Tier } from '@ferry/shared';
-import {
-  BookOpen,
-  Bot,
-  Database,
-  KeyRound,
-  Layers,
-  Shield,
-  SlidersHorizontal,
-  Sparkles,
-  UserRound,
-  Wrench,
-} from 'lucide-react';
-
-const sections = [
-  ['General', UserRound],
-  ['Profiles', Layers],
-  ['Providers & Keys', KeyRound],
-  ['Optimizers', SlidersHorizontal],
-  ['Delegation', Bot],
-  ['Permissions', Shield],
-  ['Skills', Sparkles],
-  ['MCP', Wrench],
-  ['Data & Privacy', Database],
-  ['About', BookOpen],
-] as const;
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
 const stepLabels: Record<StepKind, string> = {
   plan: 'Plan',
@@ -56,7 +32,7 @@ export function SettingsCanvas() {
   const cache = useQueryClient();
   const navigate = useNavigate();
   const toast = useToasts((state) => state.push);
-  const [section, setSection] = useState<string>('General');
+  const section = useUI((state) => state.settingsSection);
   const [confirm, setConfirm] = useState('');
   const [addMcp, setAddMcp] = useState(false);
   const [mcpName, setMcpName] = useState('');
@@ -761,24 +737,7 @@ export function SettingsCanvas() {
           <p>Control how Ferry works across your workspaces.</p>
         </div>
       </header>
-      <div className="settings-layout">
-        <nav className="settings-nav" aria-label="Settings sections">
-          {sections.map(([name, Icon]) => (
-            <button
-              key={name}
-              className={section === name ? 'active' : ''}
-              onClick={() => {
-                setSection(name);
-                setProfileDraft(null);
-              }}
-            >
-              <Icon size={16} />
-              {name}
-            </button>
-          ))}
-        </nav>
-        <main className="settings-content">{body()}</main>
-      </div>
+      <main className="settings-content settings-content-framed">{body()}</main>
       <Dialog
         open={Boolean(confirm)}
         onOpenChange={(open) => {

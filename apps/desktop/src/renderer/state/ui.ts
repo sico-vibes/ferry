@@ -1,7 +1,20 @@
 import { create } from 'zustand';
 import type { SessionId } from '@ferry/shared';
 
-export type RightTab = 'chats' | 'plan' | 'changes' | 'terminal';
+export type RightTab = 'chats' | 'plan' | 'changes';
+export type SettingsSection =
+  | 'General'
+  | 'Profiles'
+  | 'Providers & Keys'
+  | 'Optimizers'
+  | 'Delegation'
+  | 'Permissions'
+  | 'Skills'
+  | 'MCP'
+  | 'Data & Privacy'
+  | 'About';
+export const clampRightWidth = (width: number) => Math.min(560, Math.max(300, width));
+export const clampBottomHeight = (height: number) => Math.min(480, Math.max(200, height));
 export interface OpenTab {
   id: SessionId;
   title: string;
@@ -12,6 +25,13 @@ interface UIState {
   leftCollapsed: boolean;
   rightCollapsed: boolean;
   rightTab: RightTab;
+  rightWidth: number;
+  bottomOpen: boolean;
+  bottomHeight: number;
+  bottomTab: 'terminal' | 'agent-log';
+  settingsSection: SettingsSection;
+  selectedWorkspaceId: string | null;
+  exploreFilter: 'All' | 'Free' | 'Paid' | 'CLI';
   openTab: (tab: OpenTab) => void;
   setActive: (id: SessionId) => void;
   renameTab: (id: SessionId, title: string) => void;
@@ -19,6 +39,13 @@ interface UIState {
   toggleLeft: () => void;
   toggleRight: () => void;
   setRightTab: (tab: RightTab) => void;
+  setRightWidth: (width: number) => void;
+  toggleBottom: () => void;
+  setBottomHeight: (height: number) => void;
+  setBottomTab: (tab: 'terminal' | 'agent-log') => void;
+  setSettingsSection: (section: SettingsSection) => void;
+  setSelectedWorkspace: (id: string | null) => void;
+  setExploreFilter: (filter: 'All' | 'Free' | 'Paid' | 'CLI') => void;
 }
 interface PersistedUI {
   tabs: OpenTab[];
@@ -26,6 +53,10 @@ interface PersistedUI {
   leftCollapsed: boolean;
   rightCollapsed: boolean;
   rightTab: RightTab;
+  rightWidth: number;
+  bottomOpen: boolean;
+  bottomHeight: number;
+  bottomTab: 'terminal' | 'agent-log';
 }
 function readPersisted(): Partial<PersistedUI> {
   try {
@@ -46,6 +77,10 @@ function persist(state: UIState): void {
         leftCollapsed: state.leftCollapsed,
         rightCollapsed: state.rightCollapsed,
         rightTab: state.rightTab,
+        rightWidth: state.rightWidth,
+        bottomOpen: state.bottomOpen,
+        bottomHeight: state.bottomHeight,
+        bottomTab: state.bottomTab,
       }),
     );
   } catch {
@@ -67,6 +102,13 @@ export const useUI = create<UIState>((set) => {
     leftCollapsed: saved.leftCollapsed ?? false,
     rightCollapsed: saved.rightCollapsed ?? false,
     rightTab: saved.rightTab ?? 'chats',
+    rightWidth: clampRightWidth(saved.rightWidth ?? 300),
+    bottomOpen: saved.bottomOpen ?? false,
+    bottomHeight: clampBottomHeight(saved.bottomHeight ?? 260),
+    bottomTab: saved.bottomTab ?? 'terminal',
+    settingsSection: 'General',
+    selectedWorkspaceId: null,
+    exploreFilter: 'All',
     openTab: (tab) => {
       update((s) => ({
         tabs: s.tabs.some((item) => item.id === tab.id)
@@ -95,6 +137,27 @@ export const useUI = create<UIState>((set) => {
     },
     setRightTab: (rightTab) => {
       update(() => ({ rightTab }));
+    },
+    setRightWidth: (rightWidth) => {
+      update(() => ({ rightWidth: clampRightWidth(rightWidth) }));
+    },
+    toggleBottom: () => {
+      update((s) => ({ bottomOpen: !s.bottomOpen }));
+    },
+    setBottomHeight: (bottomHeight) => {
+      update(() => ({ bottomHeight: clampBottomHeight(bottomHeight) }));
+    },
+    setBottomTab: (bottomTab) => {
+      update(() => ({ bottomTab }));
+    },
+    setSettingsSection: (settingsSection) => {
+      update(() => ({ settingsSection }));
+    },
+    setSelectedWorkspace: (selectedWorkspaceId) => {
+      update(() => ({ selectedWorkspaceId }));
+    },
+    setExploreFilter: (exploreFilter) => {
+      update(() => ({ exploreFilter }));
     },
   };
 });

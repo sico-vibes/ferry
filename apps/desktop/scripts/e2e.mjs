@@ -19,6 +19,17 @@ try {
     ).toBeVisible();
     await expect(page.getByText('Saved topics')).toBeVisible();
     await expect(page.getByRole('img', { name: /capacity remaining/i })).toBeVisible();
+    const rightBefore = await page.locator('.right-panel').boundingBox();
+    const resize = page.getByRole('separator', { name: 'Resize right panel' });
+    const resizeBox = await resize.boundingBox();
+    if (!rightBefore || !resizeBox) throw new Error('Right panel resize handle is missing');
+    await page.mouse.move(resizeBox.x + resizeBox.width / 2, resizeBox.y + 120);
+    await page.mouse.down();
+    await page.mouse.move(resizeBox.x + resizeBox.width / 2 - 60, resizeBox.y + 120);
+    await page.mouse.up();
+    await expect
+      .poll(async () => (await page.locator('.right-panel').boundingBox())?.width)
+      .toBeGreaterThan(rightBefore.width + 40);
     await page
       .getByRole('textbox', { name: 'Message Ferry' })
       .fill('Switch models after quota handoff');
@@ -34,6 +45,11 @@ try {
     await page.getByRole('button', { name: 'Allow once' }).click({ timeout: 10_000 });
     await expect(page.getByText(/Checkpoint/)).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/full suite passed/i).last()).toBeVisible({ timeout: 10_000 });
+    await page.getByRole('button', { name: 'Open terminal panel' }).click();
+    await page.locator('.xterm-helper-textarea').click();
+    await page.keyboard.type('git status');
+    await page.keyboard.press('Enter');
+    await expect(page.getByText('working tree clean')).toBeVisible();
     const title = await page.locator('[role="tablist"] [role="tab"]').first().innerText();
     await page
       .getByRole('button', { name: `Save ${title}` })
@@ -47,6 +63,7 @@ try {
     await expect(page.getByRole('button', { name: `Unsave ${title}` }).first()).toBeVisible();
     await page.getByRole('button', { name: 'Explore' }).click();
     await expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Provider filters' })).toBeVisible();
     await page
       .getByRole('region', { name: 'Provider filter' })
       .getByRole('button', { name: 'Free', exact: true })
@@ -97,7 +114,10 @@ try {
     await expect(page.getByRole('heading', { name: 'Build bigger with Ferry,' })).toBeVisible();
 
     await page.goto(`${url}/settings`);
-    await page.getByRole('button', { name: 'Profiles' }).click();
+    await page
+      .getByRole('navigation', { name: 'Settings sections' })
+      .getByRole('button', { name: 'Profiles' })
+      .click();
     await page
       .locator('.settings-content')
       .getByRole('button', { name: /Best Available/ })
@@ -109,6 +129,7 @@ try {
     await expect(page.getByText('Profile saved: Best Available')).toBeVisible();
 
     await page.goto(`${url}/library`);
+    await expect(page.locator('.context-sidebar-row', { hasText: 'ferry-web' })).toBeVisible();
     await page.getByRole('button', { name: 'Approve project lanes' }).click();
     await expect(page.getByText('Project lanes approved')).toBeVisible();
   } finally {

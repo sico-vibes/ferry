@@ -12,6 +12,8 @@ import {
   Composer,
   DelegationCard,
   Disclaimer,
+  EmptyState,
+  Skeleton,
   ErrorPart,
   Hero,
   HandoffMarker,
@@ -69,7 +71,7 @@ export function HomeCanvas() {
   const navigate = useNavigate();
   const pushToast = useToasts((state) => state.push);
   const openTab = useUI((state) => state.openTab);
-  const { data: sessions = [] } = useSessions();
+  const { data: sessions = [], isLoading: sessionsLoading } = useSessions();
   const { data: workspaces = [] } = useWorkspaces();
   const { data: profiles = [] } = useProfiles();
   const { data: settings } = useSettings();
@@ -142,6 +144,28 @@ export function HomeCanvas() {
           title={['Build bigger with Ferry,', 'every free model, one seamless task.']}
           subtitle="Ferry routes each step to the model that still has room, and carries your task across when one runs dry."
         />
+        {sessionsLoading ? (
+          <Skeleton rows={2} />
+        ) : (
+          sessions.length === 0 && (
+            <EmptyState
+              title="No sessions yet"
+              action="Start your first chat"
+              onAction={() =>
+                document.querySelector<HTMLTextAreaElement>('[aria-label="Message Ferry"]')?.focus()
+              }
+            />
+          )
+        )}
+        {capacity?.stepsLeftToday === 0 && (
+          <div className="capacity-exhausted">
+            <div>
+              <strong>All free capacity is used</strong>
+              <span>Earliest reset in 2h 13m.</span>
+            </div>
+            <button onClick={() => void navigate({ to: '/explore' })}>Add provider</button>
+          </div>
+        )}
         <PinnedChatsRow
           cards={pinned.map((session) => ({
             language:

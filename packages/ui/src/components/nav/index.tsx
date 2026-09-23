@@ -72,7 +72,7 @@ export function IconRail({
   onToggleTheme,
   logo,
 }: {
-  active: 'chats' | 'library' | 'explore';
+  active: 'chats' | 'library' | 'explore' | null;
   onNavigate?: (to: 'chats' | 'library' | 'explore') => void;
   onNew?: () => void;
   onAdd?: () => void;
@@ -204,6 +204,7 @@ export function SidebarItem({
   icon: Icon,
   label,
   active = false,
+  activeStyle = 'gradient',
   onClick,
   showMenu = true,
   menu,
@@ -211,6 +212,7 @@ export function SidebarItem({
   icon: LucideIcon;
   label: string;
   active?: boolean;
+  activeStyle?: 'gradient' | 'neutral';
   shimmer?: boolean;
   onClick?: () => void;
   showMenu?: boolean;
@@ -221,11 +223,13 @@ export function SidebarItem({
       className={cn(
         'group relative flex h-9 items-center gap-2.5 overflow-hidden rounded-item px-2.5 text-[13px] leading-5 font-normal transition duration-150 ease-out',
         active
-          ? 'text-white shadow-[inset_0_1px_0_var(--highlight-top)]'
+          ? activeStyle === 'gradient'
+            ? 'text-white shadow-[inset_0_1px_0_var(--highlight-top)]'
+            : 'bg-raised text-text-1 shadow-[inset_0_1px_0_var(--highlight-top)]'
           : 'text-text-1 hover:bg-white/[0.04]',
       )}
       style={
-        active
+        active && activeStyle === 'gradient'
           ? {
               backgroundImage: 'var(--grad-signature)',
             }
