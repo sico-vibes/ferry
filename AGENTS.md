@@ -8,6 +8,7 @@ Ferry is a desktop (Electron + React) and CLI coding agent that routes work acro
 3. Do not edit `AGENTS.md`, `CLAUDE.md`, `design/DESIGN.md`, `design/reference/**`, or `.delegate/**` unless the brief says so.
 4. No network calls in tests. No secrets anywhere in the repo.
 5. QA agents: add or extend **tests only**; never modify `src/` files. Report bugs, don't fix them.
+6. **Dependencies:** your sandbox has no network. The orchestrator pre-fetches every dependency a brief needs into the pnpm store. Use `pnpm install --offline`. Add dependencies to `package.json` only with the exact versions given in your brief. If you need a package the brief didn't list, stop and name it (with the reason) in your report — do not work around it.
 
 ## Gates (run all before reporting)
 ```
