@@ -101,7 +101,13 @@ export function ProviderCard({
         )}
         <footer className="flex flex-wrap items-center gap-2 border-t border-border-hair pt-2.5">
           <span className="mr-auto text-meta text-text-2">
-            ≈ <CountUp to={provider.stepsLeftToday ?? 0} /> steps today
+            {provider.stepsLeftToday === null ? (
+              'Rate-limited · no daily cap'
+            ) : (
+              <>
+                ≈ <CountUp to={provider.stepsLeftToday} /> steps today
+              </>
+            )}
           </span>
           <Pill
             aria-label={`Test ${provider.name}`}

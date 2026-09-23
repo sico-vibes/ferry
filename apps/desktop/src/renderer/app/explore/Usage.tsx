@@ -140,26 +140,34 @@ export function UsageCanvas() {
                 ≈ <CountUp to={capacity?.stepsLeftToday ?? 0} /> steps left
               </p>
               <ul className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
-                {(capacity?.perProvider ?? [])
-                  .filter((item) => item.stepsLeft !== null)
-                  .map((item) => (
-                    <li className="min-w-0" key={item.providerId}>
-                      <div className="mb-1 flex justify-between gap-2 text-meta">
-                        <span className="truncate text-text-2">
-                          {names[item.providerId] ?? item.providerId}
+                {(capacity?.perProvider ?? []).map((item) => (
+                  <li className="min-w-0" key={item.providerId}>
+                    <div className="mb-1 flex justify-between gap-2 text-meta">
+                      <span className="truncate text-text-2">
+                        {names[item.providerId] ?? item.providerId}
+                      </span>
+                      {item.stepsLeft === null ? (
+                        <span
+                          aria-label={`${names[item.providerId] ?? item.providerId} has no daily cap`}
+                          className="text-label text-text-1"
+                          title="No daily cap"
+                        >
+                          ∞
                         </span>
-                        <span className="tabular-nums text-text-1">
-                          {item.stepsLeft === null ? '—' : format(item.stepsLeft)}
-                        </span>
-                      </div>
+                      ) : (
+                        <span className="tabular-nums text-text-1">{format(item.stepsLeft)}</span>
+                      )}
+                    </div>
+                    {item.stepsLeft !== null && (
                       <div className="h-1 overflow-hidden rounded-pill bg-white/[0.07]">
                         <span
                           className="block h-full rounded-pill bg-blue-500"
-                          style={{ width: `${String(((item.stepsLeft ?? 0) / maxSteps) * 100)}%` }}
+                          style={{ width: `${String((item.stepsLeft / maxSteps) * 100)}%` }}
                         />
                       </div>
-                    </li>
-                  ))}
+                    )}
+                  </li>
+                ))}
               </ul>
             </div>
           </section>

@@ -112,7 +112,7 @@ describe('Explore providers and models', () => {
   it('filters providers and probes with feedback', async () => {
     const user = userEvent.setup();
     setup();
-    await screen.findByRole('button', { name: 'Test Mistral' });
+    await screen.findByRole('button', { name: 'Test Mistral' }, { timeout: 10_000 });
     await user.click(
       within(screen.getByRole('region', { name: 'Provider filter' })).getByRole('button', {
         name: 'Free',

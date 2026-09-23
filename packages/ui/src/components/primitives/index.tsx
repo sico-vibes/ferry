@@ -1,6 +1,14 @@
 import { useId, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
-import { siGithub, siSupabase } from 'simple-icons';
+import {
+  siAnthropic,
+  siGithub,
+  siGooglegemini,
+  siMistralai,
+  siNvidia,
+  siOpenrouter,
+  siSupabase,
+} from 'simple-icons';
 import { BadgeCheck, Plus, Sparkles } from 'lucide-react';
 import { GlowLine } from '../../effects/GlowLine';
 import { cn } from '../../lib/cn';
@@ -142,7 +150,12 @@ export function VerifiedBadge({ className }: { className?: string }) {
 }
 
 const brandIcons: Record<string, typeof siGithub | undefined> = {
+  anthropic: siAnthropic,
   github: siGithub,
+  googlegemini: siGooglegemini,
+  mistralai: siMistralai,
+  nvidia: siNvidia,
+  openrouter: siOpenrouter,
   supabase: siSupabase,
 };
 export function BrandIcon({

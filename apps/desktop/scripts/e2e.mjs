@@ -64,6 +64,13 @@ try {
     await expect(mistral.getByText('Key: valid')).toBeVisible({ timeout: 10_000 });
     await page.getByRole('button', { name: 'Usage' }).click();
     await expect(page.getByRole('heading', { name: 'Usage', exact: true })).toBeVisible();
+    const nvidiaUsage = page
+      .getByRole('region', { name: 'Capacity remaining' })
+      .getByRole('list')
+      .locator('li')
+      .filter({ hasText: 'NVIDIA NIM' });
+    await expect(nvidiaUsage.getByLabel('NVIDIA NIM has no daily cap')).toHaveText('∞');
+    await expect(nvidiaUsage.locator('.h-1')).toHaveCount(0);
     await page.getByRole('button', { name: 'tokens', exact: true }).click();
     await expect(
       page.getByRole('img', { name: '14 day stacked tokens usage by provider' }),

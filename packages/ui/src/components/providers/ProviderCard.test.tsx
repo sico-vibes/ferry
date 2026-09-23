@@ -26,7 +26,13 @@ describe('ProviderCard', () => {
   it('exposes provider key status and actions', () => {
     render(<ProviderCard provider={provider} onTest={vi.fn()} onManageKey={vi.fn()} />);
     expect(screen.getByText('Key: missing')).toBeTruthy();
+    expect(screen.getByText('Free')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Test Gemini API' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Manage key' })).toBeTruthy();
+  });
+
+  it('describes providers without a daily step cap', () => {
+    render(<ProviderCard provider={{ ...provider, stepsLeftToday: null }} />);
+    expect(screen.getByText('Rate-limited · no daily cap')).toBeTruthy();
   });
 });

@@ -3,7 +3,7 @@ import { cn } from '../../lib/cn';
 export type TagBadgeKind = 'legit' | 'promo' | 'paid' | 'cli' | 'caution';
 
 const labels: Record<TagBadgeKind, string> = {
-  legit: 'Legit',
+  legit: 'Free',
   promo: 'Promo',
   paid: 'Paid',
   cli: 'CLI',
