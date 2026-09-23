@@ -45,6 +45,29 @@ try {
       .click();
     await expect(page.getByText('Saved topics')).toBeVisible();
     await expect(page.getByRole('button', { name: `Unsave ${title}` }).first()).toBeVisible();
+    await page.getByRole('button', { name: 'Explore' }).click();
+    await expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible();
+    await page
+      .getByRole('region', { name: 'Provider filter' })
+      .getByRole('button', { name: 'Free', exact: true })
+      .click();
+    const gemini = page.locator('article').filter({ hasText: 'Gemini API' });
+    await gemini.getByRole('button', { name: 'Test Gemini API' }).click();
+    await expect(page.getByText(/Connected · \d+ ms/)).toBeVisible({ timeout: 10_000 });
+    const mistral = page.locator('article').filter({ hasText: 'Mistral (Experiment)' });
+    await mistral.getByRole('button', { name: 'Manage key' }).click();
+    await page.getByRole('textbox', { name: 'API key' }).fill('demo-mistral-key');
+    await page.getByRole('button', { name: 'Save key' }).click();
+    await expect(mistral.getByText('Key: unchecked')).toBeVisible({ timeout: 10_000 });
+    await page.getByRole('button', { name: 'Close dialog' }).click();
+    await mistral.getByRole('button', { name: 'Test Mistral (Experiment)' }).click();
+    await expect(mistral.getByText('Key: valid')).toBeVisible({ timeout: 10_000 });
+    await page.getByRole('button', { name: 'Usage' }).click();
+    await expect(page.getByRole('heading', { name: 'Usage', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'tokens', exact: true }).click();
+    await expect(
+      page.getByRole('img', { name: '14 day stacked tokens usage by provider' }),
+    ).toBeVisible();
   } finally {
     await browser.close();
   }

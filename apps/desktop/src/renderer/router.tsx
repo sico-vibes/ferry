@@ -7,6 +7,8 @@ import {
 } from '@tanstack/react-router';
 import { AppFrame } from './app/AppFrame';
 import { HomeCanvas, PlaceholderCanvas, SessionCanvas } from './app/Canvas';
+import { ExploreCanvas } from './app/explore/Explore';
+import { UsageCanvas } from './app/explore/Usage';
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -28,12 +30,12 @@ const sessionRoute = createRoute({
 const exploreRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/explore',
-  component: () => <PlaceholderCanvas title="Explore" />,
+  component: ExploreCanvas,
 });
 const usageRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/explore/usage',
-  component: () => <PlaceholderCanvas title="Usage" />,
+  component: UsageCanvas,
 });
 const libraryRoute = createRoute({
   getParentRoute: () => rootRoute,

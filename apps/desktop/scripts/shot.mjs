@@ -42,6 +42,26 @@ try {
       }
       await page.close();
     }
+    const explorePage = await browser.newPage({
+      viewport: { width: 1440, height: 900 },
+      deviceScaleFactor: 1,
+      reducedMotion: 'reduce',
+    });
+    await explorePage.goto(url);
+    await explorePage.getByRole('button', { name: 'Explore' }).click();
+    await explorePage.getByRole('heading', { name: 'Providers' }).waitFor();
+    await explorePage.evaluate(() => document.fonts.ready);
+    await explorePage.screenshot({
+      path: join(screenshotDirectory, 'explore.png'),
+      fullPage: false,
+    });
+    await explorePage.getByRole('button', { name: 'Usage' }).click();
+    await explorePage.getByRole('heading', { name: 'Usage', exact: true }).waitFor();
+    await explorePage
+      .getByRole('img', { name: '14 day stacked requests usage by provider' })
+      .waitFor();
+    await explorePage.screenshot({ path: join(screenshotDirectory, 'usage.png'), fullPage: false });
+    await explorePage.close();
   } finally {
     await browser.close();
   }

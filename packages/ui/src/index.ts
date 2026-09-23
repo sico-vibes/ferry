@@ -24,3 +24,5 @@ export * from './components/canvas';
 export * from './components/chat';
 export * from './components/feedback/Toast';
 export * from './components/feedback/LatticeLoader';
+export * from './components/providers';
+export * from './components/charts';

@@ -20,4 +20,16 @@
   --hero-tile: #f4f4f6;
   --hero-mark: #5969ad;
   --chip-text: #d0d2d8;
+  --tint-success: rgba(34, 197, 94, 0.14);
+  --tint-warn: rgba(245, 165, 36, 0.14);
+  --tint-blue: rgba(61, 132, 236, 0.16);
+  --tint-danger: rgba(239, 68, 68, 0.14);
+  --series-1: #3d84ec;
+  --series-2: #55b8a8;
+  --series-3: #a78bda;
+  --series-4: #e5ab54;
+  --series-5: #d97982;
+  --series-6: #8793a6;
+  --series-7: #76b77c;
+  --series-8: #c2aa83;
 }
