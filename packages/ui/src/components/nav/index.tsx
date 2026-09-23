@@ -296,7 +296,7 @@ export function IntegrationItem({
       />
       <span
         className={cn(
-          'truncate text-body font-medium',
+          'truncate text-[13px] leading-5 font-medium',
           status === 'disconnected' ? 'text-text-2' : 'text-text-1',
         )}
       >

@@ -366,14 +366,14 @@ export function Composer({
           <div className="mt-auto flex items-center justify-between gap-2 pt-3">
             <div className="flex gap-2">
               <Pill
-                className="h-7 px-3 text-meta"
+                className="h-7 px-3 text-[12px] leading-4 font-medium"
                 leadingIcon={<Link size={14} />}
                 onClick={onAttach}
               >
                 Attach
               </Pill>
               <Pill
-                className="h-7 border-transparent bg-blue-tint px-3 text-meta text-link"
+                className="h-7 border-transparent bg-blue-tint px-3 text-[12px] leading-4 font-medium text-link"
                 onClick={onProfileClick}
                 leadingIcon={<Lightbulb size={14} />}
               >
@@ -383,7 +383,7 @@ export function Composer({
             <div className="flex gap-2">
               <span title="Voice input is coming soon">
                 <Pill
-                  className="h-7 px-3 text-meta"
+                  className="h-7 px-3 text-[12px] leading-4 font-medium"
                   disabled
                   leadingIcon={<AudioLines size={14} />}
                 >
@@ -391,13 +391,16 @@ export function Composer({
                 </Pill>
               </span>
               {running ? (
-                <Pill className="h-[30px] px-3 text-meta" onClick={onStop}>
+                <Pill
+                  className="h-[30px] px-3 text-[12.5px] leading-4 font-semibold"
+                  onClick={onStop}
+                >
                   <Square size={14} fill="currentColor" />
                   Stop
                 </Pill>
               ) : (
                 <Pill
-                  className="h-[30px] border-transparent bg-[image:var(--grad-send)] px-3 text-meta font-semibold text-[var(--text-on-send)]"
+                  className="h-[30px] border-transparent bg-[image:var(--grad-send)] px-3 text-[12.5px] leading-4 font-semibold text-[var(--text-on-send)] disabled:opacity-60 disabled:saturate-[0.8]"
                   disabled={!value.trim()}
                   onClick={onSend}
                   trailingIcon={<Send size={14} />}
