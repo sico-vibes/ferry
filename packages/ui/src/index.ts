@@ -22,5 +22,6 @@ export * from './components/nav';
 export * from './components/data';
 export * from './components/canvas';
 export * from './components/chat';
+export * from './components/forms';
 export * from './components/feedback/Toast';
 export * from './components/feedback/LatticeLoader';

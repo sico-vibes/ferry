@@ -28,6 +28,17 @@ export async function serveDirectory(directory, requestedPort = 0) {
       });
       response.end(body);
     } catch {
+      if (!extname(pathname)) {
+        try {
+          const body = await readFile(resolve(root, 'index.html'));
+          response.writeHead(200, { 'content-type': mime.get('.html') });
+          response.end(body);
+          return;
+        } catch {
+          response.writeHead(404).end('Not found');
+          return;
+        }
+      }
       response.writeHead(404).end('Not found');
     }
   });
