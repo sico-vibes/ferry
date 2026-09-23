@@ -44,23 +44,19 @@ describe('per-package typecheck passes', () => {
   const tscEntry = resolve(repositoryRoot, 'node_modules/typescript/bin/tsc');
 
   for (const packageName of workspacePackageNames) {
-    it(
-      `@ferry/${packageName} passes tsc --noEmit`,
-      { timeout: 120_000 },
-      () => {
-        const result = spawnSync(
-          process.execPath,
-          [
-            tscEntry,
-            '--noEmit',
-            '-p',
-            resolve(repositoryRoot, 'packages', packageName, 'tsconfig.json'),
-          ],
-          { cwd: repositoryRoot, encoding: 'utf8' },
-        );
-        expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-      },
-    );
+    it(`@ferry/${packageName} passes tsc --noEmit`, { timeout: 120_000 }, () => {
+      const result = spawnSync(
+        process.execPath,
+        [
+          tscEntry,
+          '--noEmit',
+          '-p',
+          resolve(repositoryRoot, 'packages', packageName, 'tsconfig.json'),
+        ],
+        { cwd: repositoryRoot, encoding: 'utf8' },
+      );
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    });
   }
 });
 

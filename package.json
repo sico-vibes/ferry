@@ -12,8 +12,9 @@
     "lint:fix": "turbo run lint -- --fix",
     "test": "turbo run test",
     "test:watch": "vitest",
-    "check": "turbo run typecheck lint test",
-    "format": "prettier --write ."
+    "check": "turbo run typecheck lint test && node scripts/check-text.mjs && prettier --check .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

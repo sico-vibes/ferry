@@ -25,8 +25,10 @@ describe('UI package scaffold', () => {
     const [result] = await eslint.lintFiles([
       resolve(packageDirectory, '../src/__lint_fixture__/raw-color.fixture.tsx'),
     ]);
-    expect(result?.messages.some((message) =>
-      message.message.includes('Use design tokens (packages/ui/src/styles/tokens.css)'),
-    )).toBe(true);
+    expect(
+      result?.messages.some((message) =>
+        message.message.includes('Use design tokens (packages/ui/src/styles/tokens.css)'),
+      ),
+    ).toBe(true);
   });
 });

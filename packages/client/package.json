@@ -3,11 +3,16 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
     "test": "vitest run"
   },
-  "dependencies": { "@ferry/shared": "workspace:*" }
+  "dependencies": {
+    "@ferry/shared": "workspace:*",
+    "zod": "4.6.5"
+  }
 }

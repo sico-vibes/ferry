@@ -3,3 +3,7 @@ out
 coverage
 pnpm-lock.yaml
 design/reference
+.dev
+.delegate
+**/*.md
+packages/ui/src/styles/tokens.css

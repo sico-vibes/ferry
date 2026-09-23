@@ -124,7 +124,10 @@ describe('package boundary lint rules', () => {
       "import { testing } from '@ferry/shared/testing';",
       'export const values = [WorkspaceIdSchema, testing];',
     ].join('\n');
-    const messages = withRule(await lintFile('public-imports.tsx', source), 'no-restricted-imports');
+    const messages = withRule(
+      await lintFile('public-imports.tsx', source),
+      'no-restricted-imports',
+    );
     expect(messages).toEqual([]);
   });
 
