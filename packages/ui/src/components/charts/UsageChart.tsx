@@ -70,7 +70,7 @@ export function UsageChart({
   const names = new Map(providers.map((id) => [id, providerNames[id] ?? id]));
   return (
     <div
-      className="h-44 w-full"
+      className="h-44 min-h-44 w-full"
       role="img"
       aria-label={`14 day stacked ${metric} usage by provider`}
     >

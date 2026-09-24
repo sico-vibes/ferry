@@ -276,6 +276,7 @@ export function Sidebar({
                   )
                   .map((provider) => (
                     <button
+                      title={provider.name}
                       className="context-provider-row"
                       key={provider.id}
                       onClick={() =>

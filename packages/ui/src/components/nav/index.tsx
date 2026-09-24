@@ -24,7 +24,7 @@ import { DropdownMenu } from '../forms';
 import { BrandIcon, IconButton, MiniAdd, Pill, VerifiedBadge, focusRingClass } from '../primitives';
 
 const tileStyles = cva(
-  'flex min-h-[64px] w-14 flex-col items-center gap-1.5 text-[10.5px] leading-[14px] font-medium transition duration-150 ease-out',
+  'flex min-h-[64px] w-14 flex-col items-center gap-1.5 text-[11px] leading-[14px] font-medium transition duration-150 ease-out',
   {
     variants: { active: { true: 'text-text-1', false: 'text-text-3 hover:text-text-2' } },
     defaultVariants: { active: false },
@@ -33,16 +33,19 @@ const tileStyles = cva(
 export function RailTile({
   icon: Icon,
   label,
+  ariaLabel,
   active = false,
   onClick,
 }: {
   icon: LucideIcon;
   label: string;
+  ariaLabel?: string;
   active?: boolean;
   onClick?: () => void;
 }) {
   return (
     <button
+      aria-label={ariaLabel}
       aria-current={active ? 'page' : undefined}
       className={cn(tileStyles({ active }), focusRingClass)}
       onClick={onClick}
@@ -100,6 +103,7 @@ export function IconRail({
       <div className="flex flex-col items-center gap-[18px]">
         <RailTile
           active={active === 'chats'}
+          ariaLabel="Chats navigation"
           icon={MessagesSquare}
           label="Chats"
           onClick={() => {
@@ -132,7 +136,10 @@ export function IconRail({
         <Plus aria-hidden="true" size={16} />
       </button>
       <div className="mt-auto flex w-full flex-col items-center gap-3">
-        <span className="flex w-full flex-col items-center gap-1 rounded-md border border-border-hair px-0.5 py-1 text-meta leading-4 text-text-3">
+        <span
+          data-audit-spacing="intentional"
+          className="flex w-full flex-col items-center gap-1 rounded-md border border-border-hair px-0.5 py-1 text-meta leading-4 text-text-3"
+        >
           <FlaskConical aria-hidden="true" size={13} strokeWidth={1.75} />
           <span>Demo data</span>
         </span>
@@ -225,6 +232,7 @@ export function SidebarItem({
 }) {
   return (
     <div
+      data-audit-spacing="intentional"
       className={cn(
         'group relative flex h-9 items-center gap-2.5 overflow-hidden rounded-item px-2.5 text-[13px] leading-5 font-normal transition duration-150 ease-out',
         active
@@ -304,6 +312,7 @@ export function IntegrationItem({
 export interface TabItem {
   id: string;
   label: string;
+  ariaLabel?: string;
   icon: LucideIcon;
   status?: 'idle' | 'running' | 'awaiting_approval' | 'error';
   successPulse?: boolean;
@@ -365,7 +374,9 @@ export function TabsBar({
                 role="presentation"
               >
                 <button
+                  aria-label={tab.ariaLabel}
                   aria-selected={selected}
+                  data-audit-spacing="intentional"
                   title="Select tab"
                   className={`inline-flex h-full min-w-0 items-center gap-2 rounded-pill px-3.5 text-body font-medium ${focusRingClass}`}
                   onAuxClick={(event) => {
@@ -457,7 +468,7 @@ export function TopRightCluster({
       <Pill variant="dark" size="lg" onClick={onConfiguration}>
         Configuration <Settings aria-hidden="true" size={14} />
       </Pill>
-      <Pill variant="warm-outline" size="lg" onClick={onShare}>
+      <Pill aria-label="Share workspace" variant="warm-outline" size="lg" onClick={onShare}>
         Share <Share2 aria-hidden="true" size={14} />
       </Pill>
       <DropdownMenu

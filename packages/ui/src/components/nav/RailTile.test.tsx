@@ -8,6 +8,7 @@ describe('RailTile', () => {
     render(<RailTile active icon={MessagesSquare} label="Chats" />);
     const button = screen.getByRole('button', { name: 'Chats' });
     expect(button.getAttribute('aria-current')).toBe('page');
-    expect(button.className).toContain('text-[10.5px]');
+    expect(button.className).toContain('text-[11px]');
+    expect(button.className).toContain('leading-[14px]');
   });
 });

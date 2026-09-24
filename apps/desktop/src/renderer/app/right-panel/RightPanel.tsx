@@ -153,7 +153,7 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
         <IconButton label="Collapse right panel" size="sm" onClick={toggleRight}>
           <PanelRight size={16} />
         </IconButton>
-        <IconButton label="Share" size="sm">
+        <IconButton label="Share from right panel" size="sm">
           <Share2 size={16} />
         </IconButton>
         <IconButton label="More options" size="sm">

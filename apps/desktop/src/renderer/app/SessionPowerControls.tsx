@@ -81,7 +81,7 @@ function ApprovalsTray() {
       >
         <Bell size={17} />
         {pending.length > 0 && (
-          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-warn px-1 text-center text-[10px] leading-4 text-[var(--bg-app)]">
+          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-warn px-1 text-center text-[10px] leading-[14px] text-[var(--bg-app)]">
             {pending.length}
           </span>
         )}

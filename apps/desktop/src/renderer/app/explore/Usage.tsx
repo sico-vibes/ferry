@@ -121,14 +121,14 @@ export function UsageCanvas() {
             </nav>
           }
           actions={
-            <span className="rounded-pill border border-border-hair bg-card px-2.5 py-1 text-meta text-text-3">
+            <span className="rounded-pill border border-border-hair bg-card px-3 py-1 text-meta text-text-3">
               Demo data
             </span>
           }
         />
         <div className="usage-top-grid grid">
           <Section title="Capacity remaining" ariaLabel="Capacity remaining">
-            <div className="usage-capacity-grid">
+            <div className="usage-capacity-grid min-h-24">
               <RingGauge
                 label={`${String(capacity?.percentRemaining ?? 0)}% capacity remaining`}
                 size={96}
@@ -174,11 +174,13 @@ export function UsageCanvas() {
               </div>
             </div>
           </Section>
-          {timelineSummary && (
-            <Section ariaLabel="Reset timeline">
+          <Section ariaLabel="Reset timeline" className="min-h-[168px]">
+            {timelineSummary ? (
               <ResetsTimeline providerNames={names} summary={timelineSummary} />
-            </Section>
-          )}
+            ) : (
+              <div aria-hidden="true" className="min-h-[168px]" />
+            )}
+          </Section>
         </div>
         <Section title="Provider usage" ariaLabel="Usage history">
           <header className="mb-3 flex flex-wrap items-center gap-3">
@@ -189,7 +191,7 @@ export function UsageCanvas() {
               {(['requests', 'tokens', 'cost'] as const).map((item) => (
                 <button
                   aria-pressed={metric === item}
-                  className={`rounded-pill px-2.5 py-1.5 text-meta capitalize ${metric === item ? 'bg-blue-tint text-link' : 'text-text-3 hover:text-text-2'}`}
+                  className={`rounded-pill px-3 py-1 text-meta capitalize ${metric === item ? 'bg-blue-tint text-link' : 'text-text-3 hover:text-text-2'}`}
                   key={item}
                   onClick={() => {
                     setMetric(item);
@@ -243,12 +245,12 @@ export function UsageCanvas() {
             <header className="mb-3 flex items-center gap-2">
               <span className="mr-auto" />
               {optimizer?.demo && (
-                <span className="rounded-pill bg-raised px-2 py-1 text-[10px] text-text-2">
+                <span className="rounded-pill bg-raised px-2 py-1 text-[10px] leading-[14px] text-text-2">
                   Demo data
                 </span>
               )}
             </header>
-            <p className="text-[18px] font-semibold tabular-nums text-text-1">
+            <p className="text-[18px] leading-6 font-semibold tabular-nums text-text-1">
               {format(optimizer?.today.savedTokens ?? 0)}{' '}
               <span className="text-label font-medium text-text-2">tokens today</span>
             </p>

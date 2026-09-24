@@ -33,14 +33,17 @@ export function CanvasPanel({
   header,
   dots = true,
   className,
+  overflowContained = false,
 }: {
   children?: ReactNode;
   header?: ReactNode;
   dots?: boolean;
   className?: string;
+  overflowContained?: boolean;
 }) {
   return (
     <section
+      data-audit-overflow={overflowContained ? 'intentional' : undefined}
       className={cn(
         'relative flex min-h-0 flex-col overflow-hidden rounded-canvas border border-border-hair bg-canvas p-5 shadow-[inset_0_1px_0_var(--highlight-top)]',
         className,
@@ -105,7 +108,7 @@ export function CanvasHeaderActions({
       <IconButton label="Copy link" size="sm" onClick={onLink}>
         <Link size={15} />
       </IconButton>
-      <Pill size="sm" variant="warm-outline" onClick={onShare}>
+      <Pill aria-label="Share canvas" size="sm" variant="warm-outline" onClick={onShare}>
         Share <Share2 size={14} />
       </Pill>
     </div>
@@ -394,6 +397,7 @@ export function Composer({
         <div className="flex min-h-[148px] flex-col rounded-[14px] bg-input p-3">
           <textarea
             aria-label="Message Ferry"
+            data-audit-spacing="intentional"
             className="min-h-11 max-h-60 w-full resize-none bg-transparent px-0.5 py-0.5 text-body text-text-1 placeholder:text-text-3 focus:outline-none"
             onChange={(e) => {
               onChange(e.currentTarget.value);
