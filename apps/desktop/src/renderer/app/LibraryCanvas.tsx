@@ -11,10 +11,11 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import type { Workspace, WorkspaceSettings } from '@ferry/shared';
-import { DropdownMenu, Pill, Select, SegmentedControl } from '@ferry/ui';
+import { DropdownMenu, EmptyState, Pill, Select, SegmentedControl, Skeleton } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { keys, useProfiles, useSessions, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
+import { useUI } from '../state/ui';
 
 function ago(value: string) {
   const hours = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 3600000));
@@ -34,16 +35,14 @@ export function LibraryCanvas() {
   const client = useFerryClient();
   const cache = useQueryClient();
   const toast = useToasts((state) => state.push);
-  const { data: workspaces = [] } = useWorkspaces();
+  const { data: workspaces = [], isLoading: workspacesLoading } = useWorkspaces();
   const { data: sessions = [] } = useSessions();
   const { data: profiles = [] } = useProfiles();
   const { data: lanes = [] } = useQuery({
     queryKey: ['lanes'],
     queryFn: () => client.delegation.lanes(),
   });
-  const [selectedId, setSelectedId] = useState<string | null>(() =>
-    localStorage.getItem('ferry.libraryWorkspace'),
-  );
+  const selectedId = useUI((state) => state.selectedWorkspaceId);
   const selected = workspaces.find((workspace) => workspace.id === selectedId) ?? workspaces[0];
   const [settings, setSettings] = useState<WorkspaceSettings | null>(null);
   const [gate, setGate] = useState('');
@@ -66,15 +65,14 @@ export function LibraryCanvas() {
     const path = await openFolder();
     if (!path) return;
     const workspace = await client.workspaces.open(path);
-    setSelectedId(workspace.id);
-    localStorage.setItem('ferry.libraryWorkspace', workspace.id);
+    useUI.getState().setSelectedWorkspace(workspace.id);
     setSettings(workspace.settings);
     await cache.invalidateQueries({ queryKey: keys.workspaces });
   };
   const remove = async (workspace: Workspace) => {
     await client.workspaces.remove(workspace.id);
     if (workspace.id === selected?.id) {
-      setSelectedId(null);
+      useUI.getState().setSelectedWorkspace(null);
       setSettings(null);
     }
     await cache.invalidateQueries({ queryKey: keys.workspaces });
@@ -110,14 +108,12 @@ export function LibraryCanvas() {
               role="button"
               tabIndex={0}
               onClick={() => {
-                setSelectedId(workspace.id);
-                localStorage.setItem('ferry.libraryWorkspace', workspace.id);
+                useUI.getState().setSelectedWorkspace(workspace.id);
                 setSettings(workspace.settings);
               }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
-                  setSelectedId(workspace.id);
-                  localStorage.setItem('ferry.libraryWorkspace', workspace.id);
+                  useUI.getState().setSelectedWorkspace(workspace.id);
                   setSettings(workspace.settings);
                 }
               }}
@@ -138,7 +134,7 @@ export function LibraryCanvas() {
                       label: 'Open',
                       icon: <ExternalLink size={14} />,
                       onSelect: () => {
-                        setSelectedId(workspace.id);
+                        useUI.getState().setSelectedWorkspace(workspace.id);
                         setSettings(workspace.settings);
                       },
                     },
@@ -173,14 +169,17 @@ export function LibraryCanvas() {
               </small>
             </article>
           ))}
-          {!workspaces.length && (
-            <div className="empty-card">
-              <FolderOpen size={24} />
-              <p>No workspaces yet</p>
-              <button className="text-button" onClick={() => void chooseFolder()}>
-                Open your first folder
-              </button>
-            </div>
+          {workspacesLoading ? (
+            <Skeleton rows={4} />
+          ) : (
+            !workspaces.length && (
+              <EmptyState
+                title="No workspaces yet"
+                action="Open your first folder"
+                onAction={() => void chooseFolder()}
+                icon={<FolderOpen size={22} />}
+              />
+            )
           )}
         </div>
         {selected && current ? (

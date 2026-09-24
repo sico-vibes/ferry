@@ -318,20 +318,23 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
     r.finalMessage = 'Implemented the requested change and verified the relevant gates.';
     r.touchedFiles = [
       {
-        path: 'src/index.ts',
+        path: 'src/retry/policy.ts',
         status: 'modified',
         additions: 12,
         deletions: 3,
-        before: 'export {}',
-        after: 'export const ready = true;',
+        before:
+          'export function retryDelay(attempt: number): number {\n  if (attempt < 1) return 0;\n  return attempt * 1000;\n}\n\nexport function retryRequest(run: () => Promise<unknown>) {\n  return run();\n}\n',
+        after:
+          'export interface RetryPolicy {\n  maxAttempts: number;\n  baseDelayMs: number;\n}\n\nexport function retryDelay(attempt: number, policy: RetryPolicy): number {\n  if (attempt < 1) return 0;\n  return Math.min(attempt * policy.baseDelayMs, 8000);\n}\n\nexport async function retryRequest<T>(run: () => Promise<T>, policy: RetryPolicy): Promise<T> {\n  let attempt = 0;\n  while (true) {\n    try { return await run(); }\n    catch (error) { if (++attempt >= policy.maxAttempts) throw error; }\n  }\n}\n',
       },
       {
-        path: 'test/index.test.ts',
+        path: 'test/retry/policy.test.ts',
         status: 'added',
         additions: 8,
         deletions: 0,
         before: null,
-        after: 'expect(true).toBe(true);',
+        after:
+          "import { describe, expect, it, vi } from 'vitest';\nimport { retryDelay, retryRequest } from '../../src/retry/policy';\n\ndescribe('retry policy', () => {\n  it('bounds the backoff delay', () => {\n    expect(retryDelay(20, { maxAttempts: 3, baseDelayMs: 500 })).toBe(8000);\n  });\n  it('retries transient failures', async () => {\n    const run = vi.fn().mockRejectedValueOnce(new Error('temporary')).mockResolvedValue('ok');\n    await expect(retryRequest(run, { maxAttempts: 2, baseDelayMs: 50 })).resolves.toBe('ok');\n    expect(run).toHaveBeenCalledTimes(2);\n  });\n});\n",
       },
     ];
     r.gateResults = [

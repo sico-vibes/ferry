@@ -72,6 +72,16 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
     async send(id, i) {
       await before();
       const s = session(id);
+      if (s.title === 'New Chat') {
+        const title = i.text
+          .trim()
+          .split(/\s+/)
+          .slice(0, 6)
+          .join(' ')
+          .replace(/[.!?…]+$/, '');
+        const first = title.at(0);
+        if (first) s.title = first.toLocaleUpperCase() + title.slice(1);
+      }
       const m: Message = {
         id: stringId('message'),
         sessionId: id,

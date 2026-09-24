@@ -12,7 +12,7 @@ import {
   Share2,
   Star,
 } from 'lucide-react';
-import { IconButton, KbdChip, NewChatButton } from '@ferry/ui';
+import { EmptyState, IconButton, KbdChip, NewChatButton, Skeleton } from '@ferry/ui';
 import { useFerryClient } from '../../data/client';
 import { keys, useSessionDetail, useSessions } from '../../data/queries';
 import { useUI } from '../../state/ui';
@@ -38,10 +38,11 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
   const client = useFerryClient();
   const cache = useQueryClient();
   const navigate = useNavigate();
-  const { data: sessions = [] } = useSessions(search);
+  const { data: sessions = [], isLoading: sessionsLoading } = useSessions(search);
   const openTab = useUI((state) => state.openTab);
   const toggleRight = useUI((state) => state.toggleRight);
   const rightTab = useUI((state) => state.rightTab);
+  const setRightWidth = useUI((state) => state.setRightWidth);
   const setRightTab = useUI((state) => state.setRightTab);
   const activeId = useUI((state) => state.activeId);
   const { data: activeSession } = useSessionDetail(activeId ?? ('' as never));
@@ -96,6 +97,36 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
   return (
     <aside className="right-panel">
       <span className="right-edge-glow" />
+      <button
+        aria-label="Resize right panel"
+        aria-orientation="vertical"
+        className="right-resize-handle"
+        onDoubleClick={() => {
+          setRightWidth(300);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+          event.preventDefault();
+          setRightWidth(useUI.getState().rightWidth + (event.key === 'ArrowLeft' ? 10 : -10));
+        }}
+        onPointerDown={(event) => {
+          const start = event.clientX;
+          const initial = useUI.getState().rightWidth;
+          const move = (next: PointerEvent) => {
+            useUI.getState().setRightWidth(initial + start - next.clientX);
+          };
+          const up = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+          };
+          window.addEventListener('pointermove', move);
+          window.addEventListener('pointerup', up, { once: true });
+        }}
+        role="separator"
+        tabIndex={0}
+        title="Drag to resize. Double-click to reset."
+        type="button"
+      />
       <header className="right-panel-header">
         <IconButton label="Collapse right panel" size="sm" onClick={toggleRight}>
           <PanelRight size={16} />
@@ -139,14 +170,26 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
         ))}
       </nav>
       <div className="right-panel-scroll">
-        {rightTab === 'chats' && (
-          <>
-            {section('Saved topics', saved, true)}
-            <div className="blue-separator" />
-            {section('Recent chats', recent, false)}
-            {sessions.length === 0 && <p className="empty-search">No chats match that search.</p>}
-          </>
-        )}
+        {rightTab === 'chats' &&
+          (sessionsLoading ? (
+            <Skeleton rows={6} />
+          ) : (
+            <>
+              {section('Saved topics', saved, true)}
+              <div className="blue-separator" />
+              {section('Recent chats', recent, false)}
+              {sessions.length === 0 && (
+                <EmptyState
+                  title={search ? 'No chats match that search.' : 'No sessions yet'}
+                  action={search ? 'Clear search' : 'Start a chat'}
+                  onAction={() => {
+                    if (search) setSearch('');
+                    else onNewChat();
+                  }}
+                />
+              )}
+            </>
+          ))}
         {rightTab === 'plan' && (
           <section className="task-panel">
             <h2>

@@ -14,6 +14,7 @@
     "lint:fix": "turbo run lint -- --fix",
     "test": "turbo run test",
     "test:watch": "vitest",
+    "check:affected": "node scripts/check-affected.mjs",
     "check": "turbo run typecheck lint test && node scripts/check-text.mjs && prettier --check .",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

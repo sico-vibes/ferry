@@ -1,109 +1,74 @@
 import { create } from 'zustand';
-import type { SessionId } from '@ferry/shared';
+import { createLayoutSlice, parsePersistedLayout } from './ui-layout';
+import { createPreferencesSlice } from './ui-preferences';
+import { createTabsSlice } from './ui-tabs';
+import type { UIState } from './ui.types';
 
-export type RightTab = 'chats' | 'plan' | 'changes' | 'terminal';
-export type Density = 'comfortable' | 'compact';
-export interface OpenTab {
-  id: SessionId;
-  title: string;
-}
-interface UIState {
-  tabs: OpenTab[];
-  activeId: SessionId | null;
-  leftCollapsed: boolean;
-  rightCollapsed: boolean;
-  rightTab: RightTab;
-  density: Density;
-  openTab: (tab: OpenTab) => void;
-  setActive: (id: SessionId) => void;
-  renameTab: (id: SessionId, title: string) => void;
-  closeTab: (id: SessionId) => void;
-  toggleLeft: () => void;
-  toggleRight: () => void;
-  setRightTab: (tab: RightTab) => void;
-  setDensity: (density: Density) => void;
-}
+export { clampBottomHeight, clampRightWidth, parsePersistedLayout } from './ui-layout';
+export type { Density, OpenTab, RightTab, SettingsSection } from './ui.types';
+
 interface PersistedUI {
-  tabs: OpenTab[];
-  activeId: SessionId | null;
-  leftCollapsed: boolean;
-  rightCollapsed: boolean;
-  rightTab: RightTab;
-  density: Density;
+  tabs: UIState['tabs'];
+  activeId: UIState['activeId'];
+  rightTab: UIState['rightTab'];
+  density: UIState['density'];
 }
-function readPersisted(): Partial<PersistedUI> {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function readPersisted(): Partial<PersistedUI> & Record<string, unknown> {
   try {
     const value = localStorage.getItem('ferry.ui');
-    return value ? (JSON.parse(value) as Partial<PersistedUI>) : {};
+    const parsed: unknown = value ? JSON.parse(value) : {};
+    return isRecord(parsed) ? parsed : {};
   } catch {
     return {};
   }
 }
 const saved = typeof localStorage === 'undefined' ? {} : readPersisted();
-function persist(state: UIState): void {
-  try {
-    localStorage.setItem(
-      'ferry.ui',
-      JSON.stringify({
-        tabs: state.tabs,
-        activeId: state.activeId,
-        leftCollapsed: state.leftCollapsed,
-        rightCollapsed: state.rightCollapsed,
-        rightTab: state.rightTab,
-        density: state.density,
-      }),
-    );
-  } catch {
-    /* Storage is optional in restricted browser contexts. */
-  }
-}
+const savedLayout = parsePersistedLayout(saved);
+
 export const useUI = create<UIState>((set) => {
   const update = (fn: (state: UIState) => Partial<UIState>) => {
     set((state) => {
       const next = fn(state);
       const merged = { ...state, ...next };
-      persist(merged);
+      try {
+        localStorage.setItem(
+          'ferry.ui',
+          JSON.stringify({
+            tabs: merged.tabs,
+            activeId: merged.activeId,
+            leftCollapsed: merged.leftCollapsed,
+            rightCollapsed: merged.rightCollapsed,
+            rightTab: merged.rightTab,
+            density: merged.density,
+            rightWidth: merged.rightWidth,
+            bottomOpen: merged.bottomOpen,
+            bottomHeight: merged.bottomHeight,
+            bottomTab: merged.bottomTab,
+          }),
+        );
+      } catch {
+        /* Storage is optional in restricted browser contexts. */
+      }
       return next;
     });
   };
   return {
-    tabs: saved.tabs ?? [],
-    activeId: saved.activeId ?? null,
-    leftCollapsed: saved.leftCollapsed ?? false,
-    rightCollapsed: saved.rightCollapsed ?? false,
-    rightTab: saved.rightTab ?? 'chats',
-    density: saved.density ?? 'comfortable',
-    openTab: (tab) => {
-      update((s) => ({
-        tabs: s.tabs.some((item) => item.id === tab.id)
-          ? s.tabs.map((item) => (item.id === tab.id ? tab : item))
-          : [...s.tabs, tab],
-        activeId: tab.id,
-      }));
-    },
-    setActive: (id) => {
-      update(() => ({ activeId: id }));
-    },
-    renameTab: (id, title) => {
-      update((s) => ({ tabs: s.tabs.map((tab) => (tab.id === id ? { ...tab, title } : tab)) }));
-    },
-    closeTab: (id) => {
-      update((s) => {
-        const tabs = s.tabs.filter((tab) => tab.id !== id);
-        return { tabs, activeId: s.activeId === id ? (tabs.at(-1)?.id ?? null) : s.activeId };
-      });
-    },
-    toggleLeft: () => {
-      update((s) => ({ leftCollapsed: !s.leftCollapsed }));
-    },
-    toggleRight: () => {
-      update((s) => ({ rightCollapsed: !s.rightCollapsed }));
-    },
-    setRightTab: (rightTab) => {
-      update(() => ({ rightTab }));
-    },
-    setDensity: (density) => {
-      update(() => ({ density }));
-    },
+    tabs: Array.isArray(saved.tabs) ? saved.tabs : [],
+    activeId: typeof saved.activeId === 'string' ? saved.activeId : null,
+    ...savedLayout,
+    rightTab:
+      saved.rightTab === 'plan' || saved.rightTab === 'changes' || saved.rightTab === 'terminal'
+        ? saved.rightTab
+        : 'chats',
+    density: saved.density === 'compact' ? 'compact' : 'comfortable',
+    settingsSection: 'General',
+    selectedWorkspaceId: null,
+    exploreFilter: 'All',
+    ...createLayoutSlice(update),
+    ...createTabsSlice(update),
+    ...createPreferencesSlice(update),
   };
 });

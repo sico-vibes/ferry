@@ -38,3 +38,12 @@ core: agent loop · router · quota ledger · providers (AI SDK) · workspace to
 6. The optimizer filters the output and keeps a recovery handle.
 7. The step and the task record are persisted.
 8. If the model changes, a handoff briefing and a `handoff_marker` are produced.
+
+## Where to register a new screen / shot / e2e flow / mount / store slice
+
+- **Screen:** add a route fragment in `apps/desktop/src/renderer/app/routes/` and register its factory in `routeRegistry` in `app/routes/index.ts`.
+- **Screenshot:** add a `{ name, run(page, ctx) }` module under `apps/desktop/scripts/shots/`; the `shot` runner applies optional name filters.
+- **E2E flow:** add a `{ name, run(page, ctx) }` module under `apps/desktop/scripts/e2e/flows/`; the `e2e` runner applies optional name filters.
+- **App mount:** add a React component to `app/mounts.tsx` and append it to `appMounts`.
+- **UI state:** add the concern's state/actions in its own `state/ui-*.ts` slice and compose it from `state/ui.ts`.
+- **UI kit exports:** add folder exports to that folder's `index.ts`; the package root re-exports folder barrels.

@@ -16,6 +16,7 @@ import { FerryProvider } from '../data/client';
 import { LibraryCanvas } from './LibraryCanvas';
 import { OnboardingCanvas } from './OnboardingCanvas';
 import { SettingsCanvas } from './SettingsCanvas';
+import { useUI } from '../state/ui';
 
 function renderRoute(
   path: 'library' | 'settings' | 'onboarding',
@@ -77,8 +78,8 @@ describe('Library, settings, and onboarding screens', () => {
 
   it('saves edited profile spending caps', async () => {
     const client = createDemoFerryClient();
+    useUI.getState().setSettingsSection('Profiles');
     renderRoute('settings', client);
-    await userEvent.click(await screen.findByRole('button', { name: 'Profiles' }));
     await userEvent.click(await screen.findByRole('button', { name: /Best Available/ }));
     await userEvent.clear(screen.getByRole('textbox', { name: 'Daily cap ($)' }));
     await userEvent.type(screen.getByRole('textbox', { name: 'Daily cap ($)' }), '4');

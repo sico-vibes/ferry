@@ -4,11 +4,14 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 
 const TEXT = /\.(ts|tsx|js|mjs|cjs|json|md|css|html|yml|yaml)$/;
-const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
-  encoding: 'utf8',
-})
-  .split('\n')
-  .filter((file) => TEXT.test(file) && existsSync(file));
+const specified = process.argv.slice(2);
+const files = (
+  specified.length > 0
+    ? specified
+    : execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
+        encoding: 'utf8',
+      }).split('\n')
+).filter((file) => TEXT.test(file) && existsSync(file));
 
 const withBom = files.filter((file) => {
   const head = readFileSync(file).subarray(0, 3);

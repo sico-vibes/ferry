@@ -4,11 +4,11 @@ import { useNavigate } from '@tanstack/react-router';
 import { Dialog } from 'radix-ui';
 import { ArrowDown, ArrowUp, ArrowUpRight, Check, ExternalLink, Search, X } from 'lucide-react';
 import type { Provider } from '@ferry/shared';
-import { BrandIcon, Pill, ProviderCard } from '@ferry/ui';
+import { BrandIcon, EmptyState, ErrorState, Pill, ProviderCard, Skeleton } from '@ferry/ui';
 import { useFerryClient } from '../../data/client';
 import { useToasts } from '../../state/toasts';
+import { useUI } from '../../state/ui';
 
-type ProviderFilter = 'All' | 'Free' | 'Paid' | 'CLI';
 type ModelSort =
   | 'name'
   | 'providerId'
@@ -30,7 +30,7 @@ export function ExploreCanvas() {
   const navigate = useNavigate();
   const cache = useQueryClient();
   const pushToast = useToasts((state) => state.push);
-  const [filter, setFilter] = useState<ProviderFilter>('All');
+  const filter = useUI((state) => state.exploreFilter);
   const [search, setSearch] = useState('');
   const [modelTier, setModelTier] = useState<(typeof modelFilters)[number]>('All tiers');
   const [modelKind, setModelKind] = useState<(typeof freeFilters)[number]>('All');
@@ -45,7 +45,12 @@ export function ExploreCanvas() {
   const [showKey, setShowKey] = useState(false);
   const [keyError, setKeyError] = useState('');
   const [probing, setProbing] = useState<string | null>(null);
-  const { data: providers = [] } = useQuery({
+  const {
+    data: providers = [],
+    isLoading: providersLoading,
+    isError: providersError,
+    refetch: refetchProviders,
+  } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
@@ -260,7 +265,7 @@ export function ExploreCanvas() {
               className={`rounded-pill border px-3 py-1.5 text-label transition ${filter === item ? 'border-border-strong bg-raised text-text-1' : 'border-border-hair text-text-2 hover:bg-white/[0.04]'}`}
               key={item}
               onClick={() => {
-                setFilter(item);
+                useUI.getState().setExploreFilter(item);
               }}
               type="button"
             >
@@ -269,25 +274,50 @@ export function ExploreCanvas() {
           ))}
           <span className="ml-auto text-meta text-text-3">{visibleProviders.length} providers</span>
         </section>
-        {visibleProviders.length > 0 ? (
+        {providersLoading ? (
+          <Skeleton rows={4} />
+        ) : providersError ? (
+          <ErrorState
+            title="Provider list could not load"
+            action="Retry"
+            onAction={() => void refetchProviders()}
+          />
+        ) : visibleProviders.length > 0 ? (
           <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))] gap-3">
             {visibleProviders.map((provider) => (
-              <ProviderCard
-                key={provider.id}
-                onManageKey={() => {
-                  openManage(provider);
-                }}
-                onTest={() => void probe(provider)}
-                onToggle={(enabled) => void toggleProvider(provider, enabled)}
-                probing={probing === provider.id}
-                provider={provider}
-              />
+              <div id={`provider-${provider.id}`} key={provider.id}>
+                <ProviderCard
+                  onManageKey={() => {
+                    openManage(provider);
+                  }}
+                  onTest={() => void probe(provider)}
+                  onToggle={(enabled) => void toggleProvider(provider, enabled)}
+                  probing={probing === provider.id}
+                  provider={provider}
+                />
+                {provider.health === 'down' && (
+                  <ErrorState
+                    title={`${provider.name} probe failed`}
+                    action="Review provider"
+                    onAction={() => {
+                      openManage(provider);
+                    }}
+                  />
+                )}
+              </div>
             ))}
           </div>
+        ) : providers.length === 0 ? (
+          <EmptyState title="No providers connected" action="Add a provider" onAction={openAdd} />
         ) : (
-          <div className="rounded-card border border-border-hair bg-card p-6 text-center text-body text-text-3">
-            No providers match this search.
-          </div>
+          <EmptyState
+            title="No providers match this search"
+            action="Clear filters"
+            onAction={() => {
+              setSearch('');
+              useUI.getState().setExploreFilter('All');
+            }}
+          />
         )}
         <section aria-label="Models" className="grid gap-3 pt-2">
           <header className="flex flex-wrap items-end gap-3">

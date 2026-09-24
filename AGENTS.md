@@ -15,6 +15,7 @@ Ferry is a desktop (Electron + React) and CLI coding agent that routes work acro
 .\tools\pnpm.cmd exec prettier --write <files you touched>   # format first
 .\tools\pnpm.cmd check        # = typecheck + lint + test + no-BOM check + prettier --check
 ```
+During parallel implementation, iterate with `.\tools\pnpm.cmd check:affected` (Turbo affected typecheck/lint/test plus no-BOM and Prettier checks on changed files). Finish with the full `.\tools\pnpm.cmd check` gate.
 Single package: `.\tools\pnpm.cmd --filter @ferry/<pkg> test`.
 **File encoding:** write every file as UTF-8 **without BOM**, LF line endings. (PowerShell `Set-Content`/`Out-File` add a BOM — use your file-editing tool, or `[IO.File]::WriteAllText($path, $text, [Text.UTF8Encoding]::new($false))`.)
 UI tasks additionally: `.\tools\pnpm.cmd shot <screen>` when the brief asks for screenshots.

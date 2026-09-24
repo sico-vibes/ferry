@@ -17,31 +17,6 @@ import {
   TextField,
 } from '@ferry/ui';
 import type { Profile, StepKind, Tier } from '@ferry/shared';
-import {
-  BookOpen,
-  Bot,
-  Database,
-  KeyRound,
-  Layers,
-  Shield,
-  SlidersHorizontal,
-  Sparkles,
-  UserRound,
-  Wrench,
-} from 'lucide-react';
-
-const sections = [
-  ['General', UserRound],
-  ['Profiles', Layers],
-  ['Providers & Keys', KeyRound],
-  ['Optimizers', SlidersHorizontal],
-  ['Delegation', Bot],
-  ['Permissions', Shield],
-  ['Skills', Sparkles],
-  ['MCP', Wrench],
-  ['Data & Privacy', Database],
-  ['About', BookOpen],
-] as const;
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
 const stepLabels: Record<StepKind, string> = {
   plan: 'Plan',
@@ -57,8 +32,7 @@ export function SettingsCanvas() {
   const cache = useQueryClient();
   const navigate = useNavigate();
   const toast = useToasts((state) => state.push);
-  const density = useUI((state) => state.density);
-  const [section, setSection] = useState<string>('General');
+  const section = useUI((state) => state.settingsSection);
   const [confirm, setConfirm] = useState('');
   const [addMcp, setAddMcp] = useState(false);
   const [mcpName, setMcpName] = useState('');
@@ -161,19 +135,6 @@ export function SettingsCanvas() {
                 />
                 <span>{(settings?.fontScale ?? 1).toFixed(2)}×</span>
               </div>
-            </SettingRow>
-            <SettingRow title="Transcript density" helper="Compact spacing for longer agent runs.">
-              <SegmentedControl
-                label="Transcript density"
-                value={density}
-                onValueChange={(value) => {
-                  useUI.getState().setDensity(value as typeof density);
-                }}
-                options={[
-                  { value: 'comfortable', label: 'Comfortable' },
-                  { value: 'compact', label: 'Compact' },
-                ]}
-              />
             </SettingRow>
             <SettingRow
               title="Restore tabs"
@@ -775,25 +736,18 @@ export function SettingsCanvas() {
           <h1>Settings</h1>
           <p>Control how Ferry works across your workspaces.</p>
         </div>
+        {section === 'General' && (
+          <Pill
+            onClick={() => {
+              useUI.getState().resetLayout();
+            }}
+            variant="outline"
+          >
+            Reset layout
+          </Pill>
+        )}
       </header>
-      <div className="settings-layout">
-        <nav className="settings-nav" aria-label="Settings sections">
-          {sections.map(([name, Icon]) => (
-            <button
-              key={name}
-              className={section === name ? 'active' : ''}
-              onClick={() => {
-                setSection(name);
-                setProfileDraft(null);
-              }}
-            >
-              <Icon size={16} />
-              {name}
-            </button>
-          ))}
-        </nav>
-        <main className="settings-content">{body()}</main>
-      </div>
+      <main className="settings-content settings-content-framed">{body()}</main>
       <Dialog
         open={Boolean(confirm)}
         onOpenChange={(open) => {

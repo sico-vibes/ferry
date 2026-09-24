@@ -7,6 +7,8 @@ import { useFerryEvents } from '../data/events';
 import { Sidebar } from './Sidebar';
 import { RightPanel } from './right-panel/RightPanel';
 import { useUI } from '../state/ui';
+import { clampBottomHeight, clampRightWidth, parsePersistedLayout } from '../state/ui';
+import { mockShellOutput } from './BottomPanel';
 
 const navigateMock = vi.hoisted(() => vi.fn());
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigateMock }));
@@ -37,15 +39,97 @@ afterEach(() => {
     leftCollapsed: false,
     rightCollapsed: false,
     rightTab: 'chats',
+    rightWidth: 300,
+    bottomOpen: false,
+    bottomHeight: 260,
+    bottomTab: 'terminal',
   });
 });
 
 describe('desktop frame interactions', () => {
+  it('clamps, persists, and toggles the resizable panel state', () => {
+    expect(clampRightWidth(120)).toBe(300);
+    expect(clampRightWidth(700)).toBe(560);
+    expect(clampBottomHeight(100)).toBe(200);
+    expect(clampBottomHeight(600)).toBe(480);
+    useUI.getState().setRightWidth(410);
+    useUI.getState().setBottomHeight(330);
+    useUI.getState().toggleBottom();
+    expect(useUI.getState().bottomOpen).toBe(true);
+    const persisted = JSON.parse(localStorage.getItem('ferry.ui') ?? '{}') as {
+      rightWidth?: number;
+      bottomHeight?: number;
+      bottomOpen?: boolean;
+    };
+    expect(persisted).toMatchObject({ rightWidth: 410, bottomHeight: 330, bottomOpen: true });
+  });
+
+  it('validates persisted layout values and restores the default layout', () => {
+    expect(
+      parsePersistedLayout({
+        leftCollapsed: true,
+        rightCollapsed: false,
+        rightWidth: 900,
+        bottomOpen: true,
+        bottomHeight: 140,
+        bottomTab: 'agent-log',
+      }),
+    ).toEqual({
+      leftCollapsed: true,
+      rightCollapsed: false,
+      rightWidth: 560,
+      bottomOpen: true,
+      bottomHeight: 200,
+      bottomTab: 'agent-log',
+    });
+    expect(parsePersistedLayout({ leftCollapsed: 'collapsed', rightWidth: Number.NaN })).toEqual({
+      leftCollapsed: false,
+      rightCollapsed: false,
+      rightWidth: 300,
+      bottomOpen: false,
+      bottomHeight: 260,
+      bottomTab: 'terminal',
+    });
+
+    useUI.getState().toggleLeft();
+    useUI.getState().toggleRight();
+    useUI.getState().setRightWidth(480);
+    useUI.getState().toggleBottom();
+    useUI.getState().resetLayout();
+    expect(useUI.getState()).toMatchObject({
+      leftCollapsed: false,
+      rightCollapsed: false,
+      rightWidth: 300,
+      bottomOpen: false,
+      bottomHeight: 260,
+      bottomTab: 'terminal',
+    });
+  });
+
+  it('returns canned output from the mock shell', () => {
+    expect(mockShellOutput('git status')).toContain('working tree clean');
+    expect(mockShellOutput('ls')).toContain('packages');
+    expect(mockShellOutput('nonsense')).toBe('mock shell: command not available in demo');
+  });
+
   it('routes rail navigation to Explore', async () => {
     mount(<Sidebar />);
     await screen.findByText('Best Available');
     fireEvent.click(screen.getByRole('button', { name: 'Explore' }));
     expect(navigateMock).toHaveBeenCalledWith({ to: '/explore' });
+  });
+
+  it('switches sidebar content for Library, Explore, and Settings destinations', async () => {
+    const library = mount(<Sidebar activeNav="library" />);
+    expect(await screen.findByRole('button', { name: /Open folder/ })).toBeTruthy();
+    expect(await screen.findByText('ferry-web')).toBeTruthy();
+    library.unmount();
+    mount(<Sidebar activeNav="explore" />);
+    expect(await screen.findByRole('navigation', { name: 'Provider filters' })).toBeTruthy();
+    expect(await screen.findByText(/Gemini API/)).toBeTruthy();
+    cleanup();
+    mount(<Sidebar activeNav={null} />);
+    expect(await screen.findByRole('navigation', { name: 'Settings sections' })).toBeTruthy();
   });
 
   it('creates a session and opens a tab from New Chat', async () => {
