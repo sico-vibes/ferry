@@ -1,5 +1,5 @@
 {
-  "name": "@ferry/workspace",
+  "name": "@ferry/optimizer",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -13,18 +13,9 @@
   },
   "dependencies": {
     "@ferry/shared": "workspace:*",
-    "@vscode/ripgrep": "1.18.0",
-    "@vscode/tree-sitter-wasm": "0.3.1",
-    "diff-match-patch": "1.0.5",
-    "execa": "10.0.1",
-    "ignore": "7.0.10",
-    "jsonrepair": "3.15.0",
-    "node-pty": "1.1.0",
-    "simple-git": "3.36.0",
-    "tinyglobby": "0.2.17",
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@types/diff-match-patch": "1.0.36"
+    "fast-check": "4.10.2"
   }
 }

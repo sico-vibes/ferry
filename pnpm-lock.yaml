@@ -230,6 +230,19 @@ importers:
         specifier: workspace:*
         version: link:../testkit
 
+  packages/optimizer:
+    dependencies:
+      '@ferry/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+    devDependencies:
+      fast-check:
+        specifier: 4.10.2
+        version: 4.10.2
+
   packages/providers:
     dependencies:
       '@ai-sdk/anthropic':
@@ -462,6 +475,9 @@ importers:
       '@vscode/ripgrep':
         specifier: 1.18.0
         version: 1.18.0
+      '@vscode/tree-sitter-wasm':
+        specifier: 0.3.1
+        version: 0.3.1
       diff-match-patch:
         specifier: 1.0.5
         version: 1.0.5
@@ -483,12 +499,6 @@ importers:
       tinyglobby:
         specifier: 0.2.17
         version: 0.2.17
-      tree-sitter-wasms:
-        specifier: 0.1.13
-        version: 0.1.13
-      web-tree-sitter:
-        specifier: 0.27.0
-        version: 0.27.0
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -3297,6 +3307,9 @@ packages:
   '@vscode/ripgrep@1.18.0':
     resolution: {integrity: sha512-ns5lWe44tSfbTMbVUsyB+I1819PVSw4AdpgK0RNkzfWfwy6+3IUNSxwSrfTno1/oWaS/hERNz+XLWVyga2aJBQ==}
 
+  '@vscode/tree-sitter-wasm@0.3.1':
+    resolution: {integrity: sha512-RJFoomET6FajjG511fmQxeBQfU6M24a0aFZPqpid+ttIxanWf1VGytBG0UmsGjt07qmIPJS8U31D+aecuCucsQ==}
+
   '@workflow/serde@4.1.0':
     resolution: {integrity: sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ==}
 
@@ -6101,9 +6114,6 @@ packages:
     resolution: {integrity: sha512-bLVMLPtstlZ4iMQHpFHTR7GAGj2jxi8Dg0s2h2MafAE4uSWF98FC/3MomU51iQAMf8/qDUbKWf5GxuvvVcXEhw==}
     engines: {node: '>=20'}
 
-  tree-sitter-wasms@0.1.13:
-    resolution: {integrity: sha512-wT+cR6DwaIz80/vho3AvSF0N4txuNx/5bcRKoXouOfClpxh/qqrF4URNLQXbbt8MaAxeksZcZd1j8gcGjc+QxQ==}
-
   trim-lines@3.0.1:
     resolution: {integrity: sha512-kRj8B+YHZCc9kQYdWfJB2/oUl9rA99qbowYYBtr4ui4mZyAQ2JpvVBd/6U2YloATfqBhBTSMhTpgBHtU0Mf3Rg==}
 
@@ -6472,9 +6482,6 @@ packages:
 
   web-namespaces@2.0.1:
     resolution: {integrity: sha512-bKr1DkiNa2krS7qxNtdrtHAmzuYGFQLiQ13TsorsdT6ULTkPLKuu5+GsFpDlg6JFjUTwX2DyhMPG2be8uPrqsQ==}
-
-  web-tree-sitter@0.27.0:
-    resolution: {integrity: sha512-XK08gj6RwTMQatAG7uVRP8MunqotL/XC19vHgkSPKmELgbGPBj4ECvB8haHOUnyj6ls2B8t42UTro14zxGgAHg==}
 
   webcrypto-core@1.9.2:
     resolution: {integrity: sha512-gsXecm82UQNlTBURJGuqOWy1Ww08S3kZUcr3aOJS02Pk0xLtkfeUAVC0u0xhgdonFme80edSJUIJyuvL/7250Q==}
@@ -9189,6 +9196,8 @@ snapshots:
       '@vscode/ripgrep-win32-arm64': 1.18.0
       '@vscode/ripgrep-win32-ia32': 1.18.0
       '@vscode/ripgrep-win32-x64': 1.18.0
+
+  '@vscode/tree-sitter-wasm@0.3.1': {}
 
   '@workflow/serde@4.1.0': {}
 
@@ -12473,8 +12482,6 @@ snapshots:
     dependencies:
       punycode: 2.3.1
 
-  tree-sitter-wasms@0.1.13: {}
-
   trim-lines@3.0.1: {}
 
   trough@2.2.0: {}
@@ -12807,8 +12814,6 @@ snapshots:
       xml-name-validator: 5.0.0
 
   web-namespaces@2.0.1: {}
-
-  web-tree-sitter@0.27.0: {}
 
   webcrypto-core@1.9.2:
     dependencies:
