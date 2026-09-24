@@ -137,7 +137,7 @@ try {
     await page.getByRole('button', { name: 'Continue' }).click();
     await page.getByRole('button', { name: 'Continue' }).click();
     await page.getByRole('button', { name: 'Skip for now' }).click();
-    await expect(page.getByRole('region', { name: 'Continue' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Continue', exact: true })).toBeVisible();
 
     await page.goto(`${url}/settings`);
     await page

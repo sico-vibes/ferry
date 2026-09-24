@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, FolderOpen, Sparkles } from 'lucide-react';
@@ -37,13 +37,26 @@ export function OnboardingCanvas() {
   const cache = useQueryClient();
   const navigate = useNavigate();
   const toast = useToasts((state) => state.push);
-  const [step, setStep] = useState(0);
-  const [selected, setSelected] = useState<string[]>([]);
+  const [step, setStep] = useState(() => Number(localStorage.getItem('ferry.onboardingStep') ?? 0));
+  const [selected, setSelected] = useState<string[]>(() => {
+    try {
+      const value: unknown = JSON.parse(localStorage.getItem('ferry.onboardingProviders') ?? '[]');
+      return Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === 'string')
+        : [];
+    } catch {
+      return [];
+    }
+  });
   const [keysByProvider, setKeysByProvider] = useState<Record<string, string>>({});
   const [tested, setTested] = useState<Record<string, string>>({});
   const [profile, setProfile] = useState('profile_free');
   const [delegation, setDelegation] = useState('suggest');
   const [terse, setTerse] = useState('lite');
+  useEffect(() => {
+    localStorage.setItem('ferry.onboardingStep', String(step));
+    localStorage.setItem('ferry.onboardingProviders', JSON.stringify(selected));
+  }, [step, selected]);
   const { data: providers = [] } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
@@ -82,7 +95,10 @@ export function OnboardingCanvas() {
     if (provider?.keyStatus === 'missing' && keysByProvider[id])
       await client.providers.setKey(id as ProviderId, keysByProvider[id] ?? '');
     const result = await client.providers.probe(id as ProviderId);
-    setTested((old) => ({ ...old, [id]: result.message }));
+    setTested((old) => ({
+      ...old,
+      [id]: `${result.message} · ${result.latencyMs === null ? 'CLI' : `${String(result.latencyMs)} ms`} · Next: choose a profile below.`,
+    }));
     await cache.invalidateQueries({ queryKey: ['providers'] });
   };
   const chooseFolder = async () => {
@@ -93,7 +109,17 @@ export function OnboardingCanvas() {
     }
   };
   return (
-    <section className="canvas onboarding-page">
+    <section
+      className="canvas onboarding-page"
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' || event.defaultPrevented) return;
+        const target = event.target;
+        if (target instanceof HTMLElement && target.closest('button, input, textarea, select, a'))
+          return;
+        event.preventDefault();
+        setStep((current) => Math.min(3, current + 1));
+      }}
+    >
       <div className="onboarding-top">
         <div className="onboarding-brand">
           <FerryMark variant="icon" size={30} />

@@ -2894,3 +2894,33 @@ body {
     display: none;
   }
 }
+.tab-success-pulse {
+  animation: ferry-success-pulse 1.2s ease-out both;
+}
+
+@keyframes ferry-success-pulse {
+  0% {
+    background-color: var(--blue-500);
+    box-shadow: 0 0 0 0 var(--blue-glow);
+  }
+  45% {
+    background-color: var(--success);
+    box-shadow: 0 0 10px 2px var(--success);
+  }
+  100% {
+    background-color: var(--success);
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-success-pulse {
+    animation: none;
+    background-color: var(--success);
+  }
+}
+
+button:not(:disabled):active,
+[role='button']:not([aria-disabled='true']):active {
+  transform: translateY(1px) scale(0.985);
+}

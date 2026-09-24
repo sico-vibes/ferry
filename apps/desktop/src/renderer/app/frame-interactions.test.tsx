@@ -135,7 +135,7 @@ describe('desktop frame interactions', () => {
   it('creates a session and opens a tab from New Chat', async () => {
     mount(<Sidebar />);
     await screen.findByText('Best Available');
-    fireEvent.click(screen.getByRole('button', { name: 'New conversation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New chat from sidebar' }));
     await waitFor(() => {
       expect(useUI.getState().tabs).toHaveLength(1);
     });

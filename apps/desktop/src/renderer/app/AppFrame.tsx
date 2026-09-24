@@ -11,6 +11,7 @@ import { useUI } from '../state/ui';
 import { Sidebar } from './Sidebar';
 import { RightPanel } from './right-panel/RightPanel';
 import { appMounts } from './mounts';
+import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
 
 export function AppFrame({ children }: { children: React.ReactNode }) {
   const client = useFerryClient();
@@ -49,6 +50,8 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const toastItems = useToasts((state) => state.items);
   const dismissToast = useToasts((state) => state.dismiss);
   const [closePrompt, setClosePrompt] = useState<string | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [successPulseIds, setSuccessPulseIds] = useState<string[]>([]);
   const [simulatedOffline, setSimulatedOffline] = useState(
     () => localStorage.getItem('ferry.simulateOffline') === 'true',
   );
@@ -112,10 +115,28 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
+    const pulse = (event: Event) => {
+      const id = (event as CustomEvent<{ sessionId: string }>).detail.sessionId;
+      if (!id) return;
+      setSuccessPulseIds((current) => [...new Set([...current, id])]);
+      window.setTimeout(() => {
+        setSuccessPulseIds((current) => current.filter((item) => item !== id));
+      }, 1200);
+    };
+    window.addEventListener('ferry:success-pulse', pulse);
+    return () => {
+      window.removeEventListener('ferry:success-pulse', pulse);
+    };
+  }, []);
+
+  useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (!event.ctrlKey) return;
       const key = event.key.toLowerCase();
-      if (key === 'n') {
+      if (key === '/') {
+        event.preventDefault();
+        setShortcutsOpen(true);
+      } else if (key === 'n') {
         event.preventDefault();
         void createChat();
       } else if (key === 'b' && event.shiftKey) {
@@ -165,6 +186,16 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   ]);
 
   useEffect(() => {
+    const openShortcuts = () => {
+      setShortcutsOpen(true);
+    };
+    window.addEventListener('ferry:show-shortcuts', openShortcuts);
+    return () => {
+      window.removeEventListener('ferry:show-shortcuts', openShortcuts);
+    };
+  }, []);
+
+  useEffect(() => {
     const syncOffline = () => {
       setSimulatedOffline(localStorage.getItem('ferry.simulateOffline') === 'true');
     };
@@ -195,6 +226,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           label: labels.get(tab.id) ?? tab.title,
           icon: FileText,
           status: sessions.find((session) => session.id === tab.id)?.status ?? 'idle',
+          successPulse: successPulseIds.includes(tab.id),
         }));
   const homeTab = tabs.length === 0 && pathname === '/';
   const currentId = pathname.startsWith('/s/')
@@ -336,6 +368,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           </Pill>
         </div>
       </Dialog>
+      <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </div>
   );
 }

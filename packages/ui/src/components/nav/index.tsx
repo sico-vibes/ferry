@@ -306,6 +306,7 @@ export interface TabItem {
   label: string;
   icon: LucideIcon;
   status?: 'idle' | 'running' | 'awaiting_approval' | 'error';
+  successPulse?: boolean;
 }
 export function TabsBar({
   tabs,
@@ -365,6 +366,7 @@ export function TabsBar({
               >
                 <button
                   aria-selected={selected}
+                  title="Select tab"
                   className={`inline-flex h-full min-w-0 items-center gap-2 rounded-pill px-3.5 text-body font-medium ${focusRingClass}`}
                   onAuxClick={(event) => {
                     if (event.button === 1) onClose?.(tab.id);
@@ -384,10 +386,14 @@ export function TabsBar({
                 >
                   <Icon aria-hidden="true" size={14} strokeWidth={1.75} />
                   <span className="truncate">{tab.label}</span>
-                  {tab.status && tab.status !== 'idle' && (
+                  {(tab.successPulse ?? Boolean(tab.status && tab.status !== 'idle')) && (
                     <span
                       aria-label={
-                        tab.status === 'awaiting_approval' ? 'Awaiting approval' : tab.status
+                        tab.successPulse
+                          ? 'Completed successfully'
+                          : tab.status === 'awaiting_approval'
+                            ? 'Awaiting approval'
+                            : tab.status
                       }
                       className={cn(
                         'size-2 shrink-0 rounded-full',
@@ -395,6 +401,8 @@ export function TabsBar({
                           'animate-pulse bg-blue-500 motion-reduce:animate-none',
                         tab.status === 'awaiting_approval' && 'bg-warn',
                         tab.status === 'error' && 'bg-danger',
+                        tab.successPulse &&
+                          'bg-blue-500 tab-success-pulse motion-reduce:animate-none',
                       )}
                       role="img"
                     />
@@ -403,6 +411,7 @@ export function TabsBar({
                 {onClose && (
                   <button
                     aria-label={`Close ${tab.label}`}
+                    title={`Close tab · Ctrl+W`}
                     className={`mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-full text-text-2 opacity-0 transition hover:bg-icon-circle hover:text-text-1 group-hover:opacity-100 group-focus-within:opacity-100 ${focusRingClass}`}
                     onClick={() => {
                       onClose(tab.id);
@@ -418,6 +427,7 @@ export function TabsBar({
         </div>
         <button
           aria-label="Add tab"
+          title="New chat · Ctrl+N"
           className={`flex size-[34px] shrink-0 items-center justify-center rounded-full border border-border-hair bg-icon-circle text-text-2 hover:bg-raised ${focusRingClass}`}
           onClick={onAdd}
           type="button"

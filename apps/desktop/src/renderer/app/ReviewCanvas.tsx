@@ -71,6 +71,8 @@ export function ReviewCanvas() {
   const decide = async (decision: 'accepted' | 'rejected' | 'rework') => {
     if (!canDecide) return;
     await decideReview(client, run.id, decision, decision === 'rework' ? brief : undefined);
+    if (decision === 'accepted')
+      window.dispatchEvent(new CustomEvent('ferry:success-pulse', { detail: { sessionId } }));
     await cache.invalidateQueries({ queryKey: ['delegation', sessionId] });
     await navigate({ to: '/s/$sessionId', params: { sessionId } });
   };

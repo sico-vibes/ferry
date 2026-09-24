@@ -20,6 +20,7 @@ import {
   TextField,
 } from '@ferry/ui';
 import type { Profile, StepKind, Tier } from '@ferry/shared';
+import { ProviderKeyDialog } from './ProviderKeyDialog';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
 const stepLabels: Record<StepKind, string> = {
   plan: 'Plan',
@@ -50,6 +51,8 @@ export function SettingsCanvas() {
   const toast = useToasts((state) => state.push);
   const section = useUI((state) => state.settingsSection);
   const [confirm, setConfirm] = useState('');
+  const [confirmAction, setConfirmAction] = useState<(() => void | Promise<void>) | null>(null);
+  const [keyProvider, setKeyProvider] = useState<(typeof providers)[number] | null>(null);
   const [addMcp, setAddMcp] = useState(false);
   const [mcpName, setMcpName] = useState('');
   const [mcpAddress, setMcpAddress] = useState('');
@@ -83,6 +86,34 @@ export function SettingsCanvas() {
     queryFn: () => client.system.info(),
   });
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
+  const [testingProvider, setTestingProvider] = useState<string | null>(null);
+  const testProvider = async (provider: (typeof providers)[number]) => {
+    setTestingProvider(provider.id);
+    try {
+      const result = await client.providers.probe(provider.id);
+      toast({
+        kind: result.ok ? 'success' : 'error',
+        title: result.ok
+          ? `Connected · ${result.latencyMs === null ? 'CLI' : `${String(result.latencyMs)} ms`}`
+          : 'Connection failed',
+        body: result.ok
+          ? `Next: choose ${provider.name} in a profile.`
+          : `${result.message}. Check the key and try again.`,
+      });
+      await cache.invalidateQueries({ queryKey: ['providers'] });
+    } catch (error) {
+      toast({
+        kind: 'error',
+        title: 'Connection test failed',
+        body:
+          error instanceof Error
+            ? `${error.message}. Check the key and try again.`
+            : 'Check the key and try again.',
+      });
+    } finally {
+      setTestingProvider(null);
+    }
+  };
   const update = async (patch: Parameters<typeof client.settings.update>[0]) => {
     await client.settings.update(patch);
     await cache.invalidateQueries({ queryKey: keys.settings });
@@ -243,13 +274,21 @@ export function SettingsCanvas() {
                   <Pill
                     size="sm"
                     disabled={profileDraft.builtin}
-                    onClick={() =>
-                      void client.profiles.remove(profileDraft.id).then(async () => {
-                        await cache.invalidateQueries({ queryKey: keys.profiles });
-                        setProfileDraft(null);
-                        toast({ kind: 'info', title: 'Profile deleted', body: null });
-                      })
-                    }
+                    onClick={() => {
+                      setConfirm(`Delete ${profileDraft.name}?`);
+                      setConfirmAction(
+                        () => () =>
+                          void client.profiles.remove(profileDraft.id).then(async () => {
+                            await cache.invalidateQueries({ queryKey: keys.profiles });
+                            setProfileDraft(null);
+                            toast({
+                              kind: 'success',
+                              title: 'Profile deleted',
+                              body: 'You can create another profile in Settings.',
+                            });
+                          }),
+                      );
+                    }}
                   >
                     Delete
                   </Pill>
@@ -458,10 +497,26 @@ export function SettingsCanvas() {
               <span className={`status-pill ${provider.keyStatus === 'valid' ? 'ok' : 'pending'}`}>
                 {provider.keyStatus.replace('_', ' ')}
               </span>
+              <Pill
+                size="sm"
+                onClick={() => {
+                  setKeyProvider(provider);
+                }}
+              >
+                Manage key
+              </Pill>
+              <Pill
+                size="sm"
+                disabled={testingProvider === provider.id}
+                variant="outline"
+                onClick={() => void testProvider(provider)}
+              >
+                {testingProvider === provider.id ? 'Testing…' : 'Test'}
+              </Pill>
             </SettingRow>
           ))}
-          <Pill size="sm" onClick={() => void navigate({ to: '/explore' })}>
-            Manage in Explore
+          <Pill size="sm" variant="outline" onClick={() => void navigate({ to: '/explore' })}>
+            Open in Explore
           </Pill>
         </Group>
       );
@@ -767,7 +822,15 @@ export function SettingsCanvas() {
             section === 'General' ? (
               <Pill
                 onClick={() => {
-                  useUI.getState().resetLayout();
+                  setConfirm('Reset layout?');
+                  setConfirmAction(() => () => {
+                    useUI.getState().resetLayout();
+                    toast({
+                      kind: 'success',
+                      title: 'Layout reset',
+                      body: 'Panel sizes and positions are back to default.',
+                    });
+                  });
                 }}
                 variant="outline"
               >
@@ -778,18 +841,29 @@ export function SettingsCanvas() {
         />
         <main className="settings-content settings-content-framed">{body()}</main>
       </Stack>
+      <ProviderKeyDialog
+        provider={keyProvider}
+        open={Boolean(keyProvider)}
+        onOpenChange={(open) => {
+          if (!open) setKeyProvider(null);
+        }}
+      />
       <Dialog
         open={Boolean(confirm)}
         onOpenChange={(open) => {
-          if (!open) setConfirm('');
+          if (!open) {
+            setConfirm('');
+            setConfirmAction(null);
+          }
         }}
         title={confirm}
-        description="This affects local demo data only."
+        description="Review this change before confirming."
       >
         <div className="button-row dialog-actions">
           <Pill
             onClick={() => {
               setConfirm('');
+              setConfirmAction(null);
             }}
           >
             Cancel
@@ -798,11 +872,15 @@ export function SettingsCanvas() {
             variant="blue-tint"
             onClick={() => {
               setConfirm('');
-              toast({
-                kind: 'success',
-                title: 'Local data cleared',
-                body: 'Demo data remains available after refresh.',
-              });
+              const action = confirmAction;
+              setConfirmAction(null);
+              if (action) void action();
+              else
+                toast({
+                  kind: 'success',
+                  title: 'Local data cleared',
+                  body: 'Demo data remains available after refresh.',
+                });
             }}
           >
             Confirm

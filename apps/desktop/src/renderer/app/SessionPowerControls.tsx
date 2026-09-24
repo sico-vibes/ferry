@@ -210,6 +210,9 @@ export function CommandPalette() {
       case 'settings':
         await navigate({ to: '/settings' });
         break;
+      case 'shortcuts':
+        window.dispatchEvent(new Event('ferry:show-shortcuts'));
+        break;
       case 'delegate':
         useUI.getState().setRightTab('plan');
         if (useUI.getState().rightCollapsed) useUI.getState().toggleRight();
@@ -256,6 +259,7 @@ export function CommandPalette() {
     { id: 'usage', label: 'Go to Usage', shortcut: '' },
     { id: 'library', label: 'Go to Library', shortcut: '' },
     { id: 'settings', label: 'Go to Settings', shortcut: '' },
+    { id: 'shortcuts', label: 'Keyboard shortcuts', shortcut: 'Ctrl /' },
     { id: 'delegate', label: 'Delegate current task…', shortcut: '' },
     { id: 'checkpoint', label: 'Restore last checkpoint', shortcut: '' },
   ];

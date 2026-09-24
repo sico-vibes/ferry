@@ -13,6 +13,7 @@ import {
 import type { Workspace, WorkspaceSettings } from '@ferry/shared';
 import {
   DropdownMenu,
+  Dialog,
   EmptyState,
   PageHeader,
   Pill,
@@ -44,6 +45,7 @@ export function LibraryCanvas() {
   const client = useFerryClient();
   const cache = useQueryClient();
   const toast = useToasts((state) => state.push);
+  const [workspaceToRemove, setWorkspaceToRemove] = useState<Workspace | null>(null);
   const { data: workspaces = [], isLoading: workspacesLoading } = useWorkspaces();
   const { data: sessions = [] } = useSessions();
   const { data: profiles = [] } = useProfiles();
@@ -86,6 +88,11 @@ export function LibraryCanvas() {
     }
     await cache.invalidateQueries({ queryKey: keys.workspaces });
     await cache.invalidateQueries({ queryKey: keys.sessions });
+    toast({
+      kind: 'success',
+      title: 'Workspace removed',
+      body: `${workspace.name} was removed from Ferry. Files remain on disk.`,
+    });
   };
   const save = async () => {
     if (!selected || !current) return;
@@ -145,7 +152,9 @@ export function LibraryCanvas() {
                         label: 'Remove',
                         icon: <Trash2 size={14} />,
                         danger: true,
-                        onSelect: () => void remove(workspace),
+                        onSelect: () => {
+                          setWorkspaceToRemove(workspace);
+                        },
                       },
                     ]}
                   />
@@ -366,6 +375,33 @@ export function LibraryCanvas() {
           )}
         </div>
       </Stack>
+      <Dialog
+        open={Boolean(workspaceToRemove)}
+        onOpenChange={(open) => {
+          if (!open) setWorkspaceToRemove(null);
+        }}
+        title={`Remove ${workspaceToRemove?.name ?? 'workspace'}?`}
+        description="This removes the folder from Ferry. Its files stay on disk."
+      >
+        <div className="button-row dialog-actions">
+          <Pill
+            onClick={() => {
+              setWorkspaceToRemove(null);
+            }}
+          >
+            Cancel
+          </Pill>
+          <Pill
+            variant="warm-outline"
+            onClick={() => {
+              if (workspaceToRemove) void remove(workspaceToRemove);
+              setWorkspaceToRemove(null);
+            }}
+          >
+            Remove workspace
+          </Pill>
+        </div>
+      </Dialog>
     </section>
   );
 }

@@ -200,7 +200,7 @@ export function Sidebar({
                 label="Help & Support"
                 showMenu={false}
                 onClick={() => {
-                  useUI.getState().setRightTab('plan');
+                  window.dispatchEvent(new Event('ferry:show-shortcuts'));
                 }}
               />
             </div>
@@ -339,7 +339,9 @@ export function Sidebar({
             </nav>
           ) : (
             <>
-              <NewChatButton onClick={() => void createChat()}>New conversation</NewChatButton>
+              <NewChatButton aria-label="New chat from sidebar" onClick={() => void createChat()}>
+                New Chat
+              </NewChatButton>
               <FadeSeparator className="my-5" />
               <SidebarSection
                 label="Pinned Profiles"

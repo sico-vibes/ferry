@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Dialog } from 'radix-ui';
-import { ArrowDown, ArrowUp, ArrowUpRight, Check, ExternalLink, Search, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpRight, Check, Search, X } from 'lucide-react';
 import type { Provider } from '@ferry/shared';
 import {
   BrandIcon,
@@ -18,6 +18,7 @@ import {
 import { useFerryClient } from '../../data/client';
 import { useToasts } from '../../state/toasts';
 import { useUI } from '../../state/ui';
+import { ProviderKeyDialog } from '../ProviderKeyDialog';
 
 type ModelSort =
   | 'name'
@@ -51,9 +52,6 @@ export function ExploreCanvas() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<'add' | 'manage'>('add');
   const [activeProvider, setActiveProvider] = useState<Provider | null>(null);
-  const [keyValue, setKeyValue] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [keyError, setKeyError] = useState('');
   const [probing, setProbing] = useState<string | null>(null);
   const {
     data: providers = [],
@@ -114,23 +112,17 @@ export function ExploreCanvas() {
   const openAdd = () => {
     setDialogMode('add');
     setActiveProvider(null);
-    setKeyError('');
     setDialogOpen(true);
   };
   const openManage = (provider: Provider) => {
     setActiveProvider(provider);
-    setKeyValue('');
-    setKeyError('');
-    setShowKey(false);
     setDialogMode('manage');
-    setDialogOpen(true);
+    setDialogOpen(false);
   };
   const closeDialog = (open: boolean) => {
     setDialogOpen(open);
     if (!open) {
       setActiveProvider(null);
-      setKeyValue('');
-      setKeyError('');
     }
   };
   const probe = async (provider: Provider) => {
@@ -152,41 +144,6 @@ export function ExploreCanvas() {
       });
     } finally {
       setProbing(null);
-    }
-  };
-  const saveKey = async () => {
-    if (!activeProvider) return;
-    if (!keyValue.trim()) {
-      setKeyError('Enter an API key to continue.');
-      return;
-    }
-    try {
-      await client.providers.setKey(activeProvider.id, keyValue.trim());
-      await cache.invalidateQueries({ queryKey: ['providers'] });
-      setKeyValue('');
-      setKeyError('');
-      pushToast({
-        kind: 'success',
-        title: 'Key saved',
-        body: `${activeProvider.name} is ready to test.`,
-      });
-    } catch (error) {
-      setKeyError(error instanceof Error ? error.message : 'The key could not be saved.');
-    }
-  };
-  const removeKey = async () => {
-    if (!activeProvider) return;
-    try {
-      await client.providers.removeKey(activeProvider.id);
-      await cache.invalidateQueries({ queryKey: ['providers'] });
-      setActiveProvider((current) => (current ? { ...current, keyStatus: 'missing' } : current));
-      pushToast({
-        kind: 'info',
-        title: 'Key removed',
-        body: `${activeProvider.name} has no saved key.`,
-      });
-    } catch (error) {
-      setKeyError(error instanceof Error ? error.message : 'The key could not be removed.');
     }
   };
   const toggleProvider = async (provider: Provider, enabled: boolean) => {
@@ -435,7 +392,7 @@ export function ExploreCanvas() {
           </div>
         </Section>
       </Stack>
-      <Dialog.Root onOpenChange={closeDialog} open={dialogOpen}>
+      <Dialog.Root onOpenChange={closeDialog} open={dialogOpen && dialogMode === 'add'}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-40 bg-app/80 backdrop-blur-[2px]" />
           <Dialog.Content
@@ -445,17 +402,13 @@ export function ExploreCanvas() {
             <header className="mb-4 flex items-start gap-3">
               <div className="mr-auto">
                 <Dialog.Title className="text-title font-semibold text-text-1">
-                  {dialogMode === 'add'
-                    ? 'Add a provider'
-                    : `Manage ${activeProvider?.name ?? 'provider'} key`}
+                  Add a provider
                 </Dialog.Title>
                 <Dialog.Description
                   className="mt-1 text-label text-text-2"
                   id="provider-dialog-description"
                 >
-                  {dialogMode === 'add'
-                    ? 'Choose a provider to configure its connection.'
-                    : 'Keys are stored in this local demo client.'}
+                  Choose a provider to configure its connection.
                 </Dialog.Description>
               </div>
               <Dialog.Close
@@ -465,115 +418,49 @@ export function ExploreCanvas() {
                 <X size={16} />
               </Dialog.Close>
             </header>
-            {dialogMode === 'add' ? (
-              <div className="grid gap-2">
-                {providers
-                  .filter(
-                    (provider) =>
-                      !provider.enabled ||
-                      (provider.kind === 'api' && provider.keyStatus !== 'valid'),
-                  )
-                  .map((provider) => (
-                    <button
-                      className="flex items-center gap-3 rounded-card border border-border-hair bg-card p-3 text-left hover:border-border-strong"
-                      key={provider.id}
-                      onClick={() => {
-                        openManage(provider);
-                      }}
-                      type="button"
-                    >
-                      <BrandIcon label={provider.name} slug={provider.brand ?? provider.name} />
-                      <span className="min-w-0 flex-1">
-                        <strong className="block text-label font-medium text-text-1">
-                          {provider.name}
-                        </strong>
-                        <small className="mt-0.5 block text-meta text-text-3">
-                          {provider.termsNote ??
-                            provider.dataUse ??
-                            (provider.kind === 'cli'
-                              ? 'Detected from your installed command line tool.'
-                              : 'Add an API key to enable model routing.')}
-                        </small>
-                      </span>
-                      <ArrowUpRight className="text-text-3" size={15} />
-                    </button>
-                  ))}
-              </div>
-            ) : (
-              activeProvider && (
-                <div className="grid gap-3">
-                  <p className="text-label leading-5 text-text-2">
-                    {activeProvider.termsNote ??
-                      activeProvider.dataUse ??
-                      'Ferry sends requests to this provider when your selected profile allows it.'}
-                  </p>
-                  {activeProvider.signupUrl && (
-                    <button
-                      className="inline-flex w-fit items-center gap-1 text-label text-link hover:underline"
-                      onClick={() => {
-                        const signupUrl = activeProvider.signupUrl;
-                        if (signupUrl) window.open(signupUrl, '_blank', 'noopener,noreferrer');
-                      }}
-                      type="button"
-                    >
-                      Get a key <ExternalLink size={13} />
-                    </button>
-                  )}
-                  <label className="grid gap-1.5 text-label font-medium text-text-2">
-                    API key
-                    <span className="flex h-10 items-center gap-2 rounded-input border border-border-soft bg-input px-3 focus-within:border-blue-500">
-                      <input
-                        aria-label="API key"
-                        autoComplete="off"
-                        className="min-w-0 flex-1 bg-transparent font-mono text-label text-text-1 outline-none placeholder:text-text-3"
-                        onChange={(event) => {
-                          setKeyValue(event.target.value);
-                          setKeyError('');
-                        }}
-                        placeholder="Paste provider key"
-                        type={showKey ? 'text' : 'password'}
-                        value={keyValue}
-                      />
-                      <button
-                        aria-label={showKey ? 'Hide key' : 'Show key'}
-                        className="text-meta text-text-3 hover:text-text-1"
-                        onClick={() => {
-                          setShowKey((value) => !value);
-                        }}
-                        type="button"
-                      >
-                        {showKey ? 'Hide' : 'Show'}
-                      </button>
+            <div className="grid gap-2">
+              {providers
+                .filter(
+                  (provider) =>
+                    !provider.enabled ||
+                    (provider.kind === 'api' && provider.keyStatus !== 'valid'),
+                )
+                .map((provider) => (
+                  <button
+                    className="flex items-center gap-3 rounded-card border border-border-hair bg-card p-3 text-left hover:border-border-strong"
+                    key={provider.id}
+                    onClick={() => {
+                      openManage(provider);
+                    }}
+                    type="button"
+                  >
+                    <BrandIcon label={provider.name} slug={provider.brand ?? provider.name} />
+                    <span className="min-w-0 flex-1">
+                      <strong className="block text-label font-medium text-text-1">
+                        {provider.name}
+                      </strong>
+                      <small className="mt-0.5 block text-meta text-text-3">
+                        {provider.termsNote ??
+                          provider.dataUse ??
+                          (provider.kind === 'cli'
+                            ? 'Detected from your installed command line tool.'
+                            : 'Add an API key to enable model routing.')}
+                      </small>
                     </span>
-                  </label>
-                  {keyError && (
-                    <p role="alert" className="text-meta text-danger">
-                      {keyError}
-                    </p>
-                  )}
-                  <p className="text-meta text-text-3">
-                    Keys stay in the demo client store. Never paste a real secret into a shared
-                    demo.
-                  </p>
-                  <footer className="mt-1 flex justify-between gap-2 border-t border-border-hair pt-3">
-                    <button
-                      className="text-label text-danger hover:underline disabled:opacity-40"
-                      disabled={activeProvider.keyStatus === 'missing'}
-                      onClick={() => void removeKey()}
-                      type="button"
-                    >
-                      Remove key
-                    </button>
-                    <Pill onClick={() => void saveKey()} size="md" variant="blue-tint">
-                      Save key
-                    </Pill>
-                  </footer>
-                </div>
-              )
-            )}
+                    <ArrowUpRight className="text-text-3" size={15} />
+                  </button>
+                ))}
+            </div>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+      <ProviderKeyDialog
+        provider={activeProvider}
+        open={dialogMode === 'manage' && Boolean(activeProvider)}
+        onOpenChange={(open) => {
+          if (!open) setActiveProvider(null);
+        }}
+      />
     </section>
   );
 }

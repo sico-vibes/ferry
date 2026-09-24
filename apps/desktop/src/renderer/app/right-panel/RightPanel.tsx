@@ -159,14 +159,20 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
         <IconButton label="More options" size="sm">
           <MoreHorizontal size={17} />
         </IconButton>
-        <NewChatButton size="sm" className="ml-auto" onClick={onNewChat}>
-          Start chat
+        <NewChatButton
+          aria-label="New chat from right panel"
+          size="sm"
+          className="ml-auto"
+          onClick={onNewChat}
+        >
+          New Chat
         </NewChatButton>
       </header>
       <label className="chat-search">
         <Search size={16} />
         <input
           aria-label="Search chats"
+          title="Search chats · Ctrl+F"
           onChange={(event) => {
             setSearch(event.target.value);
           }}
@@ -193,7 +199,7 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
             }}
             type="button"
           >
-            {tab === 'chats' ? 'Chat history' : tab === 'plan' ? 'Plan' : 'Changes'}
+            {tab === 'chats' ? 'Chats' : tab === 'plan' ? 'Plan' : 'Changes'}
           </button>
         ))}
       </nav>
