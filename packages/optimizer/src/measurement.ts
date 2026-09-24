@@ -1,3 +1,5 @@
+import { estimateTokens as sharedEstimateTokens } from '@ferry/shared/tokens';
+
 export type OptimizerKind =
   | 'generic'
   | 'git-status'
@@ -24,10 +26,13 @@ export interface OptimizationResult<T> {
   event: OptimizationEvent;
 }
 
-/** Shared deterministic estimate used by every optimizer in this package. */
+/** Uses the shared provider-calibrated tokenizer for consistent measurements. */
 export function estimateTokens(text: string): number {
-  if (text.length === 0) return 0;
-  return Math.ceil(text.length / 4);
+  return sharedEstimateTokens(text);
+}
+
+export function keepOnlyIfSmaller(original: string, candidate: string): string {
+  return estimateTokens(candidate) < estimateTokens(original) ? candidate : original;
 }
 
 export function measured<T>(
@@ -36,12 +41,14 @@ export function measured<T>(
   output: T,
   serialized = typeof output === 'string' ? output : JSON.stringify(output),
 ): OptimizationResult<T> {
+  const selected = typeof output === 'string' ? (keepOnlyIfSmaller(before, output) as T) : output;
+  const selectedSerialization = typeof selected === 'string' ? selected : serialized;
   return {
-    output,
+    output: selected,
     event: {
       kind,
       beforeTokens: estimateTokens(before),
-      afterTokens: estimateTokens(typeof serialized === 'string' ? serialized : ''),
+      afterTokens: estimateTokens(selectedSerialization),
     },
   };
 }
@@ -55,7 +62,8 @@ export function runOptimizer(
   transform: (input: string) => string,
   options: OptimizerOptions = {},
 ): OptimizationResult<string> {
-  const output = options.benchmarkMode ? input : transform(input);
+  const candidate = options.benchmarkMode ? input : transform(input);
+  const output = keepOnlyIfSmaller(input, candidate);
   return measured(options.benchmarkMode ? 'benchmark-bypass' : kind, input, output);
 }
 export type OptimizerEventKind =

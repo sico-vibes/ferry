@@ -1,17 +1,47 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { filterToolOutput, genericFilter } from '../src/filters.js';
-import { hygieneMessages } from '../src/hygiene.js';
+import {
+  filterBuildOutput,
+  filterFilesystem,
+  filterGitDiff,
+  filterGitLog,
+  filterGitStatus,
+  filterPackageInstall,
+  filterTestOutput,
+  filterToolOutput,
+  genericFilter,
+} from '../src/filters.js';
+import { compressJsonPayload, hygieneMessages, optimizeContextMessages } from '../src/hygiene.js';
 import { estimateTokens, rollupByDay, runOptimizer } from '../src/measurement.js';
 import { InMemoryBlobStore, readOutput } from '../src/recovery.js';
 import { rewriteWithRtk, rtkAvailable } from '../src/rtk.js';
 import { terseSystemText } from '../src/terse.js';
+import { estimateTokens as canonicalEstimateTokens } from '@ferry/shared/tokens';
+
+const largeFixtures = [
+  ['vitest run', 'vitest-214-pass-2-fail.txt'],
+  ['npx jest', 'jest-500-pass.txt'],
+  ['pytest -q', 'pytest-tracebacks.txt'],
+  ['git diff', 'git-diff-800-lines-12-files.txt'],
+  ['git status', 'git-status-60-files.txt'],
+  ['git log', 'git-log-200.txt'],
+  ['tsc --noEmit', 'tsc-40-errors-9-files.txt'],
+  ['eslint .', 'eslint-120-warnings.txt'],
+  ['pnpm install', 'pnpm-install.txt'],
+  ['Get-ChildItem -Recurse', 'get-childitem-1500.txt'],
+  ['dir /s', 'dir-s-1500.txt'],
+] as const;
+const largeFixture = (name: string): string =>
+  readFileSync(join(import.meta.dirname, 'fixtures', 'large', name), 'utf8');
 
 describe('golden tool-output fixtures', () => {
   const fixtures = [
     [
       'git status --short',
       '## feature/b7...origin/feature/b7\n M packages/optimizer/src/index.ts\n M packages/optimizer/src/index.ts\n?? notes.txt\n',
-      'Branch:\n  ## feature/b7...origin/feature/b7\nModified:\n   M packages/optimizer/src/index.ts (repeated 2 times)\nUntracked / added / deleted:\n  ?? notes.txt',
+      '## feature/b7...origin/feature/b7\n M packages/optimizer/src/index.ts\n M packages/optimizer/src/index.ts\n?? notes.txt\n',
     ],
     [
       'git diff',
@@ -56,22 +86,30 @@ describe('measurement, recovery, and helpers', () => {
       benchmarkMode: true,
     });
     expect(result.output).toBe('before before before');
-    expect(result.event.beforeTokens).toBe(5);
-    expect(result.event.afterTokens).toBe(5);
+    expect(result.event.beforeTokens).toBe(estimateTokens('before before before'));
+    expect(result.event.afterTokens).toBe(result.event.beforeTokens);
+    const expanded = runOptimizer('x', 'generic', () => 'a much longer candidate output');
+    expect(expanded.output).toBe('x');
+    expect(expanded.event.afterTokens).toBe(expanded.event.beforeTokens);
     expect(
       rollupByDay([{ ...result.event, timestamp: '2026-09-24T09:00:00Z' }]).get('2026-09-24')
         ?.events,
     ).toBe(1);
-    expect(estimateTokens('12345')).toBe(2);
+    expect(estimateTokens('12345')).toBe(canonicalEstimateTokens('12345'));
   });
   it('recovers the byte-exact original and exact line slices', () => {
-    const original = '\ufefffirst\r\nsecond  \r\nthird\n';
+    const original = '\ufefffirst\r\n' + 'long repeated line payload\r\n'.repeat(20) + 'third  \n';
     const store = new InMemoryBlobStore();
-    const filtered = filterToolOutput('git status', original, { blobStore: store, sessionId: 's' });
+    const filtered = filterToolOutput('cat output.txt', original, {
+      blobStore: store,
+      sessionId: 's',
+    });
     expect(filtered.handle).toBeDefined();
     const handle = filtered.handle;
     if (handle === undefined) throw new Error('Expected a recovery handle');
-    expect(readOutput(store, handle, { startLine: 2, endLine: 2 })).toBe('second  \r\n');
+    expect(readOutput(store, handle, { startLine: 2, endLine: 2 })).toBe(
+      'long repeated line payload\r\n',
+    );
     expect(store.get(handle)).toBe(original);
   });
   it('expires blobs on TTL and supports grep recovery', () => {
@@ -86,9 +124,30 @@ describe('measurement, recovery, and helpers', () => {
     const store = new InMemoryBlobStore();
     const messages = hygieneMessages(
       [
-        { role: 'tool', path: 'src/app.ts', kind: 'file-read', step: 1, content: 'contents' },
-        { role: 'tool', path: 'src/app.ts', kind: 'file-read', step: 2, content: 'contents' },
-        { role: 'tool', kind: 'tool-result', step: 1, content: 'line one\nline two' },
+        {
+          role: 'tool',
+          path: 'src/app.ts',
+          kind: 'file-read',
+          step: 1,
+          content: 'The file contents are lengthy and unchanged since their previous read. '.repeat(
+            8,
+          ),
+        },
+        {
+          role: 'tool',
+          path: 'src/app.ts',
+          kind: 'file-read',
+          step: 2,
+          content: 'The file contents are lengthy and unchanged since their previous read. '.repeat(
+            8,
+          ),
+        },
+        {
+          role: 'tool',
+          kind: 'tool-result',
+          step: 1,
+          content: 'line one with a detailed result that does not need to be repeated\n'.repeat(40),
+        },
       ],
       { currentStep: 10, blobStore: store, staleAfterSteps: 4 },
     );
@@ -112,4 +171,59 @@ describe('measurement, recovery, and helpers', () => {
       'progress 2\nrepeat (repeated 2 times)\n',
     );
   });
+});
+
+describe('never-inflate properties', () => {
+  it('returns the exact original whenever any filter cannot save tokens', () => {
+    const filters: ((input: string) => string)[] = [
+      genericFilter,
+      filterGitStatus,
+      filterGitDiff,
+      filterGitLog,
+      filterTestOutput,
+      filterBuildOutput,
+      filterPackageInstall,
+      filterFilesystem,
+      (input) => filterToolOutput('pnpm test', input).output,
+      compressJsonPayload,
+    ];
+    fc.assert(
+      fc.property(fc.string(), (input) => {
+        const before = estimateTokens(input);
+        for (const filter of filters) {
+          const output = filter(input);
+          const after = estimateTokens(output);
+          expect(after).toBeLessThanOrEqual(before);
+          if (after >= before) expect(output).toBe(input);
+        }
+        const messages = [{ role: 'tool', kind: 'tool-result', step: 1, content: input }];
+        const context = optimizeContextMessages(messages, {
+          currentStep: 10,
+          staleAfterSteps: 1,
+          blobStore: new InMemoryBlobStore(),
+        });
+        const beforeContext = estimateTokens(JSON.stringify(messages));
+        expect(context.event.afterTokens).toBeLessThanOrEqual(beforeContext);
+        if (context.event.afterTokens >= beforeContext) expect(context.output).toEqual(messages);
+      }),
+      { numRuns: 150 },
+    );
+  });
+});
+
+describe('large realistic golden fixtures', () => {
+  for (const [command, file] of largeFixtures) {
+    it(`never inflates ${file}`, () => {
+      const input = largeFixture(file);
+      const result = filterToolOutput(command, input, { maxLines: 120 });
+      expect(result.event.beforeTokens).toBe(estimateTokens(input));
+      expect(result.event.afterTokens).toBeLessThanOrEqual(result.event.beforeTokens);
+      if (result.event.afterTokens >= result.event.beforeTokens) expect(result.output).toBe(input);
+      if (file === 'jest-500-pass.txt') expect(result.output).toBe('All tests passed.');
+      if (file === 'git-diff-800-lines-12-files.txt') {
+        expect(result.output).toContain('diff --stat');
+        expect(result.output).toContain('12 files changed');
+      }
+    });
+  }
 });

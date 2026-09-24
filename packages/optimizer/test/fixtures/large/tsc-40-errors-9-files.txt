@@ -1,0 +1,100 @@
+src/modules/module-1.ts(10,3)
+  error TS2322: Type '1' is not assignable to type 'Result<2>'
+    at src/modules/module-1.ts:10:3
+  error TS2323: Type '2' is not assignable to type 'Result<3>'
+    at src/modules/module-1.ts:10:3
+  error TS2324: Type '3' is not assignable to type 'Result<4>'
+    at src/modules/module-1.ts:10:3
+  error TS2321: Type '4' is not assignable to type 'Result<5>'
+    at src/modules/module-1.ts:10:3
+  error TS2322: Type '5' is not assignable to type 'Result<6>'
+    at src/modules/module-1.ts:10:3
+src/modules/module-2.ts(20,6)
+  error TS2322: Type '1' is not assignable to type 'Result<2>'
+    at src/modules/module-2.ts:20:3
+  error TS2323: Type '2' is not assignable to type 'Result<3>'
+    at src/modules/module-2.ts:20:3
+  error TS2324: Type '3' is not assignable to type 'Result<4>'
+    at src/modules/module-2.ts:20:3
+  error TS2321: Type '4' is not assignable to type 'Result<5>'
+    at src/modules/module-2.ts:20:3
+  error TS2322: Type '5' is not assignable to type 'Result<6>'
+    at src/modules/module-2.ts:20:3
+src/modules/module-3.ts(30,9)
+  error TS2322: Type '1' is not assignable to type 'Result<2>'
+    at src/modules/module-3.ts:30:3
+  error TS2323: Type '2' is not assignable to type 'Result<3>'
+    at src/modules/module-3.ts:30:3
+  error TS2324: Type '3' is not assignable to type 'Result<4>'
+    at src/modules/module-3.ts:30:3
+  error TS2321: Type '4' is not assignable to type 'Result<5>'
+    at src/modules/module-3.ts:30:3
+  error TS2322: Type '5' is not assignable to type 'Result<6>'
+    at src/modules/module-3.ts:30:3
+src/modules/module-4.ts(40,12)
+  error TS2322: Type '1' is not assignable to type 'Result<2>'
+    at src/modules/module-4.ts:40:3
+  error TS2323: Type '2' is not assignable to type 'Result<3>'
+    at src/modules/module-4.ts:40:3
+  error TS2324: Type '3' is not assignable to type 'Result<4>'
+    at src/modules/module-4.ts:40:3
+  error TS2321: Type '4' is not assignable to type 'Result<5>'
+    at src/modules/module-4.ts:40:3
+  error TS2322: Type '5' is not assignable to type 'Result<6>'
+    at src/modules/module-4.ts:40:3
+src/modules/module-5.ts(50,15)
+  error TS2322: Type '1' is not assignable to type 'Result<2>'
+    at src/modules/module-5.ts:50:3
+  error TS2323: Type '2' is not assignable to type 'Result<3>'
+    at src/modules/module-5.ts:50:3
+  error TS2324: Type '3' is not assignable to type 'Result<4>'
+    at src/modules/module-5.ts:50:3
+  error TS2321: Type '4' is not assignable to type 'Result<5>'
+    at src/modules/module-5.ts:50:3
+  error TS2322: Type '5' is not assignable to type 'Result<6>'
+    at src/modules/module-5.ts:50:3
+src/modules/module-6.ts(60,18)
+  error TS2322: Type '1' is not assignable to type 'Result<2>'
+    at src/modules/module-6.ts:60:3
+  error TS2323: Type '2' is not assignable to type 'Result<3>'
+    at src/modules/module-6.ts:60:3
+  error TS2324: Type '3' is not assignable to type 'Result<4>'
+    at src/modules/module-6.ts:60:3
+  error TS2321: Type '4' is not assignable to type 'Result<5>'
+    at src/modules/module-6.ts:60:3
+  error TS2322: Type '5' is not assignable to type 'Result<6>'
+    at src/modules/module-6.ts:60:3
+src/modules/module-7.ts(70,21)
+  error TS2322: Type '1' is not assignable to type 'Result<2>'
+    at src/modules/module-7.ts:70:3
+  error TS2323: Type '2' is not assignable to type 'Result<3>'
+    at src/modules/module-7.ts:70:3
+  error TS2324: Type '3' is not assignable to type 'Result<4>'
+    at src/modules/module-7.ts:70:3
+  error TS2321: Type '4' is not assignable to type 'Result<5>'
+    at src/modules/module-7.ts:70:3
+  error TS2322: Type '5' is not assignable to type 'Result<6>'
+    at src/modules/module-7.ts:70:3
+src/modules/module-8.ts(80,24)
+  error TS2322: Type '1' is not assignable to type 'Result<2>'
+    at src/modules/module-8.ts:80:3
+  error TS2323: Type '2' is not assignable to type 'Result<3>'
+    at src/modules/module-8.ts:80:3
+  error TS2324: Type '3' is not assignable to type 'Result<4>'
+    at src/modules/module-8.ts:80:3
+  error TS2321: Type '4' is not assignable to type 'Result<5>'
+    at src/modules/module-8.ts:80:3
+  error TS2322: Type '5' is not assignable to type 'Result<6>'
+    at src/modules/module-8.ts:80:3
+src/modules/module-9.ts(90,27)
+  error TS2322: Type '1' is not assignable to type 'Result<2>'
+    at src/modules/module-9.ts:90:3
+  error TS2323: Type '2' is not assignable to type 'Result<3>'
+    at src/modules/module-9.ts:90:3
+  error TS2324: Type '3' is not assignable to type 'Result<4>'
+    at src/modules/module-9.ts:90:3
+  error TS2321: Type '4' is not assignable to type 'Result<5>'
+    at src/modules/module-9.ts:90:3
+  error TS2322: Type '5' is not assignable to type 'Result<6>'
+    at src/modules/module-9.ts:90:3
+Found 40 errors in 9 files.

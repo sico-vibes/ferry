@@ -1,4 +1,9 @@
-import { measured, type MeasuredOptimizerKind, type OptimizationResult } from './measurement.js';
+import {
+  keepOnlyIfSmaller,
+  measured,
+  type MeasuredOptimizerKind,
+  type OptimizationResult,
+} from './measurement.js';
 import { defaultBlobStore, type BlobStore } from './recovery.js';
 
 export interface FilterOptions {
@@ -15,7 +20,10 @@ export interface FilteredOutput extends OptimizationResult<string> {
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 function collapseProgress(input: string): string {
-  return input.replace(/[^\r\n]*\r(?=[^\n])/g, '').replace(/\r/g, '\n');
+  return input
+    .split(/\r?\n/)
+    .map((line) => line.split('\r').at(-1) ?? '')
+    .join('\n');
 }
 function foldDuplicates(lines: string[]): string[] {
   const result: string[] = [];
@@ -45,12 +53,13 @@ function capLines(
 }
 export function genericFilter(input: string, options: FilterOptions = {}): string {
   const normalized = collapseProgress(input.replace(ANSI, '')).split(/\r?\n/);
-  return capLines(
+  const candidate = capLines(
     foldDuplicates(normalized),
     options.maxLines,
     options.headLines,
     options.tailLines,
   ).join('\n');
+  return keepOnlyIfSmaller(input, candidate);
 }
 function recoveryResult(
   kind: MeasuredOptimizerKind,
@@ -72,7 +81,7 @@ export function filterToolOutput(
   options: FilterOptions = {},
 ): FilteredOutput {
   const kind = detectOutputKind(command);
-  const output = options.benchmarkMode
+  const candidate = options.benchmarkMode
     ? input
     : kind === 'git-status'
       ? filterGitStatus(input)
@@ -89,6 +98,7 @@ export function filterToolOutput(
                 : kind === 'filesystem'
                   ? filterFilesystem(input, options.maxLines ?? 100)
                   : genericFilter(input, options);
+  const output = keepOnlyIfSmaller(input, candidate);
   const result = recoveryResult(
     options.benchmarkMode ? 'benchmark-bypass' : kind,
     input,
@@ -139,30 +149,56 @@ export function detectOutputKind(
     return 'filesystem';
   return 'generic';
 }
-export function filterGitStatus(input: string): string {
-  const lines = genericFilter(input, { maxLines: 1000 }).split('\n');
+function gitStatusCandidate(input: string): string {
   const sections = new Map<string, string[]>();
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    const section =
-      line.startsWith('??') || line.startsWith('A ') || line.startsWith(' D')
-        ? 'Untracked / added / deleted'
-        : line.startsWith(' M') || line.startsWith('M ')
-          ? 'Modified'
-          : line.startsWith('R ')
-            ? 'Renamed'
-            : line.startsWith('##')
-              ? 'Branch'
-              : 'Other';
-    const group = sections.get(section) ?? [];
-    group.push(line);
-    sections.set(section, group);
+  let section = 'Changes';
+  let branch = '';
+  for (const source of genericFilter(input, { maxLines: 1000 }).split('\n')) {
+    const line = source.trim();
+    if (!line) continue;
+    if (line.startsWith('On branch ') || line.startsWith('## ')) {
+      branch = line;
+      continue;
+    }
+    if (line.startsWith('Changes to be committed:')) {
+      section = 'Staged';
+      continue;
+    }
+    if (line.startsWith('Changes not staged for commit:')) {
+      section = 'Modified';
+      continue;
+    }
+    if (line.startsWith('Untracked files:')) {
+      section = 'Untracked';
+      continue;
+    }
+    const porcelain = /^([ MADRCU?!]{1,2})\s+(.*)$/.exec(line);
+    if (porcelain) {
+      const status = porcelain[1] ?? '';
+      section =
+        status.includes('?') || status.includes('A')
+          ? 'Added'
+          : status.includes('D')
+            ? 'Deleted'
+            : status.includes('R')
+              ? 'Renamed'
+              : 'Modified';
+      const paths = sections.get(section) ?? [];
+      paths.push(porcelain[2] ?? '');
+      sections.set(section, paths);
+      continue;
+    }
+    const paths = sections.get(section) ?? [];
+    paths.push(line.replace(/^modified:\s+/, '').replace(/^new file:\s+/, ''));
+    sections.set(section, paths);
   }
-  return [...sections]
-    .map(([name, rows]) => `${name}:\n${rows.map((row) => `  ${row}`).join('\n')}`)
-    .join('\n');
+  const groups = [...sections].map(
+    ([name, paths]) =>
+      `${name} (${String(paths.length)}):\n${paths.map((path) => `  ${path}`).join('\n')}`,
+  );
+  return [branch, ...groups].filter(Boolean).join('\n');
 }
-export function filterGitDiff(input: string, context = 1): string {
+function gitDiffCandidate(input: string, context = 1): string {
   const lines = genericFilter(input, { maxLines: 10000 }).split('\n');
   const result: string[] = [];
   let inHunk = false;
@@ -190,6 +226,7 @@ export function filterGitDiff(input: string, context = 1): string {
   };
   for (const line of lines) {
     if (
+      line.startsWith('diff --stat') ||
       line.startsWith('diff --git ') ||
       line.startsWith('index ') ||
       line.startsWith('--- ') ||
@@ -203,25 +240,36 @@ export function filterGitDiff(input: string, context = 1): string {
       inHunk = true;
       result.push(line);
     } else if (inHunk) hunk.push(line);
-    else if (/^(?: [0-9]+ files? changed| create mode| delete mode)/.test(line)) result.push(line);
+    else if (/^(?: .*\|\s+\d+| [0-9]+ files? changed| create mode| delete mode)/.test(line))
+      result.push(line);
   }
   flush();
   return result.join('\n');
 }
-export function filterGitLog(input: string): string {
-  return input
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => {
-      const match = /^commit\s+([0-9a-f]+)(?:\s+\((.*?)\))?/i.exec(line);
-      return match
-        ? `${match[1] ?? ''}${match[2] ? ` (${match[2]})` : ''}`
-        : line.replace(/^\s+/, '');
-    })
-    .join('\n');
+function gitLogCandidate(input: string): string {
+  const result: string[] = [];
+  let hash = '';
+  let subject = '';
+  const flush = (): void => {
+    if (hash) result.push(`${hash}${subject ? ` ${subject}` : ''}`);
+  };
+  for (const line of input.split(/\r?\n/)) {
+    const commit = /^commit\s+([0-9a-f]+)(?:\s+\((.*?)\))?/i.exec(line);
+    if (commit) {
+      flush();
+      hash = `${commit[1] ?? ''}${commit[2] ? ` (${commit[2]})` : ''}`;
+      subject = '';
+      continue;
+    }
+    const trimmed = line.trim();
+    if (!subject && trimmed && !/^(Author:|Date:)/.test(trimmed)) subject = trimmed;
+    else if (!hash && trimmed) result.push(trimmed);
+  }
+  flush();
+  return result.join('\n');
 }
 
-export function filterTestOutput(input: string): string {
+function testCandidate(input: string): string {
   const lines = genericFilter(input, { maxLines: 2000 }).split('\n');
   const fail = lines.filter((line) =>
     /(^\s*(FAIL|FAILED|ERROR|not ok|✗|×|\.{2,}[FExX]|F\.|_{3,}|--- FAIL:|error:)|AssertionError|Traceback|Expected .*received|\bError:)/i.test(
@@ -234,7 +282,9 @@ export function filterTestOutput(input: string): string {
     ),
   );
   if (
-    /(All tests passed|Test Files\s+\d+ passed \(\d+\)|Tests\s+\d+ passed \(\d+\))/i.test(input) &&
+    /(All tests passed|Test Files\s+\d+ passed \(\d+\)|Tests\s+\d+ passed \(\d+\)|Tests:\s+\d+ passed,\s+\d+ total|\d+ passed(?:,\s+\d+ skipped)?(?: in [\d.]+s)?$)/im.test(
+      input,
+    ) &&
     !fail.length
   )
     return 'All tests passed.';
@@ -248,7 +298,7 @@ export function filterTestOutput(input: string): string {
       ? 'All tests passed.'
       : genericFilter(input, { maxLines: 30 });
 }
-export function filterBuildOutput(input: string): string {
+function buildCandidate(input: string): string {
   const lines = genericFilter(input, { maxLines: 2000 }).split('\n');
   const errors = new Map<string, Set<string>>();
   const summary: string[] = [];
@@ -273,7 +323,7 @@ export function filterBuildOutput(input: string): string {
   result.push(...summary);
   return result.length ? result.join('\n') : 'No build or lint diagnostics.';
 }
-export function filterPackageInstall(input: string): string {
+function packageInstallCandidate(input: string): string {
   const lines = input.split(/\r?\n/);
   const errors = genericFilter(input, { maxLines: 2000 })
     .split('\n')
@@ -290,7 +340,7 @@ export function filterPackageInstall(input: string): string {
     (errors.length ? errors.join('\n') : 'Install completed.')
   );
 }
-export function filterFilesystem(input: string, cap = 100): string {
+function filesystemCandidate(input: string, cap = 100): string {
   const rows = genericFilter(input, { maxLines: 10000 }).split('\n').filter(Boolean);
   const groups = new Map<string, string[]>();
   for (const row of rows) {
@@ -318,3 +368,18 @@ export function filterFilesystem(input: string, cap = 100): string {
   });
   return output.join('\n');
 }
+
+export const filterGitStatus = (input: string): string =>
+  keepOnlyIfSmaller(input, gitStatusCandidate(input));
+export const filterGitDiff = (input: string, context = 1): string =>
+  keepOnlyIfSmaller(input, gitDiffCandidate(input, context));
+export const filterGitLog = (input: string): string =>
+  keepOnlyIfSmaller(input, gitLogCandidate(input));
+export const filterTestOutput = (input: string): string =>
+  keepOnlyIfSmaller(input, testCandidate(input));
+export const filterBuildOutput = (input: string): string =>
+  keepOnlyIfSmaller(input, buildCandidate(input));
+export const filterPackageInstall = (input: string): string =>
+  keepOnlyIfSmaller(input, packageInstallCandidate(input));
+export const filterFilesystem = (input: string, cap = 100): string =>
+  keepOnlyIfSmaller(input, filesystemCandidate(input, cap));

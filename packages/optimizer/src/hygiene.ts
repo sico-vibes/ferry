@@ -1,4 +1,4 @@
-import { estimateTokens } from './measurement.js';
+import { estimateTokens, keepOnlyIfSmaller } from './measurement.js';
 import { measured, type OptimizationResult } from './measurement.js';
 import type { BlobStore } from './recovery.js';
 
@@ -44,7 +44,8 @@ export function compressJsonPayload(text: string, sampleSize = 3): string {
     }
     return node;
   };
-  return JSON.stringify(visit(value), null, 2);
+  const candidate = JSON.stringify(visit(value), null, 2);
+  return keepOnlyIfSmaller(text, candidate);
 }
 export function hygieneMessages(
   messages: readonly ContextMessage[],
@@ -53,7 +54,7 @@ export function hygieneMessages(
   const seenPaths = new Map<string, { step: number; content: string }>();
   const threshold = options.staleAfterSteps ?? 5;
   const maxTokens = options.maxPayloadTokens ?? 1200;
-  return messages.map((message) => {
+  const candidate = messages.map((message) => {
     if (message.path && message.kind === 'file-read') {
       const previous = seenPaths.get(message.path);
       seenPaths.set(message.path, {
@@ -61,10 +62,10 @@ export function hygieneMessages(
         content: message.content,
       });
       if (previous?.content === message.content)
-        return {
+        return keepMessageIfSmaller(message, {
           ...message,
           content: `[${message.path} unchanged since step ${String(previous.step)}]`,
-        };
+        });
     }
     if (
       message.step !== undefined &&
@@ -73,10 +74,10 @@ export function hygieneMessages(
     ) {
       const saved = saveOriginal(message, options);
       const first = message.content.split(/\r?\n/).find((line) => line.trim()) ?? '(empty output)';
-      return {
+      return keepMessageIfSmaller(message, {
         ...saved,
         content: `Older tool result (step ${String(message.step)}): ${first.slice(0, 180)} [recover ${saved.handle ?? ''}]`,
-      };
+      });
     }
     const looksPayload =
       message.kind === 'json' ||
@@ -90,10 +91,17 @@ export function hygieneMessages(
           ? compressed.split(/\r?\n/).slice(0, Math.max(1, maxTokens)).join('\n') +
             '\n… payload elided …'
           : compressed;
-      return { ...saved, content: `${clipped}\n[Full payload saved as ${saved.handle ?? ''}]` };
+      return keepMessageIfSmaller(message, {
+        ...saved,
+        content: `${clipped}\n[Full payload saved as ${saved.handle ?? ''}]`,
+      });
     }
     return message;
   });
+  return keepOnlyIfSmaller(JSON.stringify(messages), JSON.stringify(candidate)) ===
+    JSON.stringify(candidate)
+    ? candidate
+    : [...messages];
 }
 
 export function optimizeContextMessages(
@@ -101,7 +109,16 @@ export function optimizeContextMessages(
   options: HygieneOptions,
 ): OptimizationResult<ContextMessage[]> {
   const output = hygieneMessages(messages, options);
-  return measured('context-hygiene', JSON.stringify(messages), output, JSON.stringify(output));
+  const before = JSON.stringify(messages);
+  const after = JSON.stringify(output);
+  const selected = keepOnlyIfSmaller(before, after) === after ? output : [...messages];
+  return measured('context-hygiene', before, selected, JSON.stringify(selected));
+}
+
+function keepMessageIfSmaller(original: ContextMessage, candidate: ContextMessage): ContextMessage {
+  return keepOnlyIfSmaller(original.content, candidate.content) === candidate.content
+    ? candidate
+    : original;
 }
 
 function compressPayload(text: string): string {

@@ -1,0 +1,68 @@
+On branch feature/b7
+Your branch is up to date with origin/feature/b7.
+
+Changes to be committed:
+  modified:   packages/app/src/module-1.ts
+  modified:   packages/app/src/module-2.ts
+  modified:   packages/app/src/module-3.ts
+  modified:   packages/app/src/module-4.ts
+  modified:   packages/app/src/module-5.ts
+  modified:   packages/app/src/module-6.ts
+  modified:   packages/app/src/module-7.ts
+  modified:   packages/app/src/module-8.ts
+  modified:   packages/app/src/module-9.ts
+  modified:   packages/app/src/module-10.ts
+  modified:   packages/app/src/module-11.ts
+  modified:   packages/app/src/module-12.ts
+  modified:   packages/app/src/module-13.ts
+  modified:   packages/app/src/module-14.ts
+  modified:   packages/app/src/module-15.ts
+  modified:   packages/app/src/module-16.ts
+  modified:   packages/app/src/module-17.ts
+  modified:   packages/app/src/module-18.ts
+  modified:   packages/app/src/module-19.ts
+  modified:   packages/app/src/module-20.ts
+
+Changes not staged for commit:
+  modified:   packages/service/src/handler-21.ts
+  modified:   packages/service/src/handler-22.ts
+  modified:   packages/service/src/handler-23.ts
+  modified:   packages/service/src/handler-24.ts
+  modified:   packages/service/src/handler-25.ts
+  modified:   packages/service/src/handler-26.ts
+  modified:   packages/service/src/handler-27.ts
+  modified:   packages/service/src/handler-28.ts
+  modified:   packages/service/src/handler-29.ts
+  modified:   packages/service/src/handler-30.ts
+  modified:   packages/service/src/handler-31.ts
+  modified:   packages/service/src/handler-32.ts
+  modified:   packages/service/src/handler-33.ts
+  modified:   packages/service/src/handler-34.ts
+  modified:   packages/service/src/handler-35.ts
+  modified:   packages/service/src/handler-36.ts
+  modified:   packages/service/src/handler-37.ts
+  modified:   packages/service/src/handler-38.ts
+  modified:   packages/service/src/handler-39.ts
+  modified:   packages/service/src/handler-40.ts
+  modified:   packages/service/src/handler-41.ts
+  modified:   packages/service/src/handler-42.ts
+  modified:   packages/service/src/handler-43.ts
+  modified:   packages/service/src/handler-44.ts
+  modified:   packages/service/src/handler-45.ts
+
+Untracked files:
+  packages/docs/notes-46.md
+  packages/docs/notes-47.md
+  packages/docs/notes-48.md
+  packages/docs/notes-49.md
+  packages/docs/notes-50.md
+  packages/docs/notes-51.md
+  packages/docs/notes-52.md
+  packages/docs/notes-53.md
+  packages/docs/notes-54.md
+  packages/docs/notes-55.md
+  packages/docs/notes-56.md
+  packages/docs/notes-57.md
+  packages/docs/notes-58.md
+  packages/docs/notes-59.md
+  packages/docs/notes-60.md
