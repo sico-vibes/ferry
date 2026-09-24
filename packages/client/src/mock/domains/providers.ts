@@ -38,21 +38,35 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
       if (p.keyStatus === 'not_applicable')
         return {
           ok: true,
+          keyValid: true,
           latencyMs: null,
           message: 'CLI detected — no API key needed',
           windows: [],
+          models: [],
+          errorKind: null,
         };
       if (p.keyStatus === 'missing' || p.keyStatus === 'invalid')
         return {
           ok: false,
+          keyValid: false,
           latencyMs: null,
           message: 'Provider key is unavailable',
           windows: p.windows,
+          models: [],
+          errorKind: 'auth',
         };
       p.keyStatus = 'valid';
       emit('provider.updated', p);
       persist();
-      return { ok: true, latencyMs: rng.int(180, 900), message: 'Connected', windows: p.windows };
+      return {
+        ok: true,
+        keyValid: true,
+        latencyMs: rng.int(180, 900),
+        message: 'Connected',
+        windows: p.windows,
+        models: [],
+        errorKind: null,
+      };
     },
     async setEnabled(id, v) {
       await before();

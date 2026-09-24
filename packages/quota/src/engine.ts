@@ -12,6 +12,7 @@ import type {
   QuotaWindow,
   UsageRecord,
 } from '@ferry/shared';
+import { ProviderErrorKindSchema } from '@ferry/shared';
 import { newId } from '@ferry/shared';
 import { ProviderLimitsSchema, type Catalog, type ProviderLimits } from '@ferry/catalog';
 import { QuotaObservationRepository, RequestRepository } from '@ferry/storage';
@@ -180,6 +181,7 @@ export class QuotaEngine {
     const text = (value: unknown): string => (typeof value === 'string' ? value : '');
     const nullableText = (value: unknown): string | null =>
       typeof value === 'string' ? value : null;
+    const errorKind = ProviderErrorKindSchema.safeParse(row.error_kind);
     return {
       id: text(row.id),
       providerId: text(row.provider) as UsageRecord['providerId'],
@@ -196,7 +198,7 @@ export class QuotaEngine {
       costUsd: Number(row.cost_usd ?? 0),
       planUnits: Number(row.plan_units ?? 0),
       status: text(row.status),
-      errorKind: nullableText(row.error_kind),
+      errorKind: errorKind.success ? errorKind.data : null,
       latencyMs: row.latency_ms == null ? undefined : Number(row.latency_ms),
     };
   }
