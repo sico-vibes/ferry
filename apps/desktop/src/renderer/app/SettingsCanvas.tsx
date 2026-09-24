@@ -716,6 +716,7 @@ export function SettingsCanvas() {
             <p>
               Version {info?.version ?? '…'} · {info?.mock ? 'Demo client' : 'Connected'}
             </p>
+            <p>This build runs on simulated data. No real models are called.</p>
           </div>
         </div>
         <h3>Notices</h3>

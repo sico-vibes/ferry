@@ -4,6 +4,7 @@ import { cva } from 'class-variance-authority';
 import {
   Compass,
   Crown,
+  FlaskConical,
   Library,
   LogOut,
   MessagesSquare,
@@ -131,6 +132,10 @@ export function IconRail({
         <Plus aria-hidden="true" size={16} />
       </button>
       <div className="mt-auto flex w-full flex-col items-center gap-3">
+        <span className="flex w-full flex-col items-center gap-1 rounded-md border border-border-hair px-0.5 py-1 text-meta leading-tight text-text-3">
+          <FlaskConical aria-hidden="true" size={13} strokeWidth={1.75} />
+          <span>Demo data</span>
+        </span>
         <span aria-hidden="true" className="h-px w-8 bg-[var(--fade-line)]" />
         <button
           aria-label="Toggle theme"

@@ -1,0 +1,31 @@
+name: Windows release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @ferry/desktop dist
+      - name: Upload installer and portable build to draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            apps/desktop/release/Ferry-Setup-*.exe
+            apps/desktop/release/Ferry-*-portable.exe

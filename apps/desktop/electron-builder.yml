@@ -6,17 +6,27 @@ directories:
 files:
   - out/**
   - package.json
+asar: true
 win:
   icon: build/icon.ico
   target:
     - nsis
+    - portable
+  artifactName: Ferry-${version}.${ext}
 nsis:
   oneClick: false
   perMachine: false
+  allowElevation: false
   allowToChangeInstallationDirectory: true
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   shortcutName: Ferry
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  artifactName: Ferry-Setup-${version}.${ext}
+  include: nsis/installer.nsh
+portable:
+  artifactName: Ferry-${version}-portable.${ext}
 linux:
   icon: build/icon.png
 mac:

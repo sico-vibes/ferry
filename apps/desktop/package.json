@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "dist": "electron-vite build && electron-builder --win nsis portable",
     "start": "electron-vite preview",
     "dev:web": "vite --config vite.web.config.ts --host 127.0.0.1 --port 5173",
     "typecheck": "tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.renderer.json",
