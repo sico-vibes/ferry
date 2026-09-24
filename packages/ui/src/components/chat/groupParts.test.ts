@@ -28,6 +28,18 @@ describe('groupParts', () => {
     ]);
   });
 
+  it('returns an empty list for an empty message', () => {
+    expect(groupParts([])).toEqual([]);
+  });
+
+  it('groups a trailing run of tools and keeps a lone tool ungrouped', () => {
+    const parts = [tool('only'), tool('a'), tool('b', 'grep'), tool('c', 'edit_file')];
+    expect(groupParts(parts)).toEqual([
+      parts[0],
+      { type: 'tool_group', parts: [parts[1], parts[2], parts[3]] },
+    ]);
+  });
+
   it('keeps isolated tools and does not group across an approval boundary', () => {
     const approval = {
       id: 'approval',
