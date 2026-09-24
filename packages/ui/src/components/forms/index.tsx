@@ -212,6 +212,7 @@ export function SegmentedControl({
   return (
     <div
       aria-label={label}
+      data-audit-spacing="intentional"
       className="ferry-segmented"
       role="radiogroup"
       onKeyDown={(event) => {

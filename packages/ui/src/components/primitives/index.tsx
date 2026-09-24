@@ -57,7 +57,7 @@ export function IconButton({
 }
 
 const pillStyles = cva(
-  `inline-flex shrink-0 items-center justify-center gap-2 rounded-pill border px-3 text-label font-medium transition duration-150 ease-out hover:brightness-110 active:scale-[.98] disabled:pointer-events-none disabled:opacity-40 ${focus}`,
+  `inline-flex shrink-0 items-center justify-center gap-2 rounded-pill border px-3 leading-4 text-label font-medium transition duration-150 ease-out hover:brightness-110 active:scale-[.98] disabled:pointer-events-none disabled:opacity-40 ${focus}`,
   {
     variants: {
       variant: {
@@ -87,7 +87,12 @@ export function Pill({
   ...props
 }: PillProps) {
   return (
-    <button className={cn(pillStyles({ variant, size }), className)} type={type} {...props}>
+    <button
+      className={cn(pillStyles({ variant, size }), className)}
+      data-audit-spacing="intentional"
+      type={type}
+      {...props}
+    >
       {leadingIcon}
       {children}
       {trailingIcon}
@@ -213,7 +218,12 @@ export function NewChatButton({
 }: NewChatButtonProps) {
   const gradientId = `ferry-sparkle-${useId().replaceAll(':', '')}`;
   return (
-    <button className={cn(newChatStyles({ size }), className)} type={type} {...props}>
+    <button
+      data-audit-spacing="intentional"
+      className={cn(newChatStyles({ size }), className)}
+      type={type}
+      {...props}
+    >
       <Plus aria-hidden="true" size={16} strokeWidth={1.75} />
       <span>{children}</span>
       <svg aria-hidden="true" className="size-[14px]" viewBox="0 0 24 24">

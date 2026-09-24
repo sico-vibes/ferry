@@ -49,7 +49,7 @@ export function ProviderCard({
             : 'Key: unchecked';
   return (
     <Spotlight
-      className={`rounded-card border border-border-hair bg-card p-3.5 shadow-[inset_0_1px_0_var(--highlight-top)] ${provider.enabled ? '' : 'opacity-60'}`}
+      className={`rounded-card border border-border-hair bg-card p-4 shadow-[inset_0_1px_0_var(--highlight-top)] ${provider.enabled ? '' : 'opacity-60'}`}
     >
       <article className="grid gap-3">
         <header className="flex min-w-0 items-center gap-2.5">

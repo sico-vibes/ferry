@@ -84,7 +84,7 @@ export function ResetsTimeline({
             />
           );
         })}
-        <span className="absolute inset-x-0 top-7 flex justify-between text-[10px] text-text-3">
+        <span className="absolute inset-x-0 top-7 flex justify-between text-[11px] leading-4 text-text-3">
           <span>Now</span>
           <span>+24h</span>
         </span>

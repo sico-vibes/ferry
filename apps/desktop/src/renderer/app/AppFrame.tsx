@@ -220,7 +220,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
 
   const tabItems =
     tabs.length === 0 && pathname === '/'
-      ? [{ id: 'home', label: 'New Chat', icon: FileText }]
+      ? [{ id: 'home', label: 'New Chat', ariaLabel: 'New Chat (tab)', icon: FileText }]
       : tabs.map((tab) => ({
           id: tab.id,
           label: labels.get(tab.id) ?? tab.title,

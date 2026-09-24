@@ -765,7 +765,7 @@ export function SessionCanvas() {
   );
   if (isError || (!isLoading && !data)) {
     return (
-      <section className="canvas session-canvas">
+      <section className="canvas session-canvas" data-audit-overflow="intentional">
         <EmptyState
           title="This session is no longer available"
           action="Back to Home"
@@ -777,6 +777,7 @@ export function SessionCanvas() {
   return (
     <CanvasPanel
       dots={false}
+      overflowContained
       header={
         <>
           <div className="session-toolbar-primary flex min-w-0 items-center gap-2">

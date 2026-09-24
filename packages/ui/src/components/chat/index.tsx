@@ -67,7 +67,7 @@ export function AssistantMessage({
 
 export function MarkdownPart({ content }: { content: string }) {
   return (
-    <div className="prose prose-invert max-w-none text-chat [&_a]:text-link [&_a]:underline [&_code:not(pre_code)]:rounded-md [&_code:not(pre_code)]:bg-raised [&_code:not(pre_code)]:px-1.5 [&_code:not(pre_code)]:py-0.5 [&_pre]:overflow-auto [&_pre]:rounded-xl [&_pre]:border [&_pre]:border-border-hair [&_pre]:bg-card [&_pre]:p-4 [&_table]:border-collapse [&_td]:border [&_td]:border-border-hair [&_td]:px-2 [&_th]:border [&_th]:border-border-hair [&_th]:px-2">
+    <div className="prose prose-invert max-w-none text-chat [&_a]:text-link [&_a]:underline [&_code:not(pre_code)]:rounded-md [&_code:not(pre_code)]:bg-raised [&_code:not(pre_code)]:px-1.5 [&_code:not(pre_code)]:py-0.5 [&_pre]:overflow-auto [&_pre]:rounded-xl [&_pre]:border [&_pre]:border-border-hair [&_pre]:bg-card [&_pre]:p-4 [&_pre]:leading-4 [&_table]:border-collapse [&_td]:border [&_td]:border-border-hair [&_td]:px-2 [&_th]:border [&_th]:border-border-hair [&_th]:px-2">
       <Suspense fallback={<span>{content}</span>}>
         <MarkdownContent content={content} />
       </Suspense>
@@ -203,7 +203,7 @@ export function ToolCallBlock({
     <section className="overflow-hidden rounded-xl border border-border-hair bg-card">
       <button
         aria-expanded={open}
-        className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-left ${focusRingClass}`}
+        className={`flex w-full items-center gap-2.5 px-3 py-3 text-left ${focusRingClass}`}
         onClick={() => {
           setOpen(!open);
         }}
@@ -328,7 +328,7 @@ export function ToolStepGroup({
     <section className="overflow-hidden rounded-xl border border-border-hair bg-card">
       <button
         aria-expanded={open}
-        className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-left ${focusRingClass}`}
+        className={`flex w-full items-center gap-2.5 px-3 py-3 text-left ${focusRingClass}`}
         onClick={() => {
           setOpen(!open);
         }}

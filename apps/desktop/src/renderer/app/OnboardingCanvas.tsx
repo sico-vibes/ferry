@@ -110,7 +110,8 @@ export function OnboardingCanvas() {
   };
   return (
     <section
-      className="canvas onboarding-page"
+      className="canvas onboarding-page page-scroll-canvas"
+      data-audit-spacing="intentional"
       onKeyDown={(event) => {
         if (event.key !== 'Enter' || event.defaultPrevented) return;
         const target = event.target;
@@ -211,6 +212,7 @@ export function OnboardingCanvas() {
                     </Pill>
                     <Pill
                       size="sm"
+                      aria-label={`Test ${provider?.name ?? id} API`}
                       onClick={() => void testProvider(id)}
                       leadingIcon={<Check size={13} />}
                     >
