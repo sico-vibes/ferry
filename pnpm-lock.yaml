@@ -211,6 +211,25 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
 
+  packages/delegate:
+    dependencies:
+      '@ferry/router':
+        specifier: workspace:*
+        version: link:../router
+      '@ferry/shared':
+        specifier: workspace:*
+        version: link:../shared
+      execa:
+        specifier: 10.0.1
+        version: 10.0.1
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@ferry/testkit':
+        specifier: workspace:*
+        version: link:../testkit
+
   packages/providers:
     dependencies:
       '@ai-sdk/anthropic':
