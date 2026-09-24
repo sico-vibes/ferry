@@ -1,5 +1,11 @@
 :root {
   color-scheme: dark;
+  --z-canvas-overlay: 20;
+  --z-toast: 30;
+  --z-popover: 40;
+  --z-tray: 45;
+  --z-modal-overlay: 60;
+  --z-modal: 61;
 }
 * {
   box-sizing: border-box;
@@ -515,10 +521,9 @@ body {
   border-color: var(--border-soft);
   color: var(--text-1);
 }
-.approval-tray,
-.model-picker-popover {
+.approval-tray {
   position: absolute;
-  z-index: 50;
+  z-index: var(--z-tray);
   top: calc(100% + 8px);
   right: 0;
   width: min(420px, calc(100vw - 32px));
@@ -572,6 +577,10 @@ body {
   margin-top: 9px;
 }
 .model-picker-popover {
+  position: fixed;
+  z-index: var(--z-popover);
+  max-height: min(70vh, 560px);
+  overflow: auto;
   width: 440px;
   padding: 8px;
 }
@@ -912,7 +921,7 @@ body {
 }
 .output-dialog-backdrop {
   position: absolute;
-  z-index: 30;
+  z-index: var(--z-canvas-overlay);
   inset: 0;
   display: grid;
   place-items: center;
@@ -1381,6 +1390,15 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.session-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  vertical-align: 1px;
+}
 .chat-meta {
   color: var(--text-3);
   font-size: 11px;
@@ -1423,14 +1441,14 @@ body {
 .ferry-overlay {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--z-modal-overlay);
   background: var(--overlay);
   backdrop-filter: blur(3px);
   animation: ferry-fade-in 160ms ease-out;
 }
 .ferry-dialog {
   position: fixed;
-  z-index: 41;
+  z-index: var(--z-modal);
   top: 50%;
   left: 50%;
   width: min(520px, calc(100vw - 40px));
@@ -2471,7 +2489,7 @@ body {
 }
 .toast-stack {
   position: fixed;
-  z-index: 20;
+  z-index: var(--z-toast);
   right: 324px;
   bottom: 20px;
   display: grid;

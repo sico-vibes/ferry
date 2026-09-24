@@ -32,7 +32,7 @@ describe('ui store persistence', () => {
   // (e.g. `[null]`) is restored verbatim, and AppFrame dereferences `tab.id` while
   // building the tab bar, throwing so the whole app renders the "Something went wrong!" boundary.
   // Expected: invalid tab entries are filtered out; observed: the entry survives into state.
-  it.fails('drops non-object entries from the persisted tab list', async () => {
+  it('drops non-object entries from the persisted tab list', async () => {
     const { useUI } = await loadUI(
       JSON.stringify({ tabs: [null, { id: 'session_a', title: 'Alpha' }] }),
     );
@@ -41,7 +41,7 @@ describe('ui store persistence', () => {
 
   // BUG (P3): `parsePersistedLayout` accepts `rightTab: 'terminal'` but the right panel only
   // renders the chats/plan/changes tabs, so the restored value leaves the panel with no active tab.
-  it.fails('rejects the unsupported persisted right panel tab "terminal"', async () => {
+  it('rejects the unsupported persisted right panel tab "terminal"', async () => {
     const { useUI } = await loadUI(JSON.stringify({ rightTab: 'terminal' }));
     expect(useUI.getState().rightTab).toBe('chats');
   });

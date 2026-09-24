@@ -1,6 +1,6 @@
 import type { SessionId } from '@ferry/shared';
 
-export type RightTab = 'chats' | 'plan' | 'changes' | 'terminal';
+export type RightTab = 'chats' | 'plan' | 'changes';
 export type Density = 'comfortable' | 'compact';
 export type SettingsSection =
   | 'General'
@@ -12,6 +12,7 @@ export type SettingsSection =
   | 'Skills'
   | 'MCP'
   | 'Data & Privacy'
+  | 'Developer'
   | 'About';
 export interface OpenTab {
   id: SessionId;

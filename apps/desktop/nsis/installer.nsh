@@ -1,7 +1,12 @@
 !include "LogicLib.nsh"
 !include "nsDialogs.nsh"
 
+!ifdef BUILD_UNINSTALLER
 Var DeleteUserDataCheckbox
+
+!macro customUnInit
+  StrCpy $DeleteUserDataCheckbox 0
+!macroend
 
 !macro customUnWelcomePage
   UninstPage custom un.DeleteUserDataPage
@@ -25,6 +30,7 @@ FunctionEnd
 !macro customUnInstall
   ${NSD_GetState} $DeleteUserDataCheckbox $0
   ${If} $0 == ${BST_CHECKED}
-    RMDir /r "$APPDATA\Ferry"
+    RMDir /r "$APPDATA\@ferry\desktop"
   ${EndIf}
 !macroend
+!endif

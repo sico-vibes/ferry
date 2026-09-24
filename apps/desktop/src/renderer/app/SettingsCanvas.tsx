@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useFerryClient } from '../data/client';
@@ -26,6 +26,19 @@ const stepLabels: Record<StepKind, string> = {
   review: 'Review',
   long_context: 'Long context',
 };
+
+function isPermissionRule(
+  value: unknown,
+): value is { effect: string; pattern: string; tool: string } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const rule = value as Record<string, unknown>;
+  return (
+    typeof rule.effect === 'string' &&
+    ['allow', 'ask', 'deny'].includes(rule.effect) &&
+    typeof rule.pattern === 'string' &&
+    typeof rule.tool === 'string'
+  );
+}
 
 export function SettingsCanvas() {
   const client = useFerryClient();
@@ -371,18 +384,6 @@ export function SettingsCanvas() {
                   ]}
                 />
               </SettingRow>
-              <SettingRow
-                title="Paid models"
-                helper="Allow paid models when free capacity is unavailable."
-              >
-                <Switch
-                  label="Paid models"
-                  checked={profileDraft.paidAllowed}
-                  onCheckedChange={(value) => {
-                    mutateProfile('paidAllowed', value);
-                  }}
-                />
-              </SettingRow>
               <h3>Optimizer defaults</h3>
               <SettingRow
                 title="Terse level"
@@ -590,6 +591,22 @@ export function SettingsCanvas() {
           mode={settings?.permissionMode ?? 'ask'}
           onMode={(value) =>
             void update({ permissionMode: value as NonNullable<typeof settings>['permissionMode'] })
+          }
+        />
+      );
+    if (section === 'Developer')
+      return (
+        <DeveloperSettings
+          mockLatency={settings?.developer.mockLatency ?? false}
+          injectErrors={settings?.developer.injectErrors ?? false}
+          update={(patch) =>
+            void update({
+              developer: {
+                showReferenceOverlay: settings?.developer.showReferenceOverlay ?? false,
+                mockLatency: patch.mockLatency ?? settings?.developer.mockLatency ?? false,
+                injectErrors: patch.injectErrors ?? settings?.developer.injectErrors ?? false,
+              },
+            })
           }
         />
       );
@@ -854,10 +871,12 @@ function SettingRow({
 function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: string) => void }) {
   const [rules, setRules] = useState(() => {
     try {
-      return JSON.parse(
+      const parsed: unknown = JSON.parse(
         localStorage.getItem('ferry.permissionRules') ??
           '[{"effect":"ask","pattern":"run_command","tool":"run_command"}]',
-      ) as { effect: string; pattern: string; tool: string }[];
+      );
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(isPermissionRule);
     } catch {
       return [];
     }
@@ -931,6 +950,53 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
       >
         Add rule
       </Pill>
+    </Group>
+  );
+}
+
+function DeveloperSettings({
+  mockLatency,
+  injectErrors,
+  update,
+}: {
+  mockLatency: boolean;
+  injectErrors: boolean;
+  update: (patch: { mockLatency?: boolean; injectErrors?: boolean }) => void;
+}) {
+  const [simulateOffline, setSimulateOffline] = useState(
+    () => localStorage.getItem('ferry.simulateOffline') === 'true',
+  );
+  useEffect(() => {
+    localStorage.setItem('ferry.simulateOffline', String(simulateOffline));
+    window.dispatchEvent(new Event('ferry:offline-change'));
+  }, [simulateOffline]);
+  return (
+    <Group title="Developer">
+      <SettingRow title="Mock latency" helper="Add realistic delays to simulated responses.">
+        <Switch
+          label="Mock latency"
+          checked={mockLatency}
+          onCheckedChange={(value) => {
+            update({ mockLatency: value });
+          }}
+        />
+      </SettingRow>
+      <SettingRow title="Inject errors" helper="Exercise recovery states in the mock client.">
+        <Switch
+          label="Inject errors"
+          checked={injectErrors}
+          onCheckedChange={(value) => {
+            update({ injectErrors: value });
+          }}
+        />
+      </SettingRow>
+      <SettingRow title="Simulate offline" helper="Show the saved demo data state.">
+        <Switch
+          label="Simulate offline"
+          checked={simulateOffline}
+          onCheckedChange={setSimulateOffline}
+        />
+      </SettingRow>
     </Group>
   );
 }

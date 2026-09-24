@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Command } from 'cmdk';
@@ -321,14 +322,33 @@ export function ModelPickerPopover({
     queryFn: () => client.providers.list(),
   });
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
   useEffect(() => {
     if (!open) return;
+    const anchor = triggerRef.current?.getBoundingClientRect();
+    if (anchor)
+      setPosition({
+        top: anchor.bottom + 8,
+        left: Math.max(16, Math.min(anchor.left, window.innerWidth - 456)),
+      });
     const close = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
     };
+    const outside = (event: PointerEvent) => {
+      if (
+        !(event.target instanceof Node) ||
+        triggerRef.current?.contains(event.target) ||
+        document.querySelector('.model-picker-popover')?.contains(event.target)
+      )
+        return;
+      setOpen(false);
+    };
     window.addEventListener('keydown', close);
+    window.addEventListener('pointerdown', outside);
     return () => {
       window.removeEventListener('keydown', close);
+      window.removeEventListener('pointerdown', outside);
     };
   }, [open]);
   const autoModel = models.find((model) => model.ref === candidates[0]?.ref)?.name ?? modelName;
@@ -351,6 +371,9 @@ export function ModelPickerPopover({
   return (
     <div className="relative">
       <button
+        ref={triggerRef}
+        aria-expanded={open}
+        aria-haspopup="dialog"
         className="inline-flex items-center gap-2 rounded-pill px-2 py-1 text-body font-medium text-text-1 hover:bg-white/[0.04]"
         onClick={() => {
           setOpen(!open);
@@ -363,67 +386,74 @@ export function ModelPickerPopover({
         </span>
         <ChevronDown aria-hidden="true" size={14} />
       </button>
-      {open && (
-        <div aria-label="Choose model" className="model-picker-popover" role="dialog">
-          <Command label="Choose model" className="model-command">
-            <Command.Input placeholder="Search models…" />
-            <Command.List>
-              <Command.Item
-                className="model-candidate auto"
-                value={`Auto ${autoModel}`}
-                onSelect={() => void select('auto')}
-              >
-                <strong>Auto (recommended)</strong>
-                <span>{autoModel} · Router’s current pick</span>
-                <small>
-                  {candidates[0]?.explanation ?? 'Ferry selects the best available model.'}
-                </small>
-              </Command.Item>
-              {grouped.map((providerId) => (
-                <Command.Group
-                  key={providerId}
-                  heading={
-                    providers.find((provider) => provider.id === providerId)?.name ?? providerId
-                  }
+      {open &&
+        createPortal(
+          <div
+            aria-label="Choose model"
+            className="model-picker-popover"
+            role="dialog"
+            style={{ top: position.top, left: position.left }}
+          >
+            <Command label="Choose model" className="model-command">
+              <Command.Input placeholder="Search models…" />
+              <Command.List>
+                <Command.Item
+                  className="model-candidate auto"
+                  value={`Auto ${autoModel}`}
+                  onSelect={() => void select('auto')}
                 >
-                  {candidates
-                    .filter(
-                      (candidate) =>
-                        (models.find((model) => model.ref === candidate.ref)?.providerId ??
-                          'other') === providerId,
-                    )
-                    .map((candidate) => {
-                      const model = models.find((item) => item.ref === candidate.ref);
-                      if (!model) return null;
-                      return (
-                        <Command.Item
-                          className="model-candidate"
-                          key={candidate.ref}
-                          value={`${model.name} ${model.tier} ${candidate.explanation}`}
-                          onSelect={() => void select(candidate.ref)}
-                        >
-                          <strong>
-                            {model.name}
-                            {candidate.selected ? <Check size={13} /> : null}
-                          </strong>
-                          <span>
-                            <span className="model-tier-pill">{model.tier}</span> ·{' '}
-                            {candidate.stepsLeft == null
-                              ? 'steps unknown'
-                              : `${String(candidate.stepsLeft)} steps left`}{' '}
-                            · {Math.round(model.contextWindow / 1000)}K ·{' '}
-                            {model.free ? 'Free' : 'Paid'}
-                          </span>
-                          <small>{candidate.explanation}</small>
-                        </Command.Item>
-                      );
-                    })}
-                </Command.Group>
-              ))}
-            </Command.List>
-          </Command>
-        </div>
-      )}
+                  <strong>Auto (recommended)</strong>
+                  <span>{autoModel} · Router’s current pick</span>
+                  <small>
+                    {candidates[0]?.explanation ?? 'Ferry selects the best available model.'}
+                  </small>
+                </Command.Item>
+                {grouped.map((providerId) => (
+                  <Command.Group
+                    key={providerId}
+                    heading={
+                      providers.find((provider) => provider.id === providerId)?.name ?? providerId
+                    }
+                  >
+                    {candidates
+                      .filter(
+                        (candidate) =>
+                          (models.find((model) => model.ref === candidate.ref)?.providerId ??
+                            'other') === providerId,
+                      )
+                      .map((candidate) => {
+                        const model = models.find((item) => item.ref === candidate.ref);
+                        if (!model) return null;
+                        return (
+                          <Command.Item
+                            className="model-candidate"
+                            key={candidate.ref}
+                            value={`${model.name} ${model.tier} ${candidate.explanation}`}
+                            onSelect={() => void select(candidate.ref)}
+                          >
+                            <strong>
+                              {model.name}
+                              {candidate.selected ? <Check size={13} /> : null}
+                            </strong>
+                            <span>
+                              <span className="model-tier-pill">{model.tier}</span> ·{' '}
+                              {candidate.stepsLeft == null
+                                ? 'steps unknown'
+                                : `${String(candidate.stepsLeft)} steps left`}{' '}
+                              · {Math.round(model.contextWindow / 1000)}K ·{' '}
+                              {model.free ? 'Free' : 'Paid'}
+                            </span>
+                            <small>{candidate.explanation}</small>
+                          </Command.Item>
+                        );
+                      })}
+                  </Command.Group>
+                ))}
+              </Command.List>
+            </Command>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

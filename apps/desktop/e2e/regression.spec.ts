@@ -8,7 +8,7 @@ test.describe('known regressions', () => {
   // is restored verbatim; AppFrame dereferences `tab.id` while building the tab bar and the whole
   // renderer falls back to the router error boundary ("Something went wrong!").
   // Repro: localStorage.setItem('ferry.ui', '{"tabs":[null]}') then reload.
-  test.fixme('recovers from a corrupted tab list in localStorage', async ({ page }) => {
+  test('recovers from a corrupted tab list in localStorage', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
     await page.evaluate(() => {
@@ -22,7 +22,7 @@ test.describe('known regressions', () => {
   // BUG (P2): Settings → Permissions JSON-parses `ferry.permissionRules` without checking that the
   // result is an array, so a persisted object crashes the render with `rules.map is not a function`.
   // Repro: localStorage.setItem('ferry.permissionRules', '{}'), open Settings → Permissions.
-  test.fixme('renders Permissions when the persisted rules are not an array', async ({ page }) => {
+  test('renders Permissions when the persisted rules are not an array', async ({ page }) => {
     await page.goto('/settings');
     await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
     await page.evaluate(() => {
@@ -40,7 +40,7 @@ test.describe('known regressions', () => {
 
   // BUG (P3): a stale review URL (`/s/:id/review/:missingRun`) shows "Loading review…" forever;
   // the canvas cannot distinguish a pending run from a missing one.
-  test.fixme('shows a not-found state for a missing review run', async ({ page }) => {
+  test('shows a not-found state for a missing review run', async ({ page }) => {
     await page.goto('/s/session_1/review/run_does_not_exist');
     await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
     await expect(page.getByText(/not found|no longer available|missing/i)).toBeVisible();
@@ -52,7 +52,7 @@ test.describe('known regressions', () => {
   // candidate row (and its click target) sits under `.left-column`, which intercepts pointer
   // events. Verified by geometry: popover x=90..530 while `.center-column` starts at x=372.
   // Repro: open a session, click the model trigger, click any candidate row center.
-  test.fixme('selects a model by clicking the candidate row', async ({ page }) => {
+  test('selects a model by clicking the candidate row', async ({ page }) => {
     await page.goto('/');
     await page.getByRole('button', { name: 'New Chat' }).first().click();
     await page.waitForURL(/\/s\//);
@@ -66,7 +66,7 @@ test.describe('known regressions', () => {
   // BUG (P2): closing the last open tab while a session is still running leaves the renderer on
   // the session route with zero tabs, so the visible transcript has no tab and no way back except
   // the primary rail; the run also keeps going in the background.
-  test.fixme('closing the last tab returns to a tabbed state', async ({ page }) => {
+  test('closing the last tab returns to a tabbed state', async ({ page }) => {
     await page.goto('/');
     await page.getByRole('textbox', { name: 'Message Ferry' }).fill('Fix the flaky tests');
     await page.getByRole('button', { name: 'Send' }).click();

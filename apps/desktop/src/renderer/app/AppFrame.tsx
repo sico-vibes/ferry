@@ -1,8 +1,8 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { FileText, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
-import { TabsBar, TopRightCluster } from '@ferry/ui';
+import { Dialog, Pill, TabsBar, TopRightCluster } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { useFerryEvents } from '../data/events';
 import { keys, useSessions, useSettings } from '../data/queries';
@@ -31,6 +31,10 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const pushToast = useToasts((state) => state.push);
   const toastItems = useToasts((state) => state.items);
   const dismissToast = useToasts((state) => state.dismiss);
+  const [closePrompt, setClosePrompt] = useState<string | null>(null);
+  const [simulatedOffline, setSimulatedOffline] = useState(
+    () => localStorage.getItem('ferry.simulateOffline') === 'true',
+  );
   const labels = useMemo(
     () => new Map(sessions.map((session) => [session.id, session.title])),
     [sessions],
@@ -65,6 +69,30 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     await cache.invalidateQueries({ queryKey: keys.sessions });
     await navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
   };
+  const closeAndNavigate = (id: string, stop: boolean) => {
+    if (stop) void client.sessions.cancel(id as (typeof sessions)[number]['id']);
+    const index = tabs.findIndex((tab) => tab.id === id);
+    const next = tabs.filter((tab) => tab.id !== id);
+    closeTab(id as (typeof tabs)[number]['id']);
+    setClosePrompt(null);
+    if (activeId === id) {
+      const destination = next[Math.min(index, next.length - 1)];
+      if (destination) {
+        setActive(destination.id);
+        void navigate({ to: '/s/$sessionId', params: { sessionId: destination.id } });
+      } else {
+        void navigate({ to: '/' });
+      }
+    }
+  };
+  const requestCloseTab = (id: string) => {
+    const session = sessions.find((item) => item.id === id);
+    if (session?.status === 'running' || session?.status === 'awaiting_approval') {
+      setClosePrompt(id);
+      return;
+    }
+    closeAndNavigate(id, false);
+  };
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -87,7 +115,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
         );
       } else if (key === 'w' && activeId) {
         event.preventDefault();
-        closeTab(activeId);
+        requestCloseTab(activeId);
       } else if (key === 'tab' && tabs.length > 1) {
         event.preventDefault();
         const index = tabs.findIndex((tab) => tab.id === activeId);
@@ -105,7 +133,29 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     return () => {
       window.removeEventListener('keydown', handler);
     };
-  }, [activeId, cache, closeTab, createChat, navigate, openTab, pushToast, setActive, tabs]);
+  }, [
+    activeId,
+    cache,
+    closeTab,
+    createChat,
+    navigate,
+    openTab,
+    pushToast,
+    requestCloseTab,
+    setActive,
+    tabs,
+    sessions,
+  ]);
+
+  useEffect(() => {
+    const syncOffline = () => {
+      setSimulatedOffline(localStorage.getItem('ferry.simulateOffline') === 'true');
+    };
+    window.addEventListener('ferry:offline-change', syncOffline);
+    return () => {
+      window.removeEventListener('ferry:offline-change', syncOffline);
+    };
+  }, []);
 
   useEffect(() => {
     const timers = toastItems.map((toast) =>
@@ -177,9 +227,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
               {...(homeTab
                 ? {}
                 : {
-                    onClose: (id: string) => {
-                      closeTab(id as (typeof tabs)[number]['id']);
-                    },
+                    onClose: requestCloseTab,
                   })}
               onAdd={() => void createChat()}
               rightCluster={
@@ -230,7 +278,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
               }
             />
           </div>
-          {settings?.developer.injectErrors && (
+          {((settings?.developer.injectErrors ?? false) || simulatedOffline) && (
             <div className="offline-warning" role="status">
               Offline · showing saved demo data
             </div>
@@ -245,6 +293,32 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       {appMounts.overlays.map((Mount, index) => (
         <Mount bottomOpen={bottomOpen} fullCanvasPage={fullCanvasPage} key={index} />
       ))}
+      <Dialog
+        open={Boolean(closePrompt)}
+        onOpenChange={(open) => {
+          if (!open) setClosePrompt(null);
+        }}
+        title="Stop the run?"
+        description="This session is still running. Stop it or keep it running in the background."
+      >
+        <div className="button-row dialog-actions">
+          <Pill
+            onClick={() => {
+              if (closePrompt) closeAndNavigate(closePrompt, false);
+            }}
+          >
+            Keep running in background
+          </Pill>
+          <Pill
+            variant="warm-outline"
+            onClick={() => {
+              if (closePrompt) closeAndNavigate(closePrompt, true);
+            }}
+          >
+            Stop
+          </Pill>
+        </div>
+      </Dialog>
     </div>
   );
 }

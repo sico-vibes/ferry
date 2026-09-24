@@ -3,7 +3,7 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Check, FileCode2, X } from 'lucide-react';
 import type { RunId, SessionId } from '@ferry/shared';
-import { Pill } from '@ferry/ui';
+import { EmptyState, Pill } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { decideReview } from './reviewActions';
 
@@ -26,11 +26,11 @@ export function ReviewCanvas() {
   const [selected, setSelected] = useState(0);
   const [rework, setRework] = useState(false);
   const [brief, setBrief] = useState('');
-  const { data: runs = [] } = useQuery({
+  const { data: runs, isLoading } = useQuery({
     queryKey: ['delegation', sessionId],
     queryFn: () => client.delegation.runs(sessionId),
   });
-  const run = runs.find((item) => item.id === runId);
+  const run = runs?.find((item) => item.id === runId);
   const change = run?.touchedFiles[selected];
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
@@ -43,10 +43,20 @@ export function ReviewCanvas() {
       window.removeEventListener('keydown', escape);
     };
   }, [navigate, sessionId]);
-  if (!run)
+  if (!run && isLoading)
     return (
       <section className="canvas review-canvas">
         <p>Loading review…</p>
+      </section>
+    );
+  if (!run)
+    return (
+      <section className="canvas review-canvas">
+        <EmptyState
+          title="This review is no longer available"
+          action="Back to session"
+          onAction={() => void navigate({ to: '/s/$sessionId', params: { sessionId } })}
+        />
       </section>
     );
   const decide = async (decision: 'accepted' | 'rejected' | 'rework') => {

@@ -77,7 +77,12 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
                 goToSession(session);
               }}
             >
-              <span className="chat-title">{session.title}</span>
+              <span className="chat-title">
+                {(session.status === 'running' || session.status === 'awaiting_approval') && (
+                  <span className="session-status-dot" aria-label={session.status} />
+                )}
+                {session.title}
+              </span>
               <span className="chat-meta">{editedAt(session.updatedAt)}</span>
             </button>
             <button

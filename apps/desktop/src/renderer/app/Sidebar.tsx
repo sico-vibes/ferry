@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ChevronRight,
   UserRound,
+  Code2,
 } from 'lucide-react';
 import {
   CapacityCard,
@@ -57,6 +58,7 @@ const settingSections = [
   'Skills',
   'MCP',
   'Data & Privacy',
+  'Developer',
   'About',
 ] as const;
 const providerKind = (tag: string) =>
@@ -320,7 +322,9 @@ export function Sidebar({
                     useUI.getState().setSettingsSection(name);
                   }}
                 >
-                  {index === 0 ? (
+                  {name === 'Developer' ? (
+                    <Code2 size={15} />
+                  ) : index === 0 ? (
                     <UserRound size={15} />
                   ) : index === 1 ? (
                     <BookOpen size={15} />

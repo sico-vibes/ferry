@@ -51,7 +51,7 @@ describe('SettingsCanvas', () => {
   // result is an array. A persisted value like `{}` survives the try/catch and `rules.map`
   // throws during render, replacing the whole app with the error boundary.
   // Expected: a non-array persisted value falls back to an empty rule list.
-  it.fails('renders the Permissions section when persisted rules are not an array', () => {
+  it('renders the Permissions section when persisted rules are not an array', () => {
     localStorage.setItem('ferry.permissionRules', '{}');
     useUI.setState({ settingsSection: 'Permissions' });
     expect(() => mount()).not.toThrow();
@@ -59,7 +59,7 @@ describe('SettingsCanvas', () => {
 
   // BUG (P3): the profile editor repeats the "Paid models" setting row twice with identical
   // label, helper and control, so the same option is shown (and toggled) in two places.
-  it.fails('shows the paid-models setting exactly once in the profile editor', async () => {
+  it('shows the paid-models setting exactly once in the profile editor', async () => {
     useUI.setState({ settingsSection: 'Profiles' });
     mount();
     fireEvent.click(await screen.findByRole('button', { name: /Best Available/ }));

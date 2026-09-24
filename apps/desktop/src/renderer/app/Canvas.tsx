@@ -369,7 +369,7 @@ export function SessionCanvas() {
   const pushToast = useToasts((state) => state.push);
   const setRightTab = useUI((state) => state.setRightTab);
   const density = useUI((state) => state.density);
-  const { data } = useSessionDetail(sessionId);
+  const { data, isLoading, isError } = useSessionDetail(sessionId);
   const { data: workspaces = [] } = useWorkspaces();
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
@@ -451,6 +451,17 @@ export function SessionCanvas() {
       })) ?? [],
     [data?.taskRecord.plan],
   );
+  if (isError || (!isLoading && !data)) {
+    return (
+      <section className="canvas session-canvas">
+        <EmptyState
+          title="This session is no longer available"
+          action="Back to Home"
+          onAction={() => void navigate({ to: '/' })}
+        />
+      </section>
+    );
+  }
   return (
     <CanvasPanel
       dots={false}

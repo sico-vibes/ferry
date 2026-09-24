@@ -56,13 +56,15 @@ export const useUI = create<UIState>((set) => {
     });
   };
   return {
-    tabs: Array.isArray(saved.tabs) ? saved.tabs : [],
+    tabs: Array.isArray(saved.tabs)
+      ? saved.tabs.filter(
+          (tab): tab is UIState['tabs'][number] =>
+            isRecord(tab) && typeof tab.id === 'string' && typeof tab.title === 'string',
+        )
+      : [],
     activeId: typeof saved.activeId === 'string' ? saved.activeId : null,
     ...savedLayout,
-    rightTab:
-      saved.rightTab === 'plan' || saved.rightTab === 'changes' || saved.rightTab === 'terminal'
-        ? saved.rightTab
-        : 'chats',
+    rightTab: saved.rightTab === 'plan' || saved.rightTab === 'changes' ? saved.rightTab : 'chats',
     density: saved.density === 'compact' ? 'compact' : 'comfortable',
     settingsSection: 'General',
     selectedWorkspaceId: null,

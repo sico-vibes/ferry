@@ -62,7 +62,7 @@ describe('ReviewCanvas', () => {
   // leaves the review canvas stuck on "Loading review…" forever, because the component cannot
   // distinguish "still loading" from "no such run".
   // Expected: a not-found/empty state; observed: perpetual loading text.
-  it.fails('shows a not-found state when the delegation run does not exist', async () => {
+  it('shows a not-found state when the delegation run does not exist', async () => {
     mount([]);
     expect(
       await screen.findByText(/not found|no longer available|missing/i, {}, { timeout: 1500 }),
