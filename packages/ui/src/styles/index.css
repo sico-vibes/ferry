@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import '../fonts/inter.css';
 @import './tokens.css';
 @import './effects.css';
 @import './brand.css';
@@ -58,6 +59,37 @@
   --text-hero: 30px;
   --text-hero--line-height: 38px;
   --text-hero--letter-spacing: -0.01em;
+}
+
+/* Keep generated surface utilities tied to active surface tokens in both themes. */
+@layer utilities {
+  .bg-app {
+    background-color: var(--bg-app);
+  }
+  .bg-rail-tile {
+    background-color: var(--bg-rail-tile);
+  }
+  .bg-rail-tile-active {
+    background-color: var(--bg-rail-tile-active);
+  }
+  .bg-panel {
+    background-color: var(--bg-panel);
+  }
+  .bg-canvas {
+    background-color: var(--bg-canvas);
+  }
+  .bg-card {
+    background-color: var(--bg-card);
+  }
+  .bg-raised {
+    background-color: var(--bg-raised);
+  }
+  .bg-input {
+    background-color: var(--bg-input);
+  }
+  .bg-pill-dark {
+    background-color: var(--bg-pill-dark);
+  }
 }
 
 @layer base {

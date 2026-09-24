@@ -59,7 +59,7 @@ export function RingGauge({ value, size = 40, stroke = 4, label }: RingGaugeProp
         transition={reducedMotion ? { duration: 0 } : { duration: 0.22, ease: 'easeOut' }}
       />
       <text
-        className="fill-text-1 font-sans text-[10px] font-semibold tabular-nums"
+        className="fill-text-1 font-sans text-[10px] leading-3 font-semibold tabular-nums"
         dominantBaseline="central"
         textAnchor="middle"
         x="50%"

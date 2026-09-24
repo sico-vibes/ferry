@@ -339,7 +339,7 @@ export function Sidebar({
             </nav>
           ) : (
             <>
-              <NewChatButton onClick={() => void createChat()} />
+              <NewChatButton onClick={() => void createChat()}>New conversation</NewChatButton>
               <FadeSeparator className="my-5" />
               <SidebarSection
                 label="Pinned Profiles"

@@ -23,7 +23,7 @@ export async function run(page, ctx) {
   await ctx.expect(page.locator('.diff-view')).toBeVisible();
   await page.locator('.diff-view').getByRole('button', { name: 'Close' }).click();
 
-  await tabs.getByRole('button', { name: 'Chats' }).click();
+  await tabs.getByRole('button', { name: 'Chat history' }).click();
   await ctx.expect(page.getByText('Saved topics')).toBeVisible();
 
   // Double-clicking the resize handle restores the default right-panel width.

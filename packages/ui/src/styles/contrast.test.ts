@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const tokens = readFileSync(new URL('./tokens.css', import.meta.url), 'utf8');
+const theme = readFileSync(new URL('./index.css', import.meta.url), 'utf8');
+const lightTokens = readFileSync(new URL('./light-tokens.css', import.meta.url), 'utf8');
 const color = (name: string) => {
   const value = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`).exec(tokens)?.[1];
   if (!value) throw new Error(`Missing color token --${name}`);
@@ -25,5 +27,24 @@ const contrast = (foreground: string, background: string) => {
 describe('accessible text token contrast', () => {
   it.each(['bg-canvas', 'bg-card', 'bg-panel'])('passes AA on --%s', (surface) => {
     expect(contrast(color('text-3'), color(surface))).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe('theme surface utility bridge', () => {
+  it.each([
+    ['bg-app', 'bg-app'],
+    ['bg-rail-tile', 'bg-rail-tile'],
+    ['bg-rail-tile-active', 'bg-rail-tile-active'],
+    ['bg-panel', 'bg-panel'],
+    ['bg-canvas', 'bg-canvas'],
+    ['bg-card', 'bg-card'],
+    ['bg-raised', 'bg-raised'],
+    ['bg-input', 'bg-input'],
+    ['bg-pill-dark', 'bg-pill-dark'],
+  ])('maps .%s to its active surface token', (utility, token) => {
+    expect(theme).toMatch(
+      new RegExp(`\\.${utility}\\s*\\{\\s*background-color:\\s*var\\(--${token}\\)`),
+    );
+    expect(lightTokens).toMatch(new RegExp(`--${token}:`));
   });
 });

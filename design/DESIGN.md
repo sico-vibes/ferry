@@ -75,7 +75,7 @@ All values live in `packages/ui/src/styles/tokens.css` as CSS variables and are 
 
 ### 2.7 Typography
 - Font: **Inter Variable** (self-hosted `@fontsource-variable/inter`), `font-feature-settings: "cv11","ss01"`; `tabular-nums` for counters, %, times.
-- Scale: meta `11/16 500` · label `12/16 500` · body `13/20 450` · title `15/22 600` · chat `14.5/24 400` · hero `30/38 600, letter-spacing -0.01em`.
+- Scale: gauge micro `10/12 600` (capacity ring value; see §4.5) · rail label `10.5/14 500` (rail tiles; see §4.1) · meta `11/16 500` · label `12/16 500` · body `13/20 450` · title `15/22 600` · chat `14.5/24 400` · hero `30/38 600, letter-spacing -0.01em`.
 
 ### 2.8 Icons & motion
 - Icons: **lucide-react**, stroke 1.75. Sizes: 18 rail · 16 lists/pills · 14 chips/small pills. Brand marks (GitHub, Supabase, Playwright…): **simple-icons** (CC0).
