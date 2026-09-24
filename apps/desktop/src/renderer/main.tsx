@@ -14,15 +14,20 @@ const root = document.getElementById('root');
 if (!root) throw new Error('Renderer root element is missing');
 
 const client = createDemoFerryClient();
+const mountApp = () => {
+  createRoot(root).render(
+    <StrictMode>
+      <FerryProvider client={client}>
+        <QueryClientProvider client={queryClient}>
+          <AppRouter />
+        </QueryClientProvider>
+      </FerryProvider>
+    </StrictMode>,
+  );
+};
 if (new URLSearchParams(location.search).get('demo') === 'long') {
-  void import('./perf-demo').then(({ seedLongTranscript }) => seedLongTranscript(client));
-}
-createRoot(root).render(
-  <StrictMode>
-    <FerryProvider client={client}>
-      <QueryClientProvider client={queryClient}>
-        <AppRouter />
-      </QueryClientProvider>
-    </FerryProvider>
-  </StrictMode>,
-);
+  void import('./perf-demo').then(({ seedLongTranscript }) => {
+    seedLongTranscript(client);
+    mountApp();
+  });
+} else mountApp();

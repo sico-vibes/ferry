@@ -492,6 +492,7 @@ export function SessionCanvas() {
   const viewport = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
   const initialSession = useRef<SessionId | null>(null);
+  const initializedTailSession = useRef<SessionId | null>(null);
   const streamAnchor = useRef<{ index: number; offset: number } | null>(null);
   const [initialTailReady, setInitialTailReady] = useState(false);
   const [newOutputCount, setNewOutputCount] = useState(0);
@@ -576,52 +577,68 @@ export function SessionCanvas() {
     if (!data) return;
     if (initialSession.current !== sessionId) {
       initialSession.current = sessionId;
+      initializedTailSession.current = null;
       pinnedToBottom.current = true;
       setAtBottom(true);
       setInitialTailReady(false);
     }
-    if (initialTailReady && messages.length > 0) return;
+    if (initializedTailSession.current === sessionId) return;
     if (messages.length === 0) {
       setInitialTailReady(true);
       return;
     }
+    setInitialTailReady(false);
     const lastIndex = messages.length - 1;
-    let attempts = 0;
+    let cancelled = false;
+    let frame = 0;
     const scrollTail = () => {
-      attempts += 1;
       virtualizer.measure();
       virtualizer.scrollToIndex(lastIndex, { align: 'end' });
-      requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
         const last = viewport.current?.querySelector<HTMLElement>(
           `.transcript-message[data-index="${String(lastIndex)}"]`,
         );
         if (last) virtualizer.measureElement(last);
-        virtualizer.scrollToIndex(lastIndex, { align: 'end' });
-        requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => {
           const element = viewport.current;
           const tail = element?.querySelector<HTMLElement>(
             `.transcript-message[data-index="${String(lastIndex)}"]`,
           );
           if (!element || !tail) {
-            if (attempts < 8) requestAnimationFrame(scrollTail);
+            if (!cancelled) frame = requestAnimationFrame(scrollTail);
             return;
           }
-          element.scrollTop = element.scrollHeight;
-          requestAnimationFrame(() => {
-            const bottomGap =
-              element.getBoundingClientRect().bottom - tail.getBoundingClientRect().bottom;
-            if (bottomGap > 48 && attempts < 8) {
-              requestAnimationFrame(scrollTail);
-              return;
+          let attempts = 0;
+          let stableFrames = 0;
+          const alignMeasuredTail = () => {
+            if (cancelled) return;
+            const tailDelta =
+              tail.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom;
+            if (Math.abs(tailDelta) <= 48) {
+              stableFrames += 1;
+              if (stableFrames >= 3) {
+                pinnedToBottom.current = true;
+                initializedTailSession.current = sessionId;
+                setAtBottom(true);
+                setInitialTailReady(true);
+                return;
+              }
+            } else {
+              stableFrames = 0;
+              element.scrollTop += tailDelta;
             }
-            pinnedToBottom.current = bottomGap <= 48;
-            setAtBottom(bottomGap <= 48);
-            setInitialTailReady(true);
-          });
+            attempts += 1;
+            if (attempts < 120) frame = requestAnimationFrame(alignMeasuredTail);
+          };
+          alignMeasuredTail();
         });
       });
     };
     scrollTail();
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
   }, [data, initialTailReady, messages.length, sessionId, virtualizer]);
   useLayoutEffect(() => {
     if (!initialTailReady) return;
@@ -646,7 +663,22 @@ export function SessionCanvas() {
   }, [initialTailReady, streaming]);
   useLayoutEffect(() => {
     if (!initialTailReady || !pinnedToBottom.current || messages.length === 0) return;
-    virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
+    const tailIndex = messages.length - 1;
+    virtualizer.scrollToIndex(tailIndex, { align: 'end' });
+    const frame = requestAnimationFrame(() => {
+      const element = viewport.current;
+      const tail = element?.querySelector<HTMLElement>(
+        `.transcript-message[data-index="${String(tailIndex)}"]`,
+      );
+      if (!element || !tail) return;
+      virtualizer.measureElement(tail);
+      const tailDelta =
+        tail.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom;
+      if (Math.abs(tailDelta) > 48) element.scrollTop += tailDelta;
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
   }, [initialTailReady, messages.length, streaming, virtualizer]);
   useEffect(() => {
     if (data?.session.title) useUI.getState().renameTab(sessionId, data.session.title);
@@ -680,24 +712,22 @@ export function SessionCanvas() {
           pinnedToBottom.current = false;
           return;
         }
-        const bottomGap =
-          element.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom;
-        if (bottomGap > 48) {
-          element.scrollTop += bottomGap;
+        const tailDelta =
+          last.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom;
+        if (Math.abs(tailDelta) > 48) {
+          element.scrollTop += tailDelta;
           requestAnimationFrame(() => {
-            virtualizer.measureElement(last);
-            virtualizer.scrollToIndex(tailIndex, { align: 'end' });
-            requestAnimationFrame(() => {
-              const finalGap =
-                element.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom;
-              if (finalGap <= 48) {
-                setNewOutputCount(0);
-                setAtBottom(true);
-              } else pinnedToBottom.current = false;
-            });
+            const finalDelta =
+              last.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom;
+            if (Math.abs(finalDelta) <= 48) {
+              pinnedToBottom.current = true;
+              setNewOutputCount(0);
+              setAtBottom(true);
+            } else pinnedToBottom.current = false;
           });
           return;
         }
+        pinnedToBottom.current = true;
         setNewOutputCount(0);
         setAtBottom(true);
       });
@@ -824,12 +854,34 @@ export function SessionCanvas() {
         className="transcript-viewport"
         ref={viewport}
         style={{ visibility: initialTailReady ? 'visible' : 'hidden' }}
+        onWheel={(event) => {
+          if (event.deltaY < 0) {
+            pinnedToBottom.current = false;
+            setAtBottom(false);
+          }
+        }}
+        onKeyDown={(event) => {
+          if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) {
+            pinnedToBottom.current = false;
+            setAtBottom(false);
+          }
+        }}
         onScroll={(event) => {
           const element = event.currentTarget;
-          const bottom = element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
-          pinnedToBottom.current = bottom;
-          if (bottom) setNewOutputCount(0);
-          setAtBottom(bottom);
+          const tail = element.querySelector<HTMLElement>(
+            `.transcript-message[data-index="${String(messages.length - 1)}"]`,
+          );
+          const bottom = Boolean(
+            tail &&
+            Math.abs(
+              tail.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom,
+            ) <= 48,
+          );
+          if (bottom) {
+            pinnedToBottom.current = true;
+            setNewOutputCount(0);
+            setAtBottom(true);
+          } else if (!pinnedToBottom.current) setAtBottom(false);
         }}
       >
         {messages.length === 0 && (
@@ -917,39 +969,37 @@ export function SessionCanvas() {
           Jump to latest{newOutputCount > 0 ? ` · ${String(newOutputCount)} new` : ''}
         </button>
       )}
-      {initialTailReady && (
-        <Composer
-          value={prompt}
-          onChange={setPrompt}
-          onSend={() => void send()}
-          onStop={() => void client.sessions.cancel(sessionId)}
-          running={running}
-          profileName={
-            profiles.find((profile) => profile.id === data?.session.profileId)?.name ??
-            'Best Available'
-          }
-          onProfileClick={() => undefined}
-          profileMenuItems={[
-            ...profiles
-              .filter((profile) => profile.pinned)
-              .map((profile) => ({
-                label: profile.name,
-                onSelect: () => void activateProfile(profile.id),
-              })),
-            { separator: true },
-            {
-              label: 'Manage profiles…',
-              onSelect: () => {
-                useUI.getState().setSettingsSection('Profiles');
-                void navigate({ to: '/settings' });
-              },
+      <Composer
+        value={prompt}
+        onChange={setPrompt}
+        onSend={() => void send()}
+        onStop={() => void client.sessions.cancel(sessionId)}
+        running={running}
+        profileName={
+          profiles.find((profile) => profile.id === data?.session.profileId)?.name ??
+          'Best Available'
+        }
+        onProfileClick={() => undefined}
+        profileMenuItems={[
+          ...profiles
+            .filter((profile) => profile.pinned)
+            .map((profile) => ({
+              label: profile.name,
+              onSelect: () => void activateProfile(profile.id),
+            })),
+          { separator: true },
+          {
+            label: 'Manage profiles…',
+            onSelect: () => {
+              useUI.getState().setSettingsSection('Profiles');
+              void navigate({ to: '/settings' });
             },
-          ]}
-          onAttach={() => {
-            pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
-          }}
-        />
-      )}
+          },
+        ]}
+        onAttach={() => {
+          pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
+        }}
+      />
       {fullOutput !== null && (
         <div
           role="presentation"

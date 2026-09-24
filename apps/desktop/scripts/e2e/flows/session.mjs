@@ -8,6 +8,16 @@ export async function run(page, { url, expect }) {
   await expect
     .poll(() => page.locator('.transcript-message[data-index="999"]').count(), { timeout: 20_000 })
     .toBe(1);
+  await expect
+    .poll(() =>
+      viewport.evaluate((element) => {
+        const tail = element.querySelector('.transcript-message[data-index="999"]');
+        return tail
+          ? Math.abs(tail.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom)
+          : Number.POSITIVE_INFINITY;
+      }),
+    )
+    .toBeLessThanOrEqual(48);
   const startup = await viewport.evaluate((element) => {
     const tail = element.querySelector('.transcript-message[data-index="999"]');
     return {
@@ -22,13 +32,6 @@ export async function run(page, { url, expect }) {
     };
   });
   console.log(`session M-03 startup: ${JSON.stringify(startup)}`);
-  await expect
-    .poll(() =>
-      viewport.evaluate(
-        (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
-      ),
-    )
-    .toBeLessThanOrEqual(48);
   await viewport.hover();
   await page.mouse.wheel(0, -900);
   await expect(page.getByRole('button', { name: /Jump to latest/ })).toBeVisible();
@@ -45,7 +48,7 @@ export async function run(page, { url, expect }) {
     };
   });
   await expect(page.getByRole('button', { name: /Jump to latest, \d+ new/ })).toBeVisible();
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(1_500);
   const after = await viewport.evaluate((element) => {
     const first = [...element.querySelectorAll('.transcript-message')].find(
       (message) => message.getBoundingClientRect().bottom > element.getBoundingClientRect().top,
@@ -74,7 +77,10 @@ export async function run(page, { url, expect }) {
       scrollTop: element.scrollTop,
       scrollHeight: element.scrollHeight,
       tailVisible: Boolean(
-        tail && tail.getBoundingClientRect().bottom <= element.getBoundingClientRect().bottom + 48,
+        tail &&
+        tail.getBoundingClientRect().bottom > element.getBoundingClientRect().top &&
+        Math.abs(tail.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom) <=
+          48,
       ),
       tailBottomGap: tail
         ? element.getBoundingClientRect().bottom - tail.getBoundingClientRect().bottom
@@ -107,4 +113,5 @@ export async function run(page, { url, expect }) {
   );
   if (modelHeight > 36)
     throw new Error(`Model selector wrapped at narrow center width (${modelHeight}px)`);
+  await page.setViewportSize({ width: 1440, height: 900 });
 }
