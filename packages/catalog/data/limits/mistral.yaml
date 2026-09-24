@@ -1,0 +1,12 @@
+provider: mistral
+name: Mistral Experiment plan
+tag: caution
+signup_url: https://console.mistral.ai/
+docs_url: https://docs.mistral.ai/deployment/ai-studio/tier/
+terms_note: Approximately one request per second; monthly caps are visible only in console.
+data_use: Subject to Mistral terms.
+verified_at: '2026-09-23'
+source_url: https://docs.mistral.ai/deployment/ai-studio/tier/
+windows:
+  - { scope: provider, metric: requests, kind: rolling, length: 1, limit: 1 }
+  - { scope: provider, metric: requests, kind: monthly_from_anchor, limit: null }
