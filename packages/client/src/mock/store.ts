@@ -50,7 +50,8 @@ const persistenceSchema = (state: unknown) => {
   const providers = (value.providers as unknown[]).map((x) => ProviderSchema.parse(x));
   const models = (value.models as unknown[]).map((x) => ModelInfoSchema.parse(x));
   const profiles = (value.profiles as unknown[]).map((x) => ProfileSchema.parse(x));
-  const settings = SettingsSchema.parse(value.settings);
+  const settingsValue = value.settings as Record<string, unknown>;
+  const settings = SettingsSchema.parse({ homeStyle: 'auto' as const, ...settingsValue });
   const checkpoints = (value.checkpoints as unknown[]).map((x) => CheckpointSchema.parse(x));
   const lanes = (value.lanes as unknown[]).map((x) => LaneSchema.parse(x));
   const skills = (value.skills as unknown[]).map((x) => SkillSchema.parse(x));

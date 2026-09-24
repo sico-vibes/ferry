@@ -74,7 +74,7 @@ export function ModelPickerTrigger({
 }) {
   return (
     <button
-      className={`inline-flex items-center gap-2 rounded-pill px-2 py-1 text-body font-medium text-text-1 hover:bg-white/[0.04] ${focusRingClass}`}
+      className={`inline-flex items-center gap-2 rounded-pill px-2 py-1 text-body font-medium text-text-1 hover:bg-icon-circle ${focusRingClass}`}
       onClick={onClick}
       type="button"
     >
@@ -165,37 +165,64 @@ export interface ChatCardProps {
   title: string;
   snippet: string;
   date: string;
+  status?: 'running' | 'awaiting_approval' | 'idle' | 'error';
+  repo?: string;
   onClick?: () => void;
 }
-export function ChatCard({ language, title, snippet, date, onClick }: ChatCardProps) {
+export function ChatCard({ language, title, snippet, date, status, repo, onClick }: ChatCardProps) {
   return (
     <Spotlight className="h-[104px] w-[200px] shrink-0 rounded-card">
       <button
-        className={`group relative flex h-full w-full flex-col rounded-card border border-border-hair bg-card/90 p-3.5 text-left transition hover:bg-raised ${focusRingClass}`}
+        className={`group relative flex h-full w-full flex-col rounded-card border border-border-hair bg-card p-3 text-left transition hover:bg-raised ${focusRingClass}`}
         onClick={onClick}
         type="button"
       >
-        <span
-          className="flex size-7 items-center justify-center rounded-lg text-label font-bold text-white"
-          style={{ backgroundColor: `var(${langVar[language]})` }}
-        >
-          {language === 'ts'
-            ? 'TS'
-            : language === 'py'
-              ? 'Py'
-              : language === 'go'
-                ? 'Go'
-                : language === 'rust'
-                  ? 'R'
-                  : language.toUpperCase()}
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span
+            className={`flex size-6 shrink-0 items-center justify-center rounded-lg text-label font-bold ${language === 'ts' ? 'text-white' : 'text-[var(--text-on-send)]'}`}
+            style={{ backgroundColor: `var(${langVar[language]})` }}
+          >
+            {language === 'ts'
+              ? 'TS'
+              : language === 'py'
+                ? 'Py'
+                : language === 'go'
+                  ? 'Go'
+                  : language === 'rust'
+                    ? 'R'
+                    : language.toUpperCase()}
+          </span>
+          {status && status !== 'idle' && (
+            <span
+              aria-label={status === 'awaiting_approval' ? 'Awaiting approval' : status}
+              className={`size-1.5 shrink-0 rounded-full ${status === 'error' ? 'bg-danger' : status === 'awaiting_approval' ? 'bg-warn' : 'bg-blue-500'}`}
+            />
+          )}
+          {repo && (
+            <span className="ml-auto max-w-28 truncate rounded-full bg-raised px-1.5 py-0.5 text-meta font-medium text-text-2">
+              {repo}
+            </span>
+          )}
         </span>
-        <span className="mt-2 truncate text-[12.5px] leading-[18px] font-semibold text-text-1">
+        <span className="mt-1 truncate text-[12.5px] leading-[18px] font-semibold text-text-1">
           {title}
         </span>
-        <span className="truncate text-[11.5px] leading-4 text-text-3">{snippet}</span>
+        <span className="truncate text-[11.5px] leading-4 text-text-2">{snippet}</span>
         <span className="mt-auto text-meta text-text-3">{date}</span>
       </button>
     </Spotlight>
+  );
+}
+export function ContinueRow({ cards }: { cards: ChatCardProps[] }) {
+  return (
+    <section className="mt-2 min-w-0" aria-label="Continue">
+      <h2 className="mb-3 text-label font-medium text-text-2">Continue</h2>
+      <div className="flex gap-3 overflow-x-auto pb-1">
+        {cards.map((card) => (
+          <ChatCard key={card.title} {...card} />
+        ))}
+      </div>
+    </section>
   );
 }
 export function PinnedChatsRow({
@@ -260,7 +287,7 @@ export function SuggestionChips({ onSelect }: { onSelect?: (value: string) => vo
       <div className="flex gap-2 overflow-x-auto pb-1">
         {suggestionItems.map(([label, Icon]) => (
           <button
-            className={`inline-flex h-[30px] shrink-0 items-center gap-2 rounded-pill border border-white/10 px-3 text-[12.5px] leading-4 text-[var(--chip-text)] hover:bg-white/[0.04] ${focusRingClass}`}
+            className={`inline-flex h-[30px] shrink-0 items-center gap-2 rounded-pill border border-border-soft px-3 text-[12.5px] leading-4 text-[var(--chip-text)] hover:bg-icon-circle ${focusRingClass}`}
             key={label}
             onClick={() => onSelect?.(label)}
             type="button"
@@ -316,7 +343,7 @@ export function Composer({
   const topBand = {
     height: banner ? 30 : 3,
     content: banner ? (
-      <div className="flex h-full items-center justify-between gap-3 px-3 text-label font-medium text-white/90">
+      <div className="flex h-full items-center justify-between gap-3 px-3 text-label font-medium text-white/90 composer-banner-content">
         <span className="flex min-w-0 items-center gap-2 truncate">
           <Timer size={14} />
           {banner.text}

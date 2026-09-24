@@ -59,7 +59,7 @@ export function QuotaWindowBar({ window }: { window: QuotaWindow }) {
       </div>
       <div
         aria-label={window.limit === null ? 'No cap' : `${String(Math.round(percent ?? 0))}% used`}
-        className="h-1.5 overflow-hidden rounded-pill bg-white/[0.07]"
+        className="h-1.5 overflow-hidden rounded-pill bg-raised"
         role="meter"
         aria-valuemin={0}
         aria-valuemax={100}

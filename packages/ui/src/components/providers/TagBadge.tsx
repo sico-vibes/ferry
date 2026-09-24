@@ -14,7 +14,7 @@ const styles: Record<TagBadgeKind, string> = {
   legit: 'bg-[var(--tint-success)] text-success',
   promo: 'bg-[var(--tint-warn)] text-warn',
   paid: 'bg-[var(--tint-blue)] text-link',
-  cli: 'bg-white/[0.06] text-text-2',
+  cli: 'bg-icon-circle text-text-2',
   caution: 'bg-[var(--tint-danger)] text-danger',
 };
 

@@ -262,7 +262,7 @@ export function ExploreCanvas() {
           {(['All', 'Free', 'Paid', 'CLI'] as const).map((item) => (
             <button
               aria-pressed={filter === item}
-              className={`rounded-pill border px-3 py-1.5 text-label transition ${filter === item ? 'border-border-strong bg-raised text-text-1' : 'border-border-hair text-text-2 hover:bg-white/[0.04]'}`}
+              className={`rounded-pill border px-3 py-1.5 text-label transition ${filter === item ? 'border-border-strong bg-raised text-text-1' : 'border-border-hair text-text-2 hover:bg-icon-circle'}`}
               key={item}
               onClick={() => {
                 useUI.getState().setExploreFilter(item);
@@ -375,7 +375,7 @@ export function ExploreCanvas() {
               <tbody>
                 {visibleModels.map((model) => (
                   <tr
-                    className="h-10 border-b border-border-hair last:border-0 hover:bg-white/[0.025]"
+                    className="h-10 border-b border-border-hair last:border-0 hover:bg-icon-circle"
                     key={model.ref}
                   >
                     <td
@@ -388,7 +388,7 @@ export function ExploreCanvas() {
                       {providerNames[model.providerId] ?? model.providerId}
                     </td>
                     <td className="px-3">
-                      <span className="rounded-pill bg-white/[0.06] px-2 py-1 text-text-2">
+                      <span className="rounded-pill bg-raised px-2 py-1 text-text-2">
                         {model.tier}
                       </span>
                     </td>
@@ -442,7 +442,7 @@ export function ExploreCanvas() {
               </div>
               <Dialog.Close
                 aria-label="Close dialog"
-                className="rounded-pill p-1.5 text-text-3 hover:bg-white/[0.06] hover:text-text-1"
+                className="rounded-pill p-1.5 text-text-3 hover:bg-raised hover:text-text-1"
               >
                 <X size={16} />
               </Dialog.Close>

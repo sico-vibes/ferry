@@ -63,7 +63,7 @@ export function ProviderCard({
               <h2 className="truncate text-label font-semibold text-text-1">{provider.name}</h2>
               <TagBadge kind={provider.tag === 'subscription_cli' ? 'cli' : provider.tag} />
             </div>
-            <p className="mt-0.5 flex items-center gap-1.5 text-meta text-text-3">
+            <p className="mt-0.5 flex items-center gap-1.5 text-meta text-text-2">
               <span className={`size-1.5 rounded-full ${statusColor}`} />
               {status}
             </p>
@@ -91,10 +91,10 @@ export function ProviderCard({
           <QuotaWindowBar key={window.id} window={window} />
         ))}
         {provider.windows.length === 0 && (
-          <p className="text-meta text-text-3">Quota reported by provider when available</p>
+          <p className="text-meta text-text-2">Quota reported by provider when available</p>
         )}
         {provider.dataUse && (
-          <p className="flex items-start gap-1.5 text-[11px] leading-4 text-text-3">
+          <p className="flex items-start gap-1.5 text-[11px] leading-4 text-text-2">
             <AlertTriangle className="mt-0.5 shrink-0" size={13} />
             {provider.dataUse}
           </p>

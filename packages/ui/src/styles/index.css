@@ -2,6 +2,7 @@
 @import './tokens.css';
 @import './effects.css';
 @import './brand.css';
+@import './light-tokens.css';
 @source '../';
 @source "../**/*.{ts,tsx}";
 
@@ -130,4 +131,11 @@
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
   }
+}
+
+.composer-banner-content {
+  color: var(--text-on-gradient);
+}
+[data-theme='light'] .composer-banner-content {
+  color: var(--text-1);
 }

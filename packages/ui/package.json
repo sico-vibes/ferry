@@ -13,7 +13,8 @@
     "test": "vitest run",
     "gallery": "ladle serve --port 61000",
     "gallery:build": "ladle build",
-    "shot:gallery": "node scripts/shot-gallery.mjs"
+    "shot:gallery": "node scripts/shot-gallery.mjs",
+    "test:contrast": "node scripts/audit-light-contrast.mjs"
   },
   "dependencies": {
     "@ferry/shared": "workspace:*",
