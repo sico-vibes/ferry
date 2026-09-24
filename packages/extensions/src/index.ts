@@ -1,1 +1,3 @@
-export const PACKAGE = '@ferry/extensions';
+export * from './types.js';
+export * from './skills.js';
+export * from './mcp.js';
