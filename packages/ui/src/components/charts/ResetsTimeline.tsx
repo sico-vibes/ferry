@@ -49,7 +49,7 @@ export function ResetsTimeline({
       <div className="relative mx-1 h-12">
         <div className="absolute inset-x-0 top-5 h-px bg-border-soft" />
         <span
-          aria-label="Now"
+          aria-hidden="true"
           className="absolute top-2.5 h-6 w-px bg-blue-500"
           style={{
             left: '0%',

@@ -104,7 +104,7 @@ export function OnboardingCanvas() {
         </button>
       </div>
       <div className="onboarding-content">
-        <div className="step-dots" aria-label={`Step ${String(step + 1)} of 4`}>
+        <div className="step-dots" role="group" aria-label={`Step ${String(step + 1)} of 4`}>
           {[0, 1, 2, 3].map((item) => (
             <span key={item} className={item <= step ? 'active' : ''} />
           ))}

@@ -70,7 +70,7 @@ export function ProviderCard({
           </div>
           <button
             aria-label={`${provider.enabled ? 'Disable' : 'Enable'} ${provider.name}`}
-            aria-pressed={provider.enabled}
+            aria-checked={provider.enabled}
             className={`relative h-5 w-9 rounded-pill border transition ${provider.enabled ? 'border-blue-500/40 bg-blue-tint' : 'border-border-soft bg-raised'}`}
             onClick={() => onToggle?.(!provider.enabled)}
             role="switch"

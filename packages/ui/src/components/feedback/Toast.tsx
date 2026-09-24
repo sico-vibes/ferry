@@ -55,7 +55,12 @@ export function Toaster({
 }) {
   const [dismissed, setDismissed] = useState<string[]>([]);
   return (
-    <div aria-label="Notifications" className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+    <div
+      aria-label="Notifications"
+      aria-live="polite"
+      className="fixed bottom-4 right-4 z-50 flex flex-col gap-2"
+      role="region"
+    >
       {messages
         .filter((message) => !dismissed.includes(message.id))
         .map((message) => (

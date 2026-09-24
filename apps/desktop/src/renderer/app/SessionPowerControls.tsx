@@ -31,6 +31,16 @@ function ApprovalsTray() {
       queryFn: () => client.sessions.get(session.id),
     })),
   });
+  useEffect(() => {
+    if (!open) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('keydown', escape);
+    return () => {
+      window.removeEventListener('keydown', escape);
+    };
+  }, [open]);
   const pending = details.flatMap((query) => {
     const detail = query.data;
     if (!detail) return [];
@@ -351,6 +361,9 @@ export function ModelPickerPopover({
   return (
     <div className="relative">
       <button
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-controls="model-picker-dialog"
         className="inline-flex items-center gap-2 rounded-pill px-2 py-1 text-body font-medium text-text-1 hover:bg-white/[0.04]"
         onClick={() => {
           setOpen(!open);
@@ -364,9 +377,14 @@ export function ModelPickerPopover({
         <ChevronDown aria-hidden="true" size={14} />
       </button>
       {open && (
-        <div aria-label="Choose model" className="model-picker-popover" role="dialog">
+        <div
+          aria-label="Choose model"
+          className="model-picker-popover"
+          id="model-picker-dialog"
+          role="dialog"
+        >
           <Command label="Choose model" className="model-command">
-            <Command.Input placeholder="Search models…" />
+            <Command.Input aria-label="Search models" placeholder="Search models…" />
             <Command.List>
               <Command.Item
                 className="model-candidate auto"

@@ -42,6 +42,7 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
   const openTab = useUI((state) => state.openTab);
   const toggleRight = useUI((state) => state.toggleRight);
   const rightTab = useUI((state) => state.rightTab);
+  const rightWidth = useUI((state) => state.rightWidth);
   const setRightWidth = useUI((state) => state.setRightWidth);
   const setRightTab = useUI((state) => state.setRightTab);
   const activeId = useUI((state) => state.activeId);
@@ -100,6 +101,9 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
       <button
         aria-label="Resize right panel"
         aria-orientation="vertical"
+        aria-valuemin={300}
+        aria-valuemax={560}
+        aria-valuenow={rightWidth}
         className="right-resize-handle"
         onDoubleClick={() => {
           setRightWidth(300);
@@ -107,7 +111,12 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
         onKeyDown={(event) => {
           if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
           event.preventDefault();
-          setRightWidth(useUI.getState().rightWidth + (event.key === 'ArrowLeft' ? 10 : -10));
+          setRightWidth(
+            Math.min(
+              560,
+              Math.max(300, useUI.getState().rightWidth + (event.key === 'ArrowLeft' ? 10 : -10)),
+            ),
+          );
         }}
         onPointerDown={(event) => {
           const start = event.clientX;

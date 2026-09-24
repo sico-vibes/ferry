@@ -105,18 +105,6 @@ export function LibraryCanvas() {
           {workspaces.map((workspace) => (
             <article
               key={workspace.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => {
-                useUI.getState().setSelectedWorkspace(workspace.id);
-                setSettings(workspace.settings);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  useUI.getState().setSelectedWorkspace(workspace.id);
-                  setSettings(workspace.settings);
-                }
-              }}
               className={`workspace-card ${selected?.id === workspace.id ? 'is-selected' : ''}`}
             >
               <div className="workspace-card-top">
@@ -152,21 +140,32 @@ export function LibraryCanvas() {
                   ]}
                 />
               </div>
-              <h2>{workspace.name}</h2>
-              <code>{workspace.path}</code>
-              <div className="workspace-meta">
-                <span className="chip">{workspace.language.toUpperCase()}</span>
-                {workspace.gitBranch && (
-                  <span>
-                    <GitBranch size={13} />
-                    {workspace.gitBranch}
-                  </span>
-                )}
-                <span>{ago(workspace.lastOpenedAt)}</span>
-              </div>
-              <small>
-                {sessions.filter((session) => session.workspaceId === workspace.id).length} sessions
-              </small>
+              <button
+                aria-pressed={selected?.id === workspace.id}
+                className="workspace-select"
+                onClick={() => {
+                  useUI.getState().setSelectedWorkspace(workspace.id);
+                  setSettings(workspace.settings);
+                }}
+                type="button"
+              >
+                <h2>{workspace.name}</h2>
+                <code>{workspace.path}</code>
+                <span className="workspace-meta">
+                  <span className="chip">{workspace.language.toUpperCase()}</span>
+                  {workspace.gitBranch && (
+                    <span>
+                      <GitBranch size={13} />
+                      {workspace.gitBranch}
+                    </span>
+                  )}
+                  <span>{ago(workspace.lastOpenedAt)}</span>
+                </span>
+                <small>
+                  {sessions.filter((session) => session.workspaceId === workspace.id).length}{' '}
+                  sessions
+                </small>
+              </button>
             </article>
           ))}
           {workspacesLoading ? (

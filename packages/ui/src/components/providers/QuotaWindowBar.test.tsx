@@ -20,6 +20,6 @@ describe('QuotaWindowBar', () => {
   it('renders uncapped usage and confidence', () => {
     render(<QuotaWindowBar window={base} />);
     expect(screen.getByText('820K · no cap')).toBeTruthy();
-    expect(screen.getByRole('meter', { name: 'No cap' })).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'No cap' })).toBeTruthy();
   });
 });
