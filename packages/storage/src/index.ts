@@ -195,11 +195,9 @@ export class ModelCacheRepository {
     ).map((row) => JSON.parse(row.data_json) as ModelInfo);
   }
 }
-export class QuotaObservationRepository extends JsonRepository<{
-  id: string;
-  observedAt: string;
-  value: number;
-}> {
+export class QuotaObservationRepository extends JsonRepository<
+  import('@ferry/shared').QuotaObservation
+> {
   constructor(client: Database.Database) {
     super(client, 'quota_observations');
   }
@@ -350,6 +348,9 @@ export function redactHeaders(headers: unknown): string | null {
 
 export class RequestRepository {
   constructor(private readonly client: Database.Database) {}
+  list(): RequestRecord[] {
+    return this.client.prepare('SELECT * FROM requests ORDER BY ts').all() as RequestRecord[];
+  }
   put(record: RequestRecord): void {
     this.client
       .prepare(

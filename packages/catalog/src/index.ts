@@ -25,6 +25,12 @@ const WindowSchema = z.object({
     'dynamic_5h',
   ]),
   tz: z.string().optional(),
+  time: z
+    .string()
+    .regex(/^\d{2}:\d{2}$/)
+    .optional(),
+  dow: z.number().int().min(0).max(6).optional(),
+  day: z.number().int().min(1).max(31).optional(),
   length: z.number().positive().optional(),
   limit: z.number().nonnegative().nullable(),
 });
