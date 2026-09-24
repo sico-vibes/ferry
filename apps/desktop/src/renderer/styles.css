@@ -26,8 +26,31 @@ input,
 textarea,
 select,
 [role='tab'],
-[role='menuitem'] {
+[role='menuitem'],
+[role='button'],
+[role='switch'],
+[role='checkbox'] {
   transition-duration: 160ms;
+}
+/* Shared minimum hit area from DESIGN §7.7. Visuals stay centered within the target. */
+:where(
+  button,
+  a[href],
+  input,
+  select,
+  textarea,
+  [role='button'],
+  [role='tab'],
+  [role='menuitem'],
+  [role='switch'],
+  [role='checkbox']
+) {
+  min-width: 28px;
+  min-height: 28px;
+}
+a[href] {
+  display: inline-flex;
+  align-items: center;
 }
 html,
 body,
@@ -108,6 +131,12 @@ body {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+.tabs-list {
+  scrollbar-width: none;
+}
+.tabs-list::-webkit-scrollbar {
+  display: none;
 }
 .tabs-bar-frame.with-sidebar-toggle > div:nth-child(2) {
   flex: 1;
@@ -1201,6 +1230,13 @@ body {
 .sidebar-panel > div {
   overflow-y: auto;
 }
+.sidebar-panel > header > strong {
+  line-height: 22px;
+}
+.left-column > .skeleton-stack {
+  min-height: 64px;
+  flex: 0 0 64px;
+}
 .sidebar-panel .my-5 {
   margin-top: 16px;
   margin-bottom: 16px;
@@ -1283,6 +1319,7 @@ body {
   color: var(--text-3);
   padding: 0 10px;
   font-size: 11px;
+  line-height: 16px;
 }
 .right-tab.active {
   border-color: var(--border-strong);
@@ -1478,11 +1515,12 @@ body {
   gap: 8px;
   color: var(--text-2);
   font-size: 12px;
+  line-height: 16px;
   font-weight: 500;
 }
 .right-section-heading .header-icon {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   background: transparent;
 }
 .chat-row {
@@ -1692,21 +1730,38 @@ body {
   color: var(--text-link);
 }
 .ferry-switch {
+  position: relative;
   display: inline-flex;
-  width: 32px;
-  height: 18px;
+  width: 42px;
+  height: 28px;
   align-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  padding: 3px 4px;
+  transition: background 150ms ease-out;
+}
+.ferry-switch::before {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  bottom: 5px;
+  left: 5px;
   border: 1px solid var(--border-soft);
   border-radius: 999px;
   background: var(--bg-raised);
-  padding: 2px;
-  transition: background 150ms ease-out;
+  content: '';
 }
 .ferry-switch[data-state='checked'] {
+  background: transparent;
+}
+.ferry-switch[data-state='checked']::before {
   border-color: var(--blue-500);
   background: var(--blue-500);
 }
 .ferry-switch-thumb {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 12px;
   height: 12px;
@@ -1835,13 +1890,26 @@ body {
   background: var(--blue-500);
 }
 .ferry-slider-thumb {
+  position: relative;
   display: block;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+}
+.ferry-slider-thumb::after {
+  position: absolute;
+  top: 7px;
+  left: 7px;
   width: 14px;
   height: 14px;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   background: var(--text-1);
   box-shadow: 0 1px 5px var(--overlay);
+  content: '';
 }
 .ferry-radio-cards {
   display: grid;

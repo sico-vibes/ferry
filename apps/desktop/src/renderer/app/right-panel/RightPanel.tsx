@@ -160,7 +160,7 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
           <MoreHorizontal size={17} />
         </IconButton>
         <NewChatButton size="sm" className="ml-auto" onClick={onNewChat}>
-          New Chat
+          Start chat
         </NewChatButton>
       </header>
       <label className="chat-search">
@@ -193,7 +193,7 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
             }}
             type="button"
           >
-            {tab === 'chats' ? 'Chats' : tab === 'plan' ? 'Plan' : 'Changes'}
+            {tab === 'chats' ? 'Chat history' : tab === 'plan' ? 'Plan' : 'Changes'}
           </button>
         ))}
       </nav>

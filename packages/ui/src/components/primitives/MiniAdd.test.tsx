@@ -6,7 +6,9 @@ describe('MiniAdd', () => {
   it('has an accessible label and calls its action', () => {
     const action = vi.fn();
     render(<MiniAdd label="Add profile" onClick={action} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
+    const button = screen.getByRole('button', { name: 'Add profile' });
+    expect(button.className).toContain('size-7');
+    fireEvent.click(button);
     expect(action).toHaveBeenCalledOnce();
   });
 });

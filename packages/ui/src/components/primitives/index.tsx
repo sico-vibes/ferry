@@ -108,13 +108,15 @@ export function MiniAdd({
     <button
       aria-label={label}
       className={cn(
-        `inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-blue-mini text-white transition hover:brightness-110 active:scale-[.98] ${focus}`,
+        `inline-flex size-7 shrink-0 items-center justify-center rounded-full text-white transition hover:brightness-110 active:scale-[.98] ${focus}`,
         className,
       )}
       onClick={onClick}
       type="button"
     >
-      <Plus aria-hidden="true" size={10} strokeWidth={2.5} />
+      <span className="flex size-4 items-center justify-center rounded-full bg-blue-mini">
+        <Plus aria-hidden="true" size={10} strokeWidth={2.5} />
+      </span>
     </button>
   );
 }

@@ -132,7 +132,7 @@ export function IconRail({
         <Plus aria-hidden="true" size={16} />
       </button>
       <div className="mt-auto flex w-full flex-col items-center gap-3">
-        <span className="flex w-full flex-col items-center gap-1 rounded-md border border-border-hair px-0.5 py-1 text-meta leading-tight text-text-3">
+        <span className="flex w-full flex-col items-center gap-1 rounded-md border border-border-hair px-0.5 py-1 text-meta leading-4 text-text-3">
           <FlaskConical aria-hidden="true" size={13} strokeWidth={1.75} />
           <span>Demo data</span>
         </span>
@@ -196,7 +196,7 @@ export function SidebarSection({
 }) {
   return (
     <section className={cn('space-y-2', className)}>
-      <div className="flex h-4 items-center justify-between">
+      <div className="flex min-h-7 items-center justify-between">
         <h2 className="text-meta font-medium text-text-3">{label}</h2>
         {action && <MiniAdd label={`Add to ${label}`} onClick={action} />}
       </div>
@@ -259,7 +259,7 @@ export function SidebarItem({
         (showMenu && (
           <button
             aria-label={`More actions for ${label}`}
-            className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full transition hover:bg-icon-circle focus-visible:opacity-100 ${active && activeStyle === 'gradient' ? 'text-white hover:text-white' : 'text-text-2 hover:text-text-1'} ${focusRingClass}`}
+            className={`inline-flex size-7 shrink-0 items-center justify-center rounded-full transition hover:bg-icon-circle focus-visible:opacity-100 ${active && activeStyle === 'gradient' ? 'text-white hover:text-white' : 'text-text-2 hover:text-text-1'} ${focusRingClass}`}
             type="button"
           >
             <MoreHorizontal aria-hidden="true" size={16} />
@@ -343,15 +343,19 @@ export function TabsBar({
   }
   return (
     <div className="flex h-11 min-w-0 items-center justify-between gap-4">
-      <div className="flex min-w-0 items-center gap-2">
-        <div aria-label="Open tabs" className="flex min-w-0 items-center gap-2" role="tablist">
+      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+        <div
+          aria-label="Open tabs"
+          className="tabs-list flex min-w-0 flex-1 items-center gap-2 overflow-x-auto"
+          role="tablist"
+        >
           {tabs.map((tab, index) => {
             const Icon = tab.icon;
             const selected = tab.id === activeId;
             return (
               <div
                 className={cn(
-                  'group inline-flex h-[34px] max-w-56 items-center rounded-pill border transition hover:bg-icon-circle',
+                  'group inline-flex h-[34px] max-w-56 shrink-0 items-center rounded-pill border transition hover:bg-icon-circle',
                   selected
                     ? 'border-border-strong bg-raised text-text-1'
                     : 'border-border-hair text-text-2',
