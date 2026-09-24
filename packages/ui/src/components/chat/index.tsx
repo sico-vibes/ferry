@@ -1,12 +1,9 @@
-import { Children, isValidElement, useEffect, useState, type ReactNode } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import {
   ArrowLeftRight,
   ChevronDown,
   ChevronRight,
   CircleHelp,
-  Clipboard,
   FilePen,
   FilePlus,
   FileText,
@@ -32,17 +29,9 @@ import { ShinyText } from '../../effects/ShinyText';
 import { cn } from '../../lib/cn';
 import { Pill, focusRingClass } from '../primitives';
 
-let highlighterPromise:
-  Promise<Awaited<ReturnType<typeof import('shiki').createHighlighter>>> | undefined;
-function loadHighlighter() {
-  highlighterPromise ??= import('shiki').then(({ createHighlighter }) =>
-    createHighlighter({
-      themes: ['github-dark-default'],
-      langs: ['tsx', 'ts', 'js', 'json', 'bash', 'python', 'diff'],
-    }),
-  );
-  return highlighterPromise;
-}
+const MarkdownContent = lazy(() =>
+  import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })),
+);
 
 export function UserMessage({ children }: { children: ReactNode }) {
   return (
@@ -79,67 +68,10 @@ export function AssistantMessage({
 export function MarkdownPart({ content }: { content: string }) {
   return (
     <div className="prose prose-invert max-w-none text-chat [&_a]:text-link [&_a]:underline [&_code:not(pre_code)]:rounded-md [&_code:not(pre_code)]:bg-raised [&_code:not(pre_code)]:px-1.5 [&_code:not(pre_code)]:py-0.5 [&_pre]:overflow-auto [&_pre]:rounded-xl [&_pre]:border [&_pre]:border-border-hair [&_pre]:bg-card [&_pre]:p-4 [&_table]:border-collapse [&_td]:border [&_td]:border-border-hair [&_td]:px-2 [&_th]:border [&_th]:border-border-hair [&_th]:px-2">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          pre: ({ children }) => {
-            const child = Children.toArray(children)[0];
-            if (!isValidElement<{ children?: ReactNode; className?: string }>(child))
-              return <pre>{children}</pre>;
-            const code = child.props.children;
-            return (
-              <pre>
-                <CodeBlock
-                  {...(child.props.className ? { className: child.props.className } : {})}
-                  code={(typeof code === 'string' || typeof code === 'number'
-                    ? String(code)
-                    : ''
-                  ).replace(/\n$/, '')}
-                />
-              </pre>
-            );
-          },
-          code: ({ children, className }) => (
-            <code className={cn(className, 'rounded-md bg-raised px-1.5 py-0.5 font-mono')}>
-              {children}
-            </code>
-          ),
-        }}
-      >
-        {content}
-      </ReactMarkdown>
+      <Suspense fallback={<span>{content}</span>}>
+        <MarkdownContent content={content} />
+      </Suspense>
     </div>
-  );
-}
-function CodeBlock({ code, className }: { code: string; className?: string }) {
-  const [html, setHtml] = useState<string | null>(null);
-  const language = /language-(\w+)/.exec(className ?? '')?.[1] ?? 'text';
-  if (html === null && typeof window !== 'undefined')
-    void loadHighlighter().then((highlighter) => {
-      try {
-        setHtml(
-          highlighter
-            .codeToHtml(code, { lang: language, theme: 'github-dark-default' })
-            .replace(/background-color:[^;]+;/, 'background-color:var(--bg-card);'),
-        );
-      } catch {
-        setHtml('');
-      }
-    });
-  return (
-    <code className={cn(className, 'relative block font-mono text-[12px] leading-5')}>
-      <button
-        aria-label="Copy code"
-        className={`absolute right-2 top-2 z-10 rounded-md bg-raised p-1.5 text-text-2 opacity-0 transition hover:opacity-100 focus:opacity-100 ${focusRingClass}`}
-        onClick={() => {
-          void navigator.clipboard.writeText(code);
-        }}
-        type="button"
-      >
-        <Clipboard size={14} />
-      </button>
-      {html ? <span dangerouslySetInnerHTML={{ __html: html }} /> : code}
-    </code>
   );
 }
 

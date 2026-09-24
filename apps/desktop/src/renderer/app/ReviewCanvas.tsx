@@ -9,7 +9,7 @@ import { decideReview } from './reviewActions';
 
 const DiffEditor = lazy(async () => {
   const module = await import('@monaco-editor/react');
-  const monaco = await import('monaco-editor');
+  const monaco = await import('monaco-editor/esm/vs/editor/editor.api.js');
   module.loader.config({ monaco });
   return { default: module.DiffEditor };
 });

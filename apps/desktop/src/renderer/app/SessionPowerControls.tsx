@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { Command } from 'cmdk';
 import { Bell, Check, ChevronDown, Search, X } from 'lucide-react';
 import { Dialog, FerryMark, Pill } from '@ferry/ui';
 import type { ModelRef, PartId, SessionId } from '@ferry/shared';
@@ -18,6 +17,21 @@ export function SessionPowerControls() {
       <CommandPalette />
     </>
   );
+}
+
+function useCmdk(open: boolean) {
+  const [CommandModule, setCommandModule] = useState<typeof import('cmdk').Command | null>(null);
+  useEffect(() => {
+    if (!open || CommandModule) return;
+    let current = true;
+    void import('cmdk').then(({ Command: LoadedCommand }) => {
+      if (current) setCommandModule(() => LoadedCommand);
+    });
+    return () => {
+      current = false;
+    };
+  }, [open, CommandModule]);
+  return CommandModule;
 }
 
 function ApprovalsTray() {
@@ -130,6 +144,7 @@ export function CommandPalette() {
   const activeId = useUI((state) => state.activeId);
   const density = useUI((state) => state.density);
   const [open, setOpen] = useState(false);
+  const PaletteCommand = useCmdk(open);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
@@ -242,58 +257,64 @@ export function CommandPalette() {
       description="Find a Ferry action, session, or workspace."
       contentClassName="command-dialog"
     >
-      <Command label="Command palette" className="command-palette">
-        <div className="command-search">
-          <Search size={15} />
-          <Command.Input autoFocus placeholder="Search actions and sessions…" />
-        </div>
-        <Command.List>
-          <Command.Empty>No results.</Command.Empty>
-          <Command.Group heading="Actions">
-            {actions.map(({ id, label, shortcut }) => (
-              <Command.Item key={id} value={label} onSelect={() => void run(id)}>
-                {label}
-                <kbd>{shortcut}</kbd>
-              </Command.Item>
-            ))}
-          </Command.Group>
-          <Command.Group heading="Recent sessions">
-            {sessions
-              .slice()
-              .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-              .map((session) => (
-                <Command.Item
-                  key={session.id}
-                  value={`${session.title} ${session.preview}`}
+      {PaletteCommand ? (
+        <PaletteCommand label="Command palette" className="command-palette">
+          <div className="command-search">
+            <Search size={15} />
+            <PaletteCommand.Input autoFocus placeholder="Search actions and sessions…" />
+          </div>
+          <PaletteCommand.List>
+            <PaletteCommand.Empty>No results.</PaletteCommand.Empty>
+            <PaletteCommand.Group heading="Actions">
+              {actions.map(({ id, label, shortcut }) => (
+                <PaletteCommand.Item key={id} value={label} onSelect={() => void run(id)}>
+                  {label}
+                  <kbd>{shortcut}</kbd>
+                </PaletteCommand.Item>
+              ))}
+            </PaletteCommand.Group>
+            <PaletteCommand.Group heading="Recent sessions">
+              {sessions
+                .slice()
+                .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+                .map((session) => (
+                  <PaletteCommand.Item
+                    key={session.id}
+                    value={`${session.title} ${session.preview}`}
+                    onSelect={() => {
+                      setOpen(false);
+                      useUI.getState().openTab({ id: session.id, title: session.title });
+                      void navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
+                    }}
+                  >
+                    {session.title}
+                    <small>{session.preview}</small>
+                  </PaletteCommand.Item>
+                ))}
+            </PaletteCommand.Group>
+            <PaletteCommand.Group heading="Workspaces">
+              {workspaces.map((workspace) => (
+                <PaletteCommand.Item
+                  key={workspace.id}
+                  value={`${workspace.name} ${workspace.path}`}
                   onSelect={() => {
                     setOpen(false);
-                    useUI.getState().openTab({ id: session.id, title: session.title });
-                    void navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
+                    localStorage.setItem('ferry.libraryWorkspace', workspace.id);
+                    void navigate({ to: '/library' });
                   }}
                 >
-                  {session.title}
-                  <small>{session.preview}</small>
-                </Command.Item>
+                  {workspace.name}
+                  <small>{workspace.path}</small>
+                </PaletteCommand.Item>
               ))}
-          </Command.Group>
-          <Command.Group heading="Workspaces">
-            {workspaces.map((workspace) => (
-              <Command.Item
-                key={workspace.id}
-                value={`${workspace.name} ${workspace.path}`}
-                onSelect={() => {
-                  setOpen(false);
-                  localStorage.setItem('ferry.libraryWorkspace', workspace.id);
-                  void navigate({ to: '/library' });
-                }}
-              >
-                {workspace.name}
-                <small>{workspace.path}</small>
-              </Command.Item>
-            ))}
-          </Command.Group>
-        </Command.List>
-      </Command>
+            </PaletteCommand.Group>
+          </PaletteCommand.List>
+        </PaletteCommand>
+      ) : (
+        <div className="command-palette" role="status">
+          Loading actions…
+        </div>
+      )}
     </Dialog>
   );
 }
@@ -324,6 +345,7 @@ export function ModelPickerPopover({
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [position, setPosition] = useState({ top: 0, left: 0 });
+  const ModelCommand = useCmdk(open);
   useEffect(() => {
     if (!open) return;
     const anchor = triggerRef.current?.getBoundingClientRect();
@@ -387,6 +409,7 @@ export function ModelPickerPopover({
         <ChevronDown aria-hidden="true" size={14} />
       </button>
       {open &&
+        ModelCommand &&
         createPortal(
           <div
             aria-label="Choose model"
@@ -394,10 +417,10 @@ export function ModelPickerPopover({
             role="dialog"
             style={{ top: position.top, left: position.left }}
           >
-            <Command label="Choose model" className="model-command">
-              <Command.Input placeholder="Search models…" />
-              <Command.List>
-                <Command.Item
+            <ModelCommand label="Choose model" className="model-command">
+              <ModelCommand.Input placeholder="Search models…" />
+              <ModelCommand.List>
+                <ModelCommand.Item
                   className="model-candidate auto"
                   value={`Auto ${autoModel}`}
                   onSelect={() => void select('auto')}
@@ -407,9 +430,9 @@ export function ModelPickerPopover({
                   <small>
                     {candidates[0]?.explanation ?? 'Ferry selects the best available model.'}
                   </small>
-                </Command.Item>
+                </ModelCommand.Item>
                 {grouped.map((providerId) => (
-                  <Command.Group
+                  <ModelCommand.Group
                     key={providerId}
                     heading={
                       providers.find((provider) => provider.id === providerId)?.name ?? providerId
@@ -425,7 +448,7 @@ export function ModelPickerPopover({
                         const model = models.find((item) => item.ref === candidate.ref);
                         if (!model) return null;
                         return (
-                          <Command.Item
+                          <ModelCommand.Item
                             className="model-candidate"
                             key={candidate.ref}
                             value={`${model.name} ${model.tier} ${candidate.explanation}`}
@@ -444,13 +467,13 @@ export function ModelPickerPopover({
                               {model.free ? 'Free' : 'Paid'}
                             </span>
                             <small>{candidate.explanation}</small>
-                          </Command.Item>
+                          </ModelCommand.Item>
                         );
                       })}
-                  </Command.Group>
+                  </ModelCommand.Group>
                 ))}
-              </Command.List>
-            </Command>
+              </ModelCommand.List>
+            </ModelCommand>
           </div>,
           document.body,
         )}

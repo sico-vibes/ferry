@@ -1,9 +1,26 @@
 import { createRoute } from '@tanstack/react-router';
-import { ExploreCanvas } from '../explore/Explore';
-import { UsageCanvas } from '../explore/Usage';
+import { lazy, Suspense } from 'react';
 import { rootRoute } from './root';
+import { RouteLoading } from './RouteLoading';
+
+const ExploreCanvas = lazy(() =>
+  import('../explore/Explore').then((module) => ({ default: module.ExploreCanvas })),
+);
+const UsageCanvas = lazy(() =>
+  import('../explore/Usage').then((module) => ({ default: module.UsageCanvas })),
+);
+const ExplorePage = () => (
+  <Suspense fallback={<RouteLoading />}>
+    <ExploreCanvas />
+  </Suspense>
+);
+const UsagePage = () => (
+  <Suspense fallback={<RouteLoading />}>
+    <UsageCanvas />
+  </Suspense>
+);
 
 export const exploreRoutes = [
-  createRoute({ getParentRoute: () => rootRoute, path: '/explore', component: ExploreCanvas }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/explore/usage', component: UsageCanvas }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/explore', component: ExplorePage }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/explore/usage', component: UsagePage }),
 ] as const;

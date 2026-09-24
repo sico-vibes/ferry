@@ -6,5 +6,6 @@ declare global {
       versions: { app: string; electron: string };
       openFolder(): Promise<string | null>;
     };
+    ferryPerfFrameTimes?: number[];
   }
 }

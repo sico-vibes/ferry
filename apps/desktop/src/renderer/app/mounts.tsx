@@ -1,15 +1,22 @@
-import type { ComponentType } from 'react';
-import { Toaster } from '@ferry/ui';
-import { BottomPanel } from './BottomPanel';
+import { lazy, Suspense, type ComponentType } from 'react';
+import { Skeleton, Toaster } from '@ferry/ui';
 import { SessionPowerControls } from './SessionPowerControls';
 import { useToasts } from '../state/toasts';
+
+const BottomPanel = lazy(() =>
+  import('./BottomPanel').then((module) => ({ default: module.BottomPanel })),
+);
 
 export interface AppMountContext {
   bottomOpen: boolean;
   fullCanvasPage: boolean;
 }
 function BottomPanelMount({ bottomOpen, fullCanvasPage }: AppMountContext) {
-  return bottomOpen && !fullCanvasPage ? <BottomPanel /> : null;
+  return bottomOpen && !fullCanvasPage ? (
+    <Suspense fallback={<Skeleton rows={2} />}>
+      <BottomPanel />
+    </Suspense>
+  ) : null;
 }
 function SessionControlsMount() {
   return <SessionPowerControls />;
