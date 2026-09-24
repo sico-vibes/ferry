@@ -1,0 +1,28 @@
+{
+  "name": "@ferry/providers",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "4.0.62",
+    "@ai-sdk/google": "4.0.79",
+    "@ai-sdk/openai": "4.0.74",
+    "@ai-sdk/openai-compatible": "3.0.55",
+    "@ferry/catalog": "workspace:*",
+    "@ferry/shared": "workspace:*",
+    "@openrouter/ai-sdk-provider": "3.1.0",
+    "ai": "7.0.113",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@ferry/testkit": "workspace:*"
+  }
+}
