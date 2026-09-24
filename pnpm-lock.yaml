@@ -211,6 +211,19 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
 
+  packages/optimizer:
+    dependencies:
+      '@ferry/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+    devDependencies:
+      fast-check:
+        specifier: 4.10.2
+        version: 4.10.2
+
   packages/secrets:
     dependencies:
       '@ferry/shared':
