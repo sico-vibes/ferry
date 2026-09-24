@@ -38,6 +38,7 @@ describe('SettingsCanvas', () => {
     });
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     expect(useUI.getState()).toMatchObject({
       leftCollapsed: false,
       rightCollapsed: false,

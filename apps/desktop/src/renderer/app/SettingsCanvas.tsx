@@ -17,6 +17,7 @@ import {
   TextField,
 } from '@ferry/ui';
 import type { Profile, StepKind, Tier } from '@ferry/shared';
+import { ProviderKeyDialog } from './ProviderKeyDialog';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
 const stepLabels: Record<StepKind, string> = {
   plan: 'Plan',
@@ -47,9 +48,8 @@ export function SettingsCanvas() {
   const toast = useToasts((state) => state.push);
   const section = useUI((state) => state.settingsSection);
   const [confirm, setConfirm] = useState('');
+  const [confirmAction, setConfirmAction] = useState<(() => void | Promise<void>) | null>(null);
   const [keyProvider, setKeyProvider] = useState<(typeof providers)[number] | null>(null);
-  const [providerKey, setProviderKey] = useState('');
-  const [providerResult, setProviderResult] = useState('');
   const [addMcp, setAddMcp] = useState(false);
   const [mcpName, setMcpName] = useState('');
   const [mcpAddress, setMcpAddress] = useState('');
@@ -83,29 +83,32 @@ export function SettingsCanvas() {
     queryFn: () => client.system.info(),
   });
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
-  const manageKey = async () => {
-    if (!keyProvider || !providerKey.trim()) return;
-    await client.providers.setKey(keyProvider.id, providerKey.trim());
-    await cache.invalidateQueries({ queryKey: ['providers'] });
-    setProviderKey('');
-    toast({ kind: 'success', title: 'Key saved', body: `${keyProvider.name} is ready to test.` });
-  };
+  const [testingProvider, setTestingProvider] = useState<string | null>(null);
   const testProvider = async (provider: (typeof providers)[number]) => {
-    setProviderResult('Testing connection…');
+    setTestingProvider(provider.id);
     try {
       const result = await client.providers.probe(provider.id);
-      setProviderResult(
-        result.ok
-          ? `Connected in ${String(result.latencyMs ?? '—')} ms. Next: choose this provider in a profile.`
-          : `Test failed: ${result.message}`,
-      );
+      toast({
+        kind: result.ok ? 'success' : 'error',
+        title: result.ok
+          ? `Connected · ${result.latencyMs === null ? 'CLI' : `${String(result.latencyMs)} ms`}`
+          : 'Connection failed',
+        body: result.ok
+          ? `Next: choose ${provider.name} in a profile.`
+          : `${result.message}. Check the key and try again.`,
+      });
       await cache.invalidateQueries({ queryKey: ['providers'] });
     } catch (error) {
-      setProviderResult(
-        error instanceof Error
-          ? `Test failed: ${error.message}`
-          : 'Test failed. Check the key and try again.',
-      );
+      toast({
+        kind: 'error',
+        title: 'Connection test failed',
+        body:
+          error instanceof Error
+            ? `${error.message}. Check the key and try again.`
+            : 'Check the key and try again.',
+      });
+    } finally {
+      setTestingProvider(null);
     }
   };
   const update = async (patch: Parameters<typeof client.settings.update>[0]) => {
@@ -268,13 +271,21 @@ export function SettingsCanvas() {
                   <Pill
                     size="sm"
                     disabled={profileDraft.builtin}
-                    onClick={() =>
-                      void client.profiles.remove(profileDraft.id).then(async () => {
-                        await cache.invalidateQueries({ queryKey: keys.profiles });
-                        setProfileDraft(null);
-                        toast({ kind: 'info', title: 'Profile deleted', body: null });
-                      })
-                    }
+                    onClick={() => {
+                      setConfirm(`Delete ${profileDraft.name}?`);
+                      setConfirmAction(
+                        () => () =>
+                          void client.profiles.remove(profileDraft.id).then(async () => {
+                            await cache.invalidateQueries({ queryKey: keys.profiles });
+                            setProfileDraft(null);
+                            toast({
+                              kind: 'success',
+                              title: 'Profile deleted',
+                              body: 'You can create another profile in Settings.',
+                            });
+                          }),
+                      );
+                    }}
                   >
                     Delete
                   </Pill>
@@ -487,14 +498,17 @@ export function SettingsCanvas() {
                 size="sm"
                 onClick={() => {
                   setKeyProvider(provider);
-                  setProviderKey('');
-                  setProviderResult('');
                 }}
               >
                 Manage key
               </Pill>
-              <Pill size="sm" variant="outline" onClick={() => void testProvider(provider)}>
-                Test
+              <Pill
+                size="sm"
+                disabled={testingProvider === provider.id}
+                variant="outline"
+                onClick={() => void testProvider(provider)}
+              >
+                {testingProvider === provider.id ? 'Testing…' : 'Test'}
               </Pill>
             </SettingRow>
           ))}
@@ -805,7 +819,15 @@ export function SettingsCanvas() {
         {section === 'General' && (
           <Pill
             onClick={() => {
-              useUI.getState().resetLayout();
+              setConfirm('Reset layout?');
+              setConfirmAction(() => () => {
+                useUI.getState().resetLayout();
+                toast({
+                  kind: 'success',
+                  title: 'Layout reset',
+                  body: 'Panel sizes and positions are back to default.',
+                });
+              });
             }}
             variant="outline"
           >
@@ -814,53 +836,29 @@ export function SettingsCanvas() {
         )}
       </header>
       <main className="settings-content settings-content-framed">{body()}</main>
-      <Dialog
+      <ProviderKeyDialog
+        provider={keyProvider}
         open={Boolean(keyProvider)}
         onOpenChange={(open) => {
           if (!open) setKeyProvider(null);
         }}
-        title={`Manage ${keyProvider?.name ?? 'provider'} key`}
-        description="Keys are stored in this local demo client."
-      >
-        <div className="grid gap-3">
-          <TextField
-            label="API key"
-            masked
-            value={providerKey}
-            onChange={setProviderKey}
-            placeholder="Paste provider key"
-          />
-          {providerResult && (
-            <p role="status" className="muted">
-              {providerResult}
-            </p>
-          )}
-          <div className="button-row dialog-actions">
-            <Pill
-              onClick={() => {
-                if (keyProvider) void testProvider(keyProvider);
-              }}
-            >
-              Test connection
-            </Pill>
-            <Pill variant="blue-tint" onClick={() => void manageKey()}>
-              Save key
-            </Pill>
-          </div>
-        </div>
-      </Dialog>
+      />
       <Dialog
         open={Boolean(confirm)}
         onOpenChange={(open) => {
-          if (!open) setConfirm('');
+          if (!open) {
+            setConfirm('');
+            setConfirmAction(null);
+          }
         }}
         title={confirm}
-        description="This affects local demo data only."
+        description="Review this change before confirming."
       >
         <div className="button-row dialog-actions">
           <Pill
             onClick={() => {
               setConfirm('');
+              setConfirmAction(null);
             }}
           >
             Cancel
@@ -869,11 +867,15 @@ export function SettingsCanvas() {
             variant="blue-tint"
             onClick={() => {
               setConfirm('');
-              toast({
-                kind: 'success',
-                title: 'Local data cleared',
-                body: 'Demo data remains available after refresh.',
-              });
+              const action = confirmAction;
+              setConfirmAction(null);
+              if (action) void action();
+              else
+                toast({
+                  kind: 'success',
+                  title: 'Local data cleared',
+                  body: 'Demo data remains available after refresh.',
+                });
             }}
           >
             Confirm

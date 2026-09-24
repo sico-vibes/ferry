@@ -144,6 +144,7 @@ describe('Explore providers and models', () => {
       expect(setKeySpy).toHaveBeenCalledWith('mistral', 'demo-mistral-key');
     });
     await user.click(screen.getByRole('button', { name: 'Remove key' }));
+    await user.click(screen.getByRole('button', { name: 'Remove key' }));
     await waitFor(() => {
       expect(removeKeySpy).toHaveBeenCalledWith('mistral');
     });

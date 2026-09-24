@@ -49,6 +49,11 @@ export function useFerryEvents(): void {
       }),
       client.on('delegation.updated', (run) => {
         void cache.invalidateQueries({ queryKey: ['delegation', run.sessionId] });
+        if (run.status === 'completed') {
+          window.dispatchEvent(
+            new CustomEvent('ferry:success-pulse', { detail: { sessionId: run.sessionId } }),
+          );
+        }
         pushToast(
           { kind: 'info', title: `Delegation ${run.status}`, body: run.lane },
           `delegation:${run.id}`,
