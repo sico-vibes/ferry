@@ -1,0 +1,10 @@
+provider: deepseek
+name: DeepSeek API
+tag: paid
+signup_url: https://platform.deepseek.com/
+docs_url: https://api-docs.deepseek.com/quick_start/rate_limit
+terms_note: Paid API; limits vary by account.
+data_use: Subject to DeepSeek terms.
+verified_at: '2026-09-23'
+source_url: https://api-docs.deepseek.com/quick_start/rate_limit
+windows: [{ scope: provider, metric: requests, kind: rolling, length: 60, limit: null }]

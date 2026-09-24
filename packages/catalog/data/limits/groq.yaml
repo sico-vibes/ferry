@@ -1,0 +1,17 @@
+provider: groq
+name: GroqCloud
+tag: legit
+signup_url: https://console.groq.com/keys
+docs_url: https://console.groq.com/docs/rate-limits
+terms_note: Free limits vary by model. Headers expose RPD request and TPM token limits.
+data_use: Subject to Groq terms.
+verified_at: '2026-09-23'
+source_url: https://console.groq.com/docs/rate-limits
+parser: groq_rate_limit_headers
+windows:
+  - { scope: model, model: gpt-oss-120b, metric: requests, kind: rolling, length: 60, limit: 30 }
+  - { scope: model, model: gpt-oss-120b, metric: requests, kind: fixed_daily, tz: UTC, limit: 1000 }
+  - { scope: model, model: gpt-oss-120b, metric: tokens, kind: rolling, length: 60, limit: 8000 }
+  - { scope: model, model: gpt-oss-120b, metric: tokens, kind: fixed_daily, tz: UTC, limit: 200000 }
+  - { scope: model, model: gpt-oss-20b, metric: requests, kind: rolling, length: 60, limit: 30 }
+  - { scope: model, model: qwen3.8-27b, metric: tokens, kind: rolling, length: 60, limit: 8000 }
