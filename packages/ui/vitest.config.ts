@@ -5,7 +5,9 @@ export default defineConfig({
     include: ['test/**/*.test.ts', 'test/**/*.test.tsx', 'src/**/*.test.tsx'],
     setupFiles: ['./test/setup.ts'],
     environment: 'node',
-    // Type-aware ESLint runs inside tests are slow, especially under parallel turbo runs.
-    testTimeout: 120_000,
+    isolate: false,
+    pool: 'threads',
+    maxWorkers: 4,
+    testTimeout: 30_000,
   },
 });

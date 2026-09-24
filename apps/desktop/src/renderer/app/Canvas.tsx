@@ -412,6 +412,35 @@ export function SessionCanvas() {
     };
   }, [client, sessionId]);
   useEffect(() => {
+    if (new URLSearchParams(location.search).get('demo') !== 'long') return;
+    const frameTimes: number[] = [];
+    let previousFrame = performance.now();
+    let frameId = 0;
+    const sampleFrame = () => {
+      const now = performance.now();
+      frameTimes.push(now - previousFrame);
+      previousFrame = now;
+      frameId = requestAnimationFrame(sampleFrame);
+    };
+    frameId = requestAnimationFrame(sampleFrame);
+    const stream = window.setInterval(() => {
+      setStreaming((current) => ({
+        ...current,
+        'perf-demo-stream': `${current['perf-demo-stream'] ?? ''} token `,
+      }));
+    }, 80);
+    const finish = window.setTimeout(() => {
+      window.clearInterval(stream);
+      cancelAnimationFrame(frameId);
+      window.ferryPerfFrameTimes = frameTimes;
+    }, 4_000);
+    return () => {
+      window.clearInterval(stream);
+      window.clearTimeout(finish);
+      cancelAnimationFrame(frameId);
+    };
+  }, []);
+  useEffect(() => {
     if (atBottom) virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
   }, [atBottom, messages.length, streaming, virtualizer]);
   useEffect(() => {
