@@ -8,3 +8,4 @@ design/reference
 **/*.md
 packages/ui/src/styles/tokens.css
 **/vendor/**
+packages/catalog/data/*.json

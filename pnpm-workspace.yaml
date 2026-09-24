@@ -6,3 +6,7 @@ onlyBuiltDependencies:
   - esbuild
   - '@swc/core'
   - electron
+  - better-sqlite3
+  - node-pty
+  - '@vscode/ripgrep'
+  - '@napi-rs/keyring'

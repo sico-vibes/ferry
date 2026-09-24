@@ -1,11 +1,10 @@
 {
-  "name": "@ferry/shared",
+  "name": "@ferry/catalog",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./testing": "./src/testing/index.ts"
+    ".": "./src/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -13,7 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "gpt-tokenizer": "4.0.0",
+    "@ferry/shared": "workspace:*",
+    "yaml": "2.9.1",
     "zod": "4.6.5"
   }
 }
