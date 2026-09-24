@@ -56,7 +56,7 @@ export function RingGauge({ value, size = 40, stroke = 4, label }: RingGaugeProp
         strokeLinecap="round"
         strokeWidth={stroke}
         style={{ rotate: -90, transformOrigin: '50% 50%', filter: `url(#${filterId})` }}
-        transition={reducedMotion ? { duration: 0 } : { duration: 0.5, ease: 'easeOut' }}
+        transition={reducedMotion ? { duration: 0 } : { duration: 0.22, ease: 'easeOut' }}
       />
       <text
         className="fill-text-1 font-sans text-[10px] font-semibold tabular-nums"

@@ -150,6 +150,7 @@ export function UsageCanvas() {
                         <span
                           aria-label={`${names[item.providerId] ?? item.providerId} has no daily cap`}
                           className="text-label text-text-1"
+                          role="img"
                           title="No daily cap"
                         >
                           ∞
@@ -247,7 +248,7 @@ export function UsageCanvas() {
             <header className="mb-3 flex items-center gap-2">
               <h2 className="mr-auto text-label font-semibold text-text-1">Optimizer savings</h2>
               {optimizer?.demo && (
-                <span className="rounded-pill bg-white/[0.06] px-2 py-1 text-[10px] text-text-3">
+                <span className="rounded-pill bg-white/[0.06] px-2 py-1 text-[10px] text-text-2">
                   Demo data
                 </span>
               )}

@@ -94,12 +94,21 @@ export function BottomPanel() {
     >
       <div
         aria-label="Resize bottom panel"
+        aria-orientation="horizontal"
+        aria-valuemin={200}
+        aria-valuemax={480}
+        aria-valuenow={bottomHeight}
         className="bottom-resize"
         onKeyDown={(event) => {
           if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
             event.preventDefault();
             const state = useUI.getState();
-            state.setBottomHeight(state.bottomHeight + (event.key === 'ArrowUp' ? 10 : -10));
+            state.setBottomHeight(
+              Math.min(
+                480,
+                Math.max(200, state.bottomHeight + (event.key === 'ArrowUp' ? 10 : -10)),
+              ),
+            );
           }
         }}
         onPointerDown={(event) => {

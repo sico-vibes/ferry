@@ -46,7 +46,7 @@ All values live in `packages/ui/src/styles/tokens.css` as CSS variables and are 
 | `--fade-line` | `linear-gradient(90deg,transparent,rgba(255,255,255,0.12),transparent)` |
 
 ### 2.3 Text
-`--text-1: #EDEEF2` (primary) · `--text-2: #A3A6B0` (secondary) · `--text-3: #6E717C` (muted/meta) · `--text-link: #60A5FA` · `--text-on-gradient: #FFFFFF` · `--text-on-send: #0B0C0F`
+`--text-1: #EDEEF2` (primary) · `--text-2: #A3A6B0` (secondary) · `--text-3: #82848E` (muted/meta; ≥ 4.5:1 on canvas, card and panel surfaces) · `--text-link: #60A5FA` · `--text-on-gradient: #FFFFFF` · `--text-on-send: #0B0C0F`
 
 ### 2.4 Accents
 | Token | Value | Use |

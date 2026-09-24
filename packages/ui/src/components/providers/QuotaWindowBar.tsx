@@ -60,16 +60,16 @@ export function QuotaWindowBar({ window }: { window: QuotaWindow }) {
       <div
         aria-label={window.limit === null ? 'No cap' : `${String(Math.round(percent ?? 0))}% used`}
         className="h-1.5 overflow-hidden rounded-pill bg-white/[0.07]"
-        role="meter"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percent ?? undefined}
+        role={percent === null ? 'img' : 'meter'}
+        {...(percent === null
+          ? {}
+          : { 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': percent })}
       >
         <span
           className={
             window.limit === null
-              ? 'block h-full w-2/5 animate-pulse rounded-pill bg-blue-500/60'
-              : 'block h-full rounded-pill transition-[width] duration-300'
+              ? 'block h-full w-2/5 animate-pulse rounded-pill bg-blue-500/60 motion-reduce:animate-none'
+              : 'block h-full rounded-pill transition-[width] duration-160 motion-reduce:transition-none'
           }
           style={
             window.limit === null

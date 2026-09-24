@@ -324,79 +324,94 @@ export function TabsBar({
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   function onKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.key === 'Home') {
+      event.preventDefault();
+      refs.current[0]?.focus();
+      return;
+    }
+    if (event.key === 'End') {
+      event.preventDefault();
+      refs.current[tabs.length - 1]?.focus();
+      return;
+    }
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
     const next = (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
     refs.current[next]?.focus();
+    const tab = tabs[next];
+    if (tab) onSelect?.(tab.id);
   }
   return (
     <div className="flex h-11 min-w-0 items-center justify-between gap-4">
-      <div aria-label="Open tabs" className="flex min-w-0 items-center gap-2" role="tablist">
-        {tabs.map((tab, index) => {
-          const Icon = tab.icon;
-          const selected = tab.id === activeId;
-          return (
-            <div
-              className={cn(
-                'group inline-flex h-[34px] max-w-56 items-center rounded-pill border transition hover:bg-white/[0.04]',
-                selected
-                  ? 'border-border-strong bg-raised text-text-1'
-                  : 'border-border-hair text-text-2',
-              )}
-              key={tab.id}
-              role="presentation"
-            >
-              <button
-                aria-selected={selected}
-                className={`inline-flex h-full min-w-0 items-center gap-2 rounded-pill px-3.5 text-body font-medium ${focusRingClass}`}
-                onAuxClick={(event) => {
-                  if (event.button === 1) onClose?.(tab.id);
-                }}
-                onClick={() => {
-                  onSelect?.(tab.id);
-                }}
-                onKeyDown={(event) => {
-                  onKeyDown(event, index);
-                }}
-                ref={(element) => {
-                  refs.current[index] = element;
-                }}
-                role="tab"
-                type="button"
-              >
-                <Icon aria-hidden="true" size={14} strokeWidth={1.75} />
-                <span className="truncate">{tab.label}</span>
-                {tab.status && tab.status !== 'idle' && (
-                  <span
-                    aria-label={
-                      tab.status === 'awaiting_approval' ? 'Awaiting approval' : tab.status
-                    }
-                    className={cn(
-                      'size-2 shrink-0 rounded-full',
-                      tab.status === 'running' &&
-                        'animate-pulse bg-blue-500 motion-reduce:animate-none',
-                      tab.status === 'awaiting_approval' && 'bg-warn',
-                      tab.status === 'error' && 'bg-danger',
-                    )}
-                    role="img"
-                  />
+      <div className="flex min-w-0 items-center gap-2">
+        <div aria-label="Open tabs" className="flex min-w-0 items-center gap-2" role="tablist">
+          {tabs.map((tab, index) => {
+            const Icon = tab.icon;
+            const selected = tab.id === activeId;
+            return (
+              <div
+                className={cn(
+                  'group inline-flex h-[34px] max-w-56 items-center rounded-pill border transition hover:bg-white/[0.04]',
+                  selected
+                    ? 'border-border-strong bg-raised text-text-1'
+                    : 'border-border-hair text-text-2',
                 )}
-              </button>
-              {onClose && (
+                key={tab.id}
+                role="presentation"
+              >
                 <button
-                  aria-label={`Close ${tab.label}`}
-                  className={`mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-full text-text-3 opacity-0 transition hover:bg-white/10 hover:text-text-1 group-hover:opacity-100 group-focus-within:opacity-100 ${focusRingClass}`}
-                  onClick={() => {
-                    onClose(tab.id);
+                  aria-selected={selected}
+                  className={`inline-flex h-full min-w-0 items-center gap-2 rounded-pill px-3.5 text-body font-medium ${focusRingClass}`}
+                  onAuxClick={(event) => {
+                    if (event.button === 1) onClose?.(tab.id);
                   }}
+                  onClick={() => {
+                    onSelect?.(tab.id);
+                  }}
+                  onKeyDown={(event) => {
+                    onKeyDown(event, index);
+                  }}
+                  ref={(element) => {
+                    refs.current[index] = element;
+                  }}
+                  role="tab"
+                  tabIndex={selected ? 0 : -1}
                   type="button"
                 >
-                  <X aria-hidden="true" size={12} />
+                  <Icon aria-hidden="true" size={14} strokeWidth={1.75} />
+                  <span className="truncate">{tab.label}</span>
+                  {tab.status && tab.status !== 'idle' && (
+                    <span
+                      aria-label={
+                        tab.status === 'awaiting_approval' ? 'Awaiting approval' : tab.status
+                      }
+                      className={cn(
+                        'size-2 shrink-0 rounded-full',
+                        tab.status === 'running' &&
+                          'animate-pulse bg-blue-500 motion-reduce:animate-none',
+                        tab.status === 'awaiting_approval' && 'bg-warn',
+                        tab.status === 'error' && 'bg-danger',
+                      )}
+                      role="img"
+                    />
+                  )}
                 </button>
-              )}
-            </div>
-          );
-        })}
+                {onClose && (
+                  <button
+                    aria-label={`Close ${tab.label}`}
+                    className={`mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-full text-text-3 opacity-0 transition hover:bg-white/10 hover:text-text-1 group-hover:opacity-100 group-focus-within:opacity-100 ${focusRingClass}`}
+                    onClick={() => {
+                      onClose(tab.id);
+                    }}
+                    type="button"
+                  >
+                    <X aria-hidden="true" size={12} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
         <button
           aria-label="Add tab"
           className={`flex size-[34px] shrink-0 items-center justify-center rounded-full border border-border-hair bg-white/[0.02] text-text-2 hover:bg-white/[0.05] ${focusRingClass}`}

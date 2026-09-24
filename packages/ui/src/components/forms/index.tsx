@@ -235,7 +235,6 @@ export function SegmentedControl({
         <button
           type="button"
           key={option.value}
-          aria-pressed={value === option.value}
           aria-checked={value === option.value}
           role="radio"
           tabIndex={value === option.value ? 0 : -1}
