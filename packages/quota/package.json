@@ -1,0 +1,25 @@
+{
+  "name": "@ferry/quota",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ferry/shared": "workspace:*",
+    "@ferry/catalog": "workspace:*",
+    "@ferry/storage": "workspace:*",
+    "cockatiel": "4.0.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@ferry/testkit": "workspace:*",
+    "fast-check": "4.10.2"
+  }
+}
