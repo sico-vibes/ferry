@@ -4,9 +4,12 @@ import { useNavigate } from '@tanstack/react-router';
 import { ArrowUpRight } from 'lucide-react';
 import {
   CountUp,
+  PageHeader,
   Pill,
   ResetsTimeline,
   RingGauge,
+  Section,
+  Stack,
   UsageChart,
   QuotaWindowBar,
   type UsageMetric,
@@ -97,90 +100,89 @@ export function UsageCanvas() {
   }, [cache, client]);
 
   return (
-    <section aria-label="Usage dashboard" className="canvas min-h-0 overflow-y-auto p-5">
-      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-4">
-        <nav aria-label="Explore sections" className="flex gap-1 border-b border-border-hair pb-3">
-          <Pill onClick={() => void navigate({ to: '/explore' })} size="sm" variant="outline">
-            Providers
-          </Pill>
-          <Pill
-            className="border-border-strong bg-raised"
-            onClick={() => void navigate({ to: '/explore/usage' })}
-            size="sm"
-            variant="outline"
-          >
-            Usage
-          </Pill>
-        </nav>
-        <header className="flex flex-wrap items-end gap-3">
-          <div className="mr-auto">
-            <h1 className="text-[20px] font-semibold leading-7 text-text-1">Usage</h1>
-            <p className="mt-1 text-body text-text-2">
-              Quota, handoffs and spend across connected providers
-            </p>
-          </div>
-          <span className="rounded-pill border border-border-hair bg-card px-2.5 py-1 text-meta text-text-3">
-            Demo data
-          </span>
-        </header>
-        <div className="grid grid-cols-[minmax(0,1.15fr)_minmax(280px,.85fr)] gap-3 max-[1200px]:grid-cols-1">
-          <section
-            aria-label="Capacity remaining"
-            className="grid grid-cols-[auto_minmax(0,1fr)] gap-4 rounded-card border border-border-hair bg-card p-4"
-          >
-            <RingGauge
-              label={`${String(capacity?.percentRemaining ?? 0)}% capacity remaining`}
-              size={96}
-              stroke={6}
-              value={capacity?.percentRemaining ?? 0}
-            />
-            <div className="min-w-0">
-              <p className="text-label text-text-2">Available today</p>
-              <p className="mt-1 text-title font-semibold tabular-nums text-text-1">
-                ≈ <CountUp to={capacity?.stepsLeftToday ?? 0} /> steps left
-              </p>
-              <ul className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
-                {(capacity?.perProvider ?? []).map((item) => (
-                  <li className="min-w-0" key={item.providerId}>
-                    <div className="mb-1 flex justify-between gap-2 text-meta">
-                      <span className="truncate text-text-2">
-                        {names[item.providerId] ?? item.providerId}
-                      </span>
-                      {item.stepsLeft === null ? (
-                        <span
-                          aria-label={`${names[item.providerId] ?? item.providerId} has no daily cap`}
-                          className="text-label text-text-1"
-                          role="img"
-                          title="No daily cap"
-                        >
-                          ∞
+    <section aria-label="Usage dashboard" className="canvas page-scroll-canvas min-h-0 p-5">
+      <Stack className="page-content mx-auto w-full max-w-[1200px]" gap={4}>
+        <PageHeader
+          title="Usage"
+          subtitle="Quota, handoffs and spend across connected providers"
+          nav={
+            <nav aria-label="Explore sections" className="flex gap-1">
+              <Pill onClick={() => void navigate({ to: '/explore' })} size="sm" variant="outline">
+                Providers
+              </Pill>
+              <Pill
+                className="border-border-strong bg-raised"
+                onClick={() => void navigate({ to: '/explore/usage' })}
+                size="sm"
+                variant="outline"
+              >
+                Usage
+              </Pill>
+            </nav>
+          }
+          actions={
+            <span className="rounded-pill border border-border-hair bg-card px-2.5 py-1 text-meta text-text-3">
+              Demo data
+            </span>
+          }
+        />
+        <div className="usage-top-grid grid">
+          <Section title="Capacity remaining" ariaLabel="Capacity remaining">
+            <div className="usage-capacity-grid">
+              <RingGauge
+                label={`${String(capacity?.percentRemaining ?? 0)}% capacity remaining`}
+                size={96}
+                stroke={6}
+                value={capacity?.percentRemaining ?? 0}
+              />
+              <div className="min-w-0">
+                <p className="text-label text-text-2">Available today</p>
+                <p className="mt-1 text-title font-semibold tabular-nums text-text-1">
+                  ≈ <CountUp to={capacity?.stepsLeftToday ?? 0} /> steps left
+                </p>
+                <ul className="usage-provider-grid mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
+                  {(capacity?.perProvider ?? []).map((item) => (
+                    <li className="min-w-0" key={item.providerId}>
+                      <div className="usage-provider-row mb-1 flex justify-between gap-2 text-meta">
+                        <span className="usage-provider-name min-w-[88px] truncate text-text-2">
+                          {names[item.providerId] ?? item.providerId}
                         </span>
-                      ) : (
-                        <span className="tabular-nums text-text-1">{format(item.stepsLeft)}</span>
-                      )}
-                    </div>
-                    {item.stepsLeft !== null && (
-                      <div className="h-1 overflow-hidden rounded-pill bg-raised">
-                        <span
-                          className="block h-full rounded-pill bg-blue-500"
-                          style={{ width: `${String((item.stepsLeft / maxSteps) * 100)}%` }}
-                        />
+                        {item.stepsLeft === null ? (
+                          <span
+                            aria-label={`${names[item.providerId] ?? item.providerId} has no daily cap`}
+                            className="text-label text-text-1"
+                            role="img"
+                            title="No daily cap"
+                          >
+                            ∞
+                          </span>
+                        ) : (
+                          <span className="tabular-nums text-text-1">{format(item.stepsLeft)}</span>
+                        )}
                       </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
+                      {item.stepsLeft !== null && (
+                        <div className="h-1 overflow-hidden rounded-pill bg-raised">
+                          <span
+                            className="block h-full rounded-pill bg-blue-500"
+                            style={{ width: `${String((item.stepsLeft / maxSteps) * 100)}%` }}
+                          />
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
-          </section>
-          {timelineSummary && <ResetsTimeline providerNames={names} summary={timelineSummary} />}
+          </Section>
+          {timelineSummary && (
+            <Section ariaLabel="Reset timeline">
+              <ResetsTimeline providerNames={names} summary={timelineSummary} />
+            </Section>
+          )}
         </div>
-        <section
-          aria-label="Usage history"
-          className="rounded-card border border-border-hair bg-card p-4"
-        >
+        <Section title="Provider usage" ariaLabel="Usage history">
           <header className="mb-3 flex flex-wrap items-center gap-3">
             <div className="mr-auto">
-              <h2 className="text-label font-semibold text-text-1">Provider usage</h2>
               <p className="mt-1 text-meta text-text-3">Daily totals over the last 14 days</p>
             </div>
             <div aria-label="Usage metric" className="flex gap-1">
@@ -211,14 +213,10 @@ export function UsageCanvas() {
               </li>
             ))}
           </ul>
-        </section>
-        <div className="grid grid-cols-3 gap-3 max-[1150px]:grid-cols-1">
-          <section
-            aria-label="Handoffs in fourteen days"
-            className="rounded-card border border-border-hair bg-card p-3.5"
-          >
+        </Section>
+        <div className="usage-summary-grid grid">
+          <Section title="Handoffs (14d)" ariaLabel="Handoffs in fourteen days">
             <header className="mb-3 flex items-baseline justify-between">
-              <h2 className="text-label font-semibold text-text-1">Handoffs (14d)</h2>
               <span className="text-meta text-text-3">
                 {format(handoffs.reduce((sum, item) => sum + item.count, 0))} total
               </span>
@@ -240,13 +238,10 @@ export function UsageCanvas() {
                 </li>
               ))}
             </ul>
-          </section>
-          <section
-            aria-label="Optimizer savings"
-            className="rounded-card border border-border-hair bg-card p-3.5"
-          >
+          </Section>
+          <Section title="Optimizer savings" ariaLabel="Optimizer savings">
             <header className="mb-3 flex items-center gap-2">
-              <h2 className="mr-auto text-label font-semibold text-text-1">Optimizer savings</h2>
+              <span className="mr-auto" />
               {optimizer?.demo && (
                 <span className="rounded-pill bg-raised px-2 py-1 text-[10px] text-text-2">
                   Demo data
@@ -270,13 +265,10 @@ export function UsageCanvas() {
                 </li>
               ))}
             </ul>
-          </section>
-          <section
-            aria-label="Paid spend"
-            className="rounded-card border border-border-hair bg-card p-3.5"
-          >
+          </Section>
+          <Section title="Paid spend" ariaLabel="Paid spend">
             <header className="mb-3 flex items-center">
-              <h2 className="mr-auto text-label font-semibold text-text-1">Paid spend</h2>
+              <span className="mr-auto" />
               <span className="text-meta text-text-3">OpenCode Go</span>
             </header>
             <div className="grid gap-3">
@@ -286,7 +278,7 @@ export function UsageCanvas() {
                 <p className="text-meta text-text-3">No paid spend data available.</p>
               )}
             </div>
-          </section>
+          </Section>
         </div>
         <button
           className="inline-flex w-fit items-center gap-1 self-end text-meta text-link hover:underline"
@@ -295,7 +287,7 @@ export function UsageCanvas() {
         >
           Manage providers <ArrowUpRight size={13} />
         </button>
-      </div>
+      </Stack>
     </section>
   );
 }

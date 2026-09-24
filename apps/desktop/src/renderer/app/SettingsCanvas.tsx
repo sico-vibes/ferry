@@ -9,10 +9,13 @@ import {
   Checkbox,
   Dialog,
   FerryMark,
+  PageHeader,
   Pill,
+  Section,
   SegmentedControl,
   Select,
   Slider,
+  Stack,
   Switch,
   TextField,
 } from '@ferry/ui';
@@ -755,24 +758,26 @@ export function SettingsCanvas() {
   };
   return (
     <section className="canvas settings-page">
-      <header className="page-header">
-        <div>
-          <span className="eyebrow">PREFERENCES</span>
-          <h1>Settings</h1>
-          <p>Control how Ferry works across your workspaces.</p>
-        </div>
-        {section === 'General' && (
-          <Pill
-            onClick={() => {
-              useUI.getState().resetLayout();
-            }}
-            variant="outline"
-          >
-            Reset layout
-          </Pill>
-        )}
-      </header>
-      <main className="settings-content settings-content-framed">{body()}</main>
+      <Stack className="settings-page-content" gap={4}>
+        <PageHeader
+          eyebrow="PREFERENCES"
+          title="Settings"
+          subtitle="Control how Ferry works across your workspaces."
+          actions={
+            section === 'General' ? (
+              <Pill
+                onClick={() => {
+                  useUI.getState().resetLayout();
+                }}
+                variant="outline"
+              >
+                Reset layout
+              </Pill>
+            ) : undefined
+          }
+        />
+        <main className="settings-content settings-content-framed">{body()}</main>
+      </Stack>
       <Dialog
         open={Boolean(confirm)}
         onOpenChange={(open) => {
@@ -850,10 +855,9 @@ export function SettingsCanvas() {
 
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="settings-group-card">
-      <h2>{title}</h2>
+    <Section title={title} className="settings-group-card">
       {children}
-    </section>
+    </Section>
   );
 }
 function SettingRow({
