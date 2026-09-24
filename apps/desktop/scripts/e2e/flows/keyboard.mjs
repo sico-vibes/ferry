@@ -10,6 +10,7 @@ async function tabUntil(page, predicate, description) {
 
 export async function run(page, { url, expect }) {
   await page.goto(new URL('/', url).href, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('textbox', { name: 'Message Ferry' }).waitFor();
   await tabUntil(
     page,
     () => document.activeElement?.getAttribute('aria-label') === 'Message Ferry',

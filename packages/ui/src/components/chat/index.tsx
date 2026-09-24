@@ -74,7 +74,6 @@ export function MarkdownPart({ content }: { content: string }) {
     </div>
   );
 }
-
 export function ThinkingLine({
   steps = [],
   startedAt = Date.now(),
@@ -109,7 +108,7 @@ export function ReasoningPart({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <section className="rounded-xl border border-border-hair bg-white/[0.02]">
+    <section className="rounded-xl border border-border-hair bg-card">
       <button
         aria-expanded={open}
         className={`flex w-full items-center gap-2 p-3 text-left ${focusRingClass}`}
@@ -399,7 +398,7 @@ export function ApprovalCard({
       <div className="flex items-center gap-2">
         <ShieldAlert size={16} className="text-warn" />
         <span className="text-label font-medium">{summary}</span>
-        <span className="ml-auto rounded-pill bg-white/[0.06] px-2 py-1 text-meta capitalize text-text-2">
+        <span className="ml-auto rounded-pill bg-raised px-2 py-1 text-meta capitalize text-text-2">
           {risk} risk
         </span>
       </div>

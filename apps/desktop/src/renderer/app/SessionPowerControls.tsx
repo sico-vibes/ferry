@@ -73,7 +73,7 @@ function ApprovalsTray() {
     <div className="relative">
       <button
         aria-label={`Approvals${pending.length ? `, ${String(pending.length)} pending` : ''}`}
-        className="relative inline-flex size-8 items-center justify-center rounded-full text-text-2 hover:bg-white/[0.05]"
+        className="relative inline-flex size-8 items-center justify-center rounded-full text-text-2 hover:bg-icon-circle"
         onClick={() => {
           setOpen(!open);
         }}
@@ -407,7 +407,7 @@ export function ModelPickerPopover({
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-controls="model-picker-dialog"
-        className="inline-flex items-center gap-2 rounded-pill px-2 py-1 text-body font-medium text-text-1 hover:bg-white/[0.04]"
+        className="inline-flex items-center gap-2 rounded-pill px-2 py-1 text-body font-medium text-text-1 hover:bg-icon-circle"
         onClick={() => {
           setOpen(!open);
         }}

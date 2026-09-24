@@ -20,6 +20,23 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   useFerryEvents();
   const { data: sessions = [] } = useSessions();
   const { data: settings } = useSettings();
+  useEffect(() => {
+    if (!settings) return;
+    const root = document.documentElement;
+    const media = window.matchMedia('(prefers-color-scheme: light)');
+    const apply = () => {
+      const theme =
+        settings.theme === 'system' ? (media.matches ? 'light' : 'dark') : settings.theme;
+      root.dataset.theme = theme;
+      window.ferryHost?.updateTheme(theme);
+    };
+    apply();
+    if (settings.theme !== 'system') return;
+    media.addEventListener('change', apply);
+    return () => {
+      media.removeEventListener('change', apply);
+    };
+  }, [settings?.theme]);
   const tabs = useUI((state) => state.tabs);
   const activeId = useUI((state) => state.activeId);
   const leftCollapsed = useUI((state) => state.leftCollapsed);

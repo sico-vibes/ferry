@@ -10,6 +10,7 @@ export function captureRoute({
 }) {
   return async (page, ctx) => {
     await page.goto(new URL(path, ctx.url).href);
+    await page.locator('.app-shell').waitFor();
     if (action && beforeAction) await action(page);
     if (selector) await page.locator(selector).waitFor();
     if (heading) await page.getByRole(role, { name: heading, exact }).waitFor();

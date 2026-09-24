@@ -88,6 +88,19 @@ Brand tokens (in `packages/ui/src/styles/brand.css`, sampled from the icon): `--
 Usage (`FerryMark` variants):
 - `icon` — the colored app icon image. **Rail top logo** (28px).
 - `brand` — mark masked with `--grad-brand`. **Hero white tile** (mark ~30px inside the 56px tile).
+
+### 2.10 Light theme token mirror
+The dark palette above remains the default and visual reference. Light mode is selected with `data-theme="light"` on `<html>` and mirrors every token in `tokens.css`, `effects.css`, and `brand.css` through `light-tokens.css`.
+
+| Token group | Light values and decisions |
+|---|---|
+| App and surfaces | App `#F6F7F9`; canvas `#FAFBFD`; panels and cards white; raised and rail tiles `#EEF1F5`; capacity surfaces use a pale blue wash. |
+| Borders and text | Borders use `rgba(15,23,42,…)`; primary text `#172033`, secondary `#475569`; muted `--text-3` remains unchanged per parallel lane. |
+| Accent and gradients | Functional blue stays blue with deeper light-background contrast. Gradient hues remain consistent, while composer, headline, and send stops are tuned for legibility on pale surfaces. |
+| Effects and brand | Glows, dots, spotlights, circuit lines, and shadows are softened; Ferry brand ink, lilac, violet, and logo gradient retain their identity. |
+| Status and data | Semantic status, language, and chart series colors retain their hues; surface tints and blue track colors are softened for light backgrounds. |
+
+The complete token-by-token light mirror is maintained in `packages/ui/src/styles/light-tokens.css` and parity-tested against all three dark token sheets.
 - `mono` — mark masked with `currentColor`. **Model picker glyph** (14px), **ModelBadge** (12px).
 The brand violet is the logo's color only; it does not join the UI palette (the 5 gradient places in §1 are unchanged).
 

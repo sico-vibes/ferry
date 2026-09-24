@@ -1,4 +1,7 @@
 :root {
+  color-scheme: light dark;
+}
+html[data-theme='dark'] {
   color-scheme: dark;
   --z-canvas-overlay: 20;
   --z-toast: 30;
@@ -6,6 +9,9 @@
   --z-tray: 45;
   --z-modal-overlay: 60;
   --z-modal: 61;
+}
+html[data-theme='light'] {
+  color-scheme: light;
 }
 * {
   box-sizing: border-box;
@@ -481,6 +487,27 @@ body {
 }
 .home-content > :nth-child(5) {
   flex: 0 0 auto;
+}
+.home-content.home-content-compact {
+  justify-content: flex-start;
+  width: min(100%, 760px);
+}
+.home-content-compact .home-composer-slot {
+  order: 0;
+  margin: 24px 0 8px;
+}
+.home-content-compact .home-continue-slot {
+  order: 1;
+  margin-top: 8px;
+}
+.home-content-compact .home-pinned-slot {
+  order: 2;
+}
+.home-content-compact .home-chips-slot {
+  order: 3;
+}
+.home-content-compact .home-disclaimer-slot {
+  order: 4;
 }
 .session-canvas {
   padding: 16px 24px 14px;
@@ -991,6 +1018,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 20px 24px;
 }
 .hero {
   z-index: 1;

@@ -258,6 +258,7 @@ export const sampleOptimizerStats: OptimizerStats = {
 };
 export const sampleSettings: Settings = {
   theme: 'dark',
+  homeStyle: 'auto',
   fontScale: 1,
   restoreTabs: true,
   delegationMode: 'suggest',

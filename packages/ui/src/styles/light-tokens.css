@@ -1,0 +1,95 @@
+/* Complete light-theme mirror of tokens.css, effects.css, and brand.css. */
+[data-theme='light'] {
+  --bg-app: #f6f7f9;
+  --bg-rail-tile: #eef1f5;
+  --bg-rail-tile-active: #e2e8f0;
+  --bg-panel: #ffffff;
+  --bg-panel-grad: linear-gradient(180deg, #ffffff 0%, #fafbfd 100%);
+  --bg-canvas: #fafbfd;
+  --bg-card: #ffffff;
+  --bg-raised: #eef1f5;
+  --bg-input: #ffffff;
+  --bg-pill-dark: #e8edf4;
+  --bg-capacity: linear-gradient(135deg, #e8f0fc 0%, #f4f7fc 100%);
+  --border-hair: rgba(15, 23, 42, 0.08);
+  --border-soft: rgba(15, 23, 42, 0.12);
+  --border-strong: rgba(15, 23, 42, 0.18);
+  --highlight-top: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --fade-line: linear-gradient(90deg, transparent, rgba(15, 23, 42, 0.16), transparent);
+  --text-1: #172033;
+  --text-2: #475569;
+  --text-3: #6e717c;
+  --text-link: #1d4d8f;
+  --text-on-gradient: #ffffff;
+  --text-on-send: #0b0c0f;
+  --blue-500: #2875d7;
+  --blue-600: #2563b8;
+  --blue-mini: #2875d7;
+  --blue-glow: rgba(61, 132, 236, 0.24);
+  --star: #efbc0b;
+  --warn: #744300;
+  --success: #187241;
+  --danger: #b42318;
+  --grad-signature: linear-gradient(90deg, #245fae 0%, #89566c 36%, #92522f 64%, #776700 100%);
+  --grad-composer: linear-gradient(
+    100deg,
+    #e6da91 0%,
+    #e6daa4 14%,
+    #efcfc0 42%,
+    #edd1bd 55%,
+    #d6cbe1 75%,
+    #bfd0e8 90%,
+    #bfd0e8 100%
+  );
+  --grad-headline: linear-gradient(90deg, #a9660b 0%, #b47a11 40%, #4e74c1 70%, #2875d7 100%);
+  --grad-send: linear-gradient(90deg, #e4d477 0%, #bfdba5 45%, #b2cef0 100%);
+  --grad-avatar: conic-gradient(from 200deg, #e8c547, #b68f66, #4286eb, #e8c547);
+  --r-window: 12px;
+  --r-panel: 18px;
+  --r-canvas: 20px;
+  --r-card: 14px;
+  --r-tile: 14px;
+  --r-input: 12px;
+  --r-item: 12px;
+  --r-pill: 999px;
+  --overlay: rgba(15, 23, 42, 0.28);
+  --bg-field: #f1f4f8;
+  --glow-warm: rgba(176, 103, 74, 0.08);
+  --glow-blue: rgba(61, 132, 236, 0.045);
+  --dot-color: rgba(15, 23, 42, 0.075);
+  --bg-icon-circle: rgba(15, 23, 42, 0.055);
+  --bg-pill: #eef1f5;
+  --bg-blue-tint: rgba(61, 132, 236, 0.11);
+  --border-warm: rgba(165, 116, 24, 0.35);
+  --ring-track: rgba(15, 23, 42, 0.12);
+  --bg-theme-toggle: radial-gradient(circle, rgba(61, 132, 236, 0.18), rgba(61, 132, 236, 0.05));
+  --shadow-avatar: 0 2px 12px rgba(15, 23, 42, 0.12);
+  --circuit-line: rgba(15, 23, 42, 0.18);
+  --lang-ts: #3178c6;
+  --lang-js: #e8b83a;
+  --lang-py: #e8b83a;
+  --lang-go: #00add8;
+  --lang-rust: #de7b45;
+  --lang-other: #1e8e3e;
+  --spotlight: rgba(61, 132, 236, 0.06);
+  --hero-tile: #f4f4f6;
+  --hero-mark: #5969ad;
+  --chip-text: #334155;
+  --tint-success: rgba(34, 197, 94, 0.11);
+  --tint-warn: rgba(245, 165, 36, 0.12);
+  --tint-blue: rgba(61, 132, 236, 0.11);
+  --tint-danger: rgba(239, 68, 68, 0.11);
+  --series-1: #3d84ec;
+  --series-2: #55b8a8;
+  --series-3: #a78bda;
+  --series-4: #e5ab54;
+  --series-5: #d97982;
+  --series-6: #8793a6;
+  --series-7: #76b77c;
+  --series-8: #c2aa83;
+  --brand-ink: #090622;
+  --brand-lilac: #c8b5f5;
+  --brand-violet: #6552a3;
+  --brand-glow: rgba(101, 82, 163, 0.22);
+  --grad-brand: linear-gradient(135deg, #c8b5f5 0%, #8f7ae0 52%, #6552a3 100%);
+}

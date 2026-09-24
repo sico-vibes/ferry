@@ -4,6 +4,7 @@ export function createSettings() {
   return {
     settings: {
       ...sampleSettings,
+      homeStyle: 'auto' as const,
       activeProfileId: 'profile_best' as typeof sampleSettings.activeProfileId,
     },
     optimizerStats: {

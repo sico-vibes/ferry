@@ -63,6 +63,9 @@ const designedTokens = parseDesignTokens(
 const cssTokens = parseCssTokens(
   readFileSync(resolve(packageDirectory, '../src/styles/tokens.css'), 'utf8'),
 );
+const lightCssTokens = parseCssTokens(
+  readFileSync(resolve(packageDirectory, '../src/styles/light-tokens.css'), 'utf8'),
+);
 
 describe('design tokens', () => {
   it('parses the design spec tokens (sanity check on the parser)', () => {
@@ -81,5 +84,22 @@ describe('design tokens', () => {
   it('introduces no tokens beyond DESIGN.md section 2.1-2.6', () => {
     const extras = [...cssTokens.keys()].filter((name) => !designedTokens.has(name));
     expect(extras, `unexpected tokens: ${extras.join(', ')}`).toEqual([]);
+  });
+  it('mirrors every token from all dark token sheets in the light sheet', () => {
+    for (const sheet of ['tokens.css', 'effects.css', 'brand.css']) {
+      const css = readFileSync(resolve(packageDirectory, `../src/styles/${sheet}`), 'utf8');
+      for (const [name] of parseCssTokens(css)) {
+        expect(lightCssTokens.has(name), `missing light token ${name}`).toBe(true);
+      }
+    }
+  });
+
+  it('mirrors every dark token into the light theme', () => {
+    for (const sheet of ['tokens.css', 'effects.css', 'brand.css']) {
+      const css = readFileSync(resolve(packageDirectory, `../src/styles/${sheet}`), 'utf8');
+      for (const [name] of parseCssTokens(css)) {
+        expect(lightCssTokens.has(name), `missing light token ${name}`).toBe(true);
+      }
+    }
   });
 });

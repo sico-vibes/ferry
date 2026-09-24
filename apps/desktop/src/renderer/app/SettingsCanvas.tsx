@@ -115,14 +115,7 @@ export function SettingsCanvas() {
       return (
         <>
           <Group title="Appearance">
-            <SettingRow
-              title="Theme"
-              helper={
-                settings?.theme === 'light'
-                  ? 'Light theme arrives soon. The app continues to use its dark canvas.'
-                  : 'Choose how Ferry follows your display.'
-              }
-            >
+            <SettingRow title="Theme" helper={'Choose dark, light, or follow your display.'}>
               <SegmentedControl
                 label="Theme"
                 value={settings?.theme ?? 'dark'}
@@ -133,6 +126,20 @@ export function SettingsCanvas() {
                   { value: 'dark', label: 'Dark' },
                   { value: 'light', label: 'Light' },
                   { value: 'system', label: 'System' },
+                ]}
+              />
+            </SettingRow>
+            <SettingRow title="Home style" helper="Choose when Home uses the compact layout.">
+              <SegmentedControl
+                label="Home style"
+                value={settings?.homeStyle ?? 'auto'}
+                onValueChange={(value) =>
+                  void update({ homeStyle: value as NonNullable<typeof settings>['homeStyle'] })
+                }
+                options={[
+                  { value: 'auto', label: 'Auto' },
+                  { value: 'hero', label: 'Always show hero' },
+                  { value: 'compact', label: 'Compact' },
                 ]}
               />
             </SettingRow>

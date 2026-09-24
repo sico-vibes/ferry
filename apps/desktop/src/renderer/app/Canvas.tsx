@@ -10,6 +10,7 @@ import {
   CanvasPanel,
   CheckpointMarker,
   Composer,
+  ContinueRow,
   DelegationCard,
   Disclaimer,
   EmptyState,
@@ -92,6 +93,15 @@ export function HomeCanvas() {
   const [prompt, setPrompt] = useState('');
   const activeProfile = profiles.find((profile) => profile.id === settings?.activeProfileId);
   const pinned = sessions.filter((session) => session.pinned).slice(0, 5);
+  const recent = [...sessions]
+    .filter((session) => session.status !== 'error')
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 3);
+  const compactHome =
+    !sessionsLoading &&
+    sessions.length > 0 &&
+    settings?.homeStyle !== 'hero' &&
+    (settings?.homeStyle === 'compact' || sessions.length >= 3 || settings?.onboardingComplete);
   const send = async () => {
     const text = prompt.trim();
     const workspace = workspaces[0];
@@ -144,11 +154,13 @@ export function HomeCanvas() {
       }
       className="home-canvas"
     >
-      <div className="home-content">
-        <Hero
-          title={['Build bigger with Ferry,', 'every free model, one seamless task.']}
-          subtitle="Ferry routes each step to the model that still has room, and carries your task across when one runs dry."
-        />
+      <div className={`home-content${compactHome ? ' home-content-compact' : ''}`}>
+        {!compactHome && (
+          <Hero
+            title={['Build bigger with Ferry,', 'every free model, one seamless task.']}
+            subtitle="Ferry routes each step to the model that still has room, and carries your task across when one runs dry."
+          />
+        )}
         {sessionsLoading ? (
           <Skeleton rows={2} />
         ) : (
@@ -171,50 +183,111 @@ export function HomeCanvas() {
             <button onClick={() => void navigate({ to: '/explore' })}>Add provider</button>
           </div>
         )}
-        <PinnedChatsRow
-          cards={pinned.map((session) => ({
-            language:
-              workspaces.find((workspace) => workspace.id === session.workspaceId)?.language ??
-              'other',
-            title: session.title,
-            snippet: session.preview,
-            date: relativeDate(session.updatedAt),
-            onClick: () => {
-              go(session.id, session.title);
-            },
-          }))}
-          onSeeAll={() => void navigate({ to: '/library' })}
-        />
-        <SuggestionChips
-          onSelect={(label) => {
-            setPrompt(starters[label] ?? label);
-          }}
-        />
-        <Composer
-          value={prompt}
-          onChange={setPrompt}
-          onSend={() => void send()}
-          onStop={() => undefined}
-          running={false}
-          banner={
-            capacity?.banner
-              ? {
-                  text: capacity.banner.text,
-                  actionLabel: capacity.banner.actionLabel,
-                  onAction: () =>
-                    void navigate({
-                      to: capacity.banner?.action === 'open_usage' ? '/explore/usage' : '/explore',
-                    }),
-                }
-              : null
-          }
-          profileName={activeProfile?.name ?? 'Best Available'}
-          onProfileClick={() => void cycleProfile()}
-          onAttach={() => {
-            pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
-          }}
-        />
-        <Disclaimer />
+        {compactHome && (
+          <div className="home-composer-slot">
+            <Composer
+              value={prompt}
+              onChange={setPrompt}
+              onSend={() => void send()}
+              onStop={() => undefined}
+              running={false}
+              banner={
+                capacity?.banner
+                  ? {
+                      text: capacity.banner.text,
+                      actionLabel: capacity.banner.actionLabel,
+                      onAction: () =>
+                        void navigate({
+                          to:
+                            capacity.banner?.action === 'open_usage'
+                              ? '/explore/usage'
+                              : '/explore',
+                        }),
+                    }
+                  : null
+              }
+              profileName={activeProfile?.name ?? 'Best Available'}
+              onProfileClick={() => void cycleProfile()}
+              onAttach={() => {
+                pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
+              }}
+            />
+          </div>
+        )}
+        {compactHome && (
+          <div className="home-continue-slot">
+            <ContinueRow
+              cards={recent.map((session) => ({
+                language:
+                  workspaces.find((workspace) => workspace.id === session.workspaceId)?.language ??
+                  'other',
+                title: session.title,
+                snippet: session.preview,
+                date: relativeDate(session.updatedAt),
+                status: session.status,
+                repo:
+                  workspaces.find((workspace) => workspace.id === session.workspaceId)?.name ??
+                  'Workspace',
+                onClick: () => {
+                  go(session.id, session.title);
+                },
+              }))}
+            />
+          </div>
+        )}
+        <div className="home-pinned-slot">
+          <PinnedChatsRow
+            cards={pinned.map((session) => ({
+              language:
+                workspaces.find((workspace) => workspace.id === session.workspaceId)?.language ??
+                'other',
+              title: session.title,
+              snippet: session.preview,
+              date: relativeDate(session.updatedAt),
+              onClick: () => {
+                go(session.id, session.title);
+              },
+            }))}
+            onSeeAll={() => void navigate({ to: '/library' })}
+          />
+        </div>
+        <div className="home-chips-slot">
+          <SuggestionChips
+            onSelect={(label) => {
+              setPrompt(starters[label] ?? label);
+            }}
+          />
+        </div>
+        {!compactHome && (
+          <Composer
+            value={prompt}
+            onChange={setPrompt}
+            onSend={() => void send()}
+            onStop={() => undefined}
+            running={false}
+            banner={
+              capacity?.banner
+                ? {
+                    text: capacity.banner.text,
+                    actionLabel: capacity.banner.actionLabel,
+                    onAction: () =>
+                      void navigate({
+                        to:
+                          capacity.banner?.action === 'open_usage' ? '/explore/usage' : '/explore',
+                      }),
+                  }
+                : null
+            }
+            profileName={activeProfile?.name ?? 'Best Available'}
+            onProfileClick={() => void cycleProfile()}
+            onAttach={() => {
+              pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
+            }}
+          />
+        )}
+        <div className="home-disclaimer-slot">
+          <Disclaimer />
+        </div>
       </div>
     </CanvasPanel>
   );
@@ -559,7 +632,7 @@ export function SessionCanvas() {
               trigger={
                 <button
                   aria-label="Session options"
-                  className="inline-flex size-8 items-center justify-center rounded-full text-text-2 hover:bg-white/[0.05]"
+                  className="inline-flex size-8 items-center justify-center rounded-full text-text-2 hover:bg-icon-circle"
                   type="button"
                 >
                   <MoreHorizontal size={17} />

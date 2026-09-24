@@ -12,7 +12,7 @@ export const States = () => (
       menu={
         <DropdownMenu
           trigger={
-            <button aria-label="More actions" className="rounded-full p-1 text-text-3">
+            <button aria-label="More actions" className="rounded-full p-1 text-white">
               ⋯
             </button>
           }

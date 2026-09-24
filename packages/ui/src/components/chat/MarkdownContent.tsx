@@ -19,9 +19,10 @@ function loadHighlighter() {
     import('shiki/langs/python.mjs'),
     import('shiki/langs/diff.mjs'),
     import('shiki/themes/github-dark-default.mjs'),
-  ]).then(([core, engine, tsx, ts, js, json, bash, python, diff, theme]) =>
+    import('shiki/themes/github-light-default.mjs'),
+  ]).then(([core, engine, tsx, ts, js, json, bash, python, diff, darkTheme, lightTheme]) =>
     core.createHighlighterCore({
-      themes: [theme.default],
+      themes: [darkTheme.default, lightTheme.default],
       langs: [
         tsx.default,
         ts.default,
@@ -73,7 +74,23 @@ export function MarkdownContent({ content }: { content: string }) {
 
 function CodeBlock({ code, className }: { code: string; className?: string }) {
   const [html, setHtml] = useState<string | null>(null);
+  const [theme, setTheme] = useState(() =>
+    typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light'
+      ? 'github-light-default'
+      : 'github-dark-default',
+  );
   const language = /language-(\w+)/.exec(className ?? '')?.[1] ?? 'text';
+  useEffect(() => {
+    const root = document.documentElement;
+    const updateTheme = () => {
+      setTheme(root.dataset.theme === 'light' ? 'github-light-default' : 'github-dark-default');
+    };
+    const observer = new MutationObserver(updateTheme);
+    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
   useEffect(() => {
     let mounted = true;
     void loadHighlighter().then((highlighter) => {
@@ -81,7 +98,7 @@ function CodeBlock({ code, className }: { code: string; className?: string }) {
       try {
         setHtml(
           highlighter
-            .codeToHtml(code, { lang: language, theme: 'github-dark-default' })
+            .codeToHtml(code, { lang: language, theme })
             .replace(/background-color:[^;]+;/, 'background-color:var(--bg-card);'),
         );
       } catch {
@@ -91,7 +108,7 @@ function CodeBlock({ code, className }: { code: string; className?: string }) {
     return () => {
       mounted = false;
     };
-  }, [code, language]);
+  }, [code, language, theme]);
   return (
     <code className={cn(className, 'relative block font-mono text-[12px] leading-5')}>
       <button

@@ -1,7 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { WINDOW_BACKGROUND, WINDOW_SYMBOL } from './window-theme.js';
+import {
+  WINDOW_BACKGROUND,
+  WINDOW_LIGHT_BACKGROUND,
+  WINDOW_LIGHT_SYMBOL,
+  WINDOW_SYMBOL,
+} from './window-theme.js';
 
 // Packaged builds use the icon embedded in the .exe by electron-builder (build/icon.ico).
 const DEV_WINDOW_ICON = join(import.meta.dirname, '../../build/icon.ico');
@@ -107,6 +112,15 @@ ipcMain.handle('ferry:open-folder', async () => {
     properties: ['openDirectory'],
   });
   return result.canceled ? null : (result.filePaths[0] ?? null);
+});
+
+ipcMain.on('ferry:theme', (_event, theme: unknown) => {
+  if (!mainWindow || (theme !== 'dark' && theme !== 'light')) return;
+  mainWindow.setTitleBarOverlay({
+    color: theme === 'light' ? WINDOW_LIGHT_BACKGROUND : WINDOW_BACKGROUND,
+    symbolColor: theme === 'light' ? WINDOW_LIGHT_SYMBOL : WINDOW_SYMBOL,
+    height: 36,
+  });
 });
 
 app.on('second-instance', () => {

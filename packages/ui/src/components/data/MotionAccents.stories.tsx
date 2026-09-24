@@ -8,7 +8,7 @@ export const RecentChats = () => (
     <AnimatedList>
       {['Fix flaky tests · api', 'Auth refactor · ferry-web', 'Add dark mode · dashboard'].map(
         (chat) => (
-          <button className="w-full rounded-lg bg-white/[0.03] p-3 text-left text-label" key={chat}>
+          <button className="w-full rounded-lg bg-card p-3 text-left text-label" key={chat}>
             {chat}
           </button>
         ),

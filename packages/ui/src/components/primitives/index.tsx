@@ -17,7 +17,7 @@ const focus =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2 focus-visible:ring-offset-app';
 
 const iconButtonStyles = cva(
-  `inline-flex shrink-0 items-center justify-center transition duration-150 ease-out hover:bg-white/[0.04] active:scale-[.98] disabled:pointer-events-none disabled:opacity-40 ${focus}`,
+  `inline-flex shrink-0 items-center justify-center transition duration-150 ease-out hover:bg-icon-circle active:scale-[.98] disabled:pointer-events-none disabled:opacity-40 ${focus}`,
   {
     variants: {
       variant: {
@@ -174,7 +174,7 @@ export function BrandIcon({
     <span
       aria-label={name}
       className={cn(
-        'inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-border-hair bg-white/[0.06] text-[var(--brand,var(--text-1))]',
+        'inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-border-hair bg-icon-circle text-[var(--brand,var(--text-1))]',
         className,
       )}
       role="img"
@@ -194,7 +194,7 @@ export function BrandIcon({
 }
 
 const newChatStyles = cva(
-  `group relative inline-flex items-center justify-center gap-2 overflow-visible rounded-pill border border-border-soft bg-pill-dark font-medium text-text-1 transition duration-150 ease-out hover:bg-white/[0.04] active:scale-[.98] ${focus}`,
+  `group relative inline-flex items-center justify-center gap-2 overflow-visible rounded-pill border border-border-soft bg-pill-dark font-medium text-text-1 transition duration-150 ease-out hover:bg-raised active:scale-[.98] ${focus}`,
   {
     variants: { size: { lg: 'h-10 w-full text-body', sm: 'h-8 px-3 text-label' } },
     defaultVariants: { size: 'lg' },

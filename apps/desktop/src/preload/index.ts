@@ -8,4 +8,7 @@ contextBridge.exposeInMainWorld('ferryHost', {
   },
   openFolder: (): Promise<string | null> =>
     ipcRenderer.invoke('ferry:open-folder') as Promise<string | null>,
+  updateTheme: (theme: 'dark' | 'light'): void => {
+    ipcRenderer.send('ferry:theme', theme);
+  },
 });

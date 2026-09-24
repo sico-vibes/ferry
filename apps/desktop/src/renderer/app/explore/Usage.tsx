@@ -160,7 +160,7 @@ export function UsageCanvas() {
                       )}
                     </div>
                     {item.stepsLeft !== null && (
-                      <div className="h-1 overflow-hidden rounded-pill bg-white/[0.07]">
+                      <div className="h-1 overflow-hidden rounded-pill bg-raised">
                         <span
                           className="block h-full rounded-pill bg-blue-500"
                           style={{ width: `${String((item.stepsLeft / maxSteps) * 100)}%` }}
@@ -230,7 +230,7 @@ export function UsageCanvas() {
                   key={item.reason}
                 >
                   <span className="truncate text-text-2">{reasons[item.reason]}</span>
-                  <span className="h-1.5 overflow-hidden rounded-pill bg-white/[0.07]">
+                  <span className="h-1.5 overflow-hidden rounded-pill bg-raised">
                     <span
                       className="block h-full rounded-pill bg-blue-500"
                       style={{ width: `${String((item.count / maxHandoffs) * 100)}%` }}
@@ -248,7 +248,7 @@ export function UsageCanvas() {
             <header className="mb-3 flex items-center gap-2">
               <h2 className="mr-auto text-label font-semibold text-text-1">Optimizer savings</h2>
               {optimizer?.demo && (
-                <span className="rounded-pill bg-white/[0.06] px-2 py-1 text-[10px] text-text-2">
+                <span className="rounded-pill bg-raised px-2 py-1 text-[10px] text-text-2">
                   Demo data
                 </span>
               )}

@@ -125,7 +125,7 @@ export function IconRail({
       </div>
       <button
         aria-label="Add"
-        className={`mt-5 flex size-10 items-center justify-center rounded-full border border-dashed border-white/20 text-text-2 transition hover:bg-white/[0.04] ${focusRingClass}`}
+        className={`mt-5 flex size-10 items-center justify-center rounded-full border border-dashed border-border-strong text-text-2 transition hover:bg-icon-circle ${focusRingClass}`}
         onClick={onAdd}
         type="button"
       >
@@ -147,7 +147,7 @@ export function IconRail({
         </button>
         <button
           aria-label="Sign out"
-          className={`flex size-8 items-center justify-center rounded-full text-text-3 hover:bg-white/[0.04] hover:text-text-2 ${focusRingClass}`}
+          className={`flex size-8 items-center justify-center rounded-full text-text-3 hover:bg-icon-circle hover:text-text-2 ${focusRingClass}`}
           type="button"
         >
           <LogOut aria-hidden="true" size={18} />
@@ -231,7 +231,7 @@ export function SidebarItem({
           ? activeStyle === 'gradient'
             ? 'text-white shadow-[inset_0_1px_0_var(--highlight-top)]'
             : 'bg-raised text-text-1 shadow-[inset_0_1px_0_var(--highlight-top)]'
-          : 'text-text-1 hover:bg-white/[0.04]',
+          : 'text-text-1 hover:bg-icon-circle',
       )}
       style={
         active && activeStyle === 'gradient'
@@ -259,7 +259,7 @@ export function SidebarItem({
         (showMenu && (
           <button
             aria-label={`More actions for ${label}`}
-            className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full text-text-3 opacity-70 transition hover:bg-white/10 hover:text-white hover:opacity-100 focus-visible:opacity-100 ${focusRingClass}`}
+            className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full transition hover:bg-icon-circle focus-visible:opacity-100 ${active && activeStyle === 'gradient' ? 'text-white hover:text-white' : 'text-text-2 hover:text-text-1'} ${focusRingClass}`}
             type="button"
           >
             <MoreHorizontal aria-hidden="true" size={16} />
@@ -351,7 +351,7 @@ export function TabsBar({
             return (
               <div
                 className={cn(
-                  'group inline-flex h-[34px] max-w-56 items-center rounded-pill border transition hover:bg-white/[0.04]',
+                  'group inline-flex h-[34px] max-w-56 items-center rounded-pill border transition hover:bg-icon-circle',
                   selected
                     ? 'border-border-strong bg-raised text-text-1'
                     : 'border-border-hair text-text-2',
@@ -399,7 +399,7 @@ export function TabsBar({
                 {onClose && (
                   <button
                     aria-label={`Close ${tab.label}`}
-                    className={`mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-full text-text-3 opacity-0 transition hover:bg-white/10 hover:text-text-1 group-hover:opacity-100 group-focus-within:opacity-100 ${focusRingClass}`}
+                    className={`mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-full text-text-2 opacity-0 transition hover:bg-icon-circle hover:text-text-1 group-hover:opacity-100 group-focus-within:opacity-100 ${focusRingClass}`}
                     onClick={() => {
                       onClose(tab.id);
                     }}
@@ -414,7 +414,7 @@ export function TabsBar({
         </div>
         <button
           aria-label="Add tab"
-          className={`flex size-[34px] shrink-0 items-center justify-center rounded-full border border-border-hair bg-white/[0.02] text-text-2 hover:bg-white/[0.05] ${focusRingClass}`}
+          className={`flex size-[34px] shrink-0 items-center justify-center rounded-full border border-border-hair bg-icon-circle text-text-2 hover:bg-raised ${focusRingClass}`}
           onClick={onAdd}
           type="button"
         >
