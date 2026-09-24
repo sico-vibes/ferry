@@ -1,5 +1,10 @@
 /* Complete light-theme mirror of tokens.css, effects.css, and brand.css. */
 [data-theme='light'] {
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
   --bg-app: #f6f7f9;
   --bg-rail-tile: #eef1f5;
   --bg-rail-tile-active: #e2e8f0;

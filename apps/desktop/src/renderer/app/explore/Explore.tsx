@@ -4,7 +4,17 @@ import { useNavigate } from '@tanstack/react-router';
 import { Dialog } from 'radix-ui';
 import { ArrowDown, ArrowUp, ArrowUpRight, Check, ExternalLink, Search, X } from 'lucide-react';
 import type { Provider } from '@ferry/shared';
-import { BrandIcon, EmptyState, ErrorState, Pill, ProviderCard, Skeleton } from '@ferry/ui';
+import {
+  BrandIcon,
+  EmptyState,
+  ErrorState,
+  PageHeader,
+  Pill,
+  ProviderCard,
+  Section,
+  Skeleton,
+  Stack,
+} from '@ferry/ui';
 import { useFerryClient } from '../../data/client';
 import { useToasts } from '../../state/toasts';
 import { useUI } from '../../state/ui';
@@ -203,61 +213,67 @@ export function ExploreCanvas() {
   return (
     <section
       aria-label="Explore providers and models"
-      className="canvas min-h-0 overflow-y-auto p-5"
+      className="canvas page-scroll-canvas min-h-0 p-5"
     >
-      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-5">
-        <nav aria-label="Explore sections" className="flex gap-1 border-b border-border-hair pb-3">
-          <Pill
-            className="border-border-strong bg-raised"
-            onClick={() => void navigate({ to: '/explore' })}
-            size="sm"
-            variant="outline"
-          >
-            Providers
-          </Pill>
-          <Pill onClick={() => void navigate({ to: '/explore/usage' })} size="sm" variant="outline">
-            Usage
-          </Pill>
-        </nav>
-        <header className="flex flex-wrap items-end gap-3">
-          <div className="mr-auto">
-            <h1 className="text-[20px] font-semibold leading-7 text-text-1">Providers</h1>
-            <p className="mt-1 text-body text-text-2">
-              Free tiers, paid plans and CLIs Ferry can route to
-            </p>
-          </div>
-          <label className="flex h-9 w-[min(250px,100%)] items-center gap-2 rounded-input border border-border-soft bg-input px-3 text-text-3">
-            <Search size={15} />
-            <input
-              aria-label="Search providers"
-              className="min-w-0 flex-1 bg-transparent text-label text-text-1 outline-none placeholder:text-text-3"
-              onChange={(event) => {
-                setSearch(event.target.value);
-              }}
-              placeholder="Search providers"
-              value={search}
-            />
-            {search && (
-              <button
-                aria-label="Clear provider search"
-                onClick={() => {
-                  setSearch('');
-                }}
-                type="button"
+      <Stack className="page-content mx-auto w-full max-w-[1200px]" gap={4}>
+        <PageHeader
+          title="Providers"
+          subtitle="Free tiers, paid plans and CLIs Ferry can route to"
+          nav={
+            <nav aria-label="Explore sections" className="flex gap-1">
+              <Pill
+                className="border-border-strong bg-raised"
+                onClick={() => void navigate({ to: '/explore' })}
+                size="sm"
+                variant="outline"
               >
-                <X size={14} />
-              </button>
-            )}
-          </label>
-          <Pill
-            leadingIcon={<span aria-hidden="true">+</span>}
-            onClick={openAdd}
-            size="lg"
-            variant="blue-tint"
-          >
-            Add provider
-          </Pill>
-        </header>
+                Providers
+              </Pill>
+              <Pill
+                onClick={() => void navigate({ to: '/explore/usage' })}
+                size="sm"
+                variant="outline"
+              >
+                Usage
+              </Pill>
+            </nav>
+          }
+          actions={
+            <>
+              <label className="flex h-9 w-[min(250px,100%)] items-center gap-2 rounded-input border border-border-soft bg-input px-3 text-text-3">
+                <Search size={15} />
+                <input
+                  aria-label="Search providers"
+                  className="min-w-0 flex-1 bg-transparent text-label text-text-1 outline-none placeholder:text-text-3"
+                  onChange={(event) => {
+                    setSearch(event.target.value);
+                  }}
+                  placeholder="Search providers"
+                  value={search}
+                />
+                {search && (
+                  <button
+                    aria-label="Clear provider search"
+                    onClick={() => {
+                      setSearch('');
+                    }}
+                    type="button"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </label>
+              <Pill
+                leadingIcon={<span aria-hidden="true">+</span>}
+                onClick={openAdd}
+                size="lg"
+                variant="blue-tint"
+              >
+                Add provider
+              </Pill>
+            </>
+          }
+        />
         <section aria-label="Provider filter" className="flex flex-wrap items-center gap-2">
           {(['All', 'Free', 'Paid', 'CLI'] as const).map((item) => (
             <button
@@ -319,13 +335,10 @@ export function ExploreCanvas() {
             }}
           />
         )}
-        <section aria-label="Models" className="grid gap-3 pt-2">
+        <Section title="Models" ariaLabel="Models" className="grid gap-3">
           <header className="flex flex-wrap items-end gap-3">
             <div className="mr-auto">
-              <h2 className="text-title font-semibold text-text-1">Models</h2>
-              <p className="mt-1 text-meta text-text-3">
-                Compare capabilities and published pricing
-              </p>
+              <p className="text-meta text-text-3">Compare capabilities and published pricing</p>
             </div>
             <div aria-label="Filter by tier" className="flex gap-1">
               {modelFilters.map((item) => (
@@ -358,9 +371,14 @@ export function ExploreCanvas() {
               ))}
             </div>
           </header>
-          <div className="max-h-[360px] overflow-auto rounded-card border border-border-hair bg-card">
+          <div
+            className="model-table-scroll"
+            tabIndex={0}
+            role="region"
+            aria-label="Model comparison table, scroll horizontally for more columns"
+          >
             <table className="w-full min-w-[760px] border-collapse text-left text-meta">
-              <thead className="sticky top-0 z-[1] bg-panel text-text-3">
+              <thead className="bg-panel text-text-3">
                 <tr className="h-9 border-b border-border-hair">
                   <th className="px-3 font-medium">{sortLabel('name', 'Model')}</th>
                   <th className="px-3 font-medium">{sortLabel('providerId', 'Provider')}</th>
@@ -415,8 +433,8 @@ export function ExploreCanvas() {
               </p>
             )}
           </div>
-        </section>
-      </div>
+        </Section>
+      </Stack>
       <Dialog.Root onOpenChange={closeDialog} open={dialogOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-40 bg-app/80 backdrop-blur-[2px]" />

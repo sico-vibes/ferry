@@ -245,7 +245,7 @@ Hover: +4% white overlay. Press: scale .98. Focus: 2px ring `--blue-500` @40% + 
 The reference covers Home only. Everything else Ferry grows into must look like it was always part of it. Follow these patterns; if a new need doesn't fit, extend this section first, then build.
 
 ### 7.1 Page pattern
-Canvas → **page header** (title `15/22 600` + subtitle `13 text-2` + one primary action pill on the right; optional pill sub-nav under it) → **section cards** (`--bg-card`, hairline, radius 14, padding 16, section title `12/16 500 text-2`). Settings-style pages add a 240px left nav inside the canvas. Explore, Library, Settings, Onboarding all use this.
+Canvas → **PageHeader** (title `15/22 600` + subtitle `13/20 text-2` + optional eyebrow + actions slot; optional pill sub-nav under it) → **Section** cards (`--bg-card`, hairline, radius 14, padding 16, section title `12/16 500 text-2`) composed with **Stack** and **Cluster**. Stack and Cluster gaps use the 4px rhythm tokens `--space-2/3/4/6/8` (8/12/16/24/32px). Settings-style pages add a left nav inside the canvas. Explore, Library, Settings, and Onboarding follow this pattern.
 
 ### 7.2 Status semantics (fixed meanings, everywhere: UI + CLI)
 | Meaning | Color | Examples |

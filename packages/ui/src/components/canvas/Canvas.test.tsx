@@ -5,6 +5,7 @@ import {
   CanvasHeaderActions,
   CanvasPanel,
   Composer,
+  ContinueRow,
   Disclaimer,
   Hero,
   ModelPickerTrigger,
@@ -25,6 +26,16 @@ describe('canvas building blocks', () => {
     fireEvent.click(screen.getByRole('button', { name: /Auto · GLM/ }));
     expect(click).toHaveBeenCalledOnce();
     expect(screen.getByRole('button', { name: /Auth/ })).toBeTruthy();
+  });
+  it('moves the Continue card row with keyboard arrows', () => {
+    render(
+      <ContinueRow cards={[{ language: 'ts', title: 'Auth', snippet: 'Tokens', date: 'Today' }]} />,
+    );
+    const row = screen.getByRole('region', { name: 'Continue sessions' });
+    const scrollBy = vi.fn();
+    Object.defineProperty(row, 'scrollBy', { configurable: true, value: scrollBy });
+    fireEvent.keyDown(row, { key: 'ArrowRight' });
+    expect(scrollBy).toHaveBeenCalledWith({ left: 208, behavior: 'smooth' });
   });
   it('sends on Enter, preserves Shift+Enter, and stops an active run', () => {
     const send = vi.fn(),

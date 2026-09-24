@@ -59,7 +59,7 @@ export function CanvasPanel({
           {header}
         </header>
       )}
-      <div className="relative z-10 flex min-h-0 flex-1 flex-col">{children}</div>
+      <div className="relative z-10 flex min-h-0 min-w-0 w-full flex-1 flex-col">{children}</div>
     </section>
   );
 }
@@ -215,10 +215,24 @@ export function ChatCard({ language, title, snippet, date, status, repo, onClick
   );
 }
 export function ContinueRow({ cards }: { cards: ChatCardProps[] }) {
+  const list = useRef<HTMLDivElement>(null);
+  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+      event.preventDefault();
+      list.current?.scrollBy({ left: event.key === 'ArrowRight' ? 208 : -208, behavior: 'smooth' });
+    }
+  }
   return (
     <section className="mt-2 min-w-0" aria-label="Continue">
       <h2 className="mb-3 text-label font-medium text-text-2">Continue</h2>
-      <div className="flex gap-3 overflow-x-auto pb-1">
+      <div
+        aria-label="Continue sessions"
+        className="flex gap-3 overflow-x-auto pb-1"
+        onKeyDown={onKeyDown}
+        ref={list}
+        role="region"
+        tabIndex={0}
+      >
         {cards.map((card) => (
           <ChatCard key={card.title} {...card} />
         ))}
@@ -260,6 +274,7 @@ export function PinnedChatsRow({
           className="flex gap-3 overflow-x-auto pb-1"
           onKeyDown={onKeyDown}
           ref={list}
+          role="region"
           tabIndex={0}
         >
           {cards.map((card) => (
