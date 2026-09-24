@@ -16,19 +16,27 @@ const filters = process.argv.slice(2);
 const modules = await Promise.all(
   (await readdir(join(directory, 'e2e', 'flows')))
     .filter((name) => name.endsWith('.mjs'))
+    .sort()
     .map((name) => import('./e2e/flows/' + name)),
 );
 try {
   const browser = await chromium.launch({ headless: true });
   try {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    const page = await context.newPage();
     for (const flow of modules) {
       if (filters.length && !filters.includes(flow.name)) continue;
-      await flow.run(page, { url, expect });
-      console.log(`e2e: ${flow.name} OK`);
+      const context = await browser.newContext({
+        viewport: flow.viewport ?? { width: 1440, height: 900 },
+      });
+      try {
+        const page = await context.newPage();
+        const flowUrl = new URL(url);
+        flowUrl.searchParams.set('speed', String(flow.speed ?? 1));
+        await flow.run(page, { url: flowUrl.toString(), expect });
+        console.log(`e2e: ${flow.name} OK`);
+      } finally {
+        await context.close();
+      }
     }
-    await context.close();
   } finally {
     await browser.close();
   }

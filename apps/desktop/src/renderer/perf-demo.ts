@@ -44,6 +44,9 @@ export function seedLongTranscript(client: MockFerryClient): SessionId | undefin
   });
 
   client.__state().messages.set(session.id, messages);
-  history.replaceState(null, '', `/s/${session.id}?demo=long`);
+  const location = new URL(window.location.href);
+  location.pathname = `/s/${session.id}`;
+  location.searchParams.set('demo', 'long');
+  history.replaceState(null, '', location);
   return session.id;
 }

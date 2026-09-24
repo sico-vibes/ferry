@@ -555,13 +555,15 @@ export function SessionCanvas() {
       frameId = requestAnimationFrame(sampleFrame);
     };
     frameId = requestAnimationFrame(sampleFrame);
+    const speedParam = Number(new URLSearchParams(location.search).get('speed'));
+    const streamSpeed = Number.isFinite(speedParam) && speedParam > 0 ? speedParam : 1;
     const stream = window.setInterval(() => {
       if (!pinnedToBottom.current) setNewOutputCount((count) => count + 1);
       setStreaming((current) => ({
         ...current,
         'perf-demo-stream': `${current['perf-demo-stream'] ?? ''} token `,
       }));
-    }, 80);
+    }, 80 * streamSpeed);
     const finish = window.setTimeout(() => {
       window.clearInterval(stream);
       cancelAnimationFrame(frameId);
@@ -853,6 +855,8 @@ export function SessionCanvas() {
     >
       <div
         className="transcript-viewport"
+        data-at-bottom={atBottom}
+        data-new-output-count={newOutputCount}
         ref={viewport}
         style={{ visibility: initialTailReady ? 'visible' : 'hidden' }}
         onWheel={(event) => {

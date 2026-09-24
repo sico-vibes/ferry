@@ -22,7 +22,5 @@ export async function run(page, ctx) {
   await page.getByRole('button', { name: 'Accept' }).click();
   await page.waitForURL(/\/s\/[^/]+$/);
   await ctx.expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
-  await ctx
-    .expect(page.getByRole('img', { name: 'Completed successfully' }))
-    .toBeVisible({ timeout: 2_000 });
+  await ctx.expect(page.locator('[role="img"][data-status="completed"]')).toBeVisible();
 }

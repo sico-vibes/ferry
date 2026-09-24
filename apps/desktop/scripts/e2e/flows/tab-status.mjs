@@ -1,4 +1,5 @@
 export const name = 'tab-status';
+export const speed = 4;
 export async function run(page, ctx) {
   await page.goto(ctx.url);
   await page.getByRole('navigation', { name: 'Primary' }).waitFor();
@@ -6,15 +7,12 @@ export async function run(page, ctx) {
   await page.getByRole('textbox', { name: 'Message Ferry' }).fill('Explain the router');
   await page.getByRole('button', { name: 'Send' }).click();
   await page.waitForURL(/\/s\//);
-  await ctx.expect(activeTab().getByRole('img', { name: 'running' })).toBeVisible({
-    timeout: 15_000,
-  });
+  await ctx.expect(activeTab().locator('[data-status="running"]')).toBeVisible();
 
   await page.goto(ctx.url);
   await page.getByRole('textbox', { name: 'Message Ferry' }).fill('Fix the flaky tests');
   await page.getByRole('button', { name: 'Send' }).click();
-  await ctx.expect(activeTab().getByRole('img', { name: 'Awaiting approval' })).toBeVisible({
-    timeout: 20_000,
-  });
+  await page.getByRole('button', { name: 'Allow once' }).waitFor();
+  await ctx.expect(activeTab().locator('[data-status="awaiting_approval"]')).toBeVisible();
   await page.getByRole('button', { name: 'Allow once' }).click();
 }

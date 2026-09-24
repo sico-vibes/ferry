@@ -397,7 +397,7 @@ export function TabsBar({
                 >
                   <Icon aria-hidden="true" size={14} strokeWidth={1.75} />
                   <span className="truncate">{tab.label}</span>
-                  {(tab.successPulse ?? Boolean(tab.status && tab.status !== 'idle')) && (
+                  {(tab.successPulse === true || Boolean(tab.status && tab.status !== 'idle')) && (
                     <span
                       aria-label={
                         tab.successPulse
@@ -406,6 +406,7 @@ export function TabsBar({
                             ? 'Awaiting approval'
                             : tab.status
                       }
+                      data-status={tab.successPulse ? 'completed' : (tab.status ?? 'idle')}
                       className={cn(
                         'size-2 shrink-0 rounded-full',
                         tab.status === 'running' &&

@@ -1,6 +1,6 @@
 export const name = 'settings-sections';
 export async function run(page, ctx) {
-  await page.goto(`${ctx.url}/settings`);
+  await page.goto(new URL('/settings', ctx.url).toString());
   await page.getByRole('navigation', { name: 'Primary' }).waitFor();
   const nav = page.getByRole('navigation', { name: 'Settings sections' });
   const sections = [

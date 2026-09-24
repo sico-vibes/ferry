@@ -13,7 +13,13 @@ const queryClient = new QueryClient({
 const root = document.getElementById('root');
 if (!root) throw new Error('Renderer root element is missing');
 
-const client = createDemoFerryClient();
+const speedParam = new URLSearchParams(location.search).get('speed');
+const configuredSpeed = speedParam === null ? undefined : Number(speedParam);
+const client = createDemoFerryClient({
+  ...(configuredSpeed !== undefined && Number.isFinite(configuredSpeed) && configuredSpeed >= 0
+    ? { speed: configuredSpeed }
+    : {}),
+});
 const mountApp = () => {
   createRoot(root).render(
     <StrictMode>

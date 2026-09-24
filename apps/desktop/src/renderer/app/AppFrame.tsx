@@ -51,7 +51,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const dismissToast = useToasts((state) => state.dismiss);
   const [closePrompt, setClosePrompt] = useState<string | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [successPulseIds, setSuccessPulseIds] = useState<string[]>([]);
+  const [completedDelegationIds, setCompletedDelegationIds] = useState<string[]>([]);
   const [simulatedOffline, setSimulatedOffline] = useState(
     () => localStorage.getItem('ferry.simulateOffline') === 'true',
   );
@@ -118,10 +118,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     const pulse = (event: Event) => {
       const id = (event as CustomEvent<{ sessionId: string }>).detail.sessionId;
       if (!id) return;
-      setSuccessPulseIds((current) => [...new Set([...current, id])]);
-      window.setTimeout(() => {
-        setSuccessPulseIds((current) => current.filter((item) => item !== id));
-      }, 1200);
+      setCompletedDelegationIds((current) => [...new Set([...current, id])]);
     };
     window.addEventListener('ferry:success-pulse', pulse);
     return () => {
@@ -226,7 +223,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           label: labels.get(tab.id) ?? tab.title,
           icon: FileText,
           status: sessions.find((session) => session.id === tab.id)?.status ?? 'idle',
-          successPulse: successPulseIds.includes(tab.id),
+          successPulse: completedDelegationIds.includes(tab.id),
         }));
   const homeTab = tabs.length === 0 && pathname === '/';
   const currentId = pathname.startsWith('/s/')
