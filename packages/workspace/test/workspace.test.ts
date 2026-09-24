@@ -27,10 +27,13 @@ describe('workspace filesystem', () => {
       Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('first\r\nsecond\r\n')]),
     );
     await tools.writeFile({ path: 'a.txt', content: 'first\nchanged\n' });
-    await editFile(tools, { path: 'a.txt', edits: [{ search: 'changed', replace: '雪 changed' }] });
+    await editFile(tools, {
+      path: 'a.txt',
+      edits: [{ search: 'changed', replace: '\u96ea changed' }],
+    });
     const bytes = await readFile(path.join(root, 'a.txt'));
     expect(bytes.subarray(0, 3)).toEqual(Buffer.from([0xef, 0xbb, 0xbf]));
-    expect(decodeText(bytes).text).toBe('first\r\n雪 changed\r\n');
+    expect(decodeText(bytes).text).toBe('first\r\n\u96ea changed\r\n');
   });
   it('blocks parent traversal and symlink escapes', async () => {
     const root = await tempRoot();
@@ -143,7 +146,7 @@ describe('shadow checkpoints', () => {
     await writeFile(path.join(root, 'state.txt'), 'before\n');
     const first = await checkpoints.snapshot('initial');
     await writeFile(path.join(root, 'state.txt'), 'after\n');
-    const second = await checkpoints.snapshot('edited');
+    const second = await checkpoints.snapshot('edited', ['state.txt']);
     expect(second).not.toBe(first);
     expect((await checkpoints.list()).map(({ message }) => message)).toEqual(['edited', 'initial']);
     expect(await checkpoints.diff(second, 'state.txt')).toContain('-before');

@@ -118,7 +118,12 @@ export class WorkspaceJail {
     } catch {
       /* missing target */
     }
-    return this.ignoreMatcher.ignores(directory ? `${rel}/` : rel);
+    return this.isIgnoredRelative(directory ? `${rel}/` : rel);
+  }
+  async isIgnoredRelative(relativePath: string): Promise<boolean> {
+    await this.loadIgnores();
+    const rel = relativePath.split(path.sep).join('/').replace(/^\.\//, '');
+    return rel !== '' && this.ignoreMatcher.ignores(rel);
   }
   private async loadIgnores(): Promise<void> {
     if (this.ignoresLoaded) return;

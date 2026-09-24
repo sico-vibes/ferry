@@ -11,6 +11,7 @@ export const GitPathInput = z.object({ path: z.string().default('.') });
 export const CheckpointInput = z.object({
   dataDir: z.string(),
   message: z.string().default('checkpoint'),
+  touchedPaths: z.array(z.string()).optional(),
 });
 export const RestoreCheckpointInput = z.object({
   dataDir: z.string(),
@@ -33,21 +34,32 @@ export async function gitBranch(jail: WorkspaceJail) {
 export class ShadowCheckpoints {
   readonly id: string;
   readonly dir: string;
+  readonly indexFile: string;
   constructor(
     readonly jail: WorkspaceJail,
     dataDir: string,
   ) {
     this.id = createHash('sha256').update(jail.root.toLowerCase()).digest('hex').slice(0, 16);
     this.dir = path.join(dataDir, 'checkpoints', this.id);
+    this.indexFile = path.join(this.dir, 'index');
   }
-  async snapshot(message = 'checkpoint'): Promise<string> {
+  async snapshot(message = 'checkpoint', touchedPaths?: string[]): Promise<string> {
     await fs.mkdir(path.dirname(this.dir), { recursive: true });
     try {
       await fs.access(path.join(this.dir, 'HEAD'));
     } catch {
       await execa('git', ['init', '--bare', this.dir], { cwd: this.jail.root });
     }
-    await this.git(['add', '-A']);
+    if (touchedPaths === undefined) {
+      await this.git(['add', '-A']);
+    } else if (touchedPaths.length > 0) {
+      const paths: string[] = [];
+      for (const touched of touchedPaths) {
+        const absolute = await this.jail.resolve(touched, { allowMissing: true });
+        paths.push(this.jail.relative(absolute));
+      }
+      await this.git(['add', '-A', '--', ...paths]);
+    }
     const tree = await this.git(['write-tree']);
     const parent = await this.git(['rev-parse', '-q', '--verify', 'HEAD']).catch(() => undefined);
     if (parent?.stdout.trim()) {
@@ -121,10 +133,19 @@ export class ShadowCheckpoints {
         'user.email=ferry@localhost',
         '-c',
         'core.autocrlf=false',
+        '-c',
+        'core.untrackedCache=true',
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.preloadIndex=true',
+        '-c',
+        'feature.manyFiles=true',
         ...args,
       ],
       {
         cwd: this.jail.root,
+        env: { ...process.env, GIT_INDEX_FILE: this.indexFile },
         reject: true,
       },
     );
@@ -132,7 +153,7 @@ export class ShadowCheckpoints {
 }
 export async function createCheckpoint(raw: unknown, jail: WorkspaceJail): Promise<string> {
   const input = CheckpointInput.parse(raw);
-  return new ShadowCheckpoints(jail, input.dataDir).snapshot(input.message);
+  return new ShadowCheckpoints(jail, input.dataDir).snapshot(input.message, input.touchedPaths);
 }
 export async function checkpointRestore(raw: unknown, jail: WorkspaceJail): Promise<void> {
   const input = RestoreCheckpointInput.parse(raw);
