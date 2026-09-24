@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { keys } from './queries';
 import { useFerryClient } from './client';
 import { useToasts } from '../state/toasts';
+import { useUI } from '../state/ui';
 
 export function useFerryEvents(): void {
   const client = useFerryClient();
@@ -19,10 +20,23 @@ export function useFerryEvents(): void {
         'session.message',
         ({ sessionId }) => void cache.invalidateQueries({ queryKey: keys.session(sessionId) }),
       ),
-      client.on(
-        'session.part',
-        ({ sessionId }) => void cache.invalidateQueries({ queryKey: keys.session(sessionId) }),
-      ),
+      client.on('session.part', ({ sessionId, part }) => {
+        void cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+        if (
+          part.type === 'approval_request' &&
+          part.state === 'pending' &&
+          useUI.getState().activeId !== sessionId
+        ) {
+          const session = cache.getQueryData<{ session: { title: string } }>(
+            keys.session(sessionId),
+          );
+          pushToast({
+            kind: 'warning',
+            title: 'Approval needed',
+            body: session?.session.title ?? part.summary,
+          });
+        }
+      }),
       client.on(
         'session.delta',
         ({ sessionId }) => void cache.invalidateQueries({ queryKey: keys.session(sessionId) }),

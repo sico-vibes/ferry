@@ -1,4 +1,4 @@
-import { Children, isValidElement, useState, type ReactNode } from 'react';
+import { Children, isValidElement, useEffect, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -20,6 +20,7 @@ import {
   ShieldAlert,
   SquareTerminal,
   Users,
+  Wrench,
   type LucideIcon,
 } from 'lucide-react';
 import type { FileChange, MessagePart, PlanItem, ToolName, ToolOutput } from '@ferry/shared';
@@ -317,6 +318,127 @@ export function ToolCallBlock({
               <span className="text-success">+{change.additions}</span>
               <span className="text-danger">−{change.deletions}</span>
             </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+export type PartGroup =
+  MessagePart | { type: 'tool_group'; parts: Extract<MessagePart, { type: 'tool_call' }>[] };
+
+export function groupParts(parts: MessagePart[]): PartGroup[] {
+  const groups: PartGroup[] = [];
+  for (let index = 0; index < parts.length;) {
+    const part = parts[index];
+    if (part?.type !== 'tool_call') {
+      if (part) groups.push(part);
+      index += 1;
+      continue;
+    }
+    const tools: Extract<MessagePart, { type: 'tool_call' }>[] = [];
+    while (parts[index]?.type === 'tool_call') {
+      const candidate = parts[index];
+      if (candidate?.type === 'tool_call') tools.push(candidate);
+      index += 1;
+    }
+    if (tools.length === 1) {
+      const single = tools.at(0);
+      if (single) groups.push(single);
+    } else groups.push({ type: 'tool_group', parts: tools });
+  }
+  return groups;
+}
+
+export function ToolStepGroup({
+  parts,
+  onShowFull,
+  onOpenDiff,
+}: {
+  parts: Extract<MessagePart, { type: 'tool_call' }>[];
+  onShowFull?: (text: string) => void;
+  onOpenDiff?: () => void;
+}) {
+  const failed = parts.some((part) => part.status === 'failed');
+  const running = parts.at(-1)?.status === 'running';
+  const [open, setOpen] = useState(failed || running);
+  useEffect(() => {
+    if (failed || running) setOpen(true);
+  }, [failed, running]);
+  const totals = new Map<string, number>();
+  for (const part of parts) totals.set(part.tool, (totals.get(part.tool) ?? 0) + 1);
+  const count = (...names: string[]) =>
+    names.reduce((sum, name) => sum + (totals.get(name) ?? 0), 0);
+  const summaries = [
+    count('read_file', 'list_dir', 'glob', 'repo_map')
+      ? `Explored ${String(count('read_file', 'list_dir', 'glob', 'repo_map'))} files`
+      : '',
+    count('grep') ? `searched ${String(count('grep'))}` : '',
+    count('edit_file', 'write_file') ? `edited ${String(count('edit_file', 'write_file'))}` : '',
+    count('run_command')
+      ? `ran ${String(count('run_command'))} ${count('run_command') === 1 ? 'command' : 'commands'}`
+      : '',
+    count('update_plan') ? `updated plan ${String(count('update_plan'))}` : '',
+    count('mcp', 'delegate') ? `used ${String(count('mcp', 'delegate'))} other tools` : '',
+  ].filter(Boolean);
+  const summary = summaries.join(' · ');
+  const overall = failed
+    ? 'failed'
+    : running
+      ? 'running'
+      : parts.some((part) => part.status === 'denied')
+        ? 'denied'
+        : parts.every((part) => part.status === 'succeeded')
+          ? 'succeeded'
+          : 'pending';
+  const elapsed = parts.reduce((sum, part) => sum + (part.durationMs ?? 0), 0);
+  return (
+    <section className="overflow-hidden rounded-xl border border-border-hair bg-card">
+      <button
+        aria-expanded={open}
+        className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-left ${focusRingClass}`}
+        onClick={() => {
+          setOpen(!open);
+        }}
+        type="button"
+      >
+        <span className="flex -space-x-1 text-text-2">
+          <Wrench size={15} />
+          <Wrench size={12} />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-label font-medium text-text-1">
+          {summary}
+        </span>
+        <StatusMark status={overall} />
+        {elapsed > 0 && (
+          <span className="text-meta tabular-nums text-text-3">{(elapsed / 1000).toFixed(1)}s</span>
+        )}
+        <ChevronDown className={cn('size-3.5 text-text-3 transition', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div className="space-y-2 border-t border-border-hair p-3">
+          {parts.map((part) => (
+            <ToolCallBlock
+              key={part.id}
+              {...part}
+              {...(onShowFull
+                ? {
+                    onShowFull: () => {
+                      onShowFull(
+                        `${part.output?.text ?? ''}\n\nFull output restored from recovery handle.`,
+                      );
+                    },
+                  }
+                : {})}
+              {...(onOpenDiff
+                ? {
+                    onOpenDiff: () => {
+                      onOpenDiff();
+                    },
+                  }
+                : {})}
+            />
           ))}
         </div>
       )}

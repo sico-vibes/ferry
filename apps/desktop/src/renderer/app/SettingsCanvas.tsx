@@ -4,6 +4,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useFerryClient } from '../data/client';
 import { keys, useProfiles, useSettings } from '../data/queries';
 import { useToasts } from '../state/toasts';
+import { useUI } from '../state/ui';
 import {
   Checkbox,
   Dialog,
@@ -56,6 +57,7 @@ export function SettingsCanvas() {
   const cache = useQueryClient();
   const navigate = useNavigate();
   const toast = useToasts((state) => state.push);
+  const density = useUI((state) => state.density);
   const [section, setSection] = useState<string>('General');
   const [confirm, setConfirm] = useState('');
   const [addMcp, setAddMcp] = useState(false);
@@ -159,6 +161,19 @@ export function SettingsCanvas() {
                 />
                 <span>{(settings?.fontScale ?? 1).toFixed(2)}×</span>
               </div>
+            </SettingRow>
+            <SettingRow title="Transcript density" helper="Compact spacing for longer agent runs.">
+              <SegmentedControl
+                label="Transcript density"
+                value={density}
+                onValueChange={(value) => {
+                  useUI.getState().setDensity(value as typeof density);
+                }}
+                options={[
+                  { value: 'comfortable', label: 'Comfortable' },
+                  { value: 'compact', label: 'Compact' },
+                ]}
+              />
             </SettingRow>
             <SettingRow
               title="Restore tabs"

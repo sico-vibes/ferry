@@ -10,6 +10,7 @@ import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
 import { Sidebar } from './Sidebar';
 import { RightPanel } from './right-panel/RightPanel';
+import { SessionPowerControls } from './SessionPowerControls';
 
 export function AppFrame({ children }: { children: React.ReactNode }) {
   const client = useFerryClient();
@@ -22,6 +23,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const activeId = useUI((state) => state.activeId);
   const leftCollapsed = useUI((state) => state.leftCollapsed);
   const rightCollapsed = useUI((state) => state.rightCollapsed);
+  const density = useUI((state) => state.density);
   const openTab = useUI((state) => state.openTab);
   const setActive = useUI((state) => state.setActive);
   const closeTab = useUI((state) => state.closeTab);
@@ -38,7 +40,10 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       ? 'library'
       : 'chats';
   const fullCanvasPage =
-    pathname === '/library' || pathname === '/settings' || pathname === '/onboarding';
+    pathname === '/library' ||
+    pathname === '/settings' ||
+    pathname === '/onboarding' ||
+    pathname.includes('/review/');
   const createChat = async () => {
     const workspaces = await client.workspaces.list();
     const workspace = workspaces[0];
@@ -114,6 +119,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           id: tab.id,
           label: labels.get(tab.id) ?? tab.title,
           icon: FileText,
+          status: sessions.find((session) => session.id === tab.id)?.status ?? 'idle',
         }));
   const homeTab = tabs.length === 0 && pathname === '/';
   const currentId = pathname.startsWith('/s/')
@@ -124,6 +130,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   return (
     <div
       className={`app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed ? 'right-is-collapsed' : ''}`}
+      data-density={density}
     >
       <div className="title-strip" aria-hidden="true" />
       <div className={`app-grid ${fullCanvasPage ? 'page-mode-grid' : ''}`}>
@@ -149,23 +156,26 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
                 })}
             onAdd={() => void createChat()}
             rightCluster={
-              <TopRightCluster
-                onAccount={() => void navigate({ to: '/settings' })}
-                onConfiguration={() => {
-                  pushToast({
-                    kind: 'info',
-                    title: 'Configuration',
-                    body: 'Configuration controls arrive in a later update.',
-                  });
-                }}
-                onShare={() => {
-                  pushToast({
-                    kind: 'success',
-                    title: 'Share',
-                    body: 'There is nothing to share yet.',
-                  });
-                }}
-              />
+              <>
+                <SessionPowerControls />
+                <TopRightCluster
+                  onAccount={() => void navigate({ to: '/settings' })}
+                  onConfiguration={() => {
+                    pushToast({
+                      kind: 'info',
+                      title: 'Configuration',
+                      body: 'Configuration controls arrive in a later update.',
+                    });
+                  }}
+                  onShare={() => {
+                    pushToast({
+                      kind: 'success',
+                      title: 'Share',
+                      body: 'There is nothing to share yet.',
+                    });
+                  }}
+                />
+              </>
             }
           />
           <div className="canvas-slot">{children}</div>

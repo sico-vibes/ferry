@@ -34,11 +34,49 @@ try {
         await page.getByRole('textbox', { name: 'Message Ferry' }).fill('Fix the flaky tests');
         await page.getByRole('button', { name: 'Send' }).click();
         await page.getByRole('button', { name: 'Allow once' }).waitFor();
+        await page
+          .locator('.canvas-slot')
+          .getByRole('button', { name: /Auto|Manual/ })
+          .first()
+          .click();
+        await page.getByText('Auto (recommended)').waitFor();
+        await page.screenshot({
+          path: join(screenshotDirectory, 'model-picker.png'),
+          fullPage: false,
+        });
+        await page.keyboard.press('Escape');
+        await page.keyboard.press('Control+k');
+        await page.getByRole('heading', { name: 'Command palette' }).waitFor();
+        await page.screenshot({ path: join(screenshotDirectory, 'palette.png'), fullPage: false });
+        await page.keyboard.press('Escape');
         await page.getByRole('button', { name: 'Allow once' }).click();
         await page.getByText(/Checkpoint/).waitFor();
         await page.getByText(/No unrelated files changed/i).waitFor();
         await page.getByRole('button', { name: 'Stop' }).waitFor({ state: 'detached' });
         await page.screenshot({ path: join(screenshotDirectory, 'session.png'), fullPage: false });
+        await page.getByRole('button', { name: 'Add tab' }).click();
+        await page
+          .getByRole('textbox', { name: 'Message Ferry' })
+          .fill('Continue after quota handoff');
+        await page.getByRole('button', { name: 'Send' }).click();
+        await page.getByText(/retry policy is now centralized/i).waitFor({ timeout: 15000 });
+        await page.getByRole('button', { name: 'Stop' }).waitFor({ state: 'detached' });
+        await page.screenshot({
+          path: join(screenshotDirectory, 'session-grouped.png'),
+          fullPage: false,
+        });
+        await page.getByRole('button', { name: 'Add tab' }).click();
+        await page
+          .getByRole('textbox', { name: 'Message Ferry' })
+          .fill('Delegate a refactor to Codex');
+        await page.getByRole('button', { name: 'Send' }).click();
+        await page.getByRole('button', { name: 'Allow once' }).last().click({ timeout: 15000 });
+        await page.getByText('completed', { exact: true }).waitFor({ timeout: 15000 });
+        await page.getByRole('button', { name: 'Review diff' }).waitFor({ timeout: 15000 });
+        await page.getByRole('button', { name: 'Review diff' }).click();
+        await page.getByRole('region', { name: 'Delegation review' }).waitFor();
+        await page.locator('.monaco-diff-editor').waitFor({ timeout: 15000 });
+        await page.screenshot({ path: join(screenshotDirectory, 'review.png'), fullPage: false });
       }
       await page.close();
     }

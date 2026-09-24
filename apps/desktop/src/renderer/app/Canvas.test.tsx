@@ -39,6 +39,7 @@ afterEach(() => {
     leftCollapsed: false,
     rightCollapsed: false,
     rightTab: 'chats',
+    density: 'comfortable',
   });
 });
 

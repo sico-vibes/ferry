@@ -12,6 +12,7 @@ import { UsageCanvas } from './app/explore/Usage';
 import { LibraryCanvas } from './app/LibraryCanvas';
 import { SettingsCanvas } from './app/SettingsCanvas';
 import { OnboardingCanvas } from './app/OnboardingCanvas';
+import { ReviewCanvas } from './app/ReviewCanvas';
 import { useSettings } from './data/queries';
 
 function HomeRoute() {
@@ -35,6 +36,11 @@ const sessionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/s/$sessionId',
   component: SessionCanvas,
+});
+const reviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/s/$sessionId/review/$runId',
+  component: ReviewCanvas,
 });
 const exploreRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -64,6 +70,7 @@ const onboardingRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   homeRoute,
   sessionRoute,
+  reviewRoute,
   exploreRoute,
   usageRoute,
   libraryRoute,

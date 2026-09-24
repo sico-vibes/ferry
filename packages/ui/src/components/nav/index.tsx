@@ -296,6 +296,7 @@ export interface TabItem {
   id: string;
   label: string;
   icon: LucideIcon;
+  status?: 'idle' | 'running' | 'awaiting_approval' | 'error';
 }
 export function TabsBar({
   tabs,
@@ -356,6 +357,21 @@ export function TabsBar({
               >
                 <Icon aria-hidden="true" size={14} strokeWidth={1.75} />
                 <span className="truncate">{tab.label}</span>
+                {tab.status && tab.status !== 'idle' && (
+                  <span
+                    aria-label={
+                      tab.status === 'awaiting_approval' ? 'Awaiting approval' : tab.status
+                    }
+                    className={cn(
+                      'size-2 shrink-0 rounded-full',
+                      tab.status === 'running' &&
+                        'animate-pulse bg-blue-500 motion-reduce:animate-none',
+                      tab.status === 'awaiting_approval' && 'bg-warn',
+                      tab.status === 'error' && 'bg-danger',
+                    )}
+                    role="img"
+                  />
+                )}
               </button>
               {onClose && (
                 <button

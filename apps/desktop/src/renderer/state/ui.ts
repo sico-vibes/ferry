@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { SessionId } from '@ferry/shared';
 
 export type RightTab = 'chats' | 'plan' | 'changes' | 'terminal';
+export type Density = 'comfortable' | 'compact';
 export interface OpenTab {
   id: SessionId;
   title: string;
@@ -12,6 +13,7 @@ interface UIState {
   leftCollapsed: boolean;
   rightCollapsed: boolean;
   rightTab: RightTab;
+  density: Density;
   openTab: (tab: OpenTab) => void;
   setActive: (id: SessionId) => void;
   renameTab: (id: SessionId, title: string) => void;
@@ -19,6 +21,7 @@ interface UIState {
   toggleLeft: () => void;
   toggleRight: () => void;
   setRightTab: (tab: RightTab) => void;
+  setDensity: (density: Density) => void;
 }
 interface PersistedUI {
   tabs: OpenTab[];
@@ -26,6 +29,7 @@ interface PersistedUI {
   leftCollapsed: boolean;
   rightCollapsed: boolean;
   rightTab: RightTab;
+  density: Density;
 }
 function readPersisted(): Partial<PersistedUI> {
   try {
@@ -46,6 +50,7 @@ function persist(state: UIState): void {
         leftCollapsed: state.leftCollapsed,
         rightCollapsed: state.rightCollapsed,
         rightTab: state.rightTab,
+        density: state.density,
       }),
     );
   } catch {
@@ -67,6 +72,7 @@ export const useUI = create<UIState>((set) => {
     leftCollapsed: saved.leftCollapsed ?? false,
     rightCollapsed: saved.rightCollapsed ?? false,
     rightTab: saved.rightTab ?? 'chats',
+    density: saved.density ?? 'comfortable',
     openTab: (tab) => {
       update((s) => ({
         tabs: s.tabs.some((item) => item.id === tab.id)
@@ -95,6 +101,9 @@ export const useUI = create<UIState>((set) => {
     },
     setRightTab: (rightTab) => {
       update(() => ({ rightTab }));
+    },
+    setDensity: (density) => {
+      update(() => ({ density }));
     },
   };
 });

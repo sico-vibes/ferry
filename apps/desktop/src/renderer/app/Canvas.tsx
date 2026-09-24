@@ -22,8 +22,12 @@ import {
   StreamingCursor,
   SuggestionChips,
   ToolCallBlock,
+  ToolStepGroup,
+  groupParts,
   UserMessage,
+  DropdownMenu,
 } from '@ferry/ui';
+import { GitBranch, MoreHorizontal } from 'lucide-react';
 import { useFerryClient } from '../data/client';
 import {
   keys,
@@ -36,6 +40,7 @@ import {
 } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
+import { ModelPickerPopover } from './SessionPowerControls';
 
 const starters: Record<string, string> = {
   'Explain this repo': 'Explain how this repository is structured and where the main flows live.',
@@ -203,7 +208,7 @@ function PartView({
   sessionId: SessionId;
   onFull: (text: string) => void;
   onDiff: () => void;
-  onReview: () => void;
+  onReview: (id: RunId) => void;
   onCancel: (id: RunId) => void;
 }) {
   const client = useFerryClient();
@@ -271,7 +276,9 @@ function PartView({
         <DelegationRunView
           sessionId={sessionId}
           runId={part.runId}
-          onReview={onReview}
+          onReview={() => {
+            onReview(part.runId);
+          }}
           onCancel={onCancel}
         />
       );
@@ -297,7 +304,7 @@ function DelegationRunView({
 }: {
   sessionId: SessionId;
   runId: string;
-  onReview: () => void;
+  onReview: (id: RunId) => void;
   onCancel: (id: RunId) => void;
 }) {
   const client = useFerryClient();
@@ -319,7 +326,9 @@ function DelegationRunView({
           ? `${String(run.usage.inputTokens + run.usage.outputTokens)} tokens`
           : 'Usage updating'
       }
-      onReviewDiff={onReview}
+      onReviewDiff={() => {
+        onReview(run.id);
+      }}
       onCancel={() => {
         onCancel(run.id);
       }}
@@ -332,9 +341,12 @@ export function SessionCanvas() {
   const sessionId = rawId as SessionId;
   const client = useFerryClient();
   const cache = useQueryClient();
+  const navigate = useNavigate();
   const pushToast = useToasts((state) => state.push);
   const setRightTab = useUI((state) => state.setRightTab);
+  const density = useUI((state) => state.density);
   const { data } = useSessionDetail(sessionId);
+  const { data: workspaces = [] } = useWorkspaces();
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
     queryFn: () => client.models.list(),
@@ -384,6 +396,7 @@ export function SessionCanvas() {
   const running =
     data?.session.status === 'running' || data?.session.status === 'awaiting_approval';
   const currentModel = shortModel(data?.session.modelRef, models);
+  const workspace = workspaces.find((item) => item.id === data?.session.workspaceId);
   const send = async () => {
     const text = prompt.trim();
     if (!text || !data) return;
@@ -409,18 +422,59 @@ export function SessionCanvas() {
       dots={false}
       header={
         <>
-          <ModelPickerTrigger mode="manual" modelName={currentModel} />
-          <CanvasHeaderActions
-            onLink={() => {
-              void navigator.clipboard.writeText(window.location.href);
-            }}
-            onShare={() => {
-              pushToast({ kind: 'info', title: 'Share', body: 'There is nothing to share yet.' });
-            }}
-          />
+          <div className="flex min-w-0 items-center gap-2">
+            <ModelPickerPopover
+              sessionId={sessionId}
+              mode={data?.session.modelRef ? 'manual' : 'auto'}
+              modelName={currentModel}
+            />
+            {workspace && (
+              <button
+                aria-label={`Open ${workspace.name} in Library`}
+                className="repo-context-pill"
+                onClick={() => {
+                  localStorage.setItem('ferry.libraryWorkspace', workspace.id);
+                  void navigate({ to: '/library' });
+                }}
+                type="button"
+              >
+                <GitBranch size={13} />
+                {workspace.name} · {workspace.gitBranch ?? 'no branch'}
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <DropdownMenu
+              trigger={
+                <button
+                  aria-label="Session options"
+                  className="inline-flex size-8 items-center justify-center rounded-full text-text-2 hover:bg-white/[0.05]"
+                  type="button"
+                >
+                  <MoreHorizontal size={17} />
+                </button>
+              }
+              items={[
+                {
+                  label: density === 'compact' ? 'Comfortable density' : 'Compact density',
+                  onSelect: () => {
+                    useUI.getState().setDensity(density === 'compact' ? 'comfortable' : 'compact');
+                  },
+                },
+              ]}
+            />
+            <CanvasHeaderActions
+              onLink={() => {
+                void navigator.clipboard.writeText(window.location.href);
+              }}
+              onShare={() => {
+                pushToast({ kind: 'info', title: 'Share', body: 'There is nothing to share yet.' });
+              }}
+            />
+          </div>
         </>
       }
-      className="session-canvas"
+      className={`session-canvas ${density === 'compact' ? 'density-compact' : ''}`}
     >
       <div
         className="transcript-viewport"
@@ -461,8 +515,17 @@ export function SessionCanvas() {
                   </UserMessage>
                 ) : (
                   <AssistantMessage modelName={shortModel(message.modelRef, models)}>
-                    {message.parts.map((part) =>
-                      part.type === 'reasoning' ? (
+                    {groupParts(message.parts).map((part) =>
+                      part.type === 'tool_group' ? (
+                        <ToolStepGroup
+                          key={part.parts[0]?.id ?? 'tool-group'}
+                          parts={part.parts}
+                          onShowFull={setFullOutput}
+                          onOpenDiff={() => {
+                            setRightTab('changes');
+                          }}
+                        />
+                      ) : part.type === 'reasoning' ? (
                         <ReasoningPart key={part.id} text={part.text} steps={planSteps} />
                       ) : (
                         <PartView
@@ -473,8 +536,11 @@ export function SessionCanvas() {
                           onDiff={() => {
                             setRightTab('changes');
                           }}
-                          onReview={() => {
-                            setRightTab('changes');
+                          onReview={(runId) => {
+                            void navigate({
+                              to: '/s/$sessionId/review/$runId',
+                              params: { sessionId, runId },
+                            });
                           }}
                           onCancel={(id) => void client.delegation.cancel(id)}
                         />

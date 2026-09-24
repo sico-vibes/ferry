@@ -218,6 +218,7 @@ function ChangesPanel({ detail }: { detail: ReturnType<typeof useSessionDetail>[
     after: string | null;
   } | null>(null);
   const client = useFerryClient();
+  const navigate = useNavigate();
   const { data: runs = [] } = useQuery({
     queryKey: ['delegation', detail?.session.id],
     queryFn: () => (detail ? client.delegation.runs(detail.session.id) : Promise.resolve([])),
@@ -240,11 +241,26 @@ function ChangesPanel({ detail }: { detail: ReturnType<typeof useSessionDetail>[
   const unique = [
     ...new Map([...changes, ...delegated].map((change) => [change.path, change])).values(),
   ];
+  const reviewRun = runs.find((run) => run.touchedFiles.length > 0);
   return (
     <section className="task-panel">
       <h2>
         <FileCode2 size={14} /> Changes <span>{unique.length}</span>
       </h2>
+      {reviewRun && detail && (
+        <button
+          className="change-row"
+          onClick={() =>
+            void navigate({
+              to: '/s/$sessionId/review/$runId',
+              params: { sessionId: detail.session.id, runId: reviewRun.id },
+            })
+          }
+          type="button"
+        >
+          Open review <span>{reviewRun.lane}</span>
+        </button>
+      )}
       {unique.length ? (
         unique.map((change) => (
           <button

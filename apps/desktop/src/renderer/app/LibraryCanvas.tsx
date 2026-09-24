@@ -41,7 +41,9 @@ export function LibraryCanvas() {
     queryKey: ['lanes'],
     queryFn: () => client.delegation.lanes(),
   });
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() =>
+    localStorage.getItem('ferry.libraryWorkspace'),
+  );
   const selected = workspaces.find((workspace) => workspace.id === selectedId) ?? workspaces[0];
   const [settings, setSettings] = useState<WorkspaceSettings | null>(null);
   const [gate, setGate] = useState('');
@@ -65,6 +67,7 @@ export function LibraryCanvas() {
     if (!path) return;
     const workspace = await client.workspaces.open(path);
     setSelectedId(workspace.id);
+    localStorage.setItem('ferry.libraryWorkspace', workspace.id);
     setSettings(workspace.settings);
     await cache.invalidateQueries({ queryKey: keys.workspaces });
   };
@@ -108,11 +111,13 @@ export function LibraryCanvas() {
               tabIndex={0}
               onClick={() => {
                 setSelectedId(workspace.id);
+                localStorage.setItem('ferry.libraryWorkspace', workspace.id);
                 setSettings(workspace.settings);
               }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
                   setSelectedId(workspace.id);
+                  localStorage.setItem('ferry.libraryWorkspace', workspace.id);
                   setSettings(workspace.settings);
                 }
               }}

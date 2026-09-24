@@ -34,6 +34,30 @@ try {
     await page.getByRole('button', { name: 'Allow once' }).click({ timeout: 10_000 });
     await expect(page.getByText(/Checkpoint/)).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/full suite passed/i).last()).toBeVisible({ timeout: 10_000 });
+    await page.getByRole('button', { name: 'Add tab' }).click();
+    await page.getByRole('textbox', { name: 'Message Ferry' }).fill('Fix the flaky tests');
+    await page.getByRole('button', { name: 'Send' }).click();
+    await expect(page.getByRole('button', { name: /Approvals, 1 pending/ })).toBeVisible({
+      timeout: 10_000,
+    });
+    await page.getByRole('button', { name: 'Add tab' }).click();
+    await page.getByRole('button', { name: /Approvals, 1 pending/ }).click();
+    await page
+      .getByRole('dialog', { name: 'Pending approvals' })
+      .getByRole('button', { name: 'Allow once' })
+      .click();
+    await expect(page.getByRole('button', { name: /Approvals/ })).toBeVisible();
+    await page
+      .getByRole('textbox', { name: 'Message Ferry' })
+      .fill('Delegate this adapter refactor to Codex');
+    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: 'Allow once' }).last().click({ timeout: 10_000 });
+    await expect(page.getByText('completed', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Review diff' }).waitFor({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Review diff' }).click();
+    await expect(page.getByRole('region', { name: 'Delegation review' })).toBeVisible();
+    await page.getByRole('button', { name: 'Accept' }).click();
+    await expect(page.getByRole('button', { name: 'Review diff' })).toBeVisible();
     const title = await page.locator('[role="tablist"] [role="tab"]').first().innerText();
     await page
       .getByRole('button', { name: `Save ${title}` })
@@ -45,7 +69,7 @@ try {
       .click();
     await expect(page.getByText('Saved topics')).toBeVisible();
     await expect(page.getByRole('button', { name: `Unsave ${title}` }).first()).toBeVisible();
-    await page.getByRole('button', { name: 'Explore' }).click();
+    await page.getByRole('button', { name: 'Explore', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible();
     await page
       .getByRole('region', { name: 'Provider filter' })
@@ -62,7 +86,7 @@ try {
     await page.getByRole('button', { name: 'Close dialog' }).click();
     await mistral.getByRole('button', { name: 'Test Mistral (Experiment)' }).click();
     await expect(mistral.getByText('Key: valid')).toBeVisible({ timeout: 10_000 });
-    await page.getByRole('button', { name: 'Usage' }).click();
+    await page.goto(`${url}/explore/usage`);
     await expect(page.getByRole('heading', { name: 'Usage', exact: true })).toBeVisible();
     const nvidiaUsage = page
       .getByRole('region', { name: 'Capacity remaining' })
