@@ -11,6 +11,7 @@ import { useUI } from '../state/ui';
 import { Sidebar } from './Sidebar';
 import { RightPanel } from './right-panel/RightPanel';
 import { appMounts } from './mounts';
+import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
 
 export function AppFrame({ children }: { children: React.ReactNode }) {
   const client = useFerryClient();
@@ -49,6 +50,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const toastItems = useToasts((state) => state.items);
   const dismissToast = useToasts((state) => state.dismiss);
   const [closePrompt, setClosePrompt] = useState<string | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [simulatedOffline, setSimulatedOffline] = useState(
     () => localStorage.getItem('ferry.simulateOffline') === 'true',
   );
@@ -115,7 +117,10 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     const handler = (event: KeyboardEvent) => {
       if (!event.ctrlKey) return;
       const key = event.key.toLowerCase();
-      if (key === 'n') {
+      if (key === '/') {
+        event.preventDefault();
+        setShortcutsOpen(true);
+      } else if (key === 'n') {
         event.preventDefault();
         void createChat();
       } else if (key === 'b' && event.shiftKey) {
@@ -163,6 +168,16 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     tabs,
     sessions,
   ]);
+
+  useEffect(() => {
+    const openShortcuts = () => {
+      setShortcutsOpen(true);
+    };
+    window.addEventListener('ferry:show-shortcuts', openShortcuts);
+    return () => {
+      window.removeEventListener('ferry:show-shortcuts', openShortcuts);
+    };
+  }, []);
 
   useEffect(() => {
     const syncOffline = () => {
@@ -336,6 +351,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           </Pill>
         </div>
       </Dialog>
+      <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </div>
   );
 }

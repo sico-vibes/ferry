@@ -200,7 +200,7 @@ export function Sidebar({
                 label="Help & Support"
                 showMenu={false}
                 onClick={() => {
-                  useUI.getState().setRightTab('plan');
+                  window.dispatchEvent(new Event('ferry:show-shortcuts'));
                 }}
               />
             </div>

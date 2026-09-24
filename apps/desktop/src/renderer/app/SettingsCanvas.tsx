@@ -47,6 +47,9 @@ export function SettingsCanvas() {
   const toast = useToasts((state) => state.push);
   const section = useUI((state) => state.settingsSection);
   const [confirm, setConfirm] = useState('');
+  const [keyProvider, setKeyProvider] = useState<(typeof providers)[number] | null>(null);
+  const [providerKey, setProviderKey] = useState('');
+  const [providerResult, setProviderResult] = useState('');
   const [addMcp, setAddMcp] = useState(false);
   const [mcpName, setMcpName] = useState('');
   const [mcpAddress, setMcpAddress] = useState('');
@@ -80,6 +83,31 @@ export function SettingsCanvas() {
     queryFn: () => client.system.info(),
   });
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
+  const manageKey = async () => {
+    if (!keyProvider || !providerKey.trim()) return;
+    await client.providers.setKey(keyProvider.id, providerKey.trim());
+    await cache.invalidateQueries({ queryKey: ['providers'] });
+    setProviderKey('');
+    toast({ kind: 'success', title: 'Key saved', body: `${keyProvider.name} is ready to test.` });
+  };
+  const testProvider = async (provider: (typeof providers)[number]) => {
+    setProviderResult('Testing connection…');
+    try {
+      const result = await client.providers.probe(provider.id);
+      setProviderResult(
+        result.ok
+          ? `Connected in ${String(result.latencyMs ?? '—')} ms. Next: choose this provider in a profile.`
+          : `Test failed: ${result.message}`,
+      );
+      await cache.invalidateQueries({ queryKey: ['providers'] });
+    } catch (error) {
+      setProviderResult(
+        error instanceof Error
+          ? `Test failed: ${error.message}`
+          : 'Test failed. Check the key and try again.',
+      );
+    }
+  };
   const update = async (patch: Parameters<typeof client.settings.update>[0]) => {
     await client.settings.update(patch);
     await cache.invalidateQueries({ queryKey: keys.settings });
@@ -455,10 +483,23 @@ export function SettingsCanvas() {
               <span className={`status-pill ${provider.keyStatus === 'valid' ? 'ok' : 'pending'}`}>
                 {provider.keyStatus.replace('_', ' ')}
               </span>
+              <Pill
+                size="sm"
+                onClick={() => {
+                  setKeyProvider(provider);
+                  setProviderKey('');
+                  setProviderResult('');
+                }}
+              >
+                Manage key
+              </Pill>
+              <Pill size="sm" variant="outline" onClick={() => void testProvider(provider)}>
+                Test
+              </Pill>
             </SettingRow>
           ))}
-          <Pill size="sm" onClick={() => void navigate({ to: '/explore' })}>
-            Manage in Explore
+          <Pill size="sm" variant="outline" onClick={() => void navigate({ to: '/explore' })}>
+            Open in Explore
           </Pill>
         </Group>
       );
@@ -773,6 +814,41 @@ export function SettingsCanvas() {
         )}
       </header>
       <main className="settings-content settings-content-framed">{body()}</main>
+      <Dialog
+        open={Boolean(keyProvider)}
+        onOpenChange={(open) => {
+          if (!open) setKeyProvider(null);
+        }}
+        title={`Manage ${keyProvider?.name ?? 'provider'} key`}
+        description="Keys are stored in this local demo client."
+      >
+        <div className="grid gap-3">
+          <TextField
+            label="API key"
+            masked
+            value={providerKey}
+            onChange={setProviderKey}
+            placeholder="Paste provider key"
+          />
+          {providerResult && (
+            <p role="status" className="muted">
+              {providerResult}
+            </p>
+          )}
+          <div className="button-row dialog-actions">
+            <Pill
+              onClick={() => {
+                if (keyProvider) void testProvider(keyProvider);
+              }}
+            >
+              Test connection
+            </Pill>
+            <Pill variant="blue-tint" onClick={() => void manageKey()}>
+              Save key
+            </Pill>
+          </div>
+        </div>
+      </Dialog>
       <Dialog
         open={Boolean(confirm)}
         onOpenChange={(open) => {

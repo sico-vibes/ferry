@@ -159,6 +159,7 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
         <Search size={16} />
         <input
           aria-label="Search chats"
+          title="Search chats · Ctrl+F"
           onChange={(event) => {
             setSearch(event.target.value);
           }}

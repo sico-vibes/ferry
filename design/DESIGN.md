@@ -279,3 +279,6 @@ Body/meta text on any surface must reach 4.5:1 (AA). `--text-3` may be lifted sl
 
 ### 7.8 CLI translation
 The CLI reuses the palette via truecolor: blue accent, §7.2 status colors, muted gray for secondary; the signature gradient appears only in the startup banner; the capacity ring becomes `≈ 420 steps ▰▰▰▰▰▰▱▱▱ 64%`.
+
+### 7.9 Confirm vs undo
+Ask for confirmation before deleting local data or a profile, removing a workspace or session, or resetting the layout. These actions affect user-managed state and cannot be reliably reversed by the mock client. For reversible dismissals and lightweight preference changes, apply the change immediately and offer an Undo toast for 5 seconds. Keep success feedback quiet; errors state what failed and the next useful action.
