@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -490,6 +490,11 @@ export function SessionCanvas() {
   }, [fullOutput]);
   const [streaming, setStreaming] = useState<Record<string, string>>({});
   const viewport = useRef<HTMLDivElement>(null);
+  const pinnedToBottom = useRef(true);
+  const initialSession = useRef<SessionId | null>(null);
+  const streamAnchor = useRef<{ index: number; offset: number } | null>(null);
+  const [initialTailReady, setInitialTailReady] = useState(false);
+  const [newOutputCount, setNewOutputCount] = useState(0);
   const [atBottom, setAtBottom] = useState(true);
   const messages = data?.messages ?? [];
   const virtualizer = useVirtualizer({
@@ -502,6 +507,22 @@ export function SessionCanvas() {
   useEffect(() => {
     const off = client.on('session.delta', (event) => {
       if (event.sessionId !== sessionId) return;
+      if (!pinnedToBottom.current) {
+        const element = viewport.current;
+        const firstVisible = element
+          ? [...element.querySelectorAll<HTMLElement>('.transcript-message')].find(
+              (message) =>
+                message.getBoundingClientRect().bottom > element.getBoundingClientRect().top,
+            )
+          : null;
+        if (element && firstVisible) {
+          streamAnchor.current = {
+            index: Number(firstVisible.dataset.index),
+            offset: firstVisible.getBoundingClientRect().top - element.getBoundingClientRect().top,
+          };
+        }
+        setNewOutputCount((count) => count + 1);
+      }
       setStreaming((current) => ({
         ...current,
         [event.partId]: `${current[event.partId] ?? ''}${event.textDelta}`,
@@ -534,6 +555,7 @@ export function SessionCanvas() {
     };
     frameId = requestAnimationFrame(sampleFrame);
     const stream = window.setInterval(() => {
+      if (!pinnedToBottom.current) setNewOutputCount((count) => count + 1);
       setStreaming((current) => ({
         ...current,
         'perf-demo-stream': `${current['perf-demo-stream'] ?? ''} token `,
@@ -550,9 +572,82 @@ export function SessionCanvas() {
       cancelAnimationFrame(frameId);
     };
   }, []);
-  useEffect(() => {
-    if (atBottom) virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
-  }, [atBottom, messages.length, streaming, virtualizer]);
+  useLayoutEffect(() => {
+    if (!data) return;
+    if (initialSession.current !== sessionId) {
+      initialSession.current = sessionId;
+      pinnedToBottom.current = true;
+      setAtBottom(true);
+      setInitialTailReady(false);
+    }
+    if (initialTailReady && messages.length > 0) return;
+    if (messages.length === 0) {
+      setInitialTailReady(true);
+      return;
+    }
+    const lastIndex = messages.length - 1;
+    let attempts = 0;
+    const scrollTail = () => {
+      attempts += 1;
+      virtualizer.measure();
+      virtualizer.scrollToIndex(lastIndex, { align: 'end' });
+      requestAnimationFrame(() => {
+        const last = viewport.current?.querySelector<HTMLElement>(
+          `.transcript-message[data-index="${String(lastIndex)}"]`,
+        );
+        if (last) virtualizer.measureElement(last);
+        virtualizer.scrollToIndex(lastIndex, { align: 'end' });
+        requestAnimationFrame(() => {
+          const element = viewport.current;
+          const tail = element?.querySelector<HTMLElement>(
+            `.transcript-message[data-index="${String(lastIndex)}"]`,
+          );
+          if (!element || !tail) {
+            if (attempts < 8) requestAnimationFrame(scrollTail);
+            return;
+          }
+          element.scrollTop = element.scrollHeight;
+          requestAnimationFrame(() => {
+            const bottomGap =
+              element.getBoundingClientRect().bottom - tail.getBoundingClientRect().bottom;
+            if (bottomGap > 48 && attempts < 8) {
+              requestAnimationFrame(scrollTail);
+              return;
+            }
+            pinnedToBottom.current = bottomGap <= 48;
+            setAtBottom(bottomGap <= 48);
+            setInitialTailReady(true);
+          });
+        });
+      });
+    };
+    scrollTail();
+  }, [data, initialTailReady, messages.length, sessionId, virtualizer]);
+  useLayoutEffect(() => {
+    if (!initialTailReady) return;
+    const anchor = streamAnchor.current;
+    if (!anchor || pinnedToBottom.current) return;
+    const element = viewport.current;
+    if (!element) return;
+    const frame = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const message = element.querySelector<HTMLElement>(
+          `.transcript-message[data-index="${String(anchor.index)}"]`,
+        );
+        if (!message || pinnedToBottom.current) return;
+        const offset = message.getBoundingClientRect().top - element.getBoundingClientRect().top;
+        element.scrollTop += offset - anchor.offset;
+        streamAnchor.current = null;
+      });
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [initialTailReady, streaming]);
+  useLayoutEffect(() => {
+    if (!initialTailReady || !pinnedToBottom.current || messages.length === 0) return;
+    virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
+  }, [initialTailReady, messages.length, streaming, virtualizer]);
   useEffect(() => {
     if (data?.session.title) useUI.getState().renameTab(sessionId, data.session.title);
   }, [data?.session.title, sessionId]);
@@ -560,6 +655,54 @@ export function SessionCanvas() {
     data?.session.status === 'running' || data?.session.status === 'awaiting_approval';
   const currentModel = shortModel(data?.session.modelRef, models);
   const workspace = workspaces.find((item) => item.id === data?.session.workspaceId);
+  const activateProfile = async (profileId: (typeof profiles)[number]['id']) => {
+    await client.profiles.activate(profileId, sessionId);
+    await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+    await cache.invalidateQueries({ queryKey: keys.profiles });
+  };
+  const jumpToLatest = () => {
+    const tailIndex = messages.length - 1;
+    if (tailIndex < 0) return;
+    pinnedToBottom.current = true;
+    virtualizer.scrollToIndex(tailIndex, { align: 'end' });
+    requestAnimationFrame(() => {
+      const tail = viewport.current?.querySelector<HTMLElement>(
+        `.transcript-message[data-index="${String(tailIndex)}"]`,
+      );
+      if (tail) virtualizer.measureElement(tail);
+      virtualizer.scrollToIndex(tailIndex, { align: 'end' });
+      requestAnimationFrame(() => {
+        const element = viewport.current;
+        const last = element?.querySelector<HTMLElement>(
+          `.transcript-message[data-index="${String(tailIndex)}"]`,
+        );
+        if (!element || !last) {
+          pinnedToBottom.current = false;
+          return;
+        }
+        const bottomGap =
+          element.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom;
+        if (bottomGap > 48) {
+          element.scrollTop += bottomGap;
+          requestAnimationFrame(() => {
+            virtualizer.measureElement(last);
+            virtualizer.scrollToIndex(tailIndex, { align: 'end' });
+            requestAnimationFrame(() => {
+              const finalGap =
+                element.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom;
+              if (finalGap <= 48) {
+                setNewOutputCount(0);
+                setAtBottom(true);
+              } else pinnedToBottom.current = false;
+            });
+          });
+          return;
+        }
+        setNewOutputCount(0);
+        setAtBottom(true);
+      });
+    });
+  };
   const send = async () => {
     const text = prompt.trim();
     if (!text || !data) return;
@@ -606,7 +749,7 @@ export function SessionCanvas() {
       dots={false}
       header={
         <>
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="session-toolbar-primary flex min-w-0 items-center gap-2">
             <ModelPickerPopover
               sessionId={sessionId}
               mode={data?.session.modelRef ? 'manual' : 'auto'}
@@ -627,7 +770,7 @@ export function SessionCanvas() {
               </button>
             )}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="session-toolbar-actions flex items-center gap-1">
             <DropdownMenu
               trigger={
                 <button
@@ -639,6 +782,23 @@ export function SessionCanvas() {
                 </button>
               }
               items={[
+                {
+                  label: 'Copy link',
+                  onSelect: () => {
+                    void navigator.clipboard.writeText(window.location.href);
+                  },
+                },
+                {
+                  label: 'Share',
+                  onSelect: () => {
+                    pushToast({
+                      kind: 'info',
+                      title: 'Share',
+                      body: 'There is nothing to share yet.',
+                    });
+                  },
+                },
+                { separator: true },
                 {
                   label: density === 'compact' ? 'Comfortable density' : 'Compact density',
                   onSelect: () => {
@@ -663,9 +823,12 @@ export function SessionCanvas() {
       <div
         className="transcript-viewport"
         ref={viewport}
+        style={{ visibility: initialTailReady ? 'visible' : 'hidden' }}
         onScroll={(event) => {
           const element = event.currentTarget;
-          const bottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+          const bottom = element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
+          pinnedToBottom.current = bottom;
+          if (bottom) setNewOutputCount(0);
           setAtBottom(bottom);
         }}
       >
@@ -745,38 +908,48 @@ export function SessionCanvas() {
           })}
         </div>
       </div>
-      {!atBottom && (
+      {!atBottom && initialTailReady && (
         <button
+          aria-label={`Jump to latest${newOutputCount > 0 ? `, ${String(newOutputCount)} new` : ''}`}
           className="jump-latest"
-          onClick={() => {
-            setAtBottom(true);
-            virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
-          }}
+          onClick={jumpToLatest}
         >
-          Jump to latest
+          Jump to latest{newOutputCount > 0 ? ` · ${String(newOutputCount)} new` : ''}
         </button>
       )}
-      <Composer
-        value={prompt}
-        onChange={setPrompt}
-        onSend={() => void send()}
-        onStop={() => void client.sessions.cancel(sessionId)}
-        running={running}
-        profileName={
-          profiles.find((profile) => profile.id === data?.session.profileId)?.name ??
-          'Best Available'
-        }
-        onProfileClick={() => {
-          pushToast({
-            kind: 'info',
-            title: 'Session profile',
-            body: 'Change this session profile from its tab menu.',
-          });
-        }}
-        onAttach={() => {
-          pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
-        }}
-      />
+      {initialTailReady && (
+        <Composer
+          value={prompt}
+          onChange={setPrompt}
+          onSend={() => void send()}
+          onStop={() => void client.sessions.cancel(sessionId)}
+          running={running}
+          profileName={
+            profiles.find((profile) => profile.id === data?.session.profileId)?.name ??
+            'Best Available'
+          }
+          onProfileClick={() => undefined}
+          profileMenuItems={[
+            ...profiles
+              .filter((profile) => profile.pinned)
+              .map((profile) => ({
+                label: profile.name,
+                onSelect: () => void activateProfile(profile.id),
+              })),
+            { separator: true },
+            {
+              label: 'Manage profiles…',
+              onSelect: () => {
+                useUI.getState().setSettingsSection('Profiles');
+                void navigate({ to: '/settings' });
+              },
+            },
+          ]}
+          onAttach={() => {
+            pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
+          }}
+        />
+      )}
       {fullOutput !== null && (
         <div
           role="presentation"

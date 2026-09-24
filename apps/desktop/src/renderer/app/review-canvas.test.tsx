@@ -58,6 +58,20 @@ describe('ReviewCanvas', () => {
     expect(screen.getByText(/pnpm check/)).toBeTruthy();
   });
 
+  it('shows running progress and keeps review decisions disabled until results are ready', async () => {
+    mount([
+      run({
+        status: 'running',
+        gateResults: [],
+        progress: [{ at: '2026-09-23T10:00:30.000Z', text: 'Applying requested changes' }],
+      }),
+    ]);
+    expect(await screen.findByText('Applying requested changes')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Accept' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Reject' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Rework' }).hasAttribute('disabled')).toBe(true);
+  });
+
   // BUG (P3): a delegation run id that does not exist (stale link, refreshed URL, deleted run)
   // leaves the review canvas stuck on "Loading review…" forever, because the component cannot
   // distinguish "still loading" from "no such run".

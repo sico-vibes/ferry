@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import {
@@ -35,6 +35,8 @@ export function editedAt(iso: string, now = Date.now()): string {
 export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
   const [search, setSearch] = useState('');
   const input = useRef<HTMLInputElement>(null);
+  const scroll = useRef<HTMLDivElement>(null);
+  const scrollPositions = useRef(new Map<string, number>());
   const client = useFerryClient();
   const cache = useQueryClient();
   const navigate = useNavigate();
@@ -46,7 +48,13 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
   const setRightWidth = useUI((state) => state.setRightWidth);
   const setRightTab = useUI((state) => state.setRightTab);
   const activeId = useUI((state) => state.activeId);
+  const scrollKey = `${activeId ?? 'none'}:${rightTab}`;
   const { data: activeSession } = useSessionDetail(activeId ?? ('' as never));
+  useLayoutEffect(() => {
+    const element = scroll.current;
+    if (!element) return;
+    element.scrollTop = scrollPositions.current.get(scrollKey) ?? 0;
+  }, [scrollKey]);
   const setStar = useMutation({
     mutationFn: ({ id, starred }: { id: (typeof sessions)[number]['id']; starred: boolean }) =>
       client.sessions.setStarred(id, starred),
@@ -175,6 +183,12 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
             className={rightTab === tab ? 'right-tab active' : 'right-tab'}
             key={tab}
             onClick={() => {
+              if (scroll.current) {
+                scrollPositions.current.set(
+                  `${activeId ?? 'none'}:${rightTab}`,
+                  scroll.current.scrollTop,
+                );
+              }
               setRightTab(tab);
             }}
             type="button"
@@ -183,7 +197,13 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
           </button>
         ))}
       </nav>
-      <div className="right-panel-scroll">
+      <div
+        className="right-panel-scroll"
+        ref={scroll}
+        onScroll={(event) => {
+          scrollPositions.current.set(scrollKey, event.currentTarget.scrollTop);
+        }}
+      >
         {rightTab === 'chats' &&
           (sessionsLoading ? (
             <Skeleton rows={6} />

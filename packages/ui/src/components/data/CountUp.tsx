@@ -1,5 +1,5 @@
 // Adapted from React Bits (reactbits.dev) — MIT + Commons Clause
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useReducedMotion } from 'motion/react';
 
 export function CountUp({
@@ -12,8 +12,12 @@ export function CountUp({
   className?: string;
 }) {
   const reduced = useReducedMotion();
-  const [value, setValue] = useState(reduced ? to : 0);
+  const [value, setValue] = useState(to);
+  const previous = useRef(to);
   useEffect(() => {
+    const from = previous.current;
+    previous.current = to;
+    if (from === to) return;
     if (reduced) {
       setValue(to);
       return;
@@ -22,7 +26,7 @@ export function CountUp({
     const started = performance.now();
     const tick = (now: number) => {
       const progress = Math.min(1, (now - started) / duration);
-      setValue(Math.round(to * progress));
+      setValue(Math.round(from + (to - from) * progress));
       if (progress < 1) frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);

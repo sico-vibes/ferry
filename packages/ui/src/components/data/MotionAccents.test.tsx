@@ -17,4 +17,9 @@ describe('motion data accents', () => {
     expect(screen.getByText('Fix flaky tests')).toBeTruthy();
     expect(container.querySelector('span')).toBeTruthy();
   });
+
+  it('shows the current value immediately on mount', () => {
+    render(<CountUp to={420} />);
+    expect(screen.getByText('420')).toBeTruthy();
+  });
 });

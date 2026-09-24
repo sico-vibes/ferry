@@ -26,23 +26,6 @@ export default defineConfig({
           if (id.includes('/packages/client/src/')) return 'vendor-client';
           if (id.includes('/packages/shared/src/')) return 'vendor-shared';
           if (!id.includes('node_modules')) return;
-          if (id.includes('/monaco-editor/esm/vs/')) {
-            const contributor = /\/editor\/contrib\/([^/]+)\//.exec(id)?.[1];
-            if (contributor) return `monaco-contrib-${contributor}`;
-            const editorPart = /\/editor\/(browser|common)\/([^/]+)\//.exec(id);
-            if (editorPart?.[1] && editorPart[2]) {
-              return `monaco-editor-${editorPart[1]}-${editorPart[2]}`;
-            }
-            if (id.includes('/editor/standalone/')) return 'monaco-standalone';
-            if (id.includes('/editor/')) return 'monaco-editor-core';
-            if (id.includes('/base/browser/')) return 'monaco-base-browser';
-            if (id.includes('/base/common/')) return 'monaco-base-common';
-            if (id.includes('/base/')) return 'monaco-base-core';
-            if (id.includes('/platform/browser/')) return 'monaco-platform-browser';
-            if (id.includes('/platform/common/')) return 'monaco-platform-common';
-            if (id.includes('/platform/')) return 'monaco-platform-core';
-            return;
-          }
           if (id.includes('/zod/')) return 'vendor-zod';
           if (id.includes('/recharts/')) return 'vendor-recharts';
           if (id.includes('/d3-')) return 'vendor-d3';

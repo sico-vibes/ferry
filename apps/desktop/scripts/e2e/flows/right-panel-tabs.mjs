@@ -12,6 +12,11 @@ export async function run(page, ctx) {
     .waitFor({ timeout: 20_000 });
 
   const tabs = page.getByRole('navigation', { name: 'Right panel tabs' });
+  const panelScroll = page.locator('.right-panel-scroll');
+  const chatsScrollTop = await panelScroll.evaluate((element) => {
+    element.scrollTop = Math.min(160, element.scrollHeight - element.clientHeight);
+    return element.scrollTop;
+  });
   await tabs.getByRole('button', { name: 'Plan' }).click();
   await ctx.expect(page.getByRole('heading', { name: 'Plan' })).toBeVisible();
   await ctx.expect(page.getByText('Fix the flaky payment retry tests')).toBeVisible();
@@ -25,6 +30,13 @@ export async function run(page, ctx) {
 
   await tabs.getByRole('button', { name: 'Chats' }).click();
   await ctx.expect(page.getByText('Saved topics')).toBeVisible();
+  await ctx.expect
+    .poll(() => panelScroll.evaluate((element) => element.scrollTop))
+    .toBe(chatsScrollTop);
+  const restoredScrollTop = await panelScroll.evaluate((element) => element.scrollTop);
+  console.log(
+    `right-panel M-04 scrollTop: ${JSON.stringify({ before: chatsScrollTop, after: restoredScrollTop, delta: restoredScrollTop - chatsScrollTop })}`,
+  );
 
   // Double-clicking the resize handle restores the default right-panel width.
   const handle = page.getByRole('separator', { name: 'Resize right panel' });

@@ -29,9 +29,18 @@ export function ReviewCanvas() {
   const { data: runs, isLoading } = useQuery({
     queryKey: ['delegation', sessionId],
     queryFn: () => client.delegation.runs(sessionId),
+    refetchInterval: (query) =>
+      query.state.data?.some(
+        (item) => item.id === runId && (item.status === 'running' || item.status === 'queued'),
+      )
+        ? 1000
+        : false,
   });
   const run = runs?.find((item) => item.id === runId);
   const change = run?.touchedFiles[selected];
+  const canDecide = Boolean(
+    run && run.status !== 'running' && run.touchedFiles.length > 0 && run.gateResults.length > 0,
+  );
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -60,6 +69,7 @@ export function ReviewCanvas() {
       </section>
     );
   const decide = async (decision: 'accepted' | 'rejected' | 'rework') => {
+    if (!canDecide) return;
     await decideReview(client, run.id, decision, decision === 'rework' ? brief : undefined);
     await cache.invalidateQueries({ queryKey: ['delegation', sessionId] });
     await navigate({ to: '/s/$sessionId', params: { sessionId } });
@@ -105,6 +115,7 @@ export function ReviewCanvas() {
           <Pill
             size="sm"
             variant="warm-outline"
+            disabled={!canDecide}
             onClick={() => {
               void decide('rejected');
             }}
@@ -114,6 +125,7 @@ export function ReviewCanvas() {
           </Pill>
           <Pill
             size="sm"
+            disabled={!canDecide}
             onClick={() => {
               setRework(true);
             }}
@@ -123,6 +135,7 @@ export function ReviewCanvas() {
           <Pill
             size="sm"
             variant="blue-tint"
+            disabled={!canDecide}
             onClick={() => {
               void decide('accepted');
             }}
@@ -132,6 +145,13 @@ export function ReviewCanvas() {
           </Pill>
         </div>
       </header>
+      {!canDecide && (
+        <p className="review-progress" role="status">
+          {run.status === 'running' || run.status === 'queued'
+            ? (run.progress.at(-1)?.text ?? 'Waiting for delegated work to finish…')
+            : 'Review actions are available when changed files and gate results are ready.'}
+        </p>
+      )}
       <div className="review-body">
         <nav aria-label="Changed files" className="review-files">
           {run.touchedFiles.map((file, index) => (

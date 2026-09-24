@@ -26,6 +26,7 @@ import { cn } from '../../lib/cn';
 import { Spotlight } from '../../effects/Spotlight';
 import { FerryMark } from '../nav';
 import { Pill, IconButton, focusRingClass } from '../primitives';
+import { DropdownMenu } from '../forms';
 
 export function CanvasPanel({
   children,
@@ -310,6 +311,11 @@ export interface ComposerProps {
   banner?: { text: string; actionLabel: string; onAction: () => void } | null;
   profileName: string;
   onProfileClick?: () => void;
+  profileMenuItems?: {
+    label?: string;
+    separator?: boolean;
+    onSelect?: () => void;
+  }[];
   onAttach?: () => void;
   placeholder?: string;
 }
@@ -322,6 +328,7 @@ export function Composer({
   banner,
   profileName,
   onProfileClick,
+  profileMenuItems,
   onAttach,
   placeholder = 'Ask Ferry to build, fix or explain…',
 }: ComposerProps) {
@@ -392,13 +399,27 @@ export function Composer({
               >
                 Attach
               </Pill>
-              <Pill
-                className="h-7 border-transparent bg-blue-tint px-3 text-[12px] leading-4 font-medium text-link"
-                onClick={onProfileClick}
-                leadingIcon={<Lightbulb size={14} />}
-              >
-                {profileName}
-              </Pill>
+              {profileMenuItems ? (
+                <DropdownMenu
+                  trigger={
+                    <Pill
+                      className="h-7 border-transparent bg-blue-tint px-3 text-[12px] leading-4 font-medium text-link"
+                      leadingIcon={<Lightbulb size={14} />}
+                    >
+                      {profileName}
+                    </Pill>
+                  }
+                  items={profileMenuItems}
+                />
+              ) : (
+                <Pill
+                  className="h-7 border-transparent bg-blue-tint px-3 text-[12px] leading-4 font-medium text-link"
+                  onClick={onProfileClick}
+                  leadingIcon={<Lightbulb size={14} />}
+                >
+                  {profileName}
+                </Pill>
+              )}
             </div>
             <div className="flex gap-2">
               <span title="Voice input is coming soon">
