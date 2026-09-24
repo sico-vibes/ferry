@@ -1,5 +1,5 @@
 {
-  "name": "@ferry/catalog",
+  "name": "@ferry/router",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,14 +7,16 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "catalog:sync": "node ../../scripts/catalog-sync-models.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
     "test": "vitest run"
   },
   "dependencies": {
     "@ferry/shared": "workspace:*",
-    "yaml": "2.9.1",
+    "@ferry/catalog": "workspace:*",
     "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "fast-check": "4.10.2"
   }
 }

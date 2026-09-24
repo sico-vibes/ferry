@@ -1,0 +1,12 @@
+provider: nvidia
+name: NVIDIA NIM
+tag: legit
+signup_url: https://build.nvidia.com/
+docs_url: https://docs.api.nvidia.com/
+terms_note: Published request rate is 40 per minute; no daily cap published.
+data_use: Subject to NVIDIA API terms.
+verified_at: '2026-09-23'
+source_url: https://build.nvidia.com/
+windows:
+  - { scope: provider, metric: requests, kind: rolling, length: 60, limit: 40 }
+  - { scope: provider, metric: requests, kind: fixed_daily, tz: UTC, limit: null }

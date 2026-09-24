@@ -1,0 +1,16 @@
+gemini-2.5-flash: { tier: T2, tool_reliability_prior: 0.82 }
+gemini-3-flash-preview: { tier: T2, tool_reliability_prior: 0.84 }
+openrouter/openai/gpt-oss-120b: { tier: T2, tool_reliability_prior: 0.8 }
+openrouter/qwen/qwen3.8-27b: { tier: T2, tool_reliability_prior: 0.78 }
+nvidia/nvidia-nim: { tier: T2, tool_reliability_prior: 0.78 }
+cerebras/openai/gpt-oss-120b: { tier: T2, tool_reliability_prior: 0.82 }
+cerebras/qwen/qwen-3.8-27b: { tier: T2, tool_reliability_prior: 0.8 }
+groq/openai/gpt-oss-120b: { tier: T2, tool_reliability_prior: 0.8 }
+groq/openai/gpt-oss-20b: { tier: T2, tool_reliability_prior: 0.78 }
+groq/qwen/qwen3.8-27b: { tier: T2, tool_reliability_prior: 0.8 }
+mistral/codestral-latest: { tier: T2, tool_reliability_prior: 0.82 }
+opencode/zen-free: { tier: T2, tool_reliability_prior: 0.75 }
+opencode-go: { tier: T2, tool_reliability_prior: 0.86 }
+anthropic/claude-sonnet: { tier: T1, tool_reliability_prior: 0.94 }
+openai/gpt-5: { tier: T1, tool_reliability_prior: 0.95 }
+deepseek/deepseek-chat: { tier: T2, tool_reliability_prior: 0.83 }

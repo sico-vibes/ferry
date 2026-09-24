@@ -1,5 +1,55 @@
 import { z } from 'zod';
 import { ProviderIdSchema } from './ids.js';
+
+export const UsageRecordSchema = z.object({
+  id: z.string().min(1),
+  providerId: ProviderIdSchema,
+  modelRef: z.string().min(1),
+  occurredAt: z.iso.datetime(),
+  sessionId: z.string().nullable().optional(),
+  taskId: z.string().nullable().optional(),
+  stepId: z.string().nullable().optional(),
+  stepKind: z.string().nullable().optional(),
+  inputTokens: z.number().nonnegative().optional(),
+  outputTokens: z.number().nonnegative().optional(),
+  cachedTokens: z.number().nonnegative().optional(),
+  reasoningTokens: z.number().nonnegative().optional(),
+  costUsd: z.number().nonnegative().optional(),
+  planUnits: z.number().nonnegative().optional(),
+  status: z.string().default('success'),
+  errorKind: z.string().nullable().optional(),
+  latencyMs: z.number().nonnegative().optional(),
+  headers: z.record(z.string(), z.unknown()).optional(),
+});
+export type UsageRecord = z.infer<typeof UsageRecordSchema>;
+
+export const QuotaObservationSchema = z.object({
+  id: z.string().min(1),
+  providerId: ProviderIdSchema,
+  modelRef: z.string().nullable().optional(),
+  windowId: z.string(),
+  metric: z.enum(['requests', 'tokens', 'usd', 'credits']),
+  value: z.number().nonnegative().optional(),
+  limit: z.number().nonnegative().nullable().optional(),
+  remaining: z.number().nonnegative().nullable().optional(),
+  resetAt: z.iso.datetime().nullable().optional(),
+  source: z.enum(['endpoint', 'header', 'learned', 'catalog']),
+  surprise: z.boolean().optional(),
+  observedAt: z.iso.datetime(),
+  statusCode: z.number().int().optional(),
+});
+export type QuotaObservation = z.infer<typeof QuotaObservationSchema>;
+
+export const ProviderHealthSchema = z.enum([
+  'ok',
+  'cooldown',
+  'down',
+  'unknown',
+  'auth_invalid',
+  'account_disabled',
+]);
+export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
+
 export const CapacitySummarySchema = z.object({
   stepsLeftToday: z.number().nonnegative(),
   percentRemaining: z.number().min(0).max(100),

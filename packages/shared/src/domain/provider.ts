@@ -25,7 +25,7 @@ export const ProviderSchema = z.object({
   brand: z.string().nullable(),
   keyStatus: z.enum(['missing', 'valid', 'invalid', 'unchecked', 'not_applicable']),
   enabled: z.boolean(),
-  health: z.enum(['ok', 'cooldown', 'down', 'unknown']),
+  health: z.enum(['ok', 'cooldown', 'down', 'unknown', 'auth_invalid', 'account_disabled']),
   cooldownUntil: z.iso.datetime().nullable(),
   dataUse: z.string().nullable(),
   termsNote: z.string().nullable(),
