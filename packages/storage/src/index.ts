@@ -15,6 +15,7 @@ import type {
   Workspace,
 } from '@ferry/shared';
 import * as schema from './schema.js';
+import { redactKnownSecretText } from '@ferry/shared';
 
 export { schema };
 const migrationPath = join(
@@ -346,11 +347,11 @@ export function redactHeaders(headers: unknown): string | null {
         Object.entries(value).map(([key, item]) =>
           /authorization|api[-_]?key|token|secret|password/i.test(key)
             ? [key, '[REDACTED]']
-            : [key, clean(item)],
+            : [redactKnownSecretText(key), clean(item)],
         ),
       );
     if (typeof value === 'string')
-      return value
+      return redactKnownSecretText(value)
         .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, '$1[REDACTED]')
         .replace(
           /\b(?:sk[-_](?:live|test)[-_][A-Za-z0-9_-]{8,}|rk_live_[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9_-]{8,}|gsk_[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,

@@ -47,6 +47,7 @@ export interface QuotaEngineOptions {
   observationRepository?: QuotaObservationRepository;
   now?: () => Date;
   emit?: EventListener;
+  onError?: (error: unknown) => void;
   lowCapacityThreshold?: number;
   planMultipliers?: Record<
     string,
@@ -116,6 +117,7 @@ export class QuotaEngine {
   private readonly averages = new Map<string, { tokens: number; cost: number; samples: number }>();
   private readonly listeners = new Set<EventListener>();
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
+  private readonly pollingTimers = new Set<ReturnType<typeof setTimeout>>();
   private emitTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly providers: ProviderLimits[];
   private readonly models: Catalog['models'];
@@ -520,7 +522,9 @@ export class QuotaEngine {
       const stepsLeft = this.stepsLeft(providerId);
       const restrictive = windows
         .filter((window) => window.limit !== null)
-        .map((window) => (window.remaining ?? 0) / Math.max(1, window.limit ?? 1));
+        .map((window) =>
+          Math.max(0, Math.min(1, (window.remaining ?? 0) / Math.max(1, window.limit ?? 1))),
+        );
       return {
         providerId: providerId as CapacitySummary['perProvider'][number]['providerId'],
         stepsLeft,
@@ -641,10 +645,24 @@ export class QuotaEngine {
   private scheduleEmit(): void {
     if (this.emitTimer) clearTimeout(this.emitTimer);
     this.emitTimer = setTimeout(() => {
-      const event = { type: 'quota.updated' as const, summary: this.capacitySummary() };
-      this.options.emit?.(event);
-      for (const listener of this.listeners) listener(event);
+      try {
+        const event = { type: 'quota.updated' as const, summary: this.capacitySummary() };
+        this.options.emit?.(event);
+        for (const listener of this.listeners) {
+          try {
+            listener(event);
+          } catch (error) {
+            this.reportError(error);
+          }
+        }
+      } catch (error) {
+        this.reportError(error);
+      }
     }, 250);
+  }
+  private reportError(error: unknown): void {
+    if (this.options.onError) this.options.onError(error);
+    else console.error('Failed to emit quota.updated', error);
   }
   private scheduleResets(): void {
     for (const timer of this.timers) clearTimeout(timer);
@@ -678,18 +696,20 @@ export class QuotaEngine {
           .catch(() => undefined)
           .finally(schedule);
       }, 5 * 60_000);
-      this.timers.add(timer);
+      this.pollingTimers.add(timer);
     };
     schedule();
     return () => {
       stopped = true;
-      for (const timer of this.timers) clearTimeout(timer);
-      this.timers.clear();
+      for (const timer of this.pollingTimers) clearTimeout(timer);
+      this.pollingTimers.clear();
     };
   }
   dispose(): void {
     if (this.emitTimer) clearTimeout(this.emitTimer);
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
+    for (const timer of this.pollingTimers) clearTimeout(timer);
+    this.pollingTimers.clear();
   }
 }

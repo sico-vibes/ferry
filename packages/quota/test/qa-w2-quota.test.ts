@@ -130,7 +130,7 @@ describe('QA-w2 quota: capacity invariants', () => {
     expect(summary.stepsLeftToday).toBe(20);
   });
 
-  it.fails('never lets an over-reporting header push percentRemaining outside [0,100]', () => {
+  it('never lets an over-reporting header push percentRemaining outside [0,100]', () => {
     // BUG: capacitySummary() computes percent = remaining / max(1, limit) without
     // clamping, so an authoritative observation whose remaining exceeds its limit
     // yields percentRemaining > 100. The core quota domain then fails to parse the
@@ -198,7 +198,7 @@ describe('QA-w2 quota: quota.updated debounce', () => {
 });
 
 describe('QA-w2 quota: OpenRouter polling lifecycle', () => {
-  it.fails('keeps polling after usage is recorded', async () => {
+  it('keeps polling after usage is recorded', async () => {
     // BUG: recordUsage()/observe() call scheduleResets(), which clears every timer in
     // engine.timers -- including the OpenRouter polling timer registered by
     // startOpenRouterPolling(). Under normal traffic the poll timer is constantly

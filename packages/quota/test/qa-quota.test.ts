@@ -14,7 +14,7 @@ const PT = 'America/Los_Angeles';
 const record = (occurredAt: string, extra: Partial<UsageRecord> = {}): UsageRecord => ({
   id: occurredAt,
   providerId: 'gemini' as UsageRecord['providerId'],
-  modelRef: 'google/gemini-flash',
+  modelRef: 'gemini/gemini-flash',
   occurredAt,
   status: 'success',
   inputTokens: 1,

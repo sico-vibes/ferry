@@ -1,4 +1,5 @@
 import { Entry } from '@napi-rs/keyring';
+import { forgetSecret, isKnownSecret, rememberSecret } from '@ferry/shared';
 
 export interface SecretStore {
   set(providerKeyId: string, value: string): Promise<void>;
@@ -10,14 +11,25 @@ export interface SecretStore {
 export class KeyringSecretStore implements SecretStore {
   constructor(private readonly service = 'Ferry') {}
   set(providerKeyId: string, value: string): Promise<void> {
-    new Entry(this.service, providerKeyId).setPassword(value);
+    const entry = new Entry(this.service, providerKeyId);
+    const old = entry.getPassword() ?? undefined;
+    entry.setPassword(value);
+    if (old !== value) {
+      if (old) forgetSecret(old);
+      rememberSecret(value);
+    }
     return Promise.resolve();
   }
   get(providerKeyId: string): Promise<string | undefined> {
-    return Promise.resolve(new Entry(this.service, providerKeyId).getPassword() ?? undefined);
+    const value = new Entry(this.service, providerKeyId).getPassword() ?? undefined;
+    if (value && !isKnownSecret(value)) rememberSecret(value);
+    return Promise.resolve(value);
   }
   delete(providerKeyId: string): Promise<void> {
-    new Entry(this.service, providerKeyId).deleteCredential();
+    const entry = new Entry(this.service, providerKeyId);
+    const old = entry.getPassword() ?? undefined;
+    entry.deleteCredential();
+    if (old) forgetSecret(old);
     return Promise.resolve();
   }
   has(providerKeyId: string): Promise<boolean> {
@@ -35,20 +47,32 @@ export class MemorySecretStore implements SecretStore {
     return `${this.#namespace}:${providerKeyId}`;
   }
   set(providerKeyId: string, value: string): Promise<void> {
-    this.#values.set(this.#key(providerKeyId), value);
+    const key = this.#key(providerKeyId);
+    const old = this.#values.get(key);
+    this.#values.set(key, value);
+    if (old !== value) {
+      if (old) forgetSecret(old);
+      rememberSecret(value);
+    }
     return Promise.resolve();
   }
   get(providerKeyId: string): Promise<string | undefined> {
-    return Promise.resolve(this.#values.get(this.#key(providerKeyId)));
+    const value = this.#values.get(this.#key(providerKeyId));
+    if (value && !isKnownSecret(value)) rememberSecret(value);
+    return Promise.resolve(value);
   }
   delete(providerKeyId: string): Promise<void> {
-    this.#values.delete(this.#key(providerKeyId));
+    const key = this.#key(providerKeyId);
+    const old = this.#values.get(key);
+    this.#values.delete(key);
+    if (old) forgetSecret(old);
     return Promise.resolve();
   }
   has(providerKeyId: string): Promise<boolean> {
     return Promise.resolve(this.#values.has(this.#key(providerKeyId)));
   }
   clear(): void {
+    for (const value of this.#values.values()) forgetSecret(value);
     this.#values.clear();
   }
 }

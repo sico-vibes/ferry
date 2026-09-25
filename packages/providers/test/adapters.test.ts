@@ -53,6 +53,31 @@ describe('provider adapters', () => {
     ).toThrow(/baseUrl/);
   });
 
+  it('uses a configured Gemini base URL for API requests', async () => {
+    let requestedUrl = '';
+    const model = createLanguageModel(ModelRefSchema.parse('gemini/gemini-2.5-flash'), {
+      apiKey: 'fake-key',
+      baseUrl: 'https://gemini.example/v1beta',
+      fetch: (input) => {
+        requestedUrl =
+          input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              candidates: [
+                { content: { role: 'model', parts: [{ text: 'ok' }] }, finishReason: 'STOP' },
+              ],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        );
+      },
+    });
+    await streamText({ model, prompt: 'Hello' }).text;
+    expect(requestedUrl).toContain('https://gemini.example/v1beta/');
+  });
+
   it('streams through an OpenAI-compatible fake and reports tool-call output', async () => {
     const fake = new FakeOpenAIServer({
       responses: [
@@ -166,6 +191,12 @@ describe('provider adapters', () => {
 });
 
 describe('provider probes', () => {
+  it('returns a typed timeout when the configured probe deadline expires', async () => {
+    const hang = (() => new Promise<Response>(() => undefined)) as typeof globalThis.fetch;
+    const result = await probe('openai', 'fake-key', { fetch: hang, timeoutMs: 20 });
+    expect(result).toMatchObject({ ok: false, errorKind: 'timeout' });
+  });
+
   it('probes with a one-token completion and identifies invalid or rate-limited keys', async () => {
     const success = new FakeOpenAIServer();
     servers.push(success);

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import pino, { type Logger, type LoggerOptions } from 'pino';
 import { SettingsSchema, type Settings } from '@ferry/shared';
 import { z } from 'zod';
+import { redactKnownSecretText } from '@ferry/shared';
 
 export interface DataPaths {
   home: string;
@@ -226,7 +227,7 @@ export function createLogger({
   );
 }
 export function redactSecretText(text: string): string {
-  return text
+  return redactKnownSecretText(text)
     .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, '$1[REDACTED]')
     .replace(
       /\b(?:sk[-_](?:live|test)[-_][A-Za-z0-9_-]{8,}|rk_live_[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9_-]{8,}|gsk_[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
@@ -241,7 +242,7 @@ function sanitizeLogValue(value: unknown): unknown {
       Object.entries(value).map(([key, item]) =>
         /^(authorization|api[-_]?key|key|token|password|secret)$/i.test(key)
           ? [key, '[REDACTED]']
-          : [key, sanitizeLogValue(item)],
+          : [redactSecretText(key), sanitizeLogValue(item)],
       ),
     );
   }

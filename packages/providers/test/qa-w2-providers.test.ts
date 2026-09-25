@@ -163,7 +163,7 @@ describe('QA-w2 providers: hostile responses settle without leaking', () => {
 });
 
 describe('QA-w2 providers: quota parser hardening', () => {
-  it.fails('does not throw on an oversized all-digit Gemini retryDelay', () => {
+  it('does not throw on an oversized all-digit Gemini retryDelay', () => {
     // BUG: parseGeminiQuota() builds a Date from retryDelay then calls toISOString()
     // without a validity guard, so a huge provider-controlled value throws
     // RangeError: Invalid time value.

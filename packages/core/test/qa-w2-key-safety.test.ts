@@ -263,27 +263,23 @@ describe('QA-w2 core: key safety across every surface', () => {
     }
   }, 30_000);
 
-  it.fails(
-    'advertises a probeable model for every catalog API provider',
-    async () => {
-      // BUG: the catalog advertises provider "gemini", but the model snapshot keys Google
-      // models under "google". gemini therefore has modelCount 0 and providers.probe("gemini")
-      // can never succeed -- probe() throws "No catalog model found for gemini", which is
-      // mapped to a network error ("Could not reach provider"), masking the real defect.
-      const fake = await startServer();
-      const h = await makeHarness(fake);
-      try {
-        const stranded = (await h.rpc.providers.list())
-          .filter((provider) => provider.kind === 'api' && provider.modelCount === 0)
-          .map((provider) => provider.id);
-        expect(stranded).toEqual([]);
-      } finally {
-        await h.close();
-        await fake.stop();
-      }
-    },
-    30_000,
-  );
+  it('advertises a probeable model for every catalog API provider', async () => {
+    // BUG: the catalog advertises provider "gemini", but the model snapshot keys Google
+    // models under "google". gemini therefore has modelCount 0 and providers.probe("gemini")
+    // can never succeed -- probe() throws "No catalog model found for gemini", which is
+    // mapped to a network error ("Could not reach provider"), masking the real defect.
+    const fake = await startServer();
+    const h = await makeHarness(fake);
+    try {
+      const stranded = (await h.rpc.providers.list())
+        .filter((provider) => provider.kind === 'api' && provider.modelCount === 0)
+        .map((provider) => provider.id);
+      expect(stranded).toEqual([]);
+    } finally {
+      await h.close();
+      await fake.stop();
+    }
+  }, 30_000);
 });
 
 describe('QA-w2 core: test keyring selection', () => {
