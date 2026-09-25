@@ -21,3 +21,5 @@ Thumbs.db
 # Third-party design references (not ours to redistribute) - local only
 design/reference/
 !apps/desktop/build/
+.env.*
+!.env.example
