@@ -52,6 +52,43 @@ describe('QA W3 sessions: run lifecycle and races', () => {
     }
   }, 30_000);
 
+  it('waits for a cancelled loop before accepting the next send', async () => {
+    const h = await startHarness({
+      turns: [textTurn('cancel this request', { delayMs: 2_000 }), textTurn('second run')],
+    });
+    try {
+      const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      await h.rpc.sessions.send(session.id, { text: 'first prompt' });
+      await waitFor(() => h.server.requests.length === 1);
+      await h.rpc.sessions.cancel(session.id);
+      await h.rpc.sessions.send(session.id, { text: 'second prompt' });
+      await waitFor(async () => (await sessionStatus(h.rpc, session.id)) === 'idle');
+      expect(h.server.requests).toHaveLength(2);
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
+
+  it('does not emit unhandled rejections when stopping an active run', async () => {
+    const h = await startHarness({
+      turns: [textTurn('run will be stopped', { delayMs: 2_000 })],
+    });
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', listener);
+    try {
+      const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      await h.rpc.sessions.send(session.id, { text: 'stop this run' });
+      await waitFor(() => h.server.requests.length === 1);
+      await h.host.stop();
+      await delay(50);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', listener);
+      await h.close();
+    }
+  }, 30_000);
+
   it('deleting a running session removes it and never resurrects it', async () => {
     const h = await startHarness({ turns: [textTurn('still going', { delayMs: 200 })] });
     try {

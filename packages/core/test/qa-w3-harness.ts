@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createRpcFerryClient, type RpcFerryClient } from '@ferry/client';
 import { MemorySecretStore } from '@ferry/secrets';
 import { FakeOpenAIServer, type FakeResponse } from '@ferry/testkit';
+import { ProviderIdSchema } from '@ferry/shared';
 import type { Session, SessionId, Workspace, WorkspaceId } from '@ferry/shared';
 import { createCoreHost, createMemoryTransportPair, type CoreHost } from '../src/index.js';
 import type { FerryServices } from '../src/index.js';
@@ -37,7 +38,6 @@ export async function startHarness(options: HarnessOptions = {}): Promise<CoreHa
   const dataDir = join(root, 'data');
   const workspacePath = options.workspacePath ?? join(root, 'workspace');
   await mkdir(workspacePath, { recursive: true });
-  const keyName = `FERRY_PROVIDER_API_KEY_${provider.toUpperCase()}`;
   const baseName = `FERRY_PROVIDER_BASE_URL_${provider.toUpperCase()}`;
   const [coreTransport, clientTransport] = createMemoryTransportPair();
   const host = await createCoreHost({
@@ -45,7 +45,6 @@ export async function startHarness(options: HarnessOptions = {}): Promise<CoreHa
     transport: coreTransport,
     env: {
       ...process.env,
-      [keyName]: 'qa-w3-fixture-key',
       [baseName]: `${server.baseUrl}/v1`,
       ...options.env,
     },
@@ -56,11 +55,18 @@ export async function startHarness(options: HarnessOptions = {}): Promise<CoreHa
     await server.stop();
     throw new Error('Core services were not created');
   }
-  // Swap in a memory secret store: the native keyring lookup that
-  // createSessionDependencies performs for every catalog provider is a
-  // synchronous native call and makes parallel QA runs starve the RPC timeout
-  // of the existing contract suite.
-  (services as { secrets: FerryServices['secrets'] }).secrets = new MemorySecretStore();
+  // Real provider bindings route only through a stored key reference. Seed the
+  // fixture directly into memory so tests never access the native keyring.
+  const providerId = ProviderIdSchema.parse(provider);
+  const secrets = new MemorySecretStore();
+  await secrets.set(providerId, 'qa-w3-fixture-key');
+  (services as { secrets: FerryServices['secrets'] }).secrets = secrets;
+  services.providerKeys.put({
+    id: providerId,
+    providerId,
+    keyringRef: providerId,
+    createdAt: new Date().toISOString(),
+  });
   const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
   await rpc.hello;
   const workspace = await rpc.workspaces.open(workspacePath);
@@ -156,21 +162,11 @@ export async function sessionStatus(
 }
 
 /**
- * Cancels a run and waits for the agent loop itself to settle (the cancel path
- * and the loop's finish path each emit one idle session.status). Waiting on
- * events instead of a fixed delay avoids racing `CoreHost.stop()` with the
- * loop's `finally`, which otherwise throws after the database is closed.
+ * Cancels a run and waits for the loop to settle before checking its durable
+ * idle status. The cancellation RPC now resolves only after loop cleanup.
  */
 export async function cancelAndSettle(h: CoreHarness, sessionId: SessionId): Promise<void> {
-  let idle = 0;
-  const off = h.rpc.on('session.status', (event) => {
-    if (event.id === sessionId && event.status === 'idle') idle += 1;
-  });
-  try {
-    await h.rpc.sessions.cancel(sessionId);
-    await waitFor(() => idle >= 2, 10_000);
-  } finally {
-    off();
-  }
+  await h.rpc.sessions.cancel(sessionId);
+  await waitFor(async () => (await h.rpc.sessions.get(sessionId)).session.status === 'idle');
   await delay(150);
 }

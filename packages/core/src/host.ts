@@ -77,6 +77,7 @@ export class CoreHost {
   readonly dataDir: string;
   readonly #registry = new Map<string, Map<string, RpcHandler>>();
   readonly #events = new Set<(method: string, payload: unknown) => void>();
+  readonly #shutdownHandlers = new Set<() => void | Promise<void>>();
   #releaseLock: (() => Promise<void>) | undefined;
   #unsubscribe: (() => void) | undefined;
   #unsubscribeEvents: (() => void) | undefined;
@@ -107,6 +108,11 @@ export class CoreHost {
       entries.set(method, handler);
     }
     this.#registry.set(domain, entries);
+  }
+
+  onShutdown(handler: () => void | Promise<void>): () => void {
+    this.#shutdownHandlers.add(handler);
+    return () => this.#shutdownHandlers.delete(handler);
   }
 
   emit(method: string, payload: unknown): void {
@@ -175,6 +181,10 @@ export class CoreHost {
 
   async stop(): Promise<void> {
     if (!this.#started) return;
+    this.#started = false;
+    await Promise.allSettled(
+      [...this.#shutdownHandlers].map((handler) => Promise.resolve().then(handler)),
+    );
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
     this.#unsubscribeEvents?.();
@@ -185,7 +195,6 @@ export class CoreHost {
     await this.options.services?.dispose();
     await this.#releaseLock?.();
     this.#releaseLock = undefined;
-    this.#started = false;
     this.#stopped = true;
   }
 

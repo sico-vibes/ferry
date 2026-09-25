@@ -10,6 +10,7 @@ import { probe } from '@ferry/providers';
 import { z } from 'zod';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
+import { invalidateSessionProviderKeyCache } from '../session-deps.js';
 
 const ProviderIdInput = ProviderIdSchema;
 const KeyInput = z.string().trim().min(1).max(4096);
@@ -75,6 +76,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         keyringRef: id,
         createdAt: services.clock.now().toISOString(),
       });
+      invalidateSessionProviderKeyCache(services, id);
       const provider = saveProvider(services, {
         ...current,
         keyStatus: 'unchecked',
@@ -90,6 +92,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const current = providerRecord(services, id);
       await services.secrets.delete(id);
       services.providerKeys.delete(id);
+      invalidateSessionProviderKeyCache(services, id);
       services.cooldowns.delete(id);
       const provider = saveProvider(services, {
         ...current,

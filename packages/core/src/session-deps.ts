@@ -20,6 +20,29 @@ import {
 import { scoreModels, type CapacityView } from '@ferry/router';
 import type { FerryServices } from './services.js';
 
+const providerKeyPresence = new WeakMap<FerryServices, Map<string, boolean>>();
+
+export function invalidateSessionProviderKeyCache(
+  services: FerryServices,
+  providerId: string,
+): void {
+  providerKeyPresence.get(services)?.delete(providerId);
+}
+
+function hasProviderKey(services: FerryServices, providerId: string): boolean {
+  let cache = providerKeyPresence.get(services);
+  if (!cache) {
+    cache = new Map();
+    providerKeyPresence.set(services, cache);
+  }
+  let present = cache.get(providerId);
+  if (present === undefined) {
+    present = Boolean(services.providerKeys.get(providerId));
+    cache.set(providerId, present);
+  }
+  return present;
+}
+
 /** Narrow binding seam: provider execution and durable usage belong to Core services. */
 export interface ModelGateway {
   streamStep(req: StepGeneratorInput, signal: AbortSignal): Promise<GeneratedStep>;
@@ -30,24 +53,19 @@ export interface UsageSink {
   record(record: UsageRecord): void;
 }
 
-export async function createSessionDependencies(
+export function createSessionDependencies(
   services: FerryServices,
   emit: (event: AgentEvent) => void,
-): Promise<{
+): {
   gateway: ModelGateway;
   usage: UsageSink;
   capacity: () => CapacityView;
   providers: () => Provider[];
   apiKeys: Record<string, string>;
   providerFetch: typeof globalThis.fetch;
-}> {
+} {
   const apiKeys: Record<string, string> = {};
-  for (const limits of services.catalog.providers) {
-    // The provider key reference is the authority; secrets never come from environment values.
-    if (!services.providerKeys.get(limits.provider)) continue;
-    const key = await services.secrets.get(limits.provider);
-    if (key) apiKeys[limits.provider] = key;
-  }
+  const loadedApiKeys = new Set<string>();
   const providerBaseUrls = Object.fromEntries(
     services.catalog.providers.flatMap(({ provider }) => {
       const envName = `FERRY_PROVIDER_BASE_URL_${provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
@@ -60,8 +78,8 @@ export async function createSessionDependencies(
       ({ provider, name, tag, data_use, terms_note, signup_url, docs_url, verified_at }) => {
         const id = ProviderIdSchema.parse(provider);
         const saved = services.providers.get(id);
-        const keyRef = services.providerKeys.get(id);
-        const keyStatus: Provider['keyStatus'] = keyRef
+        const keyPresent = hasProviderKey(services, id);
+        const keyStatus: Provider['keyStatus'] = keyPresent
           ? (saved?.keyStatus ?? 'unchecked')
           : 'missing';
         const cooldown = services.cooldowns.get(id);
@@ -74,7 +92,7 @@ export async function createSessionDependencies(
           kind: tag === 'subscription_cli' ? 'cli' : 'api',
           brand: null,
           keyStatus,
-          enabled: saved?.enabled ?? Boolean(keyRef),
+          enabled: saved?.enabled ?? keyPresent,
           health: activeCooldown
             ? 'cooldown'
             : saved?.health === 'cooldown'
@@ -185,6 +203,15 @@ export async function createSessionDependencies(
       services.handoffs.put({ id: newId('handoff'), sessionId, reason });
     },
     async streamStep(req, signal) {
+      const providerId = req.model.providerId;
+      if (!loadedApiKeys.has(providerId)) {
+        loadedApiKeys.add(providerId);
+        // The key reference is authoritative; look up the secret only for the selected candidate.
+        if (hasProviderKey(services, providerId)) {
+          const key = await services.secrets.get(providerId);
+          if (key) apiKeys[providerId] = key;
+        }
+      }
       const generator = createStepGenerator(
         { apiKeys, providerBaseUrls, providerFetch, emit, onObservation: observe },
         req.model,

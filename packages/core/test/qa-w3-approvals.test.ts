@@ -53,63 +53,66 @@ describe('QA W3 approvals: adversarial responses', () => {
     }
   }, 30_000);
 
-  it.fails(
-    'rejects a second response to an already-resolved approval',
-    async () => {
-      // BUG: approvals.respond has no guard on the persisted part state. A second
-      // response finds the same approval_request part and silently rewrites its
-      // state (and can persist a new allow_always rule) instead of rejecting as
-      // a conflict. Re-resolving must be refused, not reapplied.
-      const h = await startHarness({
-        turns: [toolTurn('write_file', { path: 'a.txt', content: '1' }), textTurn('done')],
-      });
-      try {
-        const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
-        const partId = await pendingApproval(h, session.id);
-        await h.rpc.approvals.respond(session.id, partId, 'deny');
-        const second = await h.rpc.approvals.respond(session.id, partId, 'allow_once').then(
-          () => 'resolved' as const,
-          () => 'rejected' as const,
-        );
-        await waitFor(async () => (await h.rpc.sessions.get(session.id)).session.status === 'idle');
-        await delay(400);
-        expect(second).toBe('rejected');
-      } finally {
-        await h.close();
-      }
-    },
-    30_000,
-  );
+  it('rejects a second response to an already-resolved approval', async () => {
+    // A resolved request must stay immutable and a second answer must conflict.
+    const h = await startHarness({
+      turns: [toolTurn('write_file', { path: 'a.txt', content: '1' }), textTurn('done')],
+    });
+    try {
+      const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      const partId = await pendingApproval(h, session.id);
+      await h.rpc.approvals.respond(session.id, partId, 'deny');
+      const second = await h.rpc.approvals.respond(session.id, partId, 'allow_once').then(
+        () => 'resolved' as const,
+        () => 'rejected' as const,
+      );
+      await waitFor(async () => (await h.rpc.sessions.get(session.id)).session.status === 'idle');
+      await delay(400);
+      expect(second).toBe('rejected');
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
 
-  it.fails(
-    'emits approval.request once, only while the approval is pending',
-    async () => {
-      // BUG: the agent emits an approval_request part twice (once pending, once
-      // resolved) and sessions.register forwards every approval_request part as a
-      // approval.request event. A UI subscribed to approval.request therefore sees
-      // a duplicate request with state 'denied'/'allowed_*' and can reopen a modal
-      // for an approval the user already answered.
-      const h = await startHarness({
-        turns: [toolTurn('write_file', { path: 'a.txt', content: '1' }), textTurn('done')],
+  it('does not persist allow_always for an already-resolved approval', async () => {
+    const h = await startHarness({
+      turns: [toolTurn('write_file', { path: 'a.txt', content: '1' }), textTurn('done')],
+    });
+    try {
+      const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      const partId = await pendingApproval(h, session.id);
+      await h.rpc.approvals.respond(session.id, partId, 'deny');
+      await expect(
+        h.rpc.approvals.respond(session.id, partId, 'allow_always'),
+      ).rejects.toMatchObject({ code: -32010, kind: 'conflict' });
+      await waitFor(async () => (await h.rpc.sessions.get(session.id)).session.status === 'idle');
+      expect(h.services.settings.get(`permission-rules:${h.workspaceId}`)).toBeUndefined();
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
+
+  it('emits approval.request once, only while the approval is pending', async () => {
+    // Resolution is a session.part update; approval.request is for pending parts.
+    const h = await startHarness({
+      turns: [toolTurn('write_file', { path: 'a.txt', content: '1' }), textTurn('done')],
+    });
+    try {
+      const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      const states: string[] = [];
+      const off = h.rpc.on('approval.request', (event) => {
+        if (event.sessionId === session.id) states.push(event.part.state);
       });
-      try {
-        const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
-        const states: string[] = [];
-        const off = h.rpc.on('approval.request', (event) => {
-          if (event.sessionId === session.id) states.push(event.part.state);
-        });
-        const partId = await pendingApproval(h, session.id);
-        await h.rpc.approvals.respond(session.id, partId, 'deny');
-        await waitFor(async () => (await h.rpc.sessions.get(session.id)).session.status === 'idle');
-        off();
-        expect(states).toEqual(['pending']);
-        await delay(400);
-      } finally {
-        await h.close();
-      }
-    },
-    30_000,
-  );
+      const partId = await pendingApproval(h, session.id);
+      await h.rpc.approvals.respond(session.id, partId, 'deny');
+      await waitFor(async () => (await h.rpc.sessions.get(session.id)).session.status === 'idle');
+      off();
+      expect(states).toEqual(['pending']);
+      await delay(400);
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
 
   it('delivers a structured denial to the model and marks the tool call failed', async () => {
     const h = await startHarness({
@@ -174,42 +177,34 @@ describe('QA W3 approvals: adversarial responses', () => {
     }
   }, 30_000);
 
-  it.fails(
-    'resolves a pending approval when the core stops instead of hanging',
-    async () => {
-      // BUG: CoreHost.stop disposes services but never aborts the per-session
-      // AbortController that sessions.register keeps. A run parked on
-      // requestApproval therefore never resolves; the approval listener lives in
-      // a closure the stop path cannot reach. Stopping the core must deny/cancel
-      // the pending approval.
-      const h = await startHarness({
-        turns: [toolTurn('write_file', { path: 'a.txt', content: '1' })],
+  it('resolves a pending approval when the core stops instead of hanging', async () => {
+    // Stop denies the pending part and resolves the requestApproval waiter.
+    const h = await startHarness({
+      turns: [toolTurn('write_file', { path: 'a.txt', content: '1' })],
+    });
+    try {
+      const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      let partId: PartId | undefined;
+      let denied = false;
+      const off = h.rpc.on('session.part', (event) => {
+        if (
+          event.sessionId === session.id &&
+          event.part.type === 'approval_request' &&
+          event.part.state === 'denied'
+        )
+          denied = true;
       });
-      try {
-        const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
-        let partId: PartId | undefined;
-        let denied = false;
-        const off = h.rpc.on('session.part', (event) => {
-          if (
-            event.sessionId === session.id &&
-            event.part.type === 'approval_request' &&
-            event.part.state === 'denied'
-          )
-            denied = true;
-        });
-        h.rpc.on('approval.request', (event) => {
-          if (event.sessionId === session.id) partId = event.part.id;
-        });
-        await h.rpc.sessions.send(session.id, { text: 'needs approval' });
-        await waitFor(() => partId !== undefined);
-        await h.host.stop();
-        await delay(800);
-        off();
-        expect(denied).toBe(true);
-      } finally {
-        await h.close();
-      }
-    },
-    30_000,
-  );
+      h.rpc.on('approval.request', (event) => {
+        if (event.sessionId === session.id) partId = event.part.id;
+      });
+      await h.rpc.sessions.send(session.id, { text: 'needs approval' });
+      await waitFor(() => partId !== undefined);
+      await h.host.stop();
+      await delay(800);
+      off();
+      expect(denied).toBe(true);
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
 });
