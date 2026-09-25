@@ -6,6 +6,7 @@ directories:
 files:
   - out/**
   - package.json
+  - '!out/web/**'
   - '!**/*.map'
   - '!**/*.ts'
   - '!**/*.md'
@@ -37,7 +38,16 @@ files:
   - '!node_modules/node-pty/prebuilds/linux-*/**'
   - '!node_modules/node-pty/prebuilds/win32-arm64/**'
   - '!node_modules/node-pty/third_party/**/win10-arm64/**'
+  - '!node_modules/better-sqlite3/build/**'
+  - '!node_modules/better-sqlite3/deps/**'
+  - '!node_modules/better-sqlite3/src/**'
+  - '!node_modules/node-pty/build/**'
+  - '!node_modules/node-pty/deps/**'
+  - '!node_modules/node-pty/src/**'
+  - '!node_modules/node-pty/third_party/**'
 asar: true
+electronLanguages:
+  - en-US
 npmRebuild: false
 asarUnpack:
   - '**/*.node'

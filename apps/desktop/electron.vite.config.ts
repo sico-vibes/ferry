@@ -9,8 +9,13 @@ export default defineConfig({
     resolve: { alias: { '@ferry/core': resolve('../../packages/core/src/index.ts') } },
     build: {
       externalizeDeps: {
-        exclude: ['@ferry/core', '@ferry/shared'],
-        include: ['better-sqlite3', 'node-pty', '@napi-rs/keyring'],
+        exclude: ['@ferry/core', '@ferry/client', '@ferry/shared'],
+        include: [
+          'better-sqlite3',
+          'node-pty',
+          '@napi-rs/keyring',
+          '@napi-rs/keyring-win32-x64-msvc',
+        ],
       },
       rollupOptions: {
         input: {

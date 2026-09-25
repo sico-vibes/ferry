@@ -111,6 +111,19 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@napi-rs/keyring':
+        specifier: 2.1.0
+        version: 2.1.0
+      '@napi-rs/keyring-win32-x64-msvc':
+        specifier: 2.1.0
+        version: 2.1.0
+      better-sqlite3:
+        specifier: 13.0.3
+        version: 13.0.3
+      node-pty:
+        specifier: 1.1.0
+        version: 1.1.0
+    devDependencies:
       '@ferry/client':
         specifier: workspace:*
         version: link:../../packages/client
@@ -123,12 +136,6 @@ importers:
       '@monaco-editor/react':
         specifier: 4.7.0
         version: 4.7.0(monaco-editor@0.56.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      '@napi-rs/keyring':
-        specifier: 2.1.0
-        version: 2.1.0
-      '@napi-rs/keyring-win32-x64-msvc':
-        specifier: 2.1.0
-        version: 2.1.0
       '@tanstack/react-query':
         specifier: 5.103.2
         version: 5.103.2(react@19.3.0)
@@ -144,9 +151,6 @@ importers:
       '@xterm/xterm':
         specifier: 6.0.0
         version: 6.0.0
-      better-sqlite3:
-        specifier: 13.0.3
-        version: 13.0.3
       cmdk:
         specifier: 1.1.1
         version: 1.1.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -159,9 +163,6 @@ importers:
       motion:
         specifier: 13.4.1
         version: 13.4.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      node-pty:
-        specifier: 1.1.0
-        version: 1.1.0
       radix-ui:
         specifier: 1.6.7
         version: 1.6.7(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -180,7 +181,6 @@ importers:
       zustand:
         specifier: 5.0.15
         version: 5.0.15(@types/react@19.3.0)(immer@11.1.18)(react@19.3.0)(use-sync-external-store@1.7.0(react@19.3.0))
-    devDependencies:
       '@axe-core/playwright':
         specifier: 4.13.0
         version: 4.13.0(playwright-core@1.63.0)
