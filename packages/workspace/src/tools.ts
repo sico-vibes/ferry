@@ -7,7 +7,13 @@ import { z } from 'zod';
 import { DEFAULT_MAX_FILE_BYTES, decodeText, encodeText, isBinary, WorkspaceJail } from './fs.js';
 
 const writeLocks = new Map<string, Promise<void>>();
-async function withWriteLock<T>(key: string, action: () => Promise<T>): Promise<T> {
+const renameRetryDelaysMs = [10, 20, 40, 80] as const;
+function writeLockKey(file: string): string {
+  const normalized = path.resolve(file);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+async function withRenameLock<T>(file: string, action: () => Promise<T>): Promise<T> {
+  const key = writeLockKey(file);
   const previous = writeLocks.get(key) ?? Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>((resolve) => {
@@ -20,6 +26,19 @@ async function withWriteLock<T>(key: string, action: () => Promise<T>): Promise<
   } finally {
     release();
     if (writeLocks.get(key) === current) writeLocks.delete(key);
+  }
+}
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const delay = renameRetryDelaysMs[attempt];
+      if ((code !== 'EPERM' && code !== 'EBUSY') || delay === undefined) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    }
   }
 }
 
@@ -179,39 +198,37 @@ export class WorkspaceTools {
   async writeFile(raw: unknown): Promise<FileChange> {
     const input = WriteFileInput.parse(raw);
     const file = await this.jail.resolve(input.path, { allowMissing: true });
-    return withWriteLock(file, async () => {
-      await this.assertVisible(file);
-      let before: string | null = null;
-      let encoding: 'utf8' | 'utf8-bom' | 'utf16le' | 'utf16be' = 'utf8';
-      let eol = '\n';
-      try {
-        const b = await fs.readFile(file);
-        this.assertSize(b);
-        if (isBinary(b)) throw new Error('Cannot overwrite binary file');
-        const decoded = decodeText(b);
-        before = decoded.text;
-        encoding = decoded.encoding;
-        eol = decoded.lineEnding;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
-      const normalized = input.content.replace(/\r\n|\r|\n/g, eol);
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      const temp = `${file}.${String(process.pid)}.${String(Date.now())}.${globalThis.crypto.randomUUID()}.tmp`;
-      try {
-        await fs.writeFile(temp, encodeText(normalized, encoding), { flag: 'wx' });
-        await fs.rename(temp, file);
-      } catch (error) {
-        await fs.rm(temp, { force: true });
-        throw error;
-      }
-      return {
-        path: this.jail.relative(file),
-        before,
-        after: normalized,
-        diff: unifiedDiff(before ?? '', normalized, input.path),
-      };
-    });
+    await this.assertVisible(file);
+    let before: string | null = null;
+    let encoding: 'utf8' | 'utf8-bom' | 'utf16le' | 'utf16be' = 'utf8';
+    let eol = '\n';
+    try {
+      const b = await fs.readFile(file);
+      this.assertSize(b);
+      if (isBinary(b)) throw new Error('Cannot overwrite binary file');
+      const decoded = decodeText(b);
+      before = decoded.text;
+      encoding = decoded.encoding;
+      eol = decoded.lineEnding;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const normalized = input.content.replace(/\r\n|\r|\n/g, eol);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const temp = `${file}.${String(process.pid)}.${String(Date.now())}.${globalThis.crypto.randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(temp, encodeText(normalized, encoding), { flag: 'wx' });
+      await withRenameLock(file, () => renameWithRetry(temp, file));
+    } catch (error) {
+      await fs.rm(temp, { force: true }).catch(() => undefined);
+      throw error;
+    }
+    return {
+      path: this.jail.relative(file),
+      before,
+      after: normalized,
+      diff: unifiedDiff(before ?? '', normalized, input.path),
+    };
   }
   async assertVisible(file: string): Promise<void> {
     if (await this.jail.isIgnored(file)) throw new Error('Path is ignored');

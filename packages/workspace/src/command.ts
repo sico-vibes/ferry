@@ -182,7 +182,9 @@ function killTree(
       .then((result) => {
         if (result.failed) fallback();
       })
-      .catch(() => { fallback(); });
+      .catch(() => {
+        fallback();
+      });
   } else {
     try {
       process.kill(-pid, 'SIGKILL');
