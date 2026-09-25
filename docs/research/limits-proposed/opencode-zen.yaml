@@ -1,0 +1,20 @@
+provider: opencode-zen
+name: OpenCode Zen free promo models
+tag: promo
+signup_url: https://opencode.ai/auth
+docs_url: https://opencode.ai/docs/zen/
+terms_note: >-
+  Nine free promo/stealth models (Big Pickle, Space Bunny Free, MiMo-V2.5/V2.6-Flash Free,
+  Ling 3.0 Flash Fin Free, Nemotron 3 Ultra/3.5 Lightning Free, Muse Spark 1.3 Contributor
+  Free, Jev 1.13 Free). No rate or token limits are published. The free lane is sent with
+  an anonymous public bearer and fingerprints the tool list (bash, edit, glob, grep, read);
+  account-key free-tier requests are rejected upstream.
+data_use: >-
+  Most models are zero-retention, but the free promo/stealth models may use data to improve
+  the model; NVIDIA endpoints are trial-use-only with logging.
+verified_at: '2026-09-25'
+source_url: https://opencode.ai/docs/zen/
+endpoints:
+  - https://opencode.ai/zen/v1
+windows:
+  - { scope: provider, metric: requests, kind: rolling, length: 60, limit: null }

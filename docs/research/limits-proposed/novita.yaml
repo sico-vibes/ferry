@@ -1,0 +1,17 @@
+provider: novita
+name: Novita AI (trial / tier-gated)
+tag: caution
+signup_url: https://novita.ai/
+docs_url: https://novita.ai/docs/guides/llm-rate-limits
+terms_note: >-
+  New accounts default to the free/tier-1 tier; LLM RPM/TPM values are rendered dynamically
+  and not published as fixed numbers. Sandbox gets $100 promotional credits after a survey;
+  a small (~$0.50) LLM signup voucher is reported by secondary sources only.
+data_use: unknown
+verified_at: '2026-09-25'
+source_url: https://novita.ai/docs/guides/llm-rate-limits
+endpoints:
+  - https://api.novita.ai/v3/openai
+windows:
+  - { scope: model, metric: requests, kind: rolling, length: 60, limit: null }
+  - { scope: model, metric: tokens, kind: rolling, length: 60, limit: null }

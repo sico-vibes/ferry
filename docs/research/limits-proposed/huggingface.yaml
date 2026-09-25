@@ -1,0 +1,16 @@
+provider: huggingface
+name: Hugging Face Inference Providers
+tag: legit
+signup_url: https://huggingface.co/settings/tokens
+docs_url: https://huggingface.co/docs/inference-providers/pricing
+terms_note: >-
+  Free users receive $0.10/month in inference credits (subject to change); PRO receives
+  $2.00/month; Team/Enterprise $2.00 per seat/month. Credits are monthly and applied
+  automatically. Pay-as-you-go requires purchasing credits; HF adds no markup.
+data_use: Routed requests are governed by the upstream provider's terms.
+verified_at: '2026-09-25'
+source_url: https://huggingface.co/docs/inference-providers/pricing
+endpoints:
+  - https://router.huggingface.co/v1
+windows:
+  - { scope: provider, metric: usd, kind: monthly_from_anchor, limit: 0.1 }

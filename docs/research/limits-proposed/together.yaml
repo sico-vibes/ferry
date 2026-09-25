@@ -1,0 +1,16 @@
+provider: together
+name: Together AI (pay-as-you-go, dynamic limits)
+tag: paid
+signup_url: https://api.together.ai/
+docs_url: https://docs.together.ai/docs/serverless/rate-limits
+terms_note: >-
+  No fixed free pool published. Rate limits are dynamic per organization and per model,
+  scale with sustained successful traffic, and are reported in response headers. Exceeding
+  returns 429 (above dynamic rate) or 503 (platform capacity).
+data_use: Subject to Together terms.
+verified_at: '2026-09-25'
+source_url: https://docs.together.ai/docs/serverless/rate-limits
+endpoints:
+  - https://api.together.xyz/v1
+windows:
+  - { scope: model, metric: requests, kind: rolling, length: 60, limit: null }

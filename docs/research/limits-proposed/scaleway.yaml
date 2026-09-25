@@ -1,0 +1,17 @@
+provider: scaleway
+name: Scaleway Generative APIs (one-time free tokens)
+tag: caution
+signup_url: https://console.scaleway.com/
+docs_url: https://www.scaleway.com/en/docs/generative-apis/faq.md
+terms_note: >-
+  New customers get a one-time free tier of 1,000,000 tokens (plus 60 minutes of audio
+  transcription); a Business account adds €100 credit. Not recurring. Rate limits are TPM,
+  QPM and concurrency; base limits apply with a payment method and increase after identity
+  verification.
+data_use: EU/France hosted.
+verified_at: '2026-09-25'
+source_url: https://www.scaleway.com/en/docs/generative-apis/faq.md
+endpoints:
+  - https://api.scaleway.ai/v1
+windows:
+  - { scope: provider, metric: tokens, kind: monthly_from_anchor, limit: null }

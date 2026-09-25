@@ -1,0 +1,17 @@
+provider: fireworks
+name: Fireworks AI (starter credits only)
+tag: caution
+signup_url: https://fireworks.ai/
+docs_url: https://docs.fireworks.ai/guides/quotas_usage/account-quotas
+terms_note: >-
+  New users receive $1 in free starter credits; no permanently free model tier. Without a
+  payment method or credits the account-wide limit is 10 RPM; with payment and active
+  credits it is up to 6,000 RPM. Prepaid-credits billing.
+data_use: Subject to Fireworks terms.
+verified_at: '2026-09-25'
+source_url: https://fireworks.ai/pricing
+endpoints:
+  - https://api.fireworks.ai/inference/v1
+windows:
+  - { scope: provider, metric: requests, kind: rolling, length: 60, limit: 10 }
+  - { scope: provider, metric: usd, kind: monthly_from_anchor, limit: null }

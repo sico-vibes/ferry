@@ -1,0 +1,19 @@
+provider: ollama-cloud
+name: Ollama Cloud Free plan
+tag: caution
+signup_url: https://ollama.com/settings/keys
+docs_url: https://ollama.com/pricing
+terms_note: >-
+  Free plan is $0 and includes a starter amount of usage credits for a smaller set of
+  starter models; usage resets monthly from the signup date. Buying credits unlocks all
+  models. Free concurrency is 1 request. The starter credit amount is not published.
+data_use: >-
+  Prompt or response data is never logged or trained on; Ollama requires no-logging,
+  no-training, zero-retention policies from hosting partners.
+verified_at: '2026-09-25'
+source_url: https://ollama.com/pricing
+endpoints:
+  - https://ollama.com
+windows:
+  - { scope: provider, metric: credits, kind: monthly_from_anchor, limit: null }
+  - { scope: provider, metric: requests, kind: rolling, length: 60, limit: null }
