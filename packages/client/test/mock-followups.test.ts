@@ -92,9 +92,12 @@ describe('mock client QA follow-ups', () => {
     const result = await client.providers.probe(cli.id);
     expect(result).toEqual({
       ok: true,
+      keyValid: true,
       latencyMs: null,
       message: 'CLI detected \u2014 no API key needed',
       windows: [],
+      models: [],
+      errorKind: null,
     });
     expect(cli.keyStatus).toBe('not_applicable');
   });

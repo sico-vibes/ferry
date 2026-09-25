@@ -35,4 +35,10 @@ describe('ProviderCard', () => {
     render(<ProviderCard provider={{ ...provider, stepsLeftToday: null }} />);
     expect(screen.getByText('Rate-limited · no daily cap')).toBeTruthy();
   });
+
+  it('explains terminal authentication health and points to key recovery', () => {
+    render(<ProviderCard provider={{ ...provider, health: 'auth_invalid' }} />);
+    expect(screen.getByText('Needs attention')).toBeTruthy();
+    expect(screen.getByText('Needs attention: re-enter key')).toBeTruthy();
+  });
 });

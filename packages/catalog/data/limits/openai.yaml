@@ -1,0 +1,10 @@
+provider: openai
+name: OpenAI API
+tag: paid
+signup_url: https://platform.openai.com/api-keys
+docs_url: https://platform.openai.com/docs/guides/rate-limits
+terms_note: Paid API; account limits vary.
+data_use: Subject to OpenAI API terms.
+verified_at: '2026-09-23'
+source_url: https://platform.openai.com/docs/guides/rate-limits
+windows: [{ scope: provider, metric: requests, kind: rolling, length: 60, limit: null }]

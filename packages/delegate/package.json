@@ -1,0 +1,23 @@
+{
+  "name": "@ferry/delegate",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ferry/shared": "workspace:*",
+    "@ferry/router": "workspace:*",
+    "execa": "10.0.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@ferry/testkit": "workspace:*"
+  }
+}

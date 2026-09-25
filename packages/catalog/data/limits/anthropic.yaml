@@ -1,0 +1,10 @@
+provider: anthropic
+name: Anthropic API
+tag: paid
+signup_url: https://console.anthropic.com/
+docs_url: https://docs.anthropic.com/en/api/rate-limits
+terms_note: Paid API; account limits vary.
+data_use: Subject to Anthropic commercial terms.
+verified_at: '2026-09-23'
+source_url: https://docs.anthropic.com/en/api/rate-limits
+windows: [{ scope: provider, metric: requests, kind: rolling, length: 60, limit: null }]

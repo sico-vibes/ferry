@@ -17,13 +17,16 @@ import type {
   ProbeResult,
   Profile,
   Provider,
+  QuotaObservation,
   QuotaWindow,
+  RawCallObservation,
   Session,
   SessionDetail,
   Skill,
   SystemInfo,
   TaskRecord,
   UsageHistoryPoint,
+  UsageRecord,
   Workspace,
   WorkspaceSettings,
   Settings,
@@ -139,9 +142,45 @@ export const sampleProvider: Provider = {
 };
 export const sampleProbeResult: ProbeResult = {
   ok: true,
+  keyValid: true,
   latencyMs: 42,
   message: 'OK',
   windows: [sampleQuotaWindow],
+  models: ['gpt-5'],
+  errorKind: null,
+};
+export const sampleRawCallObservation: RawCallObservation = {
+  providerId,
+  modelRef,
+  startedAt: 1790251200000,
+  latencyMs: 42,
+  statusCode: 200,
+  requestBytes: 128,
+  rateLimitHeaders: { 'x-ratelimit-remaining-requests': '8' },
+  errorKind: null,
+};
+export const sampleUsageRecord: UsageRecord = {
+  id: 'usage-1',
+  providerId,
+  modelRef,
+  occurredAt: '2026-09-24T12:00:00.000Z',
+  status: 'success',
+  inputTokens: 12,
+  outputTokens: 4,
+  latencyMs: 42,
+};
+export const sampleQuotaObservation: QuotaObservation = {
+  id: 'observation-1',
+  providerId,
+  modelRef,
+  windowId: 'requests-day',
+  metric: 'requests',
+  value: 2,
+  limit: 10,
+  remaining: 8,
+  resetAt: null,
+  source: 'header',
+  observedAt: '2026-09-24T12:00:00.000Z',
 };
 export const sampleModelInfo: ModelInfo = {
   ref: modelRef,

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ModelRefSchema, ProviderIdSchema } from './ids.js';
 import { TierSchema } from './common.js';
+import { ProviderErrorKindSchema } from './quota.js';
 export const ProviderTagSchema = z.enum(['legit', 'promo', 'paid', 'subscription_cli', 'caution']);
 export type ProviderTag = z.infer<typeof ProviderTagSchema>;
 export const QuotaWindowSchema = z.object({
@@ -25,7 +26,7 @@ export const ProviderSchema = z.object({
   brand: z.string().nullable(),
   keyStatus: z.enum(['missing', 'valid', 'invalid', 'unchecked', 'not_applicable']),
   enabled: z.boolean(),
-  health: z.enum(['ok', 'cooldown', 'down', 'unknown']),
+  health: z.enum(['ok', 'cooldown', 'down', 'unknown', 'auth_invalid', 'account_disabled']),
   cooldownUntil: z.iso.datetime().nullable(),
   dataUse: z.string().nullable(),
   termsNote: z.string().nullable(),
@@ -39,9 +40,12 @@ export const ProviderSchema = z.object({
 export type Provider = z.infer<typeof ProviderSchema>;
 export const ProbeResultSchema = z.object({
   ok: z.boolean(),
+  keyValid: z.boolean(),
   latencyMs: z.number().nonnegative().nullable(),
   message: z.string(),
   windows: z.array(QuotaWindowSchema),
+  models: z.array(z.string()),
+  errorKind: ProviderErrorKindSchema.nullable(),
 });
 export type ProbeResult = z.infer<typeof ProbeResultSchema>;
 export const ModelInfoSchema = z.object({

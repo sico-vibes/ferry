@@ -1,0 +1,19 @@
+provider: opencode-go
+name: OpenCode Go
+tag: subscription_cli
+signup_url: https://opencode.ai/zen/go
+docs_url: https://opencode.ai/zen/go
+terms_note: $10/month plan; requires proper User-Agent and session id.
+data_use: Subject to OpenCode and upstream model provider terms.
+verified_at: '2026-09-23'
+source_url: https://opencode.ai/zen/go
+endpoints:
+  - https://opencode.ai/zen/go/v1/chat/completions
+  - https://opencode.ai/zen/go/v1/messages
+required_headers:
+  - User-Agent
+  - session id
+windows:
+  - { scope: provider, metric: usd, kind: dynamic_5h, limit: 12 }
+  - { scope: provider, metric: usd, kind: weekly_fixed, tz: UTC, limit: 30 }
+  - { scope: provider, metric: usd, kind: monthly_from_anchor, limit: 60 }

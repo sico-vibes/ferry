@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FerryClient } from '@ferry/client';
 import type { ModelInfo, Provider } from '@ferry/shared';
+import { FerryProvider } from '../../data/client';
 import { ExploreCanvas } from './Explore';
 
 const pushToast = vi.fn();
@@ -15,7 +16,6 @@ let setKeySpy: ReturnType<typeof vi.fn>;
 let removeKeySpy: ReturnType<typeof vi.fn>;
 let probeSpy: ReturnType<typeof vi.fn>;
 let modelListSpy: ReturnType<typeof vi.fn>;
-vi.mock('../../data/client', () => ({ useFerryClient: () => client }));
 vi.mock('../../state/toasts', () => ({
   useToasts: (selector: (state: { push: typeof pushToast }) => unknown) =>
     selector({ push: pushToast }),
@@ -59,9 +59,11 @@ const model = (overrides: Partial<ModelInfo> = {}): ModelInfo => ({
 function setup() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={queryClient}>
-      <ExploreCanvas />
-    </QueryClientProvider>,
+    <FerryProvider client={client}>
+      <QueryClientProvider client={queryClient}>
+        <ExploreCanvas />
+      </QueryClientProvider>
+    </FerryProvider>,
   );
 }
 
@@ -80,9 +82,15 @@ beforeEach(() => {
   ]);
   setKeySpy = vi.fn().mockResolvedValue(provider({ keyStatus: 'unchecked' }));
   removeKeySpy = vi.fn().mockResolvedValue(provider({ keyStatus: 'missing' }));
-  probeSpy = vi
-    .fn()
-    .mockResolvedValue({ ok: true, latencyMs: 412, message: 'Connected', windows: [] });
+  probeSpy = vi.fn().mockResolvedValue({
+    ok: true,
+    keyValid: true,
+    latencyMs: 412,
+    message: 'Connected',
+    windows: [],
+    models: [],
+    errorKind: null,
+  });
   modelListSpy = vi.fn().mockResolvedValue([
     model(),
     model({
