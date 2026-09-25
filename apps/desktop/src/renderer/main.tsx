@@ -2,12 +2,7 @@ import '@ferry/ui/styles.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import {
-  createDemoFerryClient,
-  createHybridClient,
-  createMessagePortTransport,
-  createRpcFerryClient,
-} from '@ferry/client';
+import { createDemoFerryClient, createHybridClient, createRpcFerryClient } from '@ferry/client';
 import type { FerryClient } from '@ferry/client';
 import { FerryProvider } from './data/client';
 import { AppRouter } from './router';
@@ -28,14 +23,15 @@ const mock = createDemoFerryClient({
 });
 const bootstrapClient = async () => {
   if (!window.ferryHost) return mock;
-  const port = await window.ferryHost.connectCore();
-  const rpc = createRpcFerryClient(
-    createMessagePortTransport(port, {
-      reconnect: () =>
-        window.ferryHost?.connectCore() ?? Promise.reject(new Error('Desktop host unavailable')),
-      onRestarting: (handler) => window.ferryHost?.onEngineRestarting(handler) ?? (() => undefined),
-    }),
-  );
+  await window.ferryHost.connectCore();
+  const rpc = createRpcFerryClient({
+    send: (message) => window.ferryHost?.sendCore(message),
+    subscribe: (handler) => window.ferryHost?.onCoreMessage(handler) ?? (() => undefined),
+    reconnect: () =>
+      window.ferryHost?.connectCore() ?? Promise.reject(new Error('Desktop host unavailable')),
+    onClose: (handler) => window.ferryHost?.onEngineRestarting(handler) ?? (() => undefined),
+    close: () => window.ferryHost?.closeCore(),
+  });
   const hello = await rpc.hello;
   window.ferryEngineHello = hello;
   window.ferryRpcClient = rpc;

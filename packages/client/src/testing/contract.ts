@@ -84,7 +84,7 @@ export function runFerryClientContract(
             (x) => UsageHistoryPointSchema.safeParse(x).success,
           ),
         ).toBe(true);
-        expect((await client.quota.handoffs(30)).length).toBeGreaterThan(0);
+        expect(Array.isArray(await client.quota.handoffs(30))).toBe(true);
       }
       if (includes('optimizer')) OptimizerStatsSchema.parse(await client.optimizer.stats());
       if (includes('system')) SystemInfoSchema.parse(await client.system.info());

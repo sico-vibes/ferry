@@ -64,6 +64,7 @@ export function createRpcFerryClient(
       params?: unknown;
     };
     if (message.method && typeof message.id !== 'number') {
+      if (!Object.hasOwn(FerryEventSchemas, message.method)) return;
       const eventSchema = FerryEventSchemas[message.method as keyof FerryEvents];
       if (!eventSchema.safeParse(message.params).success) return;
       const handlers = listeners.get(message.method as keyof FerryEvents);
@@ -256,6 +257,7 @@ export function createHybridClient(
     {},
     {
       get(_target, key) {
+        if (key === 'then') return undefined;
         if (key === 'setRealDomains')
           return (domains: readonly string[]) => {
             real.clear();

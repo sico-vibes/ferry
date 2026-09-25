@@ -512,6 +512,9 @@ export function SessionCanvas() {
   const [newOutputCount, setNewOutputCount] = useState(0);
   const [atBottom, setAtBottom] = useState(true);
   const messages = data?.messages ?? [];
+  const streamingMessageId = [...messages]
+    .reverse()
+    .find((message) => message.role === 'assistant')?.id;
   const virtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => viewport.current,
@@ -983,14 +986,15 @@ export function SessionCanvas() {
                         />
                       ),
                     )}
-                    {Object.entries(streaming)
-                      .filter(([id]) => !message.parts.some((part) => part.id === id))
-                      .map(([id, text]) => (
-                        <div key={id}>
-                          <MarkdownPart content={text} />
-                          <StreamingCursor />
-                        </div>
-                      ))}
+                    {message.id === streamingMessageId &&
+                      Object.entries(streaming)
+                        .filter(([id]) => !message.parts.some((part) => part.id === id))
+                        .map(([id, text]) => (
+                          <div key={id}>
+                            <MarkdownPart content={text} />
+                            <StreamingCursor />
+                          </div>
+                        ))}
                   </AssistantMessage>
                 )}
               </div>

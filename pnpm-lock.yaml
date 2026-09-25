@@ -338,6 +338,15 @@ importers:
       '@ferry/client':
         specifier: workspace:*
         version: link:../client
+      '@ferry/catalog':
+        specifier: workspace:*
+        version: link:../catalog
+      '@ferry/providers':
+        specifier: workspace:*
+        version: link:../providers
+      '@ferry/quota':
+        specifier: workspace:*
+        version: link:../quota
       '@ferry/secrets':
         specifier: workspace:*
         version: link:../secrets
@@ -356,6 +365,10 @@ importers:
       zod:
         specifier: 4.6.5
         version: 4.6.5
+    devDependencies:
+      '@ferry/testkit':
+        specifier: workspace:*
+        version: link:../testkit
 
   packages/delegate:
     dependencies:

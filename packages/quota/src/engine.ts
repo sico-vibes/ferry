@@ -674,7 +674,9 @@ export class QuotaEngine {
     const schedule = () => {
       if (stopped || !active()) return;
       const timer = setTimeout(() => {
-        void poll().finally(schedule);
+        void poll()
+          .catch(() => undefined)
+          .finally(schedule);
       }, 5 * 60_000);
       this.timers.add(timer);
     };

@@ -26,7 +26,10 @@ export class FakeProviderServer {
   readonly requests: RecordedRequest[] = [];
   private cursor = 0;
   baseUrl = '';
-  constructor(readonly options: FakeServerOptions = {}) {}
+  readonly options: FakeServerOptions;
+  constructor(options: FakeServerOptions = {}) {
+    this.options = options;
+  }
   protected matches(_url: string): boolean {
     return true;
   }
@@ -197,13 +200,18 @@ export class FakeGeminiServer extends FakeProviderServer {
   }
 }
 export class FakeOpenRouterKeyEndpoint extends FakeProviderServer {
+  private readonly keyInfo: {
+    limit_remaining: number;
+    free_model_daily_requests: { remaining: number; limit: number };
+  };
   constructor(
-    private readonly keyInfo = {
+    keyInfo = {
       limit_remaining: 5,
       free_model_daily_requests: { remaining: 42, limit: 50 },
     },
   ) {
     super();
+    this.keyInfo = keyInfo;
   }
   protected override matches(url: string): boolean {
     return url === '/api/v1/key';

@@ -112,7 +112,12 @@ export function createLanguageModel(ref: ModelRef, opts: ModelFactoryOptions): L
     case 'anthropic':
       return createAnthropic({ apiKey: opts.apiKey, headers, ...fetchOptions })(modelId);
     case 'openai':
-      return createOpenAI({ apiKey: opts.apiKey, headers, ...fetchOptions }).chat(modelId);
+      return createOpenAI({
+        apiKey: opts.apiKey,
+        headers,
+        ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
+        ...fetchOptions,
+      }).chat(modelId);
     case 'openrouter': {
       const openRouterHeaders = {
         ...headers,
@@ -670,6 +675,7 @@ export async function probe(
       model: languageModel,
       prompt: 'Reply with one character.',
       maxOutputTokens: 1,
+      maxRetries: 0,
     });
     const parser = parserIdForProvider(
       String(providerId),
@@ -720,12 +726,34 @@ export async function probe(
           ? { statusCode: latestObservation.statusCode, retryAfter, message: String(error) }
           : error;
     const mapped = mapProviderError(enrichedError);
+    const catalog = await providerCatalog();
+    const status =
+      latestObservation?.statusCode ??
+      Number(
+        error && typeof error === 'object' ? (error as Record<string, unknown>).statusCode : 0,
+      );
+    const parsedWindows = parseQuota(
+      parserIdForProvider(
+        String(providerId),
+        catalog.providers.find((provider) => provider.provider === providerId)?.parser,
+      ),
+      {
+        headers: latestHeaders,
+        ...(Number.isFinite(status) && status > 0 ? { status } : {}),
+      },
+    );
+    const failedObservations = toQuotaObservations(parsedWindows, {
+      providerId: ProviderIdSchema.parse(providerId),
+      source: 'header',
+      observedAt: new Date().toISOString(),
+      statusCode: Number.isFinite(status) && status > 0 ? status : undefined,
+    });
     return {
       ok: false,
       keyValid: mapped.kind !== 'auth',
       latencyMs: Math.max(0, performance.now() - started),
       message: mapped.message,
-      windows: [],
+      windows: quotaWindows(failedObservations),
       models: [],
       errorKind: mapped.kind,
     };
@@ -739,7 +767,7 @@ async function listProviderModels(
   fetchImpl: typeof globalThis.fetch,
 ): Promise<string[]> {
   let baseURL: string | undefined;
-  if (providerId === 'openai') baseURL = 'https://api.openai.com/v1';
+  if (providerId === 'openai') baseURL = options.baseUrl ?? 'https://api.openai.com/v1';
   else if (providerId === 'openrouter') baseURL = options.baseUrl ?? 'https://openrouter.ai/api/v1';
   else if (compatibleDefaults[providerId])
     baseURL = options.baseUrl ?? compatibleDefaults[providerId];

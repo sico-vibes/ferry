@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { copyFile, mkdir } from 'node:fs/promises';
+import { copyFile, cp, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
@@ -17,9 +17,16 @@ const copyStorageMigrations = {
   },
 };
 
+const copyCatalogData = {
+  name: 'ferry-copy-catalog-data',
+  async closeBundle() {
+    await cp(resolve('../../packages/catalog/data'), resolve('out/data'), { recursive: true });
+  },
+};
+
 export default defineConfig({
   main: {
-    plugins: [copyStorageMigrations],
+    plugins: [copyStorageMigrations, copyCatalogData],
     resolve: { alias: { '@ferry/core': resolve('../../packages/core/src/index.ts') } },
     build: {
       externalizeDeps: {
