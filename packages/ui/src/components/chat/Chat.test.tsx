@@ -37,6 +37,19 @@ describe('transcript components', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show full' }));
     expect(show).toHaveBeenCalledWith('handle');
   });
+  it('renders unknown tool names with the generic tool fallback', () => {
+    render(
+      <ToolCallBlock
+        tool="custom_skill_tool"
+        title="Run custom skill"
+        args={{}}
+        status="pending"
+        output={null}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /Run custom skill/ })).toBeTruthy();
+  });
   it('collapses reasoning by default and exposes approval decisions', () => {
     const respond = vi.fn();
     render(

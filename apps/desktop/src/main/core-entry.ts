@@ -59,6 +59,7 @@ parentPort.on('message', (event) => {
       });
     })
     .catch((error: unknown) => {
+      console.error('FERRY_CORE_ERROR', error);
       port.postMessage({
         jsonrpc: '2.0',
         method: 'system.coreError',

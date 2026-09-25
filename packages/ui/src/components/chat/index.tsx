@@ -129,7 +129,7 @@ export function ReasoningPart({
     </section>
   );
 }
-const tools: Record<ToolName, LucideIcon> = {
+const tools: Record<string, LucideIcon> = {
   read_file: FileText,
   edit_file: FilePen,
   write_file: FilePlus,
@@ -198,7 +198,7 @@ export function ToolCallBlock({
   onOpenDiff?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const Icon = tools[tool];
+  const Icon = tool.startsWith('mcp__') ? Plug : (tools[tool] ?? Wrench);
   return (
     <section className="overflow-hidden rounded-xl border border-border-hair bg-card">
       <button

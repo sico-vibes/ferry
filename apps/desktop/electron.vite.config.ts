@@ -5,6 +5,16 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'electron-vite';
 
+const bundledWorkspacePackages = [
+  '@ferry/core',
+  '@ferry/config',
+  '@ferry/secrets',
+  '@ferry/storage',
+  '@ferry/workspace',
+  '@ferry/client',
+  '@ferry/shared',
+];
+
 const copyStorageMigrations = {
   name: 'ferry-copy-storage-migrations',
   async closeBundle() {
@@ -23,8 +33,17 @@ export default defineConfig({
     resolve: { alias: { '@ferry/core': resolve('../../packages/core/src/index.ts') } },
     build: {
       externalizeDeps: {
-        exclude: ['@ferry/core', '@ferry/shared'],
-        include: ['better-sqlite3', 'node-pty', '@napi-rs/keyring', 'pino', 'pino-roll'],
+        exclude: bundledWorkspacePackages,
+        include: [
+          'better-sqlite3',
+          'node-pty',
+          '@napi-rs/keyring',
+          '@napi-rs/keyring-win32-x64-msvc',
+          '@vscode/ripgrep',
+          '@vscode/tree-sitter-wasm',
+          'pino',
+          'pino-roll',
+        ],
       },
       rollupOptions: {
         input: {
