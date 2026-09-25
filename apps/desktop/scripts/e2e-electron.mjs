@@ -54,6 +54,10 @@ try {
     selfTest.modules.map(({ name }) => name),
     ['better-sqlite3', 'node-pty', '@napi-rs/keyring'],
   );
+  assert.ok(
+    selfTest.modules.every((module) => module.ok),
+    `Electron core native selfTest failed: ${JSON.stringify(selfTest)}`,
+  );
   console.log(`Electron core connected; native selfTest: ${JSON.stringify(selfTest)}`);
 } finally {
   clearTimeout(timeout);

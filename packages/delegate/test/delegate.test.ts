@@ -105,7 +105,7 @@ describe('external CLI adapters', () => {
 
   it('cancels a delayed process and enforces the watchdog timeout', async () => {
     const root = await tempRoot();
-    const delayed = await installFakeClis(join(root, 'delayed'), { delayBeforeEventsMs: 1_000 });
+    const delayed = await installFakeClis(join(root, 'delayed'), { delayBeforeEventsMs: 100 });
     const controller = new AbortController();
     const cancelled = runAdapter('codex', {
       prompt: 'cancel',
@@ -115,9 +115,9 @@ describe('external CLI adapters', () => {
     });
     setTimeout(() => {
       controller.abort();
-    }, 50);
+    }, 20);
     await expect(cancelled).rejects.toThrow();
-    const slow = await installFakeClis(join(root, 'slow'), { delayBeforeEventsMs: 1_000 });
+    const slow = await installFakeClis(join(root, 'slow'), { delayBeforeEventsMs: 100 });
     await expect(
       runAdapter('opencode', {
         prompt: 'timeout',

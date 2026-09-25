@@ -2,6 +2,7 @@ import { streamText, tool, type ToolSet } from 'ai';
 import { jsonrepair } from 'jsonrepair';
 import { z } from 'zod';
 import { createObservedFetch, createLanguageModel } from '@ferry/providers';
+import { optimizeOutput, InMemoryBlobStore, readOutput } from '@ferry/optimizer';
 import {
   classifyStep,
   scoreModels,
@@ -85,11 +86,13 @@ export interface AgentOptions {
   ) => Promise<'allowed_once' | 'allowed_always' | 'denied'>;
   askUser?: (question: string, signal: AbortSignal) => Promise<string>;
   generator?: StepGenerator;
+  providerFetch?: typeof globalThis.fetch;
   toolSources?: readonly ToolSource[];
   promptSections?: readonly PromptSection[];
   filterOutput?: (
     name: string,
     text: string,
+    command?: string,
   ) => Promise<{ text: string; filtered: boolean; recoveryHandle?: string }>;
   readRecovery?: (handle: string) => Promise<string | undefined>;
   title?: (prompt: string, signal: AbortSignal) => Promise<string>;
@@ -117,6 +120,7 @@ export interface RunResult {
 export class AgentLoop {
   private readonly estimates: (text: string) => number;
   private readonly outputHandles = new Map<string, string>();
+  private readonly recoveryStore = new InMemoryBlobStore();
 
   constructor(private readonly options: AgentOptions) {
     this.estimates = options.estimateTokens ?? estimateTextTokens;
@@ -174,9 +178,22 @@ export class AgentLoop {
         this.options.emit({ type: 'session.updated', session: resumed });
         return response;
       },
-      ...(this.options.filterOutput ? { filterOutput: this.options.filterOutput } : {}),
+      filterOutput: async (name, text, command) => {
+        if (this.options.filterOutput) return this.options.filterOutput(name, text, command);
+        const result = optimizeOutput(command ?? name, text, {
+          sessionId,
+          blobStore: this.recoveryStore,
+        });
+        return {
+          text: result.output,
+          filtered: result.output !== text,
+          ...(result.handle ? { recoveryHandle: result.handle } : {}),
+        };
+      },
       readRecovery: async (handle) =>
-        this.outputHandles.get(handle) ?? this.options.readRecovery?.(handle),
+        this.outputHandles.get(handle) ??
+        readOutput(this.recoveryStore, handle) ??
+        this.options.readRecovery?.(handle),
       ...(this.options.toolSources ? { sources: this.options.toolSources } : {}),
       updateTask: (task) => {
         taskRecord = task;
@@ -511,6 +528,7 @@ export class AgentLoop {
         this.options.emit({ type: 'quota.updated', observation });
       },
       { providerId: model.providerId, model: model.ref },
+      this.options.providerFetch ?? globalThis.fetch,
     );
     // The SDK generator callback captures its model and loop scope intentionally.
     // eslint-disable-next-line @typescript-eslint/unbound-method

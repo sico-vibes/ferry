@@ -48,9 +48,12 @@ export async function runCommand(
   jail: WorkspaceJail,
   raw: unknown,
   onOutput: (event: OutputEvent) => void = ignoreOutput,
+  signal?: AbortSignal,
 ): Promise<CommandResult> {
+  if (signal?.aborted) throw abortReason(signal);
   const input = RunCommandInput.parse(raw);
   const cwd = await jail.resolve(input.cwd);
+  if (signal?.aborted) throw abortReason(signal);
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env))
     if (value !== undefined && envAllow.has(key.toUpperCase())) env[key] = value;
@@ -92,28 +95,30 @@ export async function runCommand(
       });
       const timeout = setTimeout(() => {
         timedOut = true;
-        try {
-          if (process.platform === 'win32' && child.pid) {
-            void execa('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
-              reject: false,
-              windowsHide: true,
-            });
-          } else child.kill();
-        } catch {
-          /* already exited */
-        }
+        killTree(child.pid, () => {
+          child.kill();
+        });
       }, input.timeoutMs);
       await new Promise<void>((resolve) => {
+        const abort = () => {
+          killTree(child.pid, () => {
+            child.kill();
+          });
+        };
+        signal?.addEventListener('abort', abort, { once: true });
         child.onData((data) => {
           void write('stdout', data);
         });
         child.onExit(({ exitCode: code }) => {
           exitCode = code;
           clearTimeout(timeout);
+          signal?.removeEventListener('abort', abort);
           resolve();
         });
       });
+      if (signal?.aborted) throw abortReason(signal);
     } catch {
+      if (signal?.aborted) throw abortReason(signal);
       exitCode = await fallback();
     }
   } else exitCode = await fallback();
@@ -132,17 +137,20 @@ export async function runCommand(
       reject: false,
       windowsHide: true,
       buffer: false,
+      ...(process.platform === 'win32' ? {} : { detached: true }),
     });
     const timeout = setTimeout(() => {
       timedOut = true;
-      if (process.platform === 'win32' && child.pid) {
-        const killer = execa('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
-          reject: false,
-          windowsHide: true,
-        });
-        void killer;
-      } else child.kill('SIGKILL');
+      killTree(child.pid, () => {
+        child.kill('SIGKILL');
+      });
     }, input.timeoutMs);
+    const abort = () => {
+      killTree(child.pid, () => {
+        child.kill('SIGKILL');
+      });
+    };
+    signal?.addEventListener('abort', abort, { once: true });
     child.stdout.on('data', (data: Buffer) => {
       void write('stdout', data);
     });
@@ -151,7 +159,26 @@ export async function runCommand(
     });
     const result = await child;
     clearTimeout(timeout);
+    signal?.removeEventListener('abort', abort);
+    if (signal?.aborted) throw abortReason(signal);
     return result.exitCode ?? 1;
+  }
+}
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError');
+}
+function killTree(pid: number | undefined, fallback: () => void): void {
+  if (!pid) return;
+  try {
+    if (process.platform === 'win32') {
+      void execa('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        reject: false,
+        windowsHide: true,
+      });
+      fallback();
+    } else process.kill(-pid, 'SIGKILL');
+  } catch {
+    fallback();
   }
 }
 function chooseShell(env: Record<string, string>): {

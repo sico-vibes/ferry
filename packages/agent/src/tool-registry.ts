@@ -59,6 +59,7 @@ export interface ToolRegistryOptions {
   filterOutput?: (
     tool: string,
     text: string,
+    command?: string,
   ) => Promise<{ text: string; filtered: boolean; recoveryHandle?: string }>;
   readRecovery?: (handle: string) => Promise<string | undefined>;
   sources?: readonly ToolSource[];
@@ -161,7 +162,7 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
       title: 'Run command',
       schema: CommandSchema,
       permission: { command: (a) => (a as z.infer<typeof CommandSchema>).command },
-      execute: (a) => runCommand(workspace.jail, a),
+      execute: (a, c) => runCommand(workspace.jail, a, undefined, c.signal),
     },
     {
       name: 'repo_map',
@@ -252,7 +253,13 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
         const value = await original(args, context);
         checkAbort(context.signal);
         const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-        const filtered = (await options.filterOutput?.(definition.name, text)) ?? {
+        const filtered = (await options.filterOutput?.(
+          definition.name,
+          text,
+          definition.name === 'run_command'
+            ? (args as z.infer<typeof CommandSchema>).command
+            : undefined,
+        )) ?? {
           text,
           filtered: false,
         };

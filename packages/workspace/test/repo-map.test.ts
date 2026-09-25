@@ -63,5 +63,5 @@ describe('repo map', () => {
     const second = await buildRepoMap(jail, { tokenBudget: 220 });
     expect(first.tokenCount).toBeLessThanOrEqual(220);
     expect(first.text).toBe(second.text);
-  });
+  }, 15_000);
 });

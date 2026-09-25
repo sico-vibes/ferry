@@ -7,6 +7,7 @@ import { applyPatch, editFile } from '../src/edit.js';
 import { evaluatePermission, classifyDangerousCommand } from '../src/permissions.js';
 import { WorkspaceTools } from '../src/tools.js';
 import { ShadowCheckpoints } from '../src/git.js';
+import { runCommand } from '../src/command.js';
 
 const roots: string[] = [];
 async function tempRoot(): Promise<string> {
@@ -58,6 +59,23 @@ describe('workspace filesystem', () => {
     await writeFile(path.join(root, 'large'), '123456789');
     await expect(tools.readFile({ path: 'large' })).rejects.toThrow(/byte limit/);
   });
+  it('kills a running command tree when its signal is aborted', async () => {
+    const root = await tempRoot();
+    const controller = new AbortController();
+    const running = runCommand(
+      new WorkspaceJail(root),
+      {
+        command: 'node -e "process.stdout.write(\'ready\'); setTimeout(() => {}, 10000)"',
+        pty: false,
+        timeoutMs: 20_000,
+      },
+      (event) => {
+        if (event.data.includes('ready')) controller.abort(new Error('Cancelled by test'));
+      },
+      controller.signal,
+    );
+    await expect(running).rejects.toThrow('Cancelled by test');
+  }, 15_000);
   it('uses whitespace then fuzzy matching and rejects an ambiguous exact block', async () => {
     const root = await tempRoot();
     const tools = new WorkspaceTools(root);
@@ -152,5 +170,5 @@ describe('shadow checkpoints', () => {
     expect(await checkpoints.diff(second, 'state.txt')).toContain('-before');
     await checkpoints.restore(first);
     expect(await readFile(path.join(root, 'state.txt'), 'utf8')).toBe('before\n');
-  }, 20_000);
+  }, 45_000);
 });

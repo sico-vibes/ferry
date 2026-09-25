@@ -18,6 +18,7 @@ import {
 } from '@ferry/shared';
 import { openDatabase, MessageRepository, SessionRepository, TaskRepository } from '@ferry/storage';
 import { BUILTIN_PROFILES } from '@ferry/router';
+import { createFixtureRepo, FakeOpenAIServer } from '@ferry/testkit';
 import { AGENT_EVALS, runAgentEvals } from '../evals/fixtures.js';
 import { AgentLoop, repairAndValidate } from '../src/loop.js';
 import { SessionStore } from '../src/session.js';
@@ -347,11 +348,64 @@ describe('@ferry/agent', () => {
     }
   });
 
-  it('defines all eight deterministic eval scenarios and reports measurements', async () => {
+  it('runs all eight eval scenarios against fixture repos and scripted fake OpenAI responses', async () => {
     expect(AGENT_EVALS).toHaveLength(8);
     const report = await runAgentEvals({
-      run: async () => ({ success: true, steps: 1, tokens: 12 }),
+      run: async (fixture) => {
+        const repo = await createFixtureRepo(fixture.template);
+        const state = await setup();
+        const response = `Evaluated ${fixture.id}`;
+        const chunk = (delta: Record<string, unknown>, finishReason: string | null = null) => ({
+          id: 'chatcmpl_eval',
+          object: 'chat.completion.chunk',
+          created: 1,
+          model: 'test-model',
+          choices: [{ index: 0, delta, finish_reason: finishReason }],
+        });
+        const fake = await FakeOpenAIServer.scriptedTurns([
+          {
+            chunks: [chunk({ role: 'assistant' }), chunk({ content: response }), chunk({}, 'stop')],
+          },
+        ]).start();
+        try {
+          const loop = new AgentLoop({
+            store: state.store,
+            workspace: repo.path,
+            dataDir: state.root,
+            profile: BUILTIN_PROFILES[0]!,
+            catalog: state.catalog,
+            capacity: () => ({ providers: [state.provider] }),
+            apiKeys: { openai: 'fixture-key' },
+            permissionMode: 'full_auto',
+            emit: () => {},
+            providerFetch: (input, init) => {
+              const request = input instanceof Request ? input : new Request(input, init);
+              const url = new URL(request.url);
+              return fetch(new URL(`${url.pathname}${url.search}`, fake.baseUrl), request);
+            },
+          });
+          const result = await loop.run({ sessionId: state.session.id });
+          return {
+            success:
+              result.status === 'completed' &&
+              fake.requests.length === 1 &&
+              state.store
+                .load(state.session.id)
+                ?.messages.at(-1)
+                ?.parts.some((part) => part.type === 'text' && part.text === response) === true,
+            steps: result.steps,
+            tokens: result.tokens,
+          };
+        } finally {
+          await fake.stop();
+          state.database.close();
+          await repo.cleanup();
+        }
+      },
     });
     expect(report).toMatchObject({ mode: 'fake', passed: 8, total: 8 });
-  });
+    expect(report.results.map(({ id, success }) => [id, success])).toEqual(
+      AGENT_EVALS.map(({ id }) => [id, true]),
+    );
+  }, 30_000);
 });
