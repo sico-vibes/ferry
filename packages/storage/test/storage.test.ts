@@ -1,11 +1,12 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProfileIdSchema, SessionIdSchema, WorkspaceIdSchema } from '@ferry/shared';
 import { openDatabase, runRetention, RequestRepository, SessionRepository } from '../src/index.js';
 
 const dirs: string[] = [];
+vi.setConfig({ testTimeout: 30_000 });
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });

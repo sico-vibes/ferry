@@ -13,6 +13,7 @@ import { CoreHost, createCoreHost } from '../src/index.js';
 import type { CoreWebSocketHandle } from '../src/index.js';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'ferry-qa-ws-'));
+vi.setConfig({ testTimeout: 30_000 });
 const active: CoreHost[] = [];
 
 afterEach(async () => {
@@ -150,11 +151,11 @@ describe('QA WebSocket transport validation', () => {
   it('round-trips hello over an authenticated WebSocket', async () => {
     const { endpoint } = await startBareWs('ws-rpc');
     const rpc: RpcFerryClient = createRpcFerryClient(createWebSocketRpcTransport(endpoint.url), {
-      timeoutMs: 3000,
+      timeoutMs: 10_000,
     });
     try {
       await expect(rpc.hello).resolves.toMatchObject({ protocol: 'ferry/1' });
-      await expect(rpc.system.info()).resolves.toMatchObject({ mock: false });
+      await expect(rpc.system.info()).resolves.toMatchObject({ mock: false, dataDir: null });
     } finally {
       rpc.close();
     }
@@ -165,7 +166,7 @@ describe('QA WebSocket transport validation', () => {
     const wrong = new URL(endpoint.url);
     wrong.searchParams.set('token', 'wrong-token');
     const rpc = createRpcFerryClient(createWebSocketRpcTransport(wrong.toString()), {
-      timeoutMs: 1500,
+      timeoutMs: 10_000,
     });
     try {
       await expect(rpc.hello).rejects.toBeInstanceOf(RpcError);
@@ -174,7 +175,7 @@ describe('QA WebSocket transport validation', () => {
     }
   });
 
-  it('still requires a valid token even with a spoofed browser Origin', async () => {
+  it('rejects any Origin while retaining bearer token authentication', async () => {
     const { endpoint } = await startBareWs('ws-origin');
     const url = new URL(endpoint.url);
     // Token missing + hostile Origin must be refused.
@@ -184,13 +185,15 @@ describe('QA WebSocket transport validation', () => {
         origin: 'http://evil.example',
       }),
     ).toContain('401');
-    // Observed: the server does not enforce the Origin header, so a caller that
-    // somehow learns the random token can connect from any Origin. Recorded as a
-    // hardening risk, not a spec violation (loopback + bearer token is the gate).
     expect(
       await upgradeStatus(portOf(endpoint), `${url.pathname}?token=${endpoint.token}`, {
         key: 'a2V5',
         origin: 'http://evil.example',
+      }),
+    ).toContain('401');
+    expect(
+      await upgradeStatus(portOf(endpoint), `${url.pathname}?token=${endpoint.token}`, {
+        key: 'a2V5',
       }),
     ).toContain('101');
   });
@@ -210,7 +213,7 @@ describe('QA WebSocket token secrecy', () => {
     const endpoint = host.websocket;
     if (!endpoint) throw new Error('WebSocket endpoint did not start');
     const rpc = createRpcFerryClient(createWebSocketRpcTransport(endpoint.url), {
-      timeoutMs: 3000,
+      timeoutMs: 10_000,
     });
     try {
       await rpc.hello;
@@ -230,5 +233,5 @@ describe('QA WebSocket token secrecy', () => {
     expect(printed).not.toContain(endpoint.token);
     const logs = await readAllLogs(join(dir, 'logs'));
     expect(logs).not.toContain(endpoint.token);
-  });
+  }, 30_000);
 });

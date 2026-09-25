@@ -95,12 +95,17 @@ describe('QA protocol envelope', () => {
       });
     }
     await host.stop();
+    await host.handleMessage({ jsonrpc: '2.0', id: 3, method: 'system.info', params: [] });
+    expect(lastResponse(wire)).toMatchObject({
+      id: 3,
+      error: { data: { kind: 'shutting_down' } },
+    });
   });
 
   // BUG: a fractional numeric id is echoed back verbatim, producing a response
   // that the exported JsonRpcResponseSchema itself rejects (ids must be integers
   // or strings); it should fall back to null like other unusable ids.
-  it.fails('does not echo a fractional id that fails its own response schema', async () => {
+  it('does not echo a fractional id that fails its own response schema', async () => {
     const { host, wire } = await startHost('fractional-id');
     wire.inject({ jsonrpc: '2.0', id: 1.5, method: 'system.info', params: [] });
     await wire.drain();
@@ -190,7 +195,7 @@ describe('QA protocol envelope', () => {
 
   // BUG: every start() adds another permanent event forwarder; stop() never
   // unsubscribes it, so a stop/start cycle delivers each event twice.
-  it.fails('emits each event exactly once after a stop/start cycle', async () => {
+  it('emits each event exactly once after a stop/start cycle', async () => {
     const [coreTransport, clientTransport] = createMemoryTransportPair();
     const settings = SettingsSchema.parse(DEFAULT_SETTINGS);
     const host = new CoreHost({
@@ -219,9 +224,19 @@ describe('QA protocol envelope', () => {
     await host.stop();
   });
 
+  it('reports a clear error when a composed host is started after stop', async () => {
+    const host = new CoreHost({
+      dataDir: join(dataDir, 'composed-restart'),
+      services: { dispose: () => Promise.resolve() } as never,
+    });
+    await host.start();
+    await host.stop();
+    await expect(host.start()).rejects.toThrow(/already_stopped/);
+  });
+
   // BUG: JSON-RPC batch requests (an array) are silently dropped instead of being
   // answered with an array of responses (or a single invalid_request).
-  it.fails('answers a JSON-RPC batch request', async () => {
+  it('answers a JSON-RPC batch request', async () => {
     const { host, wire } = await startHost('batch');
     wire.inject([
       { jsonrpc: '2.0', id: 1, method: 'system.info', params: [] },
@@ -229,6 +244,14 @@ describe('QA protocol envelope', () => {
     ]);
     await wire.drain();
     expect(wire.sent.length).toBeGreaterThan(0);
+    expect(wire.sent[0]).toHaveLength(2);
+    wire.sent.length = 0;
+    wire.inject([]);
+    await wire.drain();
+    expect(lastResponse(wire)).toMatchObject({
+      id: null,
+      error: { code: -32600, data: { kind: 'invalid_request' } },
+    });
     await host.stop();
   });
 });
@@ -256,7 +279,7 @@ describe('QA stdio framing', () => {
 
   // BUG: malformed JSON on the stdio framing is swallowed with no parse_error (-32700)
   // response, leaving the client to time out.
-  it.fails('reports malformed JSON framing with parse_error (-32700)', async () => {
+  it('reports malformed JSON framing with parse_error (-32700)', async () => {
     const input = new PassThrough();
     const output = new PassThrough();
     const lines: string[] = [];
@@ -268,7 +291,11 @@ describe('QA stdio framing', () => {
     await host.start();
     input.write('this is not json\n');
     await poll(() => lines.join('').trim().length > 0);
-    expect(lines.join('').trim().length).toBeGreaterThan(0);
+    expect(JSON.parse(lines.join('').trim())).toMatchObject({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32700, data: { kind: 'parse_error' } },
+    });
     await host.stop();
   });
 });

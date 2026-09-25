@@ -20,9 +20,19 @@ export function register(host: CoreHost, services: FerryServices): void {
         .filter((checkpoint) => checkpoint.sessionId === sessionId)
         .map((checkpoint) => CheckpointSchema.parse(checkpoint));
       const output = [...checkpoints];
-      for (const workspace of services.workspaces.list()) {
+      const session = services.sessions.get(sessionId);
+      const workspace = session ? services.workspaces.get(session.workspaceId) : undefined;
+      const workspaces = services.workspaces.list();
+      const candidates = session
+        ? workspace
+          ? [workspace]
+          : []
+        : workspaces.length === 1
+          ? workspaces
+          : [];
+      for (const candidate of candidates) {
         const shadow = new ShadowCheckpoints(
-          new WorkspaceJail(workspace.path),
+          new WorkspaceJail(candidate.path),
           services.paths.home,
         );
         for (const entry of await shadow.list()) {

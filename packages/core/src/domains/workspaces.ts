@@ -1,4 +1,4 @@
-import { readdir, stat } from 'node:fs/promises';
+import { readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { WorkspaceIdSchema, WorkspaceSchema, newId } from '@ferry/shared';
 import type { Workspace } from '@ferry/shared';
@@ -33,12 +33,27 @@ export function register(host: CoreHost, services: FerryServices): void {
       );
     },
     async open(rawPath: unknown) {
-      const absolutePath = path.resolve(PathSchema.parse(rawPath));
-      if (!(await stat(absolutePath)).isDirectory())
-        throw rpcDomainError(-32010, 'validation', 'Workspace path must be a directory');
+      let absolutePath = path.resolve(PathSchema.parse(rawPath));
+      try {
+        if (!(await stat(absolutePath)).isDirectory())
+          throw rpcDomainError(-32010, 'validation', 'Workspace path must be a directory');
+        absolutePath = await realpath(absolutePath);
+      } catch (error) {
+        if (error instanceof Error && 'kind' in error) throw error;
+        const mapped = mapWorkspaceFsError(error);
+        if (mapped) throw mapped;
+        throw error;
+      }
       const jail = new WorkspaceJail(absolutePath);
-      await jail.initialize();
-      const entries = await readdir(absolutePath);
+      let entries: string[];
+      try {
+        await jail.initialize();
+        entries = await readdir(absolutePath);
+      } catch (error) {
+        const mapped = mapWorkspaceFsError(error);
+        if (mapped) throw mapped;
+        throw error;
+      }
       let branch: string | null = null;
       try {
         branch = (await gitBranch(jail)).current || null;
@@ -47,7 +62,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       }
       let workspace = services.workspaces
         .list()
-        .find((entry) => path.resolve(entry.path) === absolutePath);
+        .find((entry) => workspacePathKey(entry.path) === workspacePathKey(absolutePath));
       if (!workspace) {
         workspace = WorkspaceSchema.parse({
           id: newId('workspace'),
@@ -99,4 +114,23 @@ export function register(host: CoreHost, services: FerryServices): void {
       });
     },
   });
+}
+
+function workspacePathKey(value: string): string {
+  const normalized = path.resolve(value);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function mapWorkspaceFsError(error: unknown): (Error & { code: number; kind: string }) | undefined {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+  if (code === 'ENOENT' || code === 'ENOTDIR')
+    return rpcDomainError(-32044, 'not_found', 'Workspace path does not exist');
+  if (code === 'EACCES' || code === 'EPERM')
+    return rpcDomainError(-32043, 'permission_denied', 'Workspace path cannot be accessed');
+  if (code === 'EINVAL' || code === 'ELOOP' || code === 'ENAMETOOLONG')
+    return rpcDomainError(-32010, 'validation', 'Workspace path is not valid');
+  if (code.startsWith('E'))
+    return rpcDomainError(-32050, 'unavailable', 'Workspace path could not be accessed');
+  return undefined;
 }

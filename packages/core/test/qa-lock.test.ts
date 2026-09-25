@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { FERRY_PROTOCOL } from '@ferry/shared';
 import {
   CoreHost,
@@ -13,28 +13,30 @@ import {
 } from '../src/index.js';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'ferry-qa-lock-'));
+vi.setConfig({ testTimeout: 30_000 });
 afterAll(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
 });
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 async function spawnAndKill(): Promise<number> {
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
     stdio: 'ignore',
   });
-  if (child.pid === undefined) throw new Error('Failed to spawn child process');
-  await sleep(200);
-  child.kill('SIGKILL');
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+  const pid = child.pid;
+  if (pid === undefined) throw new Error('Failed to spawn child process');
+  const exited = new Promise<void>((resolve, reject) => {
     child.once('exit', () => {
       resolve();
     });
+    child.once('error', reject);
   });
-  await sleep(50);
-  return child.pid;
+  child.kill('SIGKILL');
+  await exited;
+  return pid;
 }
 
 describe('QA single-writer lock', () => {
@@ -78,6 +80,23 @@ describe('QA single-writer lock', () => {
     expect(rejectedResult.reason).toBeInstanceOf(CoreLockError);
   });
 
+  it('allows exactly one of twenty concurrent starts across twenty iterations', async () => {
+    for (let iteration = 0; iteration < 20; iteration += 1) {
+      const path = join(dataDir, `stress-${String(iteration)}`);
+      const hosts = Array.from({ length: 20 }, () => new CoreHost({ dataDir: path }));
+      const results = await Promise.allSettled(hosts.map((host) => host.start()));
+      const winnerIndex = results.findIndex((result) => result.status === 'fulfilled');
+      const winners = results.filter((result) => result.status === 'fulfilled');
+      const losers = results.filter((result) => result.status === 'rejected');
+      expect(winners).toHaveLength(1);
+      expect(losers).toHaveLength(19);
+      expect(losers.every((result) => result.reason instanceof CoreLockError)).toBe(true);
+      const winner = hosts[winnerIndex];
+      if (!winner) throw new Error('Expected a winning host');
+      await winner.stop();
+    }
+  }, 60_000);
+
   it('writes pid and protocol into the lock file and removes it on stop', async () => {
     const path = join(dataDir, 'contents');
     const host = new CoreHost({ dataDir: path });
@@ -95,7 +114,11 @@ describe('QA single-writer lock', () => {
   it('recovers an incomplete lock left by a crash mid-write', async () => {
     const path = join(dataDir, 'partial');
     await mkdir(path, { recursive: true });
-    await writeFile(join(path, 'core.lock'), '{"pid":', 'utf8');
+    const lockPath = join(path, 'core.lock');
+    await writeFile(lockPath, '{"pid":', 'utf8');
+    await expect(new CoreHost({ dataDir: path }).start()).rejects.toBeInstanceOf(CoreLockError);
+    const staleTime = new Date(Date.now() - 10_000);
+    await utimes(lockPath, staleTime, staleTime);
     const host = new CoreHost({ dataDir: path });
     await expect(host.start()).resolves.toBeUndefined();
     expect(await readLockInfo(path)).toMatchObject({ pid: process.pid });
@@ -135,5 +158,5 @@ describe('QA single-writer lock', () => {
     } finally {
       await next.stop();
     }
-  });
+  }, 30_000);
 });

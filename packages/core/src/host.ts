@@ -1,4 +1,5 @@
-import { open, mkdir, readFile, unlink } from 'node:fs/promises';
+import { link, mkdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import {
   DomainErrorKindSchema,
@@ -14,6 +15,8 @@ import {
 } from '@ferry/shared';
 import { startCoreWebSocketServer, type CoreWebSocketHandle } from './websocket.js';
 import { ZodError } from 'zod';
+
+const lockRecoveryGraceMs = 5_000;
 
 export type RpcHandler = (...params: unknown[]) => unknown;
 export interface CoreTransport {
@@ -75,8 +78,10 @@ export class CoreHost {
   readonly #events = new Set<(method: string, payload: unknown) => void>();
   #releaseLock: (() => Promise<void>) | undefined;
   #unsubscribe: (() => void) | undefined;
+  #unsubscribeEvents: (() => void) | undefined;
   #websocket: CoreWebSocketHandle | undefined;
   #started = false;
+  #stopped = false;
 
   constructor(readonly options: CoreOptions) {
     this.dataDir = resolve(options.dataDir);
@@ -116,40 +121,27 @@ export class CoreHost {
 
   async start(): Promise<void> {
     if (this.#started) return;
+    if (this.#stopped && this.options.services)
+      throw new Error('already_stopped: composed core hosts cannot be restarted');
     await mkdir(this.dataDir, { recursive: true });
     const lockPath = resolve(this.dataDir, 'core.lock');
     await mkdir(dirname(lockPath), { recursive: true });
-    let handle;
+    const lockContents = JSON.stringify({ pid: process.pid, protocol: FERRY_PROTOCOL });
+    const temporaryLockPath = `${lockPath}.${String(process.pid)}.${randomUUID()}.tmp`;
+    await writeFile(temporaryLockPath, lockContents, { flag: 'wx' });
+    let acquired: boolean;
     try {
-      handle = await open(lockPath, 'wx');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-        let ownerPid: number | undefined;
-        try {
-          const owner = JSON.parse(await readFile(lockPath, 'utf8')) as { pid?: unknown };
-          if (typeof owner.pid === 'number') ownerPid = owner.pid;
-        } catch {
-          /* incomplete lock is stale */
-        }
-        let alive = ownerPid !== undefined;
-        if (ownerPid !== undefined) {
-          try {
-            process.kill(ownerPid, 0);
-          } catch {
-            alive = false;
-          }
-        }
-        if (alive) throw new CoreLockError(this.dataDir);
-        await unlink(lockPath).catch(() => undefined);
-        try {
-          handle = await open(lockPath, 'wx');
-        } catch {
-          throw new CoreLockError(this.dataDir);
-        }
-      } else throw error;
+      try {
+        await link(temporaryLockPath, lockPath);
+        acquired = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        acquired = await recoverStaleLock(lockPath, temporaryLockPath);
+      }
+    } finally {
+      await unlink(temporaryLockPath).catch(() => undefined);
     }
-    await handle.writeFile(JSON.stringify({ pid: process.pid, protocol: FERRY_PROTOCOL }));
-    await handle.close();
+    if (!acquired) throw new CoreLockError(this.dataDir);
     this.#releaseLock = async () => {
       try {
         await unlink(lockPath);
@@ -162,9 +154,14 @@ export class CoreHost {
       this.#unsubscribe = this.options.transport.subscribe((message) => {
         void this.handleMessage(message);
       });
-    this.onEvent((method, params) =>
+    this.#unsubscribeEvents = this.onEvent((method, params) =>
       this.options.transport?.send({ jsonrpc: '2.0', method, params }),
     );
+    if (this.options.services?.databaseRecoveryMessage)
+      this.emit('toast', {
+        message: this.options.services.databaseRecoveryMessage,
+        tone: 'warning',
+      });
     if (this.options.websocketEnabled) {
       try {
         this.#websocket = await startCoreWebSocketServer(this, this.options.websocketPort ?? 0);
@@ -178,46 +175,80 @@ export class CoreHost {
   async stop(): Promise<void> {
     if (!this.#started) return;
     this.#unsubscribe?.();
+    this.#unsubscribe = undefined;
+    this.#unsubscribeEvents?.();
+    this.#unsubscribeEvents = undefined;
     await this.#websocket?.close();
     this.#websocket = undefined;
     this.options.transport?.close?.();
     await this.options.services?.dispose();
     await this.#releaseLock?.();
+    this.#releaseLock = undefined;
     this.#started = false;
+    this.#stopped = true;
   }
 
   async handleMessage(raw: unknown): Promise<void> {
-    if (typeof raw !== 'object' || raw === null || !('id' in raw)) return;
-    const parsed = JsonRpcRequestSchema.safeParse(raw);
-    const id = typeof raw.id === 'string' || typeof raw.id === 'number' ? raw.id : null;
-    if (!parsed.success) {
+    if (!this.#started) {
       this.options.transport?.send({
+        jsonrpc: '2.0',
+        id:
+          typeof raw === 'object' && raw !== null && 'id' in raw && validRpcId(raw.id)
+            ? raw.id
+            : null,
+        error: rpcError(-32603, 'shutting_down', 'Core is shutting down'),
+      });
+      return;
+    }
+    if (Array.isArray(raw)) {
+      if (raw.length === 0) {
+        this.options.transport?.send({
+          jsonrpc: '2.0',
+          id: null,
+          error: rpcError(-32600, 'invalid_request', 'Empty JSON-RPC batch'),
+        });
+        return;
+      }
+      const responses = await Promise.all(raw.map((message) => this.#responseFor(message)));
+      const present = responses.filter((response) => response !== undefined);
+      if (present.length) this.options.transport?.send(present);
+      return;
+    }
+    const response = await this.#responseFor(raw);
+    if (response !== undefined) this.options.transport?.send(response);
+  }
+
+  async #responseFor(raw: unknown): Promise<unknown> {
+    if (typeof raw !== 'object' || raw === null || !('id' in raw)) return undefined;
+    const parsed = JsonRpcRequestSchema.safeParse(raw);
+    const id = validRpcId(raw.id) ? raw.id : null;
+    if (!parsed.success) {
+      return {
         jsonrpc: '2.0',
         id,
         error: rpcError(-32600, 'invalid_request', 'Invalid JSON-RPC request'),
-      });
-      return;
+      };
     }
     const request = parsed.data;
     try {
       const result = await this.dispatch(request);
-      this.options.transport?.send({ jsonrpc: '2.0', id: request.id, result });
+      return { jsonrpc: '2.0', id: request.id, result };
     } catch (error) {
       const mapped =
         error instanceof DispatchError
           ? rpcError(error.code, error.kind, error.message)
           : mapError(error);
-      this.options.transport?.send({ jsonrpc: '2.0', id: request.id, error: mapped });
+      return { jsonrpc: '2.0', id: request.id, error: mapped };
     }
   }
 
-  async dispatch(request: JsonRpcRequest): Promise<unknown> {
+  async dispatch(request: JsonRpcRequest, trustedTransport = true): Promise<unknown> {
     if (request.method === 'system.info') {
       const info = {
         version: '0.1.0',
         mock: false,
         platform: process.platform,
-        dataDir: this.dataDir,
+        dataDir: trustedTransport ? this.dataDir : null,
         realDomains: this.realDomains,
       };
       return SystemInfoSchema.parse(info);
@@ -252,6 +283,10 @@ export class CoreHost {
       );
     return await handler(...(request.params ?? []));
   }
+}
+
+function validRpcId(value: unknown): value is string | number {
+  return typeof value === 'string' || (typeof value === 'number' && Number.isInteger(value));
 }
 
 class DispatchError extends Error {
@@ -311,7 +346,13 @@ export function createStdioTransport(
         try {
           handler?.(JSON.parse(line) as unknown);
         } catch {
-          /* dispatcher reports malformed JSON separately when framed */
+          output.write(
+            `${JSON.stringify({
+              jsonrpc: '2.0',
+              id: null,
+              error: rpcError(-32700, 'parse_error', 'Malformed JSON framing'),
+            })}\n`,
+          );
         }
     }
   });
@@ -343,6 +384,21 @@ export async function createCoreHost(
     env?: NodeJS.ProcessEnv;
   },
 ): Promise<CoreHost> {
+  const existingLock = await readLockInfo(options.dataDir);
+  if (
+    typeof existingLock === 'object' &&
+    existingLock !== null &&
+    'pid' in existingLock &&
+    typeof existingLock.pid === 'number'
+  ) {
+    try {
+      process.kill(existingLock.pid, 0);
+      throw new CoreLockError(resolve(options.dataDir));
+    } catch (error) {
+      if (error instanceof CoreLockError) throw error;
+      // Stale lock cleanup remains owned by CoreHost.start().
+    }
+  }
   const { createServices } = await import('./services.js');
   const { domainRegistrars } = await import('./domains/index.js');
   const services = await createServices({
@@ -359,6 +415,65 @@ export async function createCoreHost(
     throw error;
   }
   return host;
+}
+
+async function recoverStaleLock(lockPath: string, temporaryLockPath: string): Promise<boolean> {
+  const recoveryPath = `${lockPath}.recovery`;
+  try {
+    await mkdir(recoveryPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    const recoveryStat = await stat(recoveryPath).catch(() => undefined);
+    if (!recoveryStat || Date.now() - recoveryStat.mtimeMs <= lockRecoveryGraceMs) return false;
+    await rm(recoveryPath, { recursive: true, force: true });
+    try {
+      await mkdir(recoveryPath);
+    } catch {
+      return false;
+    }
+  }
+
+  try {
+    if (!(await isStaleLock(lockPath))) return false;
+    await unlink(lockPath).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    });
+    try {
+      await link(temporaryLockPath, lockPath);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw error;
+    }
+  } finally {
+    await rm(recoveryPath, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function isStaleLock(lockPath: string): Promise<boolean> {
+  let content: unknown;
+  try {
+    content = JSON.parse(await readFile(lockPath, 'utf8')) as unknown;
+  } catch {
+    return isOlderThanRecoveryGrace(lockPath);
+  }
+  if (typeof content === 'object' && content !== null && 'pid' in content) {
+    const pid = content.pid;
+    if (typeof pid === 'number' && Number.isInteger(pid) && pid > 0) {
+      try {
+        process.kill(pid, 0);
+        return false;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'ESRCH';
+      }
+    }
+  }
+  return isOlderThanRecoveryGrace(lockPath);
+}
+
+async function isOlderThanRecoveryGrace(lockPath: string): Promise<boolean> {
+  const lockStat = await stat(lockPath).catch(() => undefined);
+  return lockStat !== undefined && Date.now() - lockStat.mtimeMs > lockRecoveryGraceMs;
 }
 
 export async function readLockInfo(dataDir: string): Promise<unknown> {

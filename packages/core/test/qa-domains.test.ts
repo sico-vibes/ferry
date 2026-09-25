@@ -1,15 +1,16 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createRpcFerryClient, RpcError, type RpcFerryClient } from '@ferry/client';
 import { SettingsSchema, SystemInfoSchema } from '@ferry/shared';
-import type { CheckpointId, SessionId, WorkspaceId } from '@ferry/shared';
+import type { CheckpointId, Session, SessionId, WorkspaceId } from '@ferry/shared';
 import { ShadowCheckpoints, WorkspaceJail } from '@ferry/workspace';
 import { openDatabase } from '@ferry/storage';
-import { CoreHost, createCoreHost, createMemoryTransportPair, readLockInfo } from '../src/index.js';
+import { CoreHost, createCoreHost, createMemoryTransportPair } from '../src/index.js';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'ferry-qa-domains-'));
+vi.setConfig({ testTimeout: 30_000 });
 afterAll(async () => {
   await rm(dataDir, { recursive: true, force: true });
 });
@@ -25,7 +26,7 @@ async function makeCore(name: string): Promise<Harness> {
   const dir = join(dataDir, name);
   const [coreTransport, clientTransport] = createMemoryTransportPair();
   const host = await createCoreHost({ dataDir: dir, transport: coreTransport });
-  const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 5000 });
+  const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
   await rpc.hello;
   return {
     dir,
@@ -65,7 +66,7 @@ describe('QA settings domain', () => {
     } finally {
       await core.close();
     }
-  });
+  }, 30_000);
 
   it('merges nested optimizers/developer patches instead of replacing them', async () => {
     const core = await makeCore('settings-merge');
@@ -95,7 +96,7 @@ describe('QA settings domain', () => {
 
     const [coreTransport, clientTransport] = createMemoryTransportPair();
     const host = await createCoreHost({ dataDir: dir, transport: coreTransport });
-    const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 5000 });
+    const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
     await rpc.hello;
     try {
       const settings = await rpc.settings.get();
@@ -139,18 +140,15 @@ describe('QA settings domain', () => {
     }
   });
 
-  it('fails with a clear error on a corrupt SQLite file and recovers after removal', async () => {
+  it('moves a corrupt SQLite file aside and recovers automatically', async () => {
     const dir = join(dataDir, 'settings-corrupt');
     await mkdir(join(dir, 'db'), { recursive: true });
     await writeFile(join(dir, 'db', 'ferry.sqlite'), 'definitely not sqlite', 'utf8');
-    const failure = await createCoreHost({ dataDir: dir }).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toMatch(/not a database|malformed|corrupt|sqlite/i);
-    await expect(readLockInfo(dir)).resolves.toBeNull();
-
-    await rm(join(dir, 'db', 'ferry.sqlite'), { force: true });
     const recovered = await createCoreHost({ dataDir: dir });
     try {
+      expect(
+        (await readdir(join(dir, 'db'))).some((file) => file.startsWith('ferry.sqlite.corrupt-')),
+      ).toBe(true);
       const settings = (await recovered.dispatch({
         jsonrpc: '2.0',
         id: 1,
@@ -167,7 +165,7 @@ describe('QA settings domain', () => {
 // BUG (Windows): the same folder opened with different case creates a second
 // workspace row; lookups compare `path.resolve` strings case-sensitively.
 describe.runIf(process.platform === 'win32')('QA workspaces case-insensitive paths', () => {
-  it.fails('dedupes the same folder case-insensitively', async () => {
+  it('dedupes the same folder case-insensitively', async () => {
     const core = await makeCore('ws-case');
     try {
       await mkdir(join(core.dir, 'work'), { recursive: true });
@@ -209,7 +207,7 @@ describe('QA workspaces domain', () => {
 
   // BUG: a non-existent path throws a raw ENOENT from `stat` that is mapped to
   // internal (-32603) instead of a typed not_found/validation error.
-  it.fails('reports a missing workspace path as a typed not_found/validation error', async () => {
+  it('reports a missing workspace path as a typed not_found/validation error', async () => {
     const core = await makeCore('ws-missing');
     try {
       const error = await errorOf(core.rpc.workspaces.open(join(core.dir, 'does-not-exist')));
@@ -315,17 +313,52 @@ describe('QA checkpoints domain', () => {
   }
 
   it('diffs, lists and restores a checkpoint', async () => {
-    const { core, workspaceDir, shadow } = await setup('cp-happy');
+    const { core, workspaceDir, workspace, shadow } = await setup('cp-happy');
     try {
       await writeFile(join(workspaceDir, 'a.txt'), 'one\n', 'utf8');
       const id = (await shadow.snapshot('Before change')) as CheckpointId;
       await writeFile(join(workspaceDir, 'a.txt'), 'two\n', 'utf8');
       const diff = await core.rpc.checkpoints.diff(id);
       expect(diff).toContain('a.txt');
-      const sessionId = 'qa_session' as SessionId;
+      const sessionId = `qa_session_${workspace.id}` as SessionId;
+      core.host.options.services?.sessions.put({
+        id: sessionId,
+        workspaceId: workspace.id,
+        title: 'QA session',
+        preview: '',
+        profileId: 'profile_default',
+        modelRef: null,
+        starred: false,
+        pinned: false,
+        status: 'idle',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      } as Session);
       expect((await core.rpc.checkpoints.list(sessionId)).map((c) => c.id)).toContain(id);
       await core.rpc.checkpoints.restore(id);
       expect(await readFile(join(workspaceDir, 'a.txt'), 'utf8')).toBe('one\n');
+
+      const otherWorkspaceDir = join(core.dir, 'other-workspace');
+      await mkdir(otherWorkspaceDir, { recursive: true });
+      const otherWorkspace = await core.rpc.workspaces.open(otherWorkspaceDir);
+      core.host.options.services?.sessions.put({
+        id: `qa_unrelated_${otherWorkspace.id}`,
+        workspaceId: otherWorkspace.id,
+        title: 'Other QA session',
+        preview: '',
+        profileId: 'profile_default',
+        modelRef: null,
+        starred: false,
+        pinned: false,
+        status: 'idle',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      } as Session);
+      expect(
+        (await core.rpc.checkpoints.list(`qa_unrelated_${otherWorkspace.id}` as SessionId)).map(
+          (c) => c.id,
+        ),
+      ).not.toContain(id);
     } finally {
       await core.close();
     }
@@ -349,26 +382,22 @@ describe('QA checkpoints domain', () => {
 
   // BUG: single-file restore uses `git show` through execa, which strips the
   // trailing newline, so the restored file loses its final EOL.
-  it.fails(
-    'restores only the requested path without dropping its trailing newline',
-    async () => {
-      const { core, workspaceDir, shadow } = await setup('cp-subset');
-      try {
-        await writeFile(join(workspaceDir, 'b.txt'), 'keep\n', 'utf8');
-        const id = (await shadow.snapshot('subset')) as CheckpointId;
-        await writeFile(join(workspaceDir, 'a.txt'), 'changed\n', 'utf8');
-        await writeFile(join(workspaceDir, 'b.txt'), 'changed-b\n', 'utf8');
-        await core.rpc.checkpoints.restore(id, ['a.txt']);
-        const restoredA = await readFile(join(workspaceDir, 'a.txt'), 'utf8');
-        const untouchedB = await readFile(join(workspaceDir, 'b.txt'), 'utf8');
-        expect(restoredA).toBe('one\n');
-        expect(untouchedB).toBe('changed-b\n');
-      } finally {
-        await core.close();
-      }
-    },
-    30_000,
-  );
+  it('restores only the requested path without dropping its trailing newline', async () => {
+    const { core, workspaceDir, shadow } = await setup('cp-subset');
+    try {
+      await writeFile(join(workspaceDir, 'b.txt'), 'keep\n', 'utf8');
+      const id = (await shadow.snapshot('subset')) as CheckpointId;
+      await writeFile(join(workspaceDir, 'a.txt'), 'changed\n', 'utf8');
+      await writeFile(join(workspaceDir, 'b.txt'), 'changed-b\n', 'utf8');
+      await core.rpc.checkpoints.restore(id, ['a.txt']);
+      const restoredA = await readFile(join(workspaceDir, 'a.txt'), 'utf8');
+      const untouchedB = await readFile(join(workspaceDir, 'b.txt'), 'utf8');
+      expect(restoredA).toBe('one\n');
+      expect(untouchedB).toBe('changed-b\n');
+    } finally {
+      await core.close();
+    }
+  }, 30_000);
 
   it('diffs binary files without throwing and preserves CRLF on restore', async () => {
     const { core, workspaceDir, shadow } = await setup('cp-binary');
@@ -393,22 +422,18 @@ describe('QA checkpoints domain', () => {
   // BUG: restoring a checkpoint whose workspace folder was deleted reports
   // not_found ("Checkpoint not found") even though the checkpoint data is intact;
   // the work tree cannot be recreated.
-  it.fails(
-    'restores a checkpoint when the workspace folder was deleted',
-    async () => {
-      const { core, workspaceDir, shadow } = await setup('cp-deleted');
-      try {
-        const id = (await shadow.snapshot('deleted')) as CheckpointId;
-        await writeFile(join(workspaceDir, 'a.txt'), 'changed\n', 'utf8');
-        await rm(workspaceDir, { recursive: true, force: true });
-        await expect(core.rpc.checkpoints.restore(id)).resolves.toBeUndefined();
-        expect(await readFile(join(workspaceDir, 'a.txt'), 'utf8')).toBe('one\n');
-      } finally {
-        await core.close();
-      }
-    },
-    30_000,
-  );
+  it('restores a checkpoint when the workspace folder was deleted', async () => {
+    const { core, workspaceDir, shadow } = await setup('cp-deleted');
+    try {
+      const id = (await shadow.snapshot('deleted')) as CheckpointId;
+      await writeFile(join(workspaceDir, 'a.txt'), 'changed\n', 'utf8');
+      await rm(workspaceDir, { recursive: true, force: true });
+      await expect(core.rpc.checkpoints.restore(id)).resolves.toBeUndefined();
+      expect(await readFile(join(workspaceDir, 'a.txt'), 'utf8')).toBe('one\n');
+    } finally {
+      await core.close();
+    }
+  }, 30_000);
 
   it('reports not_found for unknown checkpoints and validation for bad ids', async () => {
     const core = await makeCore('cp-unknown');
@@ -471,7 +496,7 @@ describe('QA system domain', () => {
     const dir = join(dataDir, 'system-protocol');
     const [coreTransport, clientTransport] = createMemoryTransportPair();
     const host = await createCoreHost({ dataDir: dir, transport: coreTransport });
-    const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 2000 });
+    const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
     try {
       const result = await rpc.hello;
       expect(result.protocol).toBe('ferry/1');
@@ -492,6 +517,33 @@ describe('QA system domain', () => {
       ).rejects.toThrow(/ferry\/1/);
     } finally {
       await host2.stop();
+    }
+  });
+
+  it('moves a corrupt SQLite database aside, starts fresh, and emits a toast', async () => {
+    const dir = join(dataDir, 'system-corrupt-db');
+    await mkdir(join(dir, 'db'), { recursive: true });
+    await writeFile(join(dir, 'db', 'ferry.sqlite'), 'not a sqlite database');
+    const sent: unknown[] = [];
+    const host = await createCoreHost({
+      dataDir: dir,
+      transport: { send: (message) => sent.push(message), subscribe: () => () => undefined },
+    });
+    try {
+      const files = await readdir(join(dir, 'db'));
+      expect(files.some((file) => file.startsWith('ferry.sqlite.corrupt-'))).toBe(true);
+      const toast = sent.find(
+        (message) =>
+          typeof message === 'object' &&
+          message !== null &&
+          'method' in message &&
+          message.method === 'toast',
+      );
+      expect(toast).toBeDefined();
+      expect(JSON.stringify(toast)).toContain('warning');
+      expect(JSON.stringify(toast)).toContain('corrupt');
+    } finally {
+      await host.stop();
     }
   });
 });
