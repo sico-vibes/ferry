@@ -1,0 +1,24 @@
+{
+  "name": "@ferry/extensions",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint . --ignore-pattern test/fixtures/tiny-mcp-server.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ferry/config": "workspace:*",
+    "@ferry/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.30.1",
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@ferry/testkit": "workspace:*"
+  }
+}

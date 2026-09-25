@@ -1,0 +1,831 @@
+diff --stat
+ src/modules/module-1/service.ts | 8 ++++----
+ src/modules/module-2/service.ts | 8 ++++----
+ src/modules/module-3/service.ts | 8 ++++----
+ src/modules/module-4/service.ts | 8 ++++----
+ src/modules/module-5/service.ts | 8 ++++----
+ src/modules/module-6/service.ts | 8 ++++----
+ src/modules/module-7/service.ts | 8 ++++----
+ src/modules/module-8/service.ts | 8 ++++----
+ src/modules/module-9/service.ts | 8 ++++----
+ src/modules/module-10/service.ts | 8 ++++----
+ src/modules/module-11/service.ts | 8 ++++----
+ src/modules/module-12/service.ts | 8 ++++----
+ 12 files changed, 96 insertions(+), 96 deletions(-)
+diff --git a/src/modules/module-1/service.ts b/src/modules/module-1/service.ts
+ src/modules/module-1/service.ts | 8 ++++----
+ src/modules/module-2/service.ts | 8 ++++----
+ src/modules/module-3/service.ts | 8 ++++----
+ src/modules/module-4/service.ts | 8 ++++----
+ src/modules/module-5/service.ts | 8 ++++----
+ src/modules/module-6/service.ts | 8 ++++----
+ src/modules/module-7/service.ts | 8 ++++----
+ src/modules/module-8/service.ts | 8 ++++----
+ src/modules/module-9/service.ts | 8 ++++----
+ src/modules/module-10/service.ts | 8 ++++----
+ src/modules/module-11/service.ts | 8 ++++----
+ src/modules/module-12/service.ts | 8 ++++----
+index 2bc91af..81ef200 100644
+--- a/src/modules/module-1/service.ts
++++ b/src/modules/module-1/service.ts
+@@ -10,30 +10,30 @@ export function updateModule1(input: Input): Result {
+   const item1 = input.items[0];
+   const item2 = input.items[1];
+   const item3 = input.items[2];
+   const item4 = input.items[3];
+   const item5 = input.items[4];
+   const item6 = input.items[5];
+   const item7 = input.items[6];
+   const item8 = input.items[7];
+   const item9 = input.items[8];
+   const item10 = input.items[9];
+   const item11 = input.items[10];
+   const item12 = input.items[11];
+   const item13 = input.items[12];
+   const item14 = input.items[13];
+   const item15 = input.items[14];
+   const item16 = input.items[15];
+   const item17 = input.items[16];
+   const item18 = input.items[17];
+   const item19 = input.items[18];
+   const item20 = input.items[19];
+   const item21 = input.items[20];
+   const item22 = input.items[21];
+   const item23 = input.items[22];
+   const item24 = input.items[23];
+   const item25 = input.items[24];
+-  validateLegacyRule1(input);
++  validatePolicyRule1(input, context);
+-  validateLegacyRule2(input);
++  validatePolicyRule2(input, context);
+-  validateLegacyRule3(input);
++  validatePolicyRule3(input, context);
+-  validateLegacyRule4(input);
++  validatePolicyRule4(input, context);
+-  validateLegacyRule5(input);
++  validatePolicyRule5(input, context);
+-  validateLegacyRule6(input);
++  validatePolicyRule6(input, context);
+-  validateLegacyRule7(input);
++  validatePolicyRule7(input, context);
+-  validateLegacyRule8(input);
++  validatePolicyRule8(input, context);
+   result.steps.push(transformEntry1(input));
+   result.steps.push(transformEntry2(input));
+   result.steps.push(transformEntry3(input));
+   result.steps.push(transformEntry4(input));
+   result.steps.push(transformEntry5(input));
+   result.steps.push(transformEntry6(input));
+   result.steps.push(transformEntry7(input));
+   result.steps.push(transformEntry8(input));
+   result.steps.push(transformEntry9(input));
+   result.steps.push(transformEntry10(input));
+   result.steps.push(transformEntry11(input));
+   result.steps.push(transformEntry12(input));
+   result.steps.push(transformEntry13(input));
+   result.steps.push(transformEntry14(input));
+   result.steps.push(transformEntry15(input));
+   result.steps.push(transformEntry16(input));
+   result.steps.push(transformEntry17(input));
+   result.steps.push(transformEntry18(input));
+   result.steps.push(transformEntry19(input));
+   result.steps.push(transformEntry20(input));
+   return result;
+diff --git a/src/modules/module-2/service.ts b/src/modules/module-2/service.ts
+index 2bc91af..81ef200 100644
+--- a/src/modules/module-2/service.ts
++++ b/src/modules/module-2/service.ts
+@@ -20,30 +20,30 @@ export function updateModule2(input: Input): Result {
+   const item1 = input.items[0];
+   const item2 = input.items[1];
+   const item3 = input.items[2];
+   const item4 = input.items[3];
+   const item5 = input.items[4];
+   const item6 = input.items[5];
+   const item7 = input.items[6];
+   const item8 = input.items[7];
+   const item9 = input.items[8];
+   const item10 = input.items[9];
+   const item11 = input.items[10];
+   const item12 = input.items[11];
+   const item13 = input.items[12];
+   const item14 = input.items[13];
+   const item15 = input.items[14];
+   const item16 = input.items[15];
+   const item17 = input.items[16];
+   const item18 = input.items[17];
+   const item19 = input.items[18];
+   const item20 = input.items[19];
+   const item21 = input.items[20];
+   const item22 = input.items[21];
+   const item23 = input.items[22];
+   const item24 = input.items[23];
+   const item25 = input.items[24];
+-  validateLegacyRule1(input);
++  validatePolicyRule1(input, context);
+-  validateLegacyRule2(input);
++  validatePolicyRule2(input, context);
+-  validateLegacyRule3(input);
++  validatePolicyRule3(input, context);
+-  validateLegacyRule4(input);
++  validatePolicyRule4(input, context);
+-  validateLegacyRule5(input);
++  validatePolicyRule5(input, context);
+-  validateLegacyRule6(input);
++  validatePolicyRule6(input, context);
+-  validateLegacyRule7(input);
++  validatePolicyRule7(input, context);
+-  validateLegacyRule8(input);
++  validatePolicyRule8(input, context);
+   result.steps.push(transformEntry1(input));
+   result.steps.push(transformEntry2(input));
+   result.steps.push(transformEntry3(input));
+   result.steps.push(transformEntry4(input));
+   result.steps.push(transformEntry5(input));
+   result.steps.push(transformEntry6(input));
+   result.steps.push(transformEntry7(input));
+   result.steps.push(transformEntry8(input));
+   result.steps.push(transformEntry9(input));
+   result.steps.push(transformEntry10(input));
+   result.steps.push(transformEntry11(input));
+   result.steps.push(transformEntry12(input));
+   result.steps.push(transformEntry13(input));
+   result.steps.push(transformEntry14(input));
+   result.steps.push(transformEntry15(input));
+   result.steps.push(transformEntry16(input));
+   result.steps.push(transformEntry17(input));
+   result.steps.push(transformEntry18(input));
+   result.steps.push(transformEntry19(input));
+   result.steps.push(transformEntry20(input));
+   return result;
+diff --git a/src/modules/module-3/service.ts b/src/modules/module-3/service.ts
+index 2bc91af..81ef200 100644
+--- a/src/modules/module-3/service.ts
++++ b/src/modules/module-3/service.ts
+@@ -30,30 +30,30 @@ export function updateModule3(input: Input): Result {
+   const item1 = input.items[0];
+   const item2 = input.items[1];
+   const item3 = input.items[2];
+   const item4 = input.items[3];
+   const item5 = input.items[4];
+   const item6 = input.items[5];
+   const item7 = input.items[6];
+   const item8 = input.items[7];
+   const item9 = input.items[8];
+   const item10 = input.items[9];
+   const item11 = input.items[10];
+   const item12 = input.items[11];
+   const item13 = input.items[12];
+   const item14 = input.items[13];
+   const item15 = input.items[14];
+   const item16 = input.items[15];
+   const item17 = input.items[16];
+   const item18 = input.items[17];
+   const item19 = input.items[18];
+   const item20 = input.items[19];
+   const item21 = input.items[20];
+   const item22 = input.items[21];
+   const item23 = input.items[22];
+   const item24 = input.items[23];
+   const item25 = input.items[24];
+-  validateLegacyRule1(input);
++  validatePolicyRule1(input, context);
+-  validateLegacyRule2(input);
++  validatePolicyRule2(input, context);
+-  validateLegacyRule3(input);
++  validatePolicyRule3(input, context);
+-  validateLegacyRule4(input);
++  validatePolicyRule4(input, context);
+-  validateLegacyRule5(input);
++  validatePolicyRule5(input, context);
+-  validateLegacyRule6(input);
++  validatePolicyRule6(input, context);
+-  validateLegacyRule7(input);
++  validatePolicyRule7(input, context);
+-  validateLegacyRule8(input);
++  validatePolicyRule8(input, context);
+   result.steps.push(transformEntry1(input));
+   result.steps.push(transformEntry2(input));
+   result.steps.push(transformEntry3(input));
+   result.steps.push(transformEntry4(input));
+   result.steps.push(transformEntry5(input));
+   result.steps.push(transformEntry6(input));
+   result.steps.push(transformEntry7(input));
+   result.steps.push(transformEntry8(input));
+   result.steps.push(transformEntry9(input));
+   result.steps.push(transformEntry10(input));
+   result.steps.push(transformEntry11(input));
+   result.steps.push(transformEntry12(input));
+   result.steps.push(transformEntry13(input));
+   result.steps.push(transformEntry14(input));
+   result.steps.push(transformEntry15(input));
+   result.steps.push(transformEntry16(input));
+   result.steps.push(transformEntry17(input));
+   result.steps.push(transformEntry18(input));
+   result.steps.push(transformEntry19(input));
+   result.steps.push(transformEntry20(input));
+   return result;
+diff --git a/src/modules/module-4/service.ts b/src/modules/module-4/service.ts
+index 2bc91af..81ef200 100644
+--- a/src/modules/module-4/service.ts
++++ b/src/modules/module-4/service.ts
+@@ -40,30 +40,30 @@ export function updateModule4(input: Input): Result {
+   const item1 = input.items[0];
+   const item2 = input.items[1];
+   const item3 = input.items[2];
+   const item4 = input.items[3];
+   const item5 = input.items[4];
+   const item6 = input.items[5];
+   const item7 = input.items[6];
+   const item8 = input.items[7];
+   const item9 = input.items[8];
+   const item10 = input.items[9];
+   const item11 = input.items[10];
+   const item12 = input.items[11];
+   const item13 = input.items[12];
+   const item14 = input.items[13];
+   const item15 = input.items[14];
+   const item16 = input.items[15];
+   const item17 = input.items[16];
+   const item18 = input.items[17];
+   const item19 = input.items[18];
+   const item20 = input.items[19];
+   const item21 = input.items[20];
+   const item22 = input.items[21];
+   const item23 = input.items[22];
+   const item24 = input.items[23];
+   const item25 = input.items[24];
+-  validateLegacyRule1(input);
++  validatePolicyRule1(input, context);
+-  validateLegacyRule2(input);
++  validatePolicyRule2(input, context);
+-  validateLegacyRule3(input);
++  validatePolicyRule3(input, context);
+-  validateLegacyRule4(input);
++  validatePolicyRule4(input, context);
+-  validateLegacyRule5(input);
++  validatePolicyRule5(input, context);
+-  validateLegacyRule6(input);
++  validatePolicyRule6(input, context);
+-  validateLegacyRule7(input);
++  validatePolicyRule7(input, context);
+-  validateLegacyRule8(input);
++  validatePolicyRule8(input, context);
+   result.steps.push(transformEntry1(input));
+   result.steps.push(transformEntry2(input));
+   result.steps.push(transformEntry3(input));
+   result.steps.push(transformEntry4(input));
+   result.steps.push(transformEntry5(input));
+   result.steps.push(transformEntry6(input));
+   result.steps.push(transformEntry7(input));
+   result.steps.push(transformEntry8(input));
+   result.steps.push(transformEntry9(input));
+   result.steps.push(transformEntry10(input));
+   result.steps.push(transformEntry11(input));
+   result.steps.push(transformEntry12(input));
+   result.steps.push(transformEntry13(input));
+   result.steps.push(transformEntry14(input));
+   result.steps.push(transformEntry15(input));
+   result.steps.push(transformEntry16(input));
+   result.steps.push(transformEntry17(input));
+   result.steps.push(transformEntry18(input));
+   result.steps.push(transformEntry19(input));
+   result.steps.push(transformEntry20(input));
+   return result;
+diff --git a/src/modules/module-5/service.ts b/src/modules/module-5/service.ts
+index 2bc91af..81ef200 100644
+--- a/src/modules/module-5/service.ts
++++ b/src/modules/module-5/service.ts
+@@ -50,30 +50,30 @@ export function updateModule5(input: Input): Result {
+   const item1 = input.items[0];
+   const item2 = input.items[1];
+   const item3 = input.items[2];
+   const item4 = input.items[3];
+   const item5 = input.items[4];
+   const item6 = input.items[5];
+   const item7 = input.items[6];
+   const item8 = input.items[7];
+   const item9 = input.items[8];
+   const item10 = input.items[9];
+   const item11 = input.items[10];
+   const item12 = input.items[11];
+   const item13 = input.items[12];
+   const item14 = input.items[13];
+   const item15 = input.items[14];
+   const item16 = input.items[15];
+   const item17 = input.items[16];
+   const item18 = input.items[17];
+   const item19 = input.items[18];
+   const item20 = input.items[19];
+   const item21 = input.items[20];
+   const item22 = input.items[21];
+   const item23 = input.items[22];
+   const item24 = input.items[23];
+   const item25 = input.items[24];
+-  validateLegacyRule1(input);
++  validatePolicyRule1(input, context);
+-  validateLegacyRule2(input);
++  validatePolicyRule2(input, context);
+-  validateLegacyRule3(input);
++  validatePolicyRule3(input, context);
+-  validateLegacyRule4(input);
++  validatePolicyRule4(input, context);
+-  validateLegacyRule5(input);
++  validatePolicyRule5(input, context);
+-  validateLegacyRule6(input);
++  validatePolicyRule6(input, context);
+-  validateLegacyRule7(input);
++  validatePolicyRule7(input, context);
+-  validateLegacyRule8(input);
++  validatePolicyRule8(input, context);
+   result.steps.push(transformEntry1(input));
+   result.steps.push(transformEntry2(input));
+   result.steps.push(transformEntry3(input));
+   result.steps.push(transformEntry4(input));
+   result.steps.push(transformEntry5(input));
+   result.steps.push(transformEntry6(input));
+   result.steps.push(transformEntry7(input));
+   result.steps.push(transformEntry8(input));
+   result.steps.push(transformEntry9(input));
+   result.steps.push(transformEntry10(input));
+   result.steps.push(transformEntry11(input));
+   result.steps.push(transformEntry12(input));
+   result.steps.push(transformEntry13(input));
+   result.steps.push(transformEntry14(input));
+   result.steps.push(transformEntry15(input));
+   result.steps.push(transformEntry16(input));
+   result.steps.push(transformEntry17(input));
+   result.steps.push(transformEntry18(input));
+   result.steps.push(transformEntry19(input));
+   result.steps.push(transformEntry20(input));
+   return result;
+diff --git a/src/modules/module-6/service.ts b/src/modules/module-6/service.ts
+index 2bc91af..81ef200 100644
+--- a/src/modules/module-6/service.ts
++++ b/src/modules/module-6/service.ts
+@@ -60,30 +60,30 @@ export function updateModule6(input: Input): Result {
+   const item1 = input.items[0];
+   const item2 = input.items[1];
+   const item3 = input.items[2];
+   const item4 = input.items[3];
+   const item5 = input.items[4];
+   const item6 = input.items[5];
+   const item7 = input.items[6];
+   const item8 = input.items[7];
+   const item9 = input.items[8];
+   const item10 = input.items[9];
+   const item11 = input.items[10];
+   const item12 = input.items[11];
+   const item13 = input.items[12];
+   const item14 = input.items[13];
+   const item15 = input.items[14];
+   const item16 = input.items[15];
+   const item17 = input.items[16];
+   const item18 = input.items[17];
+   const item19 = input.items[18];
+   const item20 = input.items[19];
+   const item21 = input.items[20];
+   const item22 = input.items[21];
+   const item23 = input.items[22];
+   const item24 = input.items[23];
+   const item25 = input.items[24];
+-  validateLegacyRule1(input);
++  validatePolicyRule1(input, context);
+-  validateLegacyRule2(input);
++  validatePolicyRule2(input, context);
+-  validateLegacyRule3(input);
++  validatePolicyRule3(input, context);
+-  validateLegacyRule4(input);
++  validatePolicyRule4(input, context);
+-  validateLegacyRule5(input);
++  validatePolicyRule5(input, context);
+-  validateLegacyRule6(input);
++  validatePolicyRule6(input, context);
+-  validateLegacyRule7(input);
++  validatePolicyRule7(input, context);
+-  validateLegacyRule8(input);
++  validatePolicyRule8(input, context);
+   result.steps.push(transformEntry1(input));
+   result.steps.push(transformEntry2(input));
+   result.steps.push(transformEntry3(input));
+   result.steps.push(transformEntry4(input));
+   result.steps.push(transformEntry5(input));
+   result.steps.push(transformEntry6(input));
+   result.steps.push(transformEntry7(input));
+   result.steps.push(transformEntry8(input));
+   result.steps.push(transformEntry9(input));
+   result.steps.push(transformEntry10(input));
+   result.steps.push(transformEntry11(input));
+   result.steps.push(transformEntry12(input));
+   result.steps.push(transformEntry13(input));
+   result.steps.push(transformEntry14(input));
+   result.steps.push(transformEntry15(input));
+   result.steps.push(transformEntry16(input));
+   result.steps.push(transformEntry17(input));
+   result.steps.push(transformEntry18(input));
+   result.steps.push(transformEntry19(input));
+   result.steps.push(transformEntry20(input));
+   return result;
+diff --git a/src/modules/module-7/service.ts b/src/modules/module-7/service.ts
+index 2bc91af..81ef200 100644
+--- a/src/modules/module-7/service.ts
++++ b/src/modules/module-7/service.ts
+@@ -70,30 +70,30 @@ export function updateModule7(input: Input): Result {
+   const item1 = input.items[0];
+   const item2 = input.items[1];
+   const item3 = input.items[2];
+   const item4 = input.items[3];
+   const item5 = input.items[4];
+   const item6 = input.items[5];
+   const item7 = input.items[6];
+   const item8 = input.items[7];
+   const item9 = input.items[8];
+   const item10 = input.items[9];
+   const item11 = input.items[10];
+   const item12 = input.items[11];
+   const item13 = input.items[12];
+   const item14 = input.items[13];
+   const item15 = input.items[14];
+   const item16 = input.items[15];
+   const item17 = input.items[16];
+   const item18 = input.items[17];
+   const item19 = input.items[18];
+   const item20 = input.items[19];
+   const item21 = input.items[20];
+   const item22 = input.items[21];
+   const item23 = input.items[22];
+   const item24 = input.items[23];
+   const item25 = input.items[24];
+-  validateLegacyRule1(input);
++  validatePolicyRule1(input, context);
+-  validateLegacyRule2(input);
++  validatePolicyRule2(input, context);
+-  validateLegacyRule3(input);
++  validatePolicyRule3(input, context);
+-  validateLegacyRule4(input);
++  validatePolicyRule4(input, context);
+-  validateLegacyRule5(input);
++  validatePolicyRule5(input, context);
+-  validateLegacyRule6(input);
++  validatePolicyRule6(input, context);
+-  validateLegacyRule7(input);
++  validatePolicyRule7(input, context);
+-  validateLegacyRule8(input);
++  validatePolicyRule8(input, context);
+   result.steps.push(transformEntry1(input));
+   result.steps.push(transformEntry2(input));
+   result.steps.push(transformEntry3(input));
+   result.steps.push(transformEntry4(input));
+   result.steps.push(transformEntry5(input));
+   result.steps.push(transformEntry6(input));
+   result.steps.push(transformEntry7(input));
+   result.steps.push(transformEntry8(input));
+   result.steps.push(transformEntry9(input));
+   result.steps.push(transformEntry10(input));
+   result.steps.push(transformEntry11(input));
+   result.steps.push(transformEntry12(input));
+   result.steps.push(transformEntry13(input));
+   result.steps.push(transformEntry14(input));
+   result.steps.push(transformEntry15(input));
+   result.steps.push(transformEntry16(input));
+   result.steps.push(transformEntry17(input));
+   result.steps.push(transformEntry18(input));
+   result.steps.push(transformEntry19(input));
+   result.steps.push(transformEntry20(input));
+   return result;
+diff --git a/src/modules/module-8/service.ts b/src/modules/module-8/service.ts
+index 2bc91af..81ef200 100644
+--- a/src/modules/module-8/service.ts
++++ b/src/modules/module-8/service.ts
+@@ -80,30 +80,30 @@ export function updateModule8(input: Input): Result {
+   const item1 = input.items[0];
+   const item2 = input.items[1];
+   const item3 = input.items[2];
+   const item4 = input.items[3];
+   const item5 = input.items[4];
+   const item6 = input.items[5];
+   const item7 = input.items[6];
+   const item8 = input.items[7];
+   const item9 = input.items[8];
+   const item10 = input.items[9];
+   const item11 = input.items[10];
+   const item12 = input.items[11];
+   const item13 = input.items[12];
+   const item14 = input.items[13];
+   const item15 = input.items[14];
+   const item16 = input.items[15];
+   const item17 = input.items[16];
+   const item18 = input.items[17];
+   const item19 = input.items[18];
+   const item20 = input.items[19];
+   const item21 = input.items[20];
+   const item22 = input.items[21];
+   const item23 = input.items[22];
+   const item24 = input.items[23];
+   const item25 = input.items[24];
+-  validateLegacyRule1(input);
++  validatePolicyRule1(input, context);
+-  validateLegacyRule2(input);
++  validatePolicyRule2(input, context);
+-  validateLegacyRule3(input);
++  validatePolicyRule3(input, context);
+-  validateLegacyRule4(input);
++  validatePolicyRule4(input, context);
+-  validateLegacyRule5(input);
++  validatePolicyRule5(input, context);
+-  validateLegacyRule6(input);
++  validatePolicyRule6(input, context);
+-  validateLegacyRule7(input);
++  validatePolicyRule7(input, context);
+-  validateLegacyRule8(input);
++  validatePolicyRule8(input, context);
+   result.steps.push(transformEntry1(input));
+   result.steps.push(transformEntry2(input));
+   result.steps.push(transformEntry3(input));
+   result.steps.push(transformEntry4(input));
+   result.steps.push(transformEntry5(input));
+   result.steps.push(transformEntry6(input));
+   result.steps.push(transformEntry7(input));
+   result.steps.push(transformEntry8(input));
+   result.steps.push(transformEntry9(input));
+   result.steps.push(transformEntry10(input));
+   result.steps.push(transformEntry11(input));
+   result.steps.push(transformEntry12(input));
+   result.steps.push(transformEntry13(input));
+   result.steps.push(transformEntry14(input));
+   result.steps.push(transformEntry15(input));
+   result.steps.push(transformEntry16(input));
+   result.steps.push(transformEntry17(input));
+   result.steps.push(transformEntry18(input));
+   result.steps.push(transformEntry19(input));
+   result.steps.push(transformEntry20(input));
+   return result;
+diff --git a/src/modules/module-9/service.ts b/src/modules/module-9/service.ts
+index 2bc91af..81ef200 100644
+--- a/src/modules/module-9/service.ts
++++ b/src/modules/module-9/service.ts
+@@ -90,30 +90,30 @@ export function updateModule9(input: Input): Result {
+   const item1 = input.items[0];
+   const item2 = input.items[1];
+   const item3 = input.items[2];
+   const item4 = input.items[3];
+   const item5 = input.items[4];
+   const item6 = input.items[5];
+   const item7 = input.items[6];
+   const item8 = input.items[7];
+   const item9 = input.items[8];
+   const item10 = input.items[9];
+   const item11 = input.items[10];
+   const item12 = input.items[11];
+   const item13 = input.items[12];
+   const item14 = input.items[13];
+   const item15 = input.items[14];
+   const item16 = input.items[15];
+   const item17 = input.items[16];
+   const item18 = input.items[17];
+   const item19 = input.items[18];
+   const item20 = input.items[19];
+   const item21 = input.items[20];
+   const item22 = input.items[21];
+   const item23 = input.items[22];
+   const item24 = input.items[23];
+   const item25 = input.items[24];
+-  validateLegacyRule1(input);
++  validatePolicyRule1(input, context);
+-  validateLegacyRule2(input);
++  validatePolicyRule2(input, context);
+-  validateLegacyRule3(input);
++  validatePolicyRule3(input, context);
+-  validateLegacyRule4(input);
++  validatePolicyRule4(input, context);
+-  validateLegacyRule5(input);
++  validatePolicyRule5(input, context);
+-  validateLegacyRule6(input);
++  validatePolicyRule6(input, context);
+-  validateLegacyRule7(input);
++  validatePolicyRule7(input, context);
+-  validateLegacyRule8(input);
++  validatePolicyRule8(input, context);
+   result.steps.push(transformEntry1(input));
+   result.steps.push(transformEntry2(input));
+   result.steps.push(transformEntry3(input));
+   result.steps.push(transformEntry4(input));
+   result.steps.push(transformEntry5(input));
+   result.steps.push(transformEntry6(input));
+   result.steps.push(transformEntry7(input));
+   result.steps.push(transformEntry8(input));
+   result.steps.push(transformEntry9(input));
+   result.steps.push(transformEntry10(input));
+   result.steps.push(transformEntry11(input));
+   result.steps.push(transformEntry12(input));
+   result.steps.push(transformEntry13(input));
+   result.steps.push(transformEntry14(input));
+   result.steps.push(transformEntry15(input));
+   result.steps.push(transformEntry16(input));
+   result.steps.push(transformEntry17(input));
+   result.steps.push(transformEntry18(input));
+   result.steps.push(transformEntry19(input));
+   result.steps.push(transformEntry20(input));
+   return result;
+diff --git a/src/modules/module-10/service.ts b/src/modules/module-10/service.ts
+index 2bc91af..81ef200 100644
+--- a/src/modules/module-10/service.ts
++++ b/src/modules/module-10/service.ts
+@@ -100,30 +100,30 @@ export function updateModule10(input: Input): Result {
+   const item1 = input.items[0];
+   const item2 = input.items[1];
+   const item3 = input.items[2];
+   const item4 = input.items[3];
+   const item5 = input.items[4];
+   const item6 = input.items[5];
+   const item7 = input.items[6];
+   const item8 = input.items[7];
+   const item9 = input.items[8];
+   const item10 = input.items[9];
+   const item11 = input.items[10];
+   const item12 = input.items[11];
+   const item13 = input.items[12];
+   const item14 = input.items[13];
+   const item15 = input.items[14];
+   const item16 = input.items[15];
+   const item17 = input.items[16];
+   const item18 = input.items[17];
+   const item19 = input.items[18];
+   const item20 = input.items[19];
+   const item21 = input.items[20];
+   const item22 = input.items[21];
+   const item23 = input.items[22];
+   const item24 = input.items[23];
+   const item25 = input.items[24];
+-  validateLegacyRule1(input);
++  validatePolicyRule1(input, context);
+-  validateLegacyRule2(input);
++  validatePolicyRule2(input, context);
+-  validateLegacyRule3(input);
++  validatePolicyRule3(input, context);
+-  validateLegacyRule4(input);
++  validatePolicyRule4(input, context);
+-  validateLegacyRule5(input);
++  validatePolicyRule5(input, context);
+-  validateLegacyRule6(input);
++  validatePolicyRule6(input, context);
+-  validateLegacyRule7(input);
++  validatePolicyRule7(input, context);
+-  validateLegacyRule8(input);
++  validatePolicyRule8(input, context);
+   result.steps.push(transformEntry1(input));
+   result.steps.push(transformEntry2(input));
+   result.steps.push(transformEntry3(input));
+   result.steps.push(transformEntry4(input));
+   result.steps.push(transformEntry5(input));
+   result.steps.push(transformEntry6(input));
+   result.steps.push(transformEntry7(input));
+   result.steps.push(transformEntry8(input));
+   result.steps.push(transformEntry9(input));
+   result.steps.push(transformEntry10(input));
+   result.steps.push(transformEntry11(input));
+   result.steps.push(transformEntry12(input));
+   result.steps.push(transformEntry13(input));
+   result.steps.push(transformEntry14(input));
+   result.steps.push(transformEntry15(input));
+   result.steps.push(transformEntry16(input));
+   result.steps.push(transformEntry17(input));
+   result.steps.push(transformEntry18(input));
+   result.steps.push(transformEntry19(input));
+   result.steps.push(transformEntry20(input));
+   return result;
+diff --git a/src/modules/module-11/service.ts b/src/modules/module-11/service.ts
+index 2bc91af..81ef200 100644
+--- a/src/modules/module-11/service.ts
++++ b/src/modules/module-11/service.ts
+@@ -110,30 +110,30 @@ export function updateModule11(input: Input): Result {
+   const item1 = input.items[0];
+   const item2 = input.items[1];
+   const item3 = input.items[2];
+   const item4 = input.items[3];
+   const item5 = input.items[4];
+   const item6 = input.items[5];
+   const item7 = input.items[6];
+   const item8 = input.items[7];
+   const item9 = input.items[8];
+   const item10 = input.items[9];
+   const item11 = input.items[10];
+   const item12 = input.items[11];
+   const item13 = input.items[12];
+   const item14 = input.items[13];
+   const item15 = input.items[14];
+   const item16 = input.items[15];
+   const item17 = input.items[16];
+   const item18 = input.items[17];
+   const item19 = input.items[18];
+   const item20 = input.items[19];
+   const item21 = input.items[20];
+   const item22 = input.items[21];
+   const item23 = input.items[22];
+   const item24 = input.items[23];
+   const item25 = input.items[24];
+-  validateLegacyRule1(input);
++  validatePolicyRule1(input, context);
+-  validateLegacyRule2(input);
++  validatePolicyRule2(input, context);
+-  validateLegacyRule3(input);
++  validatePolicyRule3(input, context);
+-  validateLegacyRule4(input);
++  validatePolicyRule4(input, context);
+-  validateLegacyRule5(input);
++  validatePolicyRule5(input, context);
+-  validateLegacyRule6(input);
++  validatePolicyRule6(input, context);
+-  validateLegacyRule7(input);
++  validatePolicyRule7(input, context);
+-  validateLegacyRule8(input);
++  validatePolicyRule8(input, context);
+   result.steps.push(transformEntry1(input));
+   result.steps.push(transformEntry2(input));
+   result.steps.push(transformEntry3(input));
+   result.steps.push(transformEntry4(input));
+   result.steps.push(transformEntry5(input));
+   result.steps.push(transformEntry6(input));
+   result.steps.push(transformEntry7(input));
+   result.steps.push(transformEntry8(input));
+   result.steps.push(transformEntry9(input));
+   result.steps.push(transformEntry10(input));
+   result.steps.push(transformEntry11(input));
+   result.steps.push(transformEntry12(input));
+   result.steps.push(transformEntry13(input));
+   result.steps.push(transformEntry14(input));
+   result.steps.push(transformEntry15(input));
+   result.steps.push(transformEntry16(input));
+   result.steps.push(transformEntry17(input));
+   result.steps.push(transformEntry18(input));
+   result.steps.push(transformEntry19(input));
+   result.steps.push(transformEntry20(input));
+   return result;
+diff --git a/src/modules/module-12/service.ts b/src/modules/module-12/service.ts
+index 2bc91af..81ef200 100644
+--- a/src/modules/module-12/service.ts
++++ b/src/modules/module-12/service.ts
+@@ -120,30 +120,30 @@ export function updateModule12(input: Input): Result {
+   const item1 = input.items[0];
+   const item2 = input.items[1];
+   const item3 = input.items[2];
+   const item4 = input.items[3];
+   const item5 = input.items[4];
+   const item6 = input.items[5];
+   const item7 = input.items[6];
+   const item8 = input.items[7];
+   const item9 = input.items[8];
+   const item10 = input.items[9];
+   const item11 = input.items[10];
+   const item12 = input.items[11];
+   const item13 = input.items[12];
+   const item14 = input.items[13];
+   const item15 = input.items[14];
+   const item16 = input.items[15];
+   const item17 = input.items[16];
+   const item18 = input.items[17];
+   const item19 = input.items[18];
+   const item20 = input.items[19];
+   const item21 = input.items[20];
+   const item22 = input.items[21];
+   const item23 = input.items[22];
+   const item24 = input.items[23];
+   const item25 = input.items[24];
+-  validateLegacyRule1(input);
++  validatePolicyRule1(input, context);
+-  validateLegacyRule2(input);
++  validatePolicyRule2(input, context);
+-  validateLegacyRule3(input);
++  validatePolicyRule3(input, context);
+-  validateLegacyRule4(input);
++  validatePolicyRule4(input, context);
+-  validateLegacyRule5(input);
++  validatePolicyRule5(input, context);
+-  validateLegacyRule6(input);
++  validatePolicyRule6(input, context);
+-  validateLegacyRule7(input);
++  validatePolicyRule7(input, context);
+-  validateLegacyRule8(input);
++  validatePolicyRule8(input, context);
+   result.steps.push(transformEntry1(input));
+   result.steps.push(transformEntry2(input));
+   result.steps.push(transformEntry3(input));
+   result.steps.push(transformEntry4(input));
+   result.steps.push(transformEntry5(input));
+   result.steps.push(transformEntry6(input));
+   result.steps.push(transformEntry7(input));
+   result.steps.push(transformEntry8(input));
+   result.steps.push(transformEntry9(input));
+   result.steps.push(transformEntry10(input));
+   result.steps.push(transformEntry11(input));
+   result.steps.push(transformEntry12(input));
+   result.steps.push(transformEntry13(input));
+   result.steps.push(transformEntry14(input));
+   result.steps.push(transformEntry15(input));
+   result.steps.push(transformEntry16(input));
+   result.steps.push(transformEntry17(input));
+   result.steps.push(transformEntry18(input));
+   result.steps.push(transformEntry19(input));
+   result.steps.push(transformEntry20(input));
+   return result;
+ 12 files changed, 96 insertions(+), 96 deletions(-)
