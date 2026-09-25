@@ -232,7 +232,21 @@ export class QuotaEngine {
     return () => this.listeners.delete(listener);
   }
   recordUsage(input: UsageRecord): void {
-    const record = input;
+    const record = {
+      ...input,
+      ...(input.inputTokens === undefined ? {} : { inputTokens: Math.max(0, input.inputTokens) }),
+      ...(input.outputTokens === undefined
+        ? {}
+        : { outputTokens: Math.max(0, input.outputTokens) }),
+      ...(input.cachedTokens === undefined
+        ? {}
+        : { cachedTokens: Math.max(0, input.cachedTokens) }),
+      ...(input.reasoningTokens === undefined
+        ? {}
+        : { reasoningTokens: Math.max(0, input.reasoningTokens) }),
+      ...(input.costUsd === undefined ? {} : { costUsd: Math.max(0, input.costUsd) }),
+      ...(input.planUnits === undefined ? {} : { planUnits: Math.max(0, input.planUnits) }),
+    };
     this.records.set(record.id, record);
     this.requestRepo?.put({
       id: record.id,
@@ -474,7 +488,15 @@ export class QuotaEngine {
       if (window.metric === 'tokens') candidates.push(Math.floor(window.remaining / avgTokens));
       if ((window.metric === 'usd' || window.metric === 'credits') && avgCost > 0)
         candidates.push(Math.floor(window.remaining / avgCost));
-      if (window.metric === 'requests' && window.kind === 'rolling' && window.limit !== null) {
+      const definition = this.windowDefinitions(providerId).find((item) => item.id === window.id);
+      if (
+        window.metric === 'requests' &&
+        window.kind === 'rolling' &&
+        window.limit !== null &&
+        definition?.kind === 'rolling' &&
+        typeof definition.length === 'number' &&
+        definition.length >= 3600
+      ) {
         const seconds = Math.max(
           1,
           (Date.parse(window.resetAt ?? '') - this.now().getTime()) / 1000,

@@ -279,6 +279,14 @@ function resetTime(value: string | null | undefined, now: Date): string | null {
   const date = seconds !== null ? new Date(now.getTime() + seconds * 1000) : new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
+function retryAfterTime(value: string, now: Date): string | null {
+  const seconds = num(value);
+  if (seconds === null) return resetTime(value, now);
+  const timestamp = now.getTime() + seconds * 1000;
+  return Number.isFinite(timestamp) && Math.abs(timestamp) <= 8.64e15
+    ? new Date(timestamp).toISOString()
+    : null;
+}
 
 function nextMidnight(now: Date, timeZone: string): string {
   const local = new Intl.DateTimeFormat('en-US', {
@@ -335,15 +343,11 @@ export function parseGroqRateLimits(
     Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
   );
   if (lower['retry-after'] && !result.some((entry) => entry.windowId === 'retry-after')) {
-    const seconds = num(lower['retry-after']);
     result.push({
       windowId: 'retry-after',
       remaining: null,
       limit: null,
-      resetAt:
-        seconds === null
-          ? resetTime(lower['retry-after'], now)
-          : new Date(now.getTime() + seconds * 1000).toISOString(),
+      resetAt: retryAfterTime(lower['retry-after'] ?? '', now),
       confidence: 'exact',
     });
   }
@@ -483,6 +487,8 @@ export function parseGenericRateLimits(
     .map((key) => key.replace(/^x-ratelimit-(?:limit|remaining|reset)-?/, ''))
     .filter(Boolean);
   const unique = [...new Set(dimensions)];
+  if ([...keys].some((key) => /^x-ratelimit-(?:limit|remaining|reset)$/.test(key)))
+    unique.unshift('default');
   for (const dimension of unique.length ? unique : ['default']) {
     const suffix = dimension === 'default' ? '' : `-${dimension}`;
     const limit = num(values[`x-ratelimit-limit${suffix}`]);
@@ -498,15 +504,11 @@ export function parseGenericRateLimits(
       });
   }
   if (values['retry-after']) {
-    const seconds = num(values['retry-after']);
     output.push({
       windowId: 'retry-after',
       remaining: null,
       limit: null,
-      resetAt:
-        seconds === null
-          ? resetTime(values['retry-after'], now)
-          : new Date(now.getTime() + seconds * 1000).toISOString(),
+      resetAt: retryAfterTime(values['retry-after'], now),
       confidence: 'exact',
     });
   }

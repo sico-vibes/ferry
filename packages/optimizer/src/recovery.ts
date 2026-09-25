@@ -67,7 +67,9 @@ export function readOutput(
     .filter(
       (line) =>
         options.grep === undefined ||
-        (typeof options.grep === 'string' ? line.includes(options.grep) : options.grep.test(line)),
+        (typeof options.grep === 'string'
+          ? line.includes(options.grep)
+          : ((options.grep.lastIndex = 0), options.grep.test(line))),
     )
     .join('');
 }

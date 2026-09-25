@@ -39,7 +39,6 @@ const envAllow = new Set([
   'LOCALAPPDATA',
   'LANG',
   'TERM',
-  'FERRY_SHELL',
 ]);
 function ignoreOutput(_event: OutputEvent): void {
   /* optional streaming callback */
@@ -57,9 +56,8 @@ export async function runCommand(
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env))
     if (value !== undefined && envAllow.has(key.toUpperCase())) env[key] = value;
-  for (const [key, value] of Object.entries(input.env))
-    if (envAllow.has(key.toUpperCase())) env[key] = value;
-  const shell = chooseShell(env);
+  for (const [key, value] of Object.entries(input.env)) env[key] = value;
+  const shell = chooseShell(env, input.env.FERRY_SHELL ?? process.env.FERRY_SHELL);
   const chunks: { out: Buffer[]; err: Buffer[] } = { out: [], err: [] };
   let bytes = 0;
   let spillFile: string | undefined;
@@ -95,13 +93,13 @@ export async function runCommand(
       });
       const timeout = setTimeout(() => {
         timedOut = true;
-        killTree(child.pid, () => {
+        killTree(child.pid, env, () => {
           child.kill();
         });
       }, input.timeoutMs);
       await new Promise<void>((resolve) => {
         const abort = () => {
-          killTree(child.pid, () => {
+          killTree(child.pid, env, () => {
             child.kill();
           });
         };
@@ -134,6 +132,7 @@ export async function runCommand(
     const child = execa(shell.file, shell.args(input.command), {
       cwd,
       env,
+      extendEnv: false,
       reject: false,
       windowsHide: true,
       buffer: false,
@@ -141,12 +140,12 @@ export async function runCommand(
     });
     const timeout = setTimeout(() => {
       timedOut = true;
-      killTree(child.pid, () => {
+      killTree(child.pid, env, () => {
         child.kill('SIGKILL');
       });
     }, input.timeoutMs);
     const abort = () => {
-      killTree(child.pid, () => {
+      killTree(child.pid, env, () => {
         child.kill('SIGKILL');
       });
     };
@@ -167,27 +166,41 @@ export async function runCommand(
 function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError');
 }
-function killTree(pid: number | undefined, fallback: () => void): void {
+function killTree(
+  pid: number | undefined,
+  env: Record<string, string>,
+  fallback: () => void,
+): void {
   if (!pid) return;
-  try {
-    if (process.platform === 'win32') {
-      void execa('taskkill', ['/PID', String(pid), '/T', '/F'], {
-        reject: false,
-        windowsHide: true,
-      });
+  if (process.platform === 'win32') {
+    void execa('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      reject: false,
+      windowsHide: true,
+      env,
+      extendEnv: false,
+    })
+      .then((result) => {
+        if (result.failed) fallback();
+      })
+      .catch(() => { fallback(); });
+  } else {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
       fallback();
-    } else process.kill(-pid, 'SIGKILL');
-  } catch {
-    fallback();
+    }
   }
 }
-function chooseShell(env: Record<string, string>): {
+function chooseShell(
+  env: Record<string, string>,
+  configuredShell?: string,
+): {
   file: string;
   args: (command: string) => string[];
 } {
   if (process.platform === 'win32') {
-    if (env.FERRY_SHELL) {
-      const configured = findOnPath(env.FERRY_SHELL, env.PATH) ?? env.FERRY_SHELL;
+    if (configuredShell) {
+      const configured = findOnPath(configuredShell, env.PATH) ?? configuredShell;
       return { file: configured, args: (command) => ['-lc', command] };
     }
     const pwsh = findOnPath('pwsh.exe', env.PATH);

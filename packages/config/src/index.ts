@@ -155,9 +155,11 @@ export async function loadProjectConfig(
   try {
     source = JSON.parse(await readFile(filePath, 'utf8'));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') source = {};
   }
-  const config = ProjectConfigSchema.parse(source);
+  const parsedConfig = ProjectConfigSchema.safeParse(source);
+  const config = parsedConfig.success ? parsedConfig.data : ProjectConfigSchema.parse({});
+  const permissionMode = env.FERRY_PERMISSION_MODE;
   return ProjectConfigSchema.parse({
     ...config,
     ...(env.FERRY_GATE_COMMANDS
@@ -165,7 +167,9 @@ export async function loadProjectConfig(
       : {}),
     ...(env.FERRY_INSTRUCTIONS_FILE ? { instructionsFile: env.FERRY_INSTRUCTIONS_FILE } : {}),
     ...(env.FERRY_DEFAULT_PROFILE ? { defaultProfileId: env.FERRY_DEFAULT_PROFILE } : {}),
-    ...(env.FERRY_PERMISSION_MODE ? { permissionMode: env.FERRY_PERMISSION_MODE } : {}),
+    ...(permissionMode && ProjectConfigSchema.shape.permissionMode.safeParse(permissionMode).success
+      ? { permissionMode }
+      : {}),
   });
 }
 
@@ -225,7 +229,7 @@ export function redactSecretText(text: string): string {
   return text
     .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, '$1[REDACTED]')
     .replace(
-      /\b(?:sk-[A-Za-z0-9_-]{8,}|gsk_[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{8,})\b/g,
+      /\b(?:sk[-_](?:live|test)[-_][A-Za-z0-9_-]{8,}|rk_live_[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9_-]{8,}|gsk_[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
       '[REDACTED]',
     );
 }

@@ -234,7 +234,8 @@ export interface ScoreInput {
 /** Remove models that cannot safely execute this step, then rank the remaining models. */
 export function scoreModels(input: ScoreInput): ModelCandidate[] {
   const providers = input.providers ?? input.capacity.providers;
-  const nowMs = Date.parse(input.capacity.now ?? new Date(0).toISOString());
+  const parsedNow = Date.parse(input.capacity.now ?? new Date(0).toISOString());
+  const nowMs = Number.isFinite(parsedNow) ? parsedNow : 0;
   const providerById = new Map(providers.map((provider) => [provider.id as string, provider]));
   const statByRef = new Map((input.stats ?? []).map((stats) => [stats.modelRef, stats]));
   const scored: (ModelCandidate & { refKey: string })[] = [];

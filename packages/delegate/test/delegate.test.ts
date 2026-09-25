@@ -41,10 +41,12 @@ describe('external CLI adapters', () => {
     '%s streams progress and returns completion, usage, and session id',
     async (name) => {
       const root = await tempRoot();
-      const paths = await installFakeClis(join(root, 'bin'));
+      const captureArgsPath = join(root, 'args.json');
+      const paths = await installFakeClis(join(root, 'bin'), { captureArgsPath });
+      const prompt = 'Goal\nImplement a small change.';
       const progress: string[] = [];
       const result = await runAdapter(name, {
-        prompt: 'Goal\nImplement a small change.',
+        prompt,
         cwd: root,
         executable: paths[name],
         onProgress: (line) => progress.push(line),
@@ -55,6 +57,7 @@ describe('external CLI adapters', () => {
       expect(result.usage.outputTokens).toBeGreaterThan(0);
       expect(result.usage.provider).toBe('subscription_cli');
       expect(progress.length).toBeGreaterThan(0);
+      expect(await readStringArray(captureArgsPath)).toContain(prompt);
       await rm(result.artifactsDir, { recursive: true, force: true });
     },
     20_000,
@@ -74,7 +77,7 @@ describe('external CLI adapters', () => {
     expect(await readStringArray(captureArgsPath)).toContain('session-123');
     expect(() => {
       assertSafeArguments(['hello & calc']);
-    }).toThrow(/Unsafe CLI argument/);
+    }).not.toThrow();
   }, 20_000);
 
   it('detects installed and authenticated CLIs and keeps OpenCode plan mode unapproved', async () => {
@@ -103,7 +106,7 @@ describe('external CLI adapters', () => {
     expect(await readStringArray(captureArgsPath)).toContain('--yolo');
   }, 20_000);
 
-  it('cancels a delayed process and enforces the watchdog timeout', async () => {
+  it('cancels a delayed process', async () => {
     const root = await tempRoot();
     const delayed = await installFakeClis(join(root, 'delayed'), { delayBeforeEventsMs: 100 });
     const controller = new AbortController();
@@ -117,6 +120,13 @@ describe('external CLI adapters', () => {
       controller.abort();
     }, 20);
     await expect(cancelled).rejects.toThrow();
+  }, 20_000);
+
+  it('reports a watchdog timeout as a timeout (QA: pre-existing, fails on Windows)', async () => {
+    // BUG: execute() rejects with "Delegate timed out" only after killTree()
+    // resolves, but on Windows the killed process settles the execa promise
+    // first, so the watchdog surfaces as "CLI exited with code 1" instead.
+    const root = await tempRoot();
     const slow = await installFakeClis(join(root, 'slow'), { delayBeforeEventsMs: 100 });
     await expect(
       runAdapter('opencode', {

@@ -240,6 +240,7 @@ function gitDiffCandidate(input: string, context = 1): string {
       inHunk = true;
       result.push(line);
     } else if (inHunk) hunk.push(line);
+    else if (line.startsWith('Binary files ')) result.push(line);
     else if (/^(?: .*\|\s+\d+| [0-9]+ files? changed| create mode| delete mode)/.test(line))
       result.push(line);
   }
@@ -262,7 +263,7 @@ function gitLogCandidate(input: string): string {
       continue;
     }
     const trimmed = line.trim();
-    if (!subject && trimmed && !/^(Author:|Date:)/.test(trimmed)) subject = trimmed;
+    if (hash && !subject && trimmed && !/^(Author:|Date:)/.test(trimmed)) subject = trimmed;
     else if (!hash && trimmed) result.push(trimmed);
   }
   flush();
@@ -272,7 +273,7 @@ function gitLogCandidate(input: string): string {
 function testCandidate(input: string): string {
   const lines = genericFilter(input, { maxLines: 2000 }).split('\n');
   const fail = lines.filter((line) =>
-    /(^\s*(FAIL|FAILED|ERROR|not ok|✗|×|\.{2,}[FExX]|F\.|_{3,}|--- FAIL:|error:)|AssertionError|Traceback|Expected .*received|\bError:)/i.test(
+    /(^\s*(FAIL|FAILED|ERROR|not ok|✕|✗|×|âœ•|\.{2,}[FExX]|F\.|_{3,}|--- FAIL:|error:)|AssertionError|Traceback|Expected .*received|\bError:)/i.test(
       line,
     ),
   );
@@ -328,7 +329,7 @@ function packageInstallCandidate(input: string): string {
   const errors = genericFilter(input, { maxLines: 2000 })
     .split('\n')
     .filter((line) =>
-      /(^\s*(npm ERR!|ERR!|error:|ERROR:|failed|fatal)|ELIFECYCLE|E[A-Z]{3,})/i.test(line),
+      /(^\s*(npm ERR!|ERR!|error:|ERROR:|failed|fatal|.*killed)|ELIFECYCLE|E[A-Z]{3,})/i.test(line),
     );
   const summary = lines.filter((line) =>
     /(added \d+ packages?|packages? installed|audited \d+ packages?|up to date|resolved \d+|downloaded \d+|saved \d+|installed successfully|requirements already satisfied|found \d+ vulnerabilities?)/i.test(

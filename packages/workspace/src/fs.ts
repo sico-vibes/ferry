@@ -57,6 +57,11 @@ export function encodeText(text: string, encoding: TextEncoding): Buffer {
   return Buffer.from(text, 'utf8');
 }
 export function isBinary(buffer: Buffer): boolean {
+  if (
+    buffer.subarray(0, 2).equals(Buffer.from([0xff, 0xfe])) ||
+    buffer.subarray(0, 2).equals(Buffer.from([0xfe, 0xff]))
+  )
+    return false;
   return buffer.includes(0);
 }
 
@@ -76,7 +81,14 @@ export class WorkspaceJail {
     if (!this.realRoot) await this.initialize();
     const realRoot = this.realRoot;
     if (!realRoot) throw new Error('Workspace root is unavailable');
-    const candidate = path.resolve(this.root, input);
+    const normalizedInput =
+      process.platform === 'win32'
+        ? input
+            .split(/[\\/]/)
+            .map((part) => (part === '.' || part === '..' ? part : part.replace(/[ .]+$/g, '')))
+            .join(path.sep)
+        : input;
+    const candidate = path.resolve(this.root, normalizedInput);
     if (!inside(this.root, candidate)) throw new Error('Path escapes workspace root');
     let checked: string;
     try {
