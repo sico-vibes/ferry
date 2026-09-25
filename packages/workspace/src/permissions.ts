@@ -21,16 +21,16 @@ export const ActionSchema = z.object({
 });
 export type Action = z.infer<typeof ActionSchema>;
 const credentialPattern =
-  /(^|[\\/])(?:\.env(?:\.|$)|id_rsa|id_ed25519|credentials(?:\.json)?|secrets?\.json|\.npmrc|\.aws[\\/]credentials)(?:$|[\\/])/i;
+  /(^|[\\/])(?:\.env(?:\.[^\\/]+)?|[^\\/]+\.(?:pem|key|p12|pfx|jks)|id_rsa[^\\/]*|id_ed25519[^\\/]*|credentials(?:\.[^\\/]*)?|secrets?\.[^\\/]*|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.aws[\\/]credentials|\.azure[\\/][^\\/]+|\.kube[\\/]config|\.docker[\\/]config\.json|\.config[\\/]gh[\\/]hosts\.yml|\.config[\\/]gcloud[\\/]application_default_credentials\.json|\.ssh[\\/]known_hosts)(?:$|[\\/])/i;
 const destructiveCommand = [
   /\bremove-item\b(?=.*-recurse)(?=.*(?:[a-z]:\\(?:$|\s)|\\\\|\/))/i,
   /\bformat(?:\.com)?\s+[a-z]:/i,
-  /\bdel\s+\/s\s+\/q\s+(?:[a-z]:\\windows|[a-z]:\\|\\\\)/i,
+  /\bdel\b(?=.*\/s)(?=.*\/q)(?:\s+\/\w+)*\s+(?:[a-z]:\\windows|[a-z]:\\|\\\\)/i,
   /\bgit\s+push\b(?=.*(?:--force|-f\b))/i,
   /\b(?:iex|invoke-expression)\s*\(?\s*(?:iwr|invoke-webrequest)\b/i,
   /\breg(?:\.exe)?\s+(?:add|delete|import)\b/i,
   /\b(?:set-itemproperty|new-itemproperty|remove-itemproperty)\b.*\b(hklm|hkcu|registry::)/i,
-  /\bpowershell(?:\.exe)?\b.*\s-encodedcommand\b/i,
+  /\b(?:powershell|pwsh)(?:\.exe)?\b.*\s-encodedcommand\b/i,
 ];
 export function classifyDangerousCommand(command: string, workspace: string): string | undefined {
   const segments = command
@@ -45,11 +45,20 @@ export function classifyDangerousCommand(command: string, workspace: string): st
     if (/\bcurl\b/i.test(segment) && /\b(sh|bash)\b/i.test(segments[index + 1] ?? ''))
       return `Download piped to shell: ${segment}`;
     if (/\bremove-item\b/i.test(segment) && /-recurse/i.test(segment)) {
-      const target = /(?:^|\s)([a-z]:\\(?:[^\s]*)?|\\\\[^\s]+|\/[^\s]*)/i.exec(segment)?.[1];
-      if (target && !withinWorkspace(target, workspace))
+      const target =
+        /(?:^|\s)([a-z]:\\(?:[^\s]*)?|\\\\[^\s]+|\/[^\s]*|\.\.?|\$env:[\w]+|\$[\w]+)/i.exec(
+          segment,
+        )?.[1];
+      if (
+        target &&
+        (target.startsWith('$') || !withinWorkspace(path.resolve(workspace, target), workspace))
+      )
         return `Destructive path is outside workspace: ${target}`;
     }
-    const rm = /\brm\s+-[^\s]*r[^\s]*f[^\s]*\s+([^\s]+)/i.exec(segment)?.[1];
+    const rm =
+      /\brm\b(?=[^\n]*(?:-[^\s]*r|\s-r\b))(?=[^\n]*(?:-[^\s]*f|\s-f\b))(?:\s+-[^\s]+)*\s+([^\s]+)/i.exec(
+        segment,
+      )?.[1];
     if (rm && /^(?:\/|[a-z]:\\|\\\\)/i.test(rm) && !withinWorkspace(rm, workspace))
       return `Destructive path is outside workspace: ${rm}`;
   }

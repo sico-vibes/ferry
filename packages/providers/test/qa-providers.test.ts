@@ -128,7 +128,7 @@ describe('QA providers: quota parser robustness', () => {
     expect(parseGeminiQuota(body, now, 429).length).toBeGreaterThan(0);
   });
 
-  it.fails('skips a default limit that is mixed with a dimensioned header', () => {
+  it('skips a default limit that is mixed with a dimensioned header', () => {
     // BUG: dimension detection drops the un-dimensioned "x-ratelimit-limit"
     // whenever any dimensioned header exists, so the limit is silently lost.
     const windows = parseGenericRateLimits(
@@ -138,7 +138,7 @@ describe('QA providers: quota parser robustness', () => {
     expect(windows.some((window) => window.limit === 100)).toBe(true);
   });
 
-  it.fails('does not crash on an enormous retry-after value', () => {
+  it('does not crash on an enormous retry-after value', () => {
     // BUG: the retry-after branches build a Date then call toISOString without a
     // validity guard, so a huge (provider- or attacker-controlled) value throws
     // RangeError: Invalid time value.

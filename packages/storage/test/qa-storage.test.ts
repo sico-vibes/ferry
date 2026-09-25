@@ -36,7 +36,7 @@ describe('QA storage: migrations and corruption', () => {
     second.close();
   });
 
-  it.fails('releases the SQLite handle when opening a corrupt file fails', async () => {
+  it('releases the SQLite handle when opening a corrupt file fails', async () => {
     // BUG: openDatabase() constructs the better-sqlite3 Database before running
     // pragmas/migration and never closes it on failure, so the file stays locked
     // on Windows (the cleanup unlink fails with EBUSY).
@@ -170,7 +170,7 @@ describe('QA storage: secret redaction', () => {
     expect(redactHeaders(null)).toBeNull();
   });
 
-  it.fails('redacts GitHub-style tokens stored in request headers', () => {
+  it('redacts GitHub-style tokens stored in request headers', () => {
     // BUG: the value scrubber only recognizes sk-/gsk_/AIza/nvapi- prefixes, so a
     // GitHub PAT (ghp_…) persists verbatim into the requests table.
     const redacted = redactHeaders({ 'x-custom-auth': 'ghp_0123456789abcdefghijklmnopqrstuvwx' });

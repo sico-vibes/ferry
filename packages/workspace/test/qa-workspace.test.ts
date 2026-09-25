@@ -141,7 +141,7 @@ describe('QA workspace: edit and patch', () => {
     ).rejects.toThrow(/escapes/);
   });
 
-  it.fails('preserves mixed CRLF/LF endings on untouched lines', async () => {
+  it('preserves mixed CRLF/LF endings on untouched lines', async () => {
     // BUG: editFile flattens every newline to the dominant ending, so a single
     // edit rewrites CRLF lines as LF (or vice versa) across the whole file.
     const root = await tempRoot();
@@ -154,7 +154,7 @@ describe('QA workspace: edit and patch', () => {
     expect(change.after).toBe('a\r\nB\nc\r\n');
   });
 
-  it.fails('treats a replacement containing $& literally instead of expanding it', async () => {
+  it('treats a replacement containing $& literally instead of expanding it', async () => {
     // BUG: String.prototype.replace(search, replace) expands $&/$`/$'/$1 in the
     // replacement, corrupting legitimate replacement text that contains "$".
     const root = await tempRoot();
@@ -167,7 +167,7 @@ describe('QA workspace: edit and patch', () => {
     expect(change.after).toBe('hello $&!\n');
   });
 
-  it.fails('reads UTF-16LE files as text rather than rejecting them as binary', async () => {
+  it('reads UTF-16LE files as text rather than rejecting them as binary', async () => {
     // BUG: isBinary() flags any NUL byte, but UTF-16 text always contains NULs,
     // so decodeText/encodeText can never be reached through the tool layer.
     const root = await tempRoot();
@@ -178,7 +178,7 @@ describe('QA workspace: edit and patch', () => {
     await expect(tools.readFile({ path: 'u16.txt' })).resolves.toContain('hello');
   });
 
-  it.fails('lets concurrent writeFile calls to one path all succeed', async () => {
+  it('lets concurrent writeFile calls to one path all succeed', async () => {
     // BUG: the temp filename includes pid + Date.now() only, so writes that
     // share a millisecond clobber each other's temp file and fail with EEXIST
     // (or delete the winner's temp before rename).
@@ -191,7 +191,7 @@ describe('QA workspace: edit and patch', () => {
     expect(results.every((result) => result.status === 'fulfilled')).toBe(true);
   });
 
-  it.runIf(process.platform === 'win32').fails(
+  it.runIf(process.platform === 'win32')(
     'blocks writing an ignored file via a trailing-dot alias',
     async () => {
       // BUG: Windows strips trailing dots/spaces, so resolve({allowMissing}) keeps
@@ -263,7 +263,7 @@ describe('QA workspace: permission classifier', () => {
     ).toBe('deny');
   });
 
-  it.fails('protects .env.local and other .env.* variants', () => {
+  it('protects .env.local and other .env.* variants', () => {
     // BUG: credentialPattern is /(^|[\\/])(?:\.env(?:\.|$)|...)(?:$|[\\/])/ which
     // consumes the "." after ".env" and then demands end/slash, so ".env.local"
     // (and ".env.production") are read as ordinary files.
@@ -275,13 +275,13 @@ describe('QA workspace: permission classifier', () => {
     ).toBe('deny');
   });
 
-  it.fails('flags pwsh -EncodedCommand as dangerous', () => {
+  it('flags pwsh -EncodedCommand as dangerous', () => {
     // BUG: the encoded-command rule only matches "powershell", not the modern
     // "pwsh" binary, so the same obfuscated payload is treated as safe.
     expect(Boolean(classifyDangerousCommand('pwsh -EncodedCommand SQBFAFgA', ws))).toBe(true);
   });
 
-  it.fails('flags recursive deletion of an environment-variable user profile', () => {
+  it('flags recursive deletion of an environment-variable user profile', () => {
     // BUG: env-var targets ($env:USERPROFILE, $HOME) bypass both the drive/UNC
     // pattern and the outside-workspace check.
     expect(
@@ -289,17 +289,17 @@ describe('QA workspace: permission classifier', () => {
     ).toBe(true);
   });
 
-  it.fails('flags del with reordered /q /s switches', () => {
+  it('flags del with reordered /q /s switches', () => {
     // BUG: the del rule hard-codes "/s /q" order, so "del /q /s C:\" slips past.
     expect(Boolean(classifyDangerousCommand('del /q /s C:\\', ws))).toBe(true);
   });
 
-  it.fails('flags separated rm -r -f against the filesystem root', () => {
+  it('flags separated rm -r -f against the filesystem root', () => {
     // BUG: the rm rule requires -r and -f inside a single token ("-rf").
     expect(Boolean(classifyDangerousCommand('rm -r -f /', ws))).toBe(true);
   });
 
-  it.fails('flags recursive deletion of a parent directory via a relative path', () => {
+  it('flags recursive deletion of a parent directory via a relative path', () => {
     // BUG: the outside-workspace check only fires for absolute paths, so
     // "Remove-Item -Recurse -Force .." is considered safe while escaping cwd.
     expect(Boolean(classifyDangerousCommand('Remove-Item -Recurse -Force ..', ws))).toBe(true);
@@ -317,34 +317,30 @@ describe('QA workspace: command runner', () => {
     expect(result.stdout).toContain('ferry-ok');
   }, 30_000);
 
-  it.fails(
-    'does not forward non-allowlisted parent environment variables',
-    async () => {
-      // BUG: execa defaults to extendEnv:true, so the filtered `env` object is
-      // merged on top of the full parent environment and every secret leaks to the
-      // child whenever the pty path is not used (pty:false, or non-Windows).
-      const root = await tempRoot();
-      await writeRaw(
-        path.join(root, 'env.mjs'),
-        "process.stdout.write(process.env.FERRY_SECRET ?? 'absent');\n",
-        'utf8',
+  it('does not forward non-allowlisted parent environment variables', async () => {
+    // BUG: execa defaults to extendEnv:true, so the filtered `env` object is
+    // merged on top of the full parent environment and every secret leaks to the
+    // child whenever the pty path is not used (pty:false, or non-Windows).
+    const root = await tempRoot();
+    await writeRaw(
+      path.join(root, 'env.mjs'),
+      "process.stdout.write(process.env.FERRY_SECRET ?? 'absent');\n",
+      'utf8',
+    );
+    process.env.FERRY_SECRET = 'must-not-be-forwarded';
+    try {
+      const jail = new WorkspaceJail(root);
+      const result = await runCommand(
+        jail,
+        { command: 'node env.mjs', pty: false },
+        () => undefined,
       );
-      process.env.FERRY_SECRET = 'must-not-be-forwarded';
-      try {
-        const jail = new WorkspaceJail(root);
-        const result = await runCommand(
-          jail,
-          { command: 'node env.mjs', pty: false },
-          () => undefined,
-        );
-        expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain('absent');
-      } finally {
-        delete process.env.FERRY_SECRET;
-      }
-    },
-    30_000,
-  );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('absent');
+    } finally {
+      delete process.env.FERRY_SECRET;
+    }
+  }, 30_000);
 
   it('spills output beyond the byte cap into a spill file', async () => {
     const root = await tempRoot();
@@ -398,22 +394,18 @@ describe('QA workspace: checkpoints', () => {
     expect(await readFile(path.join(root, 'text.txt'), 'utf8')).toBe(original);
   }, 30_000);
 
-  it.fails(
-    'restores a binary file byte for byte through a single-file restore',
-    async () => {
-      // BUG: restore(file) writes the UTF-8 decoded stdout of `git show`, so any
-      // non-UTF-8 byte sequence is corrupted by the lossy string round-trip.
-      const root = await tempRoot();
-      const dataDir = await tempRoot();
-      const jail = new WorkspaceJail(root);
-      const checkpoints = new ShadowCheckpoints(jail, dataDir);
-      const original = Buffer.from([0x00, 0xff, 0xfe, 0x80, 0x81, 0x00, 0x7f, 0x01]);
-      await writeRaw(path.join(root, 'blob.bin'), original);
-      const first = await checkpoints.snapshot('binary');
-      await writeRaw(path.join(root, 'blob.bin'), Buffer.from([1, 2, 3]));
-      await checkpoints.restore(first, 'blob.bin');
-      expect(await readFile(path.join(root, 'blob.bin'))).toEqual(original);
-    },
-    30_000,
-  );
+  it('restores a binary file byte for byte through a single-file restore', async () => {
+    // BUG: restore(file) writes the UTF-8 decoded stdout of `git show`, so any
+    // non-UTF-8 byte sequence is corrupted by the lossy string round-trip.
+    const root = await tempRoot();
+    const dataDir = await tempRoot();
+    const jail = new WorkspaceJail(root);
+    const checkpoints = new ShadowCheckpoints(jail, dataDir);
+    const original = Buffer.from([0x00, 0xff, 0xfe, 0x80, 0x81, 0x00, 0x7f, 0x01]);
+    await writeRaw(path.join(root, 'blob.bin'), original);
+    const first = await checkpoints.snapshot('binary');
+    await writeRaw(path.join(root, 'blob.bin'), Buffer.from([1, 2, 3]));
+    await checkpoints.restore(first, 'blob.bin');
+    expect(await readFile(path.join(root, 'blob.bin'))).toEqual(original);
+  }, 30_000);
 });

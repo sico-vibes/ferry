@@ -39,7 +39,6 @@ const envAllow = new Set([
   'LOCALAPPDATA',
   'LANG',
   'TERM',
-  'FERRY_SHELL',
 ]);
 function ignoreOutput(_event: OutputEvent): void {
   /* optional streaming callback */
@@ -54,9 +53,8 @@ export async function runCommand(
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env))
     if (value !== undefined && envAllow.has(key.toUpperCase())) env[key] = value;
-  for (const [key, value] of Object.entries(input.env))
-    if (envAllow.has(key.toUpperCase())) env[key] = value;
-  const shell = chooseShell(env);
+  for (const [key, value] of Object.entries(input.env)) env[key] = value;
+  const shell = chooseShell(env, input.env.FERRY_SHELL ?? process.env.FERRY_SHELL);
   const chunks: { out: Buffer[]; err: Buffer[] } = { out: [], err: [] };
   let bytes = 0;
   let spillFile: string | undefined;
@@ -97,6 +95,8 @@ export async function runCommand(
             void execa('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
               reject: false,
               windowsHide: true,
+              env,
+              extendEnv: false,
             });
           } else child.kill();
         } catch {
@@ -129,6 +129,7 @@ export async function runCommand(
     const child = execa(shell.file, shell.args(input.command), {
       cwd,
       env,
+      extendEnv: false,
       reject: false,
       windowsHide: true,
       buffer: false,
@@ -139,6 +140,8 @@ export async function runCommand(
         const killer = execa('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
           reject: false,
           windowsHide: true,
+          env,
+          extendEnv: false,
         });
         void killer;
       } else child.kill('SIGKILL');
@@ -154,13 +157,16 @@ export async function runCommand(
     return result.exitCode ?? 1;
   }
 }
-function chooseShell(env: Record<string, string>): {
+function chooseShell(
+  env: Record<string, string>,
+  configuredShell?: string,
+): {
   file: string;
   args: (command: string) => string[];
 } {
   if (process.platform === 'win32') {
-    if (env.FERRY_SHELL) {
-      const configured = findOnPath(env.FERRY_SHELL, env.PATH) ?? env.FERRY_SHELL;
+    if (configuredShell) {
+      const configured = findOnPath(configuredShell, env.PATH) ?? configuredShell;
       return { file: configured, args: (command) => ['-lc', command] };
     }
     const pwsh = findOnPath('pwsh.exe', env.PATH);

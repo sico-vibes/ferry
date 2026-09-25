@@ -210,7 +210,7 @@ describe('QA router: selection invariants', () => {
     ).toHaveLength(0);
   });
 
-  it.fails('still skips cooling-down models when capacity.now is malformed', () => {
+  it('still skips cooling-down models when capacity.now is malformed', () => {
     // BUG: with an unparseable capacity.now, Date.parse(now) is NaN, so the
     // comparison `cooldown > nowMs` is false and the cooldown guard is skipped.
     const provider = makeProvider({

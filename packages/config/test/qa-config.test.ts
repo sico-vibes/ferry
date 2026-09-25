@@ -134,7 +134,7 @@ describe('QA config: project config', () => {
     });
   });
 
-  it.fails('falls back to defaults for a corrupted project config', async () => {
+  it('falls back to defaults for a corrupted project config', async () => {
     // BUG: loadProjectConfig only swallows ENOENT; a corrupted .ferry/config.json
     // throws a SyntaxError and takes down every project-scoped operation, unlike
     // loadSettings which backs the file up and recovers.
@@ -144,7 +144,7 @@ describe('QA config: project config', () => {
     await expect(loadProjectConfig(dir, {})).resolves.toMatchObject({ permissionMode: 'ask' });
   });
 
-  it.fails('redacts GitHub- and Stripe-style tokens from log text', () => {
+  it('redacts GitHub- and Stripe-style tokens from log text', () => {
     // BUG: redactSecretText only knows sk-/gsk_/AIza/nvapi- prefixes, so GitHub
     // PATs and Stripe keys pass through untouched.
     const cleaned = redactSecretText(
@@ -205,7 +205,7 @@ describe('QA config: project config', () => {
     expect(text).not.toContain('tok_abcdefghij');
   }, 15_000);
 
-  it.fails('ignores an invalid FERRY_PERMISSION_MODE instead of throwing', async () => {
+  it('ignores an invalid FERRY_PERMISSION_MODE instead of throwing', async () => {
     // BUG: the environment override is fed straight into the enum schema, so a
     // typo in an env var crashes config loading instead of being ignored.
     const dir = await tempDir();

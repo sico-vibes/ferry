@@ -31,17 +31,22 @@ export interface DatabaseConnection {
 export async function openDatabase(path: string): Promise<DatabaseConnection> {
   if (path !== ':memory:') await mkdir(dirname(path), { recursive: true });
   const client = new Database(path);
-  client.pragma('journal_mode = WAL');
-  client.pragma('busy_timeout = 5000');
-  client.pragma('foreign_keys = ON');
-  const current = Number(client.pragma('user_version', { simple: true }));
-  if (current < 1) {
-    const sql = await readFile(migrationPath, 'utf8');
-    const migrate = client.transaction(() => {
-      client.exec(sql);
-      client.pragma('user_version = 1');
-    });
-    migrate();
+  try {
+    client.pragma('journal_mode = WAL');
+    client.pragma('busy_timeout = 5000');
+    client.pragma('foreign_keys = ON');
+    const current = Number(client.pragma('user_version', { simple: true }));
+    if (current < 1) {
+      const sql = await readFile(migrationPath, 'utf8');
+      const migrate = client.transaction(() => {
+        client.exec(sql);
+        client.pragma('user_version = 1');
+      });
+      migrate();
+    }
+  } catch (error) {
+    client.close();
+    throw error;
   }
   return { client, orm: drizzle(client, { schema }), close: () => client.close() };
 }
@@ -338,7 +343,7 @@ export function redactHeaders(headers: unknown): string | null {
       return value
         .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, '$1[REDACTED]')
         .replace(
-          /\b(?:sk-[A-Za-z0-9_-]{8,}|gsk_[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{8,})\b/g,
+          /\b(?:sk[-_](?:live|test)[-_][A-Za-z0-9_-]{8,}|rk_live_[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9_-]{8,}|gsk_[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
           '[REDACTED]',
         );
     return value;

@@ -35,7 +35,7 @@ describe('QA catalog: snapshot normalization', () => {
     ).toBe('T3');
   });
 
-  it.fails('returns no models for a null snapshot instead of throwing', () => {
+  it('returns no models for a null snapshot instead of throwing', () => {
     // BUG: normalizeModels() calls Object.entries() on the raw input, which
     // throws a TypeError when a (corrupted) snapshot parses to null.
     expect(() => normalizeModels(null)).not.toThrow();

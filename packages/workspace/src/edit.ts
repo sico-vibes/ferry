@@ -25,7 +25,7 @@ export async function editFile(tools: WorkspaceTools, raw: unknown): Promise<Fil
   for (const edit of input.edits) {
     const occurrences = count(after, edit.search);
     if (occurrences === 1) {
-      after = after.replace(edit.search, edit.replace);
+      after = after.replace(edit.search, () => edit.replace);
       continue;
     }
     if (occurrences > 1)
@@ -46,7 +46,7 @@ export async function editFile(tools: WorkspaceTools, raw: unknown): Promise<Fil
     }
     throw new Error('Edit block could not be matched with sufficient confidence');
   }
-  const output = after.replace(/\r\n|\r|\n/g, decoded.lineEnding);
+  const output = preserveExistingLineEndings(decoded.text, after, decoded.lineEnding);
   await fs.writeFile(file, encodeText(output, decoded.encoding));
   return {
     path: tools.jail.relative(file),
@@ -54,6 +54,11 @@ export async function editFile(tools: WorkspaceTools, raw: unknown): Promise<Fil
     after: output,
     diff: unifiedDiff(decoded.text, output, input.path),
   };
+}
+function preserveExistingLineEndings(before: string, after: string, fallback: string): string {
+  const endings = before.match(/\r\n|\r|\n/g) ?? [];
+  let index = 0;
+  return after.replace(/\r\n|\r|\n/g, () => endings[index++] ?? fallback);
 }
 function count(haystack: string, needle: string): number {
   if (!needle) return 0;

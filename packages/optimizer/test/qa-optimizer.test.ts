@@ -64,7 +64,7 @@ describe('QA optimizer: never inflate', () => {
     expect(filterToolOutput('git status', sample).output).toContain('plain text');
   });
 
-  it.fails('keeps the first line of an unrecognized git log message', () => {
+  it('keeps the first line of an unrecognized git log message', () => {
     // BUG: gitLogCandidate() treats the first free line as a commit subject and
     // never emits it, so a single-line git error such as a fatal message is
     // erased from the filtered output entirely.
@@ -72,7 +72,7 @@ describe('QA optimizer: never inflate', () => {
     expect(filtered.output).toContain('fatal');
   });
 
-  it.fails('keeps a binary git diff notice instead of erasing it', () => {
+  it('keeps a binary git diff notice instead of erasing it', () => {
     // BUG: gitDiffCandidate() drops every line that is not a header, hunk, or
     // stat line, so "Binary files ... differ" disappears from the filtered diff.
     const output = 'diff --git a/x b/x\nindex 111..222 100644\nBinary files a/x and b/x differ\n';
@@ -80,7 +80,7 @@ describe('QA optimizer: never inflate', () => {
     expect(filtered.output).toContain('Binary files');
   });
 
-  it.fails('does not replace unrecognized test output with an all-pass claim', () => {
+  it('does not replace unrecognized test output with an all-pass claim', () => {
     // BUG: the "All tests passed" heuristic only recognizes "✗"/"×" failure
     // markers, so a runner that prints "✕" plus an "N passed in Xs" summary is
     // silently rewritten to "All tests passed.", hiding the failures.
@@ -88,7 +88,7 @@ describe('QA optimizer: never inflate', () => {
     expect(filterTestOutput(output)).not.toBe('All tests passed.');
   });
 
-  it.fails('does not claim success for a failed install it cannot parse', () => {
+  it('does not claim success for a failed install it cannot parse', () => {
     // BUG: packageInstallCandidate() falls back to "Install completed." whenever
     // no line matches its error heuristics, so an unparsed failure is reported as
     // success.
@@ -127,7 +127,7 @@ describe('QA optimizer: byte-exact recovery', () => {
     expect(readOutput(store, handle, { grep: 'three' })).toBe('three\n');
   });
 
-  it.fails('applies a RegExp grep without leaking stateful lastIndex across lines', () => {
+  it('applies a RegExp grep without leaking stateful lastIndex across lines', () => {
     // BUG: readOutput() calls RegExp.test() directly; a caller-supplied global
     // regex advances lastIndex between lines, so alternating lines are dropped.
     const store = new InMemoryBlobStore();

@@ -101,9 +101,12 @@ export class ShadowCheckpoints {
     if (file) {
       const target = await this.jail.resolve(file, { allowMissing: true });
       await fs.mkdir(path.dirname(target), { recursive: true });
-      await this.git(['show', `${sha}:${this.jail.relative(target)}`]).then(({ stdout }) =>
-        fs.writeFile(target, stdout),
-      );
+      const { stdout } = await execa('git', ['show', `${sha}:${this.jail.relative(target)}`], {
+        cwd: this.jail.root,
+        env: { ...process.env, GIT_DIR: this.dir, GIT_WORK_TREE: this.jail.root },
+        encoding: 'buffer',
+      });
+      await fs.writeFile(target, stdout);
     } else {
       const files = await this.git(['ls-tree', '-r', '--name-only', sha]);
       const keep = new Set(files.stdout.split(/\r?\n/).filter(Boolean));

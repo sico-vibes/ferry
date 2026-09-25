@@ -182,7 +182,7 @@ describe('QA quota: engine hostile inputs', () => {
     expect(engine.capacitySummary().banner?.text).toContain('gemini');
   });
 
-  it.fails('does not let negative usage inflate remaining capacity above the limit', () => {
+  it('does not let negative usage inflate remaining capacity above the limit', () => {
     // BUG: recordUsage() does no runtime validation, so a negative token count
     // flows into usageIn() and remaining() = limit - (negative) exceeds the limit,
     // pushing the capacity percentage above 100.
@@ -207,49 +207,46 @@ describe('QA quota: engine hostile inputs', () => {
     expect(CapacitySummarySchema.safeParse(engine.capacitySummary()).success).toBe(true);
   });
 
-  it.fails(
-    'does not report zero steps left when only a short rolling window is restrictive',
-    () => {
-      // BUG: stepsFor() adds a "seconds until reset" candidate for rolling windows;
-      // nextReset() for rolling windows equals now, so the candidate is 0 and the
-      // minimum collapses stepsLeftToday to 0 even when a daily window is ample.
-      const mixed = {
-        ...provider,
-        windows: [
-          {
-            scope: 'provider' as const,
-            metric: 'requests' as const,
-            kind: 'fixed_daily' as const,
-            tz: 'UTC',
-            limit: 20,
-          },
-          {
-            scope: 'provider' as const,
-            metric: 'requests' as const,
-            kind: 'rolling' as const,
-            length: 60,
-            limit: 4,
-          },
-        ],
-      };
-      const model: ModelInfo = {
-        ref: ModelRefSchema.parse('gemini/gemini-flash'),
-        providerId: ProviderIdSchema.parse('gemini'),
-        name: 'Flash',
-        tier: 'T1',
-        contextWindow: 100_000,
-        maxOutput: 8_000,
-        toolCalling: true,
-        reasoning: false,
-        free: true,
-        priceInPerM: null,
-        priceOutPerM: null,
-      };
-      const engine = makeEngine({ catalog: { providers: [mixed], models: [model] } });
-      engine.recordUsage(record('2026-06-01T09:00:00Z', { stepKind: 'edit' }));
-      expect(engine.stepsLeft('gemini', model.ref)).toBeGreaterThan(0);
-    },
-  );
+  it('does not report zero steps left when only a short rolling window is restrictive', () => {
+    // BUG: stepsFor() adds a "seconds until reset" candidate for rolling windows;
+    // nextReset() for rolling windows equals now, so the candidate is 0 and the
+    // minimum collapses stepsLeftToday to 0 even when a daily window is ample.
+    const mixed = {
+      ...provider,
+      windows: [
+        {
+          scope: 'provider' as const,
+          metric: 'requests' as const,
+          kind: 'fixed_daily' as const,
+          tz: 'UTC',
+          limit: 20,
+        },
+        {
+          scope: 'provider' as const,
+          metric: 'requests' as const,
+          kind: 'rolling' as const,
+          length: 60,
+          limit: 4,
+        },
+      ],
+    };
+    const model: ModelInfo = {
+      ref: ModelRefSchema.parse('gemini/gemini-flash'),
+      providerId: ProviderIdSchema.parse('gemini'),
+      name: 'Flash',
+      tier: 'T1',
+      contextWindow: 100_000,
+      maxOutput: 8_000,
+      toolCalling: true,
+      reasoning: false,
+      free: true,
+      priceInPerM: null,
+      priceOutPerM: null,
+    };
+    const engine = makeEngine({ catalog: { providers: [mixed], models: [model] } });
+    engine.recordUsage(record('2026-06-01T09:00:00Z', { stepKind: 'edit' }));
+    expect(engine.stepsLeft('gemini', model.ref)).toBeGreaterThan(0);
+  });
 
   it('converges a learned limit toward the catalog limit without going negative', () => {
     const engine = makeEngine({ catalog: { providers: [provider], models: [] } });

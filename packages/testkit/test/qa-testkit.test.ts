@@ -38,7 +38,7 @@ describe('QA testkit: fake provider server', () => {
     expect(server.requests).toHaveLength(3);
   });
 
-  it.fails('emits malformed tool-call arguments when asked', async () => {
+  it('emits malformed tool-call arguments when asked', async () => {
     // BUG: FakeOpenAIServer.responseFor() builds the broken arguments string but
     // then omits tool_calls entirely when malformed, so malformedToolCall can
     // never exercise a client's bad-JSON handling.
