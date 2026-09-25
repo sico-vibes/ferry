@@ -17,6 +17,7 @@ export function ProviderKeyDialog({
   const client = useFerryClient();
   const cache = useQueryClient();
   const toast = useToasts((state) => state.push);
+  const realProviders = window.ferryHybrid?.getRealDomains().includes('providers') ?? false;
   const [value, setValue] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -89,7 +90,11 @@ export function ProviderKeyDialog({
       open={open && Boolean(provider)}
       onOpenChange={onOpenChange}
       title={`Manage ${provider?.name ?? 'provider'} key`}
-      description="Keys are stored in this local demo client."
+      description={
+        realProviders
+          ? 'Keys are stored securely in your operating system keyring.'
+          : 'Keys are stored in this local demo client.'
+      }
     >
       <div className="grid gap-3">
         {provider?.signupUrl && (
@@ -175,7 +180,9 @@ export function ProviderKeyDialog({
           </div>
         )}
         <p className="text-meta text-text-3">
-          Keys stay in the demo client store. Never paste a real secret into a shared demo.
+          {realProviders
+            ? 'Keys never leave your device or appear in Ferry logs.'
+            : 'Keys stay in the demo client store. Never paste a real secret into a shared demo.'}
         </p>
       </div>
     </Dialog>

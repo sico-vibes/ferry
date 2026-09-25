@@ -27,18 +27,28 @@ export class KeyringSecretStore implements SecretStore {
 
 export class MemorySecretStore implements SecretStore {
   readonly #values = new Map<string, string>();
+  readonly #namespace: string;
+  constructor(namespace = 'default') {
+    this.#namespace = namespace;
+  }
+  #key(providerKeyId: string): string {
+    return `${this.#namespace}:${providerKeyId}`;
+  }
   set(providerKeyId: string, value: string): Promise<void> {
-    this.#values.set(providerKeyId, value);
+    this.#values.set(this.#key(providerKeyId), value);
     return Promise.resolve();
   }
   get(providerKeyId: string): Promise<string | undefined> {
-    return Promise.resolve(this.#values.get(providerKeyId));
+    return Promise.resolve(this.#values.get(this.#key(providerKeyId)));
   }
   delete(providerKeyId: string): Promise<void> {
-    this.#values.delete(providerKeyId);
+    this.#values.delete(this.#key(providerKeyId));
     return Promise.resolve();
   }
   has(providerKeyId: string): Promise<boolean> {
-    return Promise.resolve(this.#values.has(providerKeyId));
+    return Promise.resolve(this.#values.has(this.#key(providerKeyId)));
+  }
+  clear(): void {
+    this.#values.clear();
   }
 }

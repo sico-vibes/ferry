@@ -97,8 +97,10 @@ const finish = async (error) => {
 async function waitForRendererLoad() {
   const deadline = Date.now() + 60_000;
   let lastError;
+  const pageErrors = [];
   while (Date.now() < deadline) {
     let browser;
+    let rendererFound = false;
     try {
       browser = await chromium.connectOverCDP(`http://127.0.0.1:${remoteDebuggingPort}`, {
         timeout: 3_000,
@@ -106,15 +108,52 @@ async function waitForRendererLoad() {
       for (const context of browser.contexts()) {
         for (const page of context.pages()) {
           if (!page.url().startsWith('file://')) continue;
+          rendererFound = true;
+          page.on('console', (message) => {
+            if (message.type() === 'error') pageErrors.push(message.text());
+          });
+          page.on('pageerror', (error) => pageErrors.push(error.message));
           await page.waitForLoadState('load', { timeout: 5_000 });
           const readyState = await page.evaluate(() => document.readyState);
           if (readyState === 'complete') {
+            await page.waitForFunction(() => Boolean(window.ferryHybrid), undefined, {
+              timeout: 20_000,
+            });
+            const domains = await page.evaluate(async () => {
+              const client = window.ferryHybrid;
+              if (!client) throw new Error('Packaged renderer did not connect to Ferry Core');
+              const [providers, models, capacity] = await Promise.all([
+                client.providers.list(),
+                client.models.list(),
+                client.quota.capacity(),
+              ]);
+              return {
+                realDomains: client.getRealDomains(),
+                providers: providers.length,
+                modelsAreArray: Array.isArray(models),
+                capacity,
+              };
+            });
+            if (
+              !['providers', 'models', 'quota'].every((domain) =>
+                domains.realDomains.includes(domain),
+              ) ||
+              domains.providers === 0 ||
+              !domains.modelsAreArray ||
+              typeof domains.capacity.percentRemaining !== 'number'
+            )
+              throw new Error(`Packaged real-domain RPC smoke failed: ${JSON.stringify(domains)}`);
             console.log(`Packaged renderer loaded: ${page.url()}`);
+            console.log('Packaged providers/quota RPC connected');
             return;
           }
         }
       }
     } catch (error) {
+      if (rendererFound)
+        throw new Error(
+          `Packaged renderer startup failed: ${error.message}; ${pageErrors.join(' | ')}`,
+        );
       lastError = error;
     } finally {
       await browser?.close().catch(() => undefined);

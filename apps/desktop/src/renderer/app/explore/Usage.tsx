@@ -31,6 +31,7 @@ export function UsageCanvas() {
   const client = useFerryClient();
   const navigate = useNavigate();
   const cache = useQueryClient();
+  const realQuota = window.ferryHybrid?.getRealDomains().includes('quota') ?? false;
   const [metric, setMetric] = useState<UsageMetric>('requests');
   const { data: providers = [] } = useQuery({
     queryKey: ['providers'],
@@ -121,9 +122,11 @@ export function UsageCanvas() {
             </nav>
           }
           actions={
-            <span className="rounded-pill border border-border-hair bg-card px-3 py-1 text-meta text-text-3">
-              Demo data
-            </span>
+            !realQuota && (
+              <span className="rounded-pill border border-border-hair bg-card px-3 py-1 text-meta text-text-3">
+                Demo data
+              </span>
+            )
           }
         />
         <div className="usage-top-grid grid">

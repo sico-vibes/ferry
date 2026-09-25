@@ -1,9 +1,19 @@
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createLogger, getDataPaths, type DataPaths } from '@ferry/config';
-import { KeyringSecretStore, type SecretStore } from '@ferry/secrets';
+import { KeyringSecretStore, MemorySecretStore, type SecretStore } from '@ferry/secrets';
+import { loadCatalog, type Catalog } from '@ferry/catalog';
+import { QuotaEngine } from '@ferry/quota';
+import { parseOpenRouterKey } from '@ferry/providers';
+import { QuotaObservationSchema, newId } from '@ferry/shared';
 import {
   CheckpointRepository,
+  ProviderRepository,
+  ProviderKeyRepository,
+  RequestRepository,
+  QuotaObservationRepository,
+  CooldownRepository,
+  HandoffRepository,
   SettingsRepository,
   SessionRepository,
   WorkspaceRepository,
@@ -19,6 +29,7 @@ export interface ServiceOptions {
   dataDir: string;
   clock?: FerryClock;
   env?: NodeJS.ProcessEnv;
+  secrets?: SecretStore;
 }
 
 export interface FerryServices {
@@ -32,6 +43,13 @@ export interface FerryServices {
   readonly sessions: SessionRepository;
   readonly checkpoints: CheckpointRepository;
   readonly secrets: SecretStore;
+  readonly catalog: Catalog;
+  readonly providers: ProviderRepository;
+  readonly providerKeys: ProviderKeyRepository;
+  readonly quota: QuotaEngine;
+  readonly cooldowns: CooldownRepository;
+  readonly quotaObservations: QuotaObservationRepository;
+  readonly handoffs: HandoffRepository;
   readonly logger: ReturnType<typeof createLogger>;
   dispose(): Promise<void>;
 }
@@ -40,6 +58,7 @@ export async function createServices({
   dataDir,
   clock,
   env = process.env,
+  secrets,
 }: ServiceOptions): Promise<FerryServices> {
   const home = resolve(dataDir);
   const paths = getDataPaths({ ...env, FERRY_HOME: home });
@@ -50,6 +69,59 @@ export async function createServices({
     mkdir(paths.checkpoints, { recursive: true }),
   ]);
   const db = await openDatabase(resolve(paths.db, 'ferry.sqlite'));
+  const catalog = await loadCatalog({ now: clock?.now() ?? new Date() });
+  const providers = new ProviderRepository(db.client);
+  const providerKeys = new ProviderKeyRepository(db.client);
+  const cooldowns = new CooldownRepository(db.client);
+  const quotaObservations = new QuotaObservationRepository(db.client);
+  const handoffs = new HandoffRepository(db.client);
+  const quota = new QuotaEngine({
+    catalog,
+    requestRepository: new RequestRepository(db.client),
+    observationRepository: quotaObservations,
+    now: () => (clock ?? { now: () => new Date() }).now(),
+  });
+  const testKeyringNamespace = env.FERRY_TEST_KEYRING_NAMESPACE;
+  const secretStore =
+    secrets ??
+    (testKeyringNamespace
+      ? new MemorySecretStore(testKeyringNamespace)
+      : new KeyringSecretStore(env.FERRY_KEYRING_SERVICE ?? 'Ferry'));
+  const stopOpenRouterPolling = quota.startOpenRouterPolling(
+    async () => {
+      const key = await secretStore.get('openrouter');
+      if (!key) return;
+      const configured = env.FERRY_PROVIDER_BASE_URL_OPENROUTER ?? 'https://openrouter.ai/api/v1';
+      const origin = configured.replace(/\/$/, '').replace(/\/api\/v1$/, '');
+      const response = await fetch(`${origin}/api/v1/key`, {
+        headers: { Authorization: `Bearer ${key}` },
+      });
+      if (!response.ok) return;
+      const body: unknown = await response.json().catch(() => ({}));
+      const observedAt = (clock ?? { now: () => new Date() }).now().toISOString();
+      for (const window of parseOpenRouterKey(body, new Date(observedAt))) {
+        const observation = QuotaObservationSchema.safeParse({
+          id: newId('quota'),
+          providerId: 'openrouter',
+          windowId:
+            window.windowId === 'free-model-requests-day'
+              ? 'openrouter:provider:*:requests:fixed_daily'
+              : window.windowId,
+          metric: window.windowId === 'credits' ? 'credits' : 'requests',
+          ...(window.limit === null || window.remaining === null
+            ? {}
+            : { value: Math.max(0, window.limit - window.remaining) }),
+          limit: window.limit,
+          remaining: window.remaining,
+          resetAt: window.resetAt,
+          source: 'endpoint',
+          observedAt,
+        });
+        if (observation.success) quota.observe(observation.data);
+      }
+    },
+    () => Boolean(providerKeys.get('openrouter')),
+  );
   const logger = createLogger({ logsDir: paths.logs });
   let disposed = false;
   return {
@@ -62,11 +134,21 @@ export async function createServices({
     workspaces: new WorkspaceRepository(db.client),
     sessions: new SessionRepository(db.client),
     checkpoints: new CheckpointRepository(db.client),
-    secrets: new KeyringSecretStore(),
+    catalog,
+    providers,
+    providerKeys,
+    quota,
+    cooldowns,
+    quotaObservations,
+    handoffs,
+    secrets: secretStore,
     logger,
     async dispose() {
       if (disposed) return;
       disposed = true;
+      stopOpenRouterPolling();
+      quota.dispose();
+      if (secretStore instanceof MemorySecretStore) secretStore.clear();
       await new Promise<void>((done, fail) => {
         logger.flush((error) => {
           if (error) fail(error);

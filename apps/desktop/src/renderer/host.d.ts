@@ -7,7 +7,7 @@ declare global {
       realDomainsFromEnvironment(): string[];
       openFolder(): Promise<string | null>;
       updateTheme(theme: 'dark' | 'light'): void;
-      connectCore(): Promise<MessagePort>;
+      connectCore(token: string): Promise<void>;
       getEngineStatus(): Promise<{ status: 'connected' | 'restarting'; pid: number | null }>;
       onEngineRestarting(handler: () => void): () => void;
       onEngineConnected(handler: () => void): () => void;

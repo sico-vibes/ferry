@@ -13,6 +13,7 @@ import {
 import {
   FERRY_PROTOCOL,
   JsonRpcRequestSchema,
+  ProviderIdSchema,
   SessionIdSchema,
   SettingsSchema,
   WorkspaceSchema,
@@ -28,6 +29,10 @@ import {
 } from '../src/index.js';
 import { runFerryClientContract } from '../../client/src/testing/contract.js';
 import { createFakeClock } from '../../client/src/mock/clock.js';
+import { FakeOpenAIServer } from '@ferry/testkit';
+import { MemorySecretStore } from '@ferry/secrets';
+import { createServices } from '../src/services.js';
+import { domainRegistrars } from '../src/domains/index.js';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'ferry-core-test-'));
 let activeHost: CoreHost | undefined;
@@ -72,7 +77,14 @@ async function makeRealDomainsHarness() {
   await rpc.hello;
   const mock = createMockFerryClient({ behavior: 'test' });
   return {
-    client: createHybridClient(mock, rpc, ['settings', 'workspaces', 'checkpoints']),
+    client: createHybridClient(mock, rpc, [
+      'settings',
+      'workspaces',
+      'checkpoints',
+      'providers',
+      'models',
+      'quota',
+    ]),
     cleanup: async () => {
       rpc.close();
       await host.stop();
@@ -81,7 +93,7 @@ async function makeRealDomainsHarness() {
 }
 
 runFerryClientContract('In-process Core RPC selected domains', makeRealDomainsHarness, {
-  domains: ['settings', 'workspaces', 'checkpoints', 'system'],
+  domains: ['settings', 'workspaces', 'checkpoints', 'providers', 'models', 'quota', 'system'],
 });
 
 afterAll(async () => {
@@ -97,7 +109,14 @@ describe('core host dispatcher and lifecycle', () => {
     const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 2500 });
     try {
       const hello = await rpc.hello;
-      expect(hello.realDomains).toEqual(['settings', 'workspaces', 'checkpoints']);
+      expect(hello.realDomains).toEqual([
+        'settings',
+        'workspaces',
+        'checkpoints',
+        'providers',
+        'models',
+        'quota',
+      ]);
       await mkdir(join(path, 'workspace'), { recursive: true });
       const opened = await rpc.workspaces.open(join(path, 'workspace'));
       WorkspaceSchema.parse(opened);
@@ -199,4 +218,85 @@ describe('core host dispatcher and lifecycle', () => {
       await host.stop();
     }
   });
+});
+
+describe('provider, model and quota RPC integration', () => {
+  it('keeps keys out of RPC output, reads fake rate limits, and reports 429 cooldowns', async () => {
+    const fake = await new FakeOpenAIServer({
+      responseHeaders: {
+        'x-ratelimit-limit-requests': '20',
+        'x-ratelimit-remaining-requests': '13',
+        'x-ratelimit-reset-requests': '3600',
+      },
+    }).start();
+    const path = join(dataDir, 'provider-quota-rpc');
+    const services = await createServices({
+      dataDir: path,
+      env: {
+        ...process.env,
+        FERRY_PROVIDER_BASE_URL_OPENAI: `${fake.baseUrl}/v1`,
+      },
+      secrets: new MemorySecretStore(),
+    });
+    const [coreTransport, clientTransport] = createMemoryTransportPair();
+    const host = new CoreHost({ dataDir: path, transport: coreTransport, services });
+    for (const register of domainRegistrars) register(host, services);
+    const emitted: unknown[] = [];
+    host.onEvent((_method, payload) => emitted.push(payload));
+    await host.start();
+    const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 5000 });
+    try {
+      const secret = 'fake-key-never-a-real-secret';
+      const providerId = ProviderIdSchema.parse('openai');
+      const connected = await rpc.providers.setKey(providerId, secret);
+      expect(connected.keyStatus).toBe('unchecked');
+      expect(JSON.stringify(connected)).not.toContain(secret);
+      expect(await rpc.models.list(providerId)).not.toHaveLength(0);
+
+      const probeResult = await rpc.providers.probe(providerId).catch((error: unknown) => {
+        const requests = fake.requests.map(({ method, url }) => ({ method, url }));
+        throw new Error(
+          `Provider probe RPC failed: ${String(error)}; fake requests=${JSON.stringify(requests)}`,
+        );
+      });
+      expect(probeResult).toMatchObject({ ok: true, keyValid: true });
+      expect(probeResult.windows[0]).toMatchObject({ limit: 20, remaining: 13 });
+      const capacity = await rpc.quota.capacity();
+      expect(capacity.perProvider.find((item) => item.providerId === 'openai')).toMatchObject({
+        percent: 65,
+      });
+      expect(await rpc.quota.history(14)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ providerId: 'openai', requests: 7 })]),
+      );
+      expect(JSON.stringify({ probeResult, capacity, emitted })).not.toContain(secret);
+      const persisted = JSON.stringify({
+        providers: services.providers.list(),
+        keyReferences: services.providerKeys.get('openai'),
+        quota: services.quotaObservations.list(),
+      });
+      expect(persisted).not.toContain(secret);
+
+      fake.options.responses = [
+        {
+          status: 429,
+          headers: {
+            'retry-after': '30',
+            'x-ratelimit-limit-requests': '20',
+            'x-ratelimit-remaining-requests': '0',
+            'x-ratelimit-reset-requests': '30',
+          },
+        },
+      ];
+      const limited = await rpc.providers.probe(providerId);
+      expect(limited).toMatchObject({ ok: false, errorKind: 'rate_limit' });
+      const provider = (await rpc.providers.list()).find((item) => item.id === 'openai');
+      expect(provider).toMatchObject({ health: 'cooldown' });
+      expect(provider?.cooldownUntil).not.toBeNull();
+      expect(JSON.stringify({ limited, provider, emitted })).not.toContain(secret);
+    } finally {
+      rpc.close();
+      await host.stop();
+      await fake.stop();
+    }
+  }, 30_000);
 });

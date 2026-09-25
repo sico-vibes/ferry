@@ -100,7 +100,11 @@ async function startEmbeddedCore() {
   );
   try {
     const details = await ready;
-    assert.deepEqual(details.realDomains, ['settings', 'workspaces', 'checkpoints']);
+    assert.ok(
+      ['settings', 'workspaces', 'checkpoints'].every((domain) =>
+        details.realDomains.includes(domain),
+      ),
+    );
     assert.equal(details.dataDir, dataDirectory);
     return { websocketUrl: details.websocketUrl, exit };
   } finally {
@@ -124,7 +128,9 @@ async function openRenderer(page, websocketUrl) {
   await page.goto(url.toString());
   await page.waitForFunction(() => Boolean(window.ferryRpcClient), undefined, { timeout: 30_000 });
   const hello = await page.evaluate(() => window.ferryRpcClient.hello);
-  assert.deepEqual(hello.realDomains, ['settings', 'workspaces', 'checkpoints']);
+  assert.ok(
+    ['settings', 'workspaces', 'checkpoints'].every((domain) => hello.realDomains.includes(domain)),
+  );
 }
 
 try {
@@ -227,5 +233,10 @@ try {
     await new Promise((resolve, reject) =>
       rendererServer.server.close((error) => (error ? reject(error) : resolve())),
     );
-  await rm(temporaryDirectory, { recursive: true, force: true });
+  await rm(temporaryDirectory, {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 250,
+  });
 }

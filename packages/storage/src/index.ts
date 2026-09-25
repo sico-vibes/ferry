@@ -247,8 +247,18 @@ export class HandoffRepository extends JsonRepository<{
   sessionId: string;
   reason: string;
 }> {
-  constructor(client: Database.Database) {
+  constructor(
+    client: Database.Database,
+    private readonly handoffClient: Database.Database = client,
+  ) {
     super(client, 'handoffs');
+  }
+  listSince(since: Date): { id: string; sessionId: string; reason: string }[] {
+    return (
+      this.handoffClient
+        .prepare('SELECT data_json FROM handoffs WHERE updated_at >= ? ORDER BY updated_at')
+        .all(since.toISOString()) as { data_json: string }[]
+    ).map((row) => JSON.parse(row.data_json) as { id: string; sessionId: string; reason: string });
   }
 }
 export class OptimizerEventRepository extends JsonRepository<{

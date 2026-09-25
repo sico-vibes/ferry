@@ -14,11 +14,17 @@
   "dependencies": {
     "@ferry/config": "workspace:*",
     "@ferry/client": "workspace:*",
+    "@ferry/catalog": "workspace:*",
+    "@ferry/providers": "workspace:*",
+    "@ferry/quota": "workspace:*",
     "@ferry/secrets": "workspace:*",
     "@ferry/shared": "workspace:*",
     "@ferry/storage": "workspace:*",
     "@ferry/workspace": "workspace:*",
     "cockatiel": "4.0.0",
     "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@ferry/testkit": "workspace:*"
   }
 }

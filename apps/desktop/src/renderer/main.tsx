@@ -27,14 +27,53 @@ const mock = createDemoFerryClient({
     ? { speed: configuredSpeed }
     : {}),
 });
+let nextCorePortToken = 0;
+const connectCorePort = async (
+  host: NonNullable<typeof window.ferryHost>,
+): Promise<MessagePort> => {
+  const token = `ferry-core-port-${String(nextCorePortToken++)}`;
+  const portPromise = new Promise<MessagePort>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      window.removeEventListener('message', onMessage);
+      reject(new Error('Core MessagePort transfer timed out'));
+    }, 12_000);
+    const onMessage = (event: MessageEvent<unknown>) => {
+      if (
+        event.source !== window ||
+        typeof event.data !== 'object' ||
+        event.data === null ||
+        !('type' in event.data) ||
+        event.data.type !== 'ferry:core-port' ||
+        !('token' in event.data) ||
+        event.data.token !== token
+      )
+        return;
+      window.clearTimeout(timeout);
+      window.removeEventListener('message', onMessage);
+      const port = event.ports[0];
+      if (!port) {
+        reject(new Error('Core did not transfer a MessagePort'));
+        return;
+      }
+      resolve(port);
+    };
+    window.addEventListener('message', onMessage);
+  });
+  await host.connectCore(token);
+  return portPromise;
+};
 const bootstrapClient = async () => {
   let rpc: ReturnType<typeof createRpcFerryClient>;
   if (window.ferryHost) {
-    const port = await window.ferryHost.connectCore();
+    const port = await connectCorePort(window.ferryHost);
     rpc = createRpcFerryClient(
       createMessagePortTransport(port, {
-        reconnect: () =>
-          window.ferryHost?.connectCore() ?? Promise.reject(new Error('Desktop host unavailable')),
+        reconnect: () => {
+          const host = window.ferryHost;
+          return host
+            ? connectCorePort(host)
+            : Promise.reject(new Error('Desktop host unavailable'));
+        },
         onRestarting: (handler) =>
           window.ferryHost?.onEngineRestarting(handler) ?? (() => undefined),
       }),

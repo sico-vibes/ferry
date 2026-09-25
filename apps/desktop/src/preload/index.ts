@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+const rendererWindow = globalThis as unknown as {
+  postMessage(message: unknown, targetOrigin: string, transfer: unknown[]): void;
+};
+
 contextBridge.exposeInMainWorld('ferryHost', {
   platform: process.platform,
   versions: {
@@ -15,7 +19,7 @@ contextBridge.exposeInMainWorld('ferryHost', {
   updateTheme: (theme: 'dark' | 'light'): void => {
     ipcRenderer.send('ferry:theme', theme);
   },
-  connectCore: (): Promise<MessagePort> =>
+  connectCore: (token: string): Promise<void> =>
     new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         ipcRenderer.removeListener('ferry:core-port', listener);
@@ -26,7 +30,8 @@ contextBridge.exposeInMainWorld('ferryHost', {
         if (!port) return;
         clearTimeout(timeout);
         ipcRenderer.removeListener('ferry:core-port', listener);
-        resolve(port);
+        rendererWindow.postMessage({ type: 'ferry:core-port', token }, '/', [port]);
+        resolve();
       };
       ipcRenderer.on('ferry:core-port', listener);
       ipcRenderer.send('ferry:connect-core');
