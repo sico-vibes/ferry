@@ -267,6 +267,8 @@ export const sampleSkill: Skill = {
 export const sampleLane: Lane = {
   name: 'Codex',
   implementer: 'codex',
+  agent: null,
+  transport: 'native',
   profile: null,
   model: null,
   effort: null,

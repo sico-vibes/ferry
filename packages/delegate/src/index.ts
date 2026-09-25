@@ -1,13 +1,20 @@
 import { createHash } from 'node:crypto';
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { execa } from 'execa';
+import { client as acpClient, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk';
+import type {
+  ClientConnection,
+  SessionConfigOption,
+  SessionModeState,
+} from '@agentclientprotocol/sdk';
+import { Readable, Writable } from 'node:stream';
 import { DelegationRunSchema, LaneSchema, newId } from '@ferry/shared';
 import type { DelegationRun, FileChange, Lane, SessionId } from '@ferry/shared';
 import type { BriefingSection } from '@ferry/router';
 
-export type Implementer = 'codex' | 'opencode' | 'claude';
+export type Implementer = 'codex' | 'opencode' | 'claude' | 'acp';
 export type NativeLane = Omit<Lane, 'source' | 'trusted'> & {
   permission: 'read_only' | 'scoped_write';
   paths: string[];
@@ -63,10 +70,26 @@ function lanesFromText(text: string, source: 'global' | 'project', trusted: bool
   for (const [name, raw] of Object.entries(data.lanes)) {
     if (typeof raw !== 'object' || raw === null) continue;
     const entry = raw as Record<string, unknown>;
-    if (!['codex', 'opencode', 'claude', 'ferry'].includes(String(entry.implementer))) continue;
+    if (!['codex', 'opencode', 'claude', 'acp', 'ferry'].includes(String(entry.implementer)))
+      continue;
     const lane = LaneSchema.safeParse({
       name,
       implementer: entry.implementer,
+      agent: typeof entry.agent === 'string' ? entry.agent : null,
+      transport: entry.transport === 'acp' ? 'acp' : 'native',
+      ...(typeof entry.command === 'string' ? { command: entry.command } : {}),
+      ...(Array.isArray(entry.args)
+        ? { args: entry.args.filter((value): value is string => typeof value === 'string') }
+        : {}),
+      ...(typeof entry.env === 'object' && entry.env !== null
+        ? {
+            env: Object.fromEntries(
+              Object.entries(entry.env).filter(
+                (pair): pair is [string, string] => typeof pair[1] === 'string',
+              ),
+            ),
+          }
+        : {}),
       profile: typeof entry.profile === 'string' ? entry.profile : null,
       model: typeof entry.model === 'string' ? entry.model : null,
       effort: typeof entry.effort === 'string' ? entry.effort : null,
@@ -179,6 +202,18 @@ export interface AdapterRequest {
   resumeId?: string;
   timeoutMs?: number;
   executable?: string;
+  args?: string[];
+  env?: NodeJS.ProcessEnv;
+  permissionPolicy?: 'read_only' | 'scoped_write';
+  paths?: string[];
+  checkpoint?: () => Promise<void>;
+  requestApproval?: (request: {
+    title: string;
+    command: string;
+    permissionPolicy: 'read_only' | 'scoped_write';
+  }) => Promise<boolean>;
+  onAuthMethods?: (methods: readonly { id: string; name: string }[]) => void;
+  authMethodId?: string;
   signal?: AbortSignal;
   onProgress?: (text: string) => void;
 }
@@ -200,6 +235,204 @@ export interface CliDetection {
   version: string | null;
   executable: string | null;
   error?: string;
+}
+export interface AcpAgentDefinition {
+  id: string;
+  name: string;
+  command: string;
+  args: readonly string[];
+  detectArgs: readonly string[];
+  installHint: string;
+  supportsModel: boolean;
+  supportsMode: boolean;
+  launchVerified: boolean;
+  verified: boolean;
+}
+export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
+  {
+    id: 'gemini',
+    name: 'Gemini CLI',
+    command: 'gemini',
+    args: ['--experimental-acp'],
+    detectArgs: ['--version'],
+    installHint: 'Install Gemini CLI, then check its ACP launch flag.',
+    supportsModel: false,
+    supportsMode: false,
+    launchVerified: false,
+    verified: false,
+  },
+  {
+    id: 'claude-code',
+    name: 'Claude Code',
+    command: 'claude-code-acp',
+    args: [],
+    detectArgs: ['--version'],
+    installHint: 'Install the Claude Code ACP adapter.',
+    supportsModel: false,
+    supportsMode: false,
+    launchVerified: false,
+    verified: false,
+  },
+  {
+    id: 'codex',
+    name: 'Codex',
+    command: 'codex-acp',
+    args: [],
+    detectArgs: ['--version'],
+    installHint: 'Install a Codex ACP adapter.',
+    supportsModel: false,
+    supportsMode: false,
+    launchVerified: false,
+    verified: false,
+  },
+  {
+    id: 'opencode',
+    name: 'OpenCode',
+    command: 'opencode',
+    args: ['acp'],
+    detectArgs: ['--version'],
+    installHint: 'Install OpenCode with ACP support.',
+    supportsModel: false,
+    supportsMode: false,
+    launchVerified: false,
+    verified: false,
+  },
+  {
+    id: 'qwen-code',
+    name: 'Qwen Code',
+    command: 'qwen',
+    args: ['--experimental-acp'],
+    detectArgs: ['--version'],
+    installHint: 'Install Qwen Code and check the current ACP flag.',
+    supportsModel: false,
+    supportsMode: false,
+    launchVerified: false,
+    verified: false,
+  },
+  {
+    id: 'kimi-cli',
+    name: 'Kimi CLI',
+    command: 'kimi',
+    args: ['acp'],
+    detectArgs: ['--version'],
+    installHint: 'Install Kimi CLI with ACP support.',
+    supportsModel: false,
+    supportsMode: false,
+    launchVerified: false,
+    verified: false,
+  },
+  {
+    id: 'mistral-vibe',
+    name: 'Mistral Vibe',
+    command: 'vibe',
+    args: ['--acp'],
+    detectArgs: ['--version'],
+    installHint: 'Install Mistral Vibe and verify its ACP flag.',
+    supportsModel: false,
+    supportsMode: false,
+    launchVerified: false,
+    verified: false,
+  },
+  {
+    id: 'goose',
+    name: 'Goose',
+    command: 'goose',
+    args: ['acp'],
+    detectArgs: ['--version'],
+    installHint: 'Install Goose with ACP support.',
+    supportsModel: false,
+    supportsMode: false,
+    launchVerified: false,
+    verified: false,
+  },
+  {
+    id: 'github-copilot',
+    name: 'GitHub Copilot CLI',
+    command: 'copilot',
+    args: ['--acp'],
+    detectArgs: ['--version'],
+    installHint: 'Install GitHub Copilot CLI and verify its ACP option.',
+    supportsModel: false,
+    supportsMode: false,
+    launchVerified: false,
+    verified: false,
+  },
+  {
+    id: 'kiro',
+    name: 'Kiro CLI',
+    command: 'kiro-cli',
+    args: ['acp'],
+    detectArgs: ['--version'],
+    installHint: 'Install Kiro CLI with ACP support.',
+    supportsModel: false,
+    supportsMode: false,
+    launchVerified: false,
+    verified: false,
+  },
+  {
+    id: 'cline',
+    name: 'Cline',
+    command: 'cline',
+    args: ['--acp'],
+    detectArgs: ['--version'],
+    installHint: 'Install Cline and verify its ACP mode.',
+    supportsModel: false,
+    supportsMode: false,
+    launchVerified: false,
+    verified: false,
+  },
+  {
+    id: 'pi',
+    name: 'Pi',
+    command: 'pi-acp',
+    args: [],
+    detectArgs: ['--version'],
+    installHint: 'Install Pi and the pi-free extension yourself, then install pi-acp.',
+    supportsModel: false,
+    supportsMode: false,
+    launchVerified: false,
+    verified: false,
+  },
+];
+export interface DetectedAcpAgent extends AcpAgentDefinition {
+  available: boolean;
+  version: string | null;
+  executable: string | null;
+  error?: string;
+}
+export async function detectAcpAgents(
+  options: { cwd?: string; timeoutMs?: number } = {},
+): Promise<DetectedAcpAgent[]> {
+  return await Promise.all(
+    ACP_AGENT_REGISTRY.map(async (agent) => {
+      try {
+        const executable = await executablePath(agent.command);
+        const invocation = commandInvocation(executable, [...agent.detectArgs]);
+        const result = await execa(invocation.file, invocation.args, {
+          ...(options.cwd ? { cwd: options.cwd } : {}),
+          reject: false,
+          windowsHide: true,
+          timeout: options.timeoutMs ?? 10_000,
+          ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
+        });
+        return {
+          ...agent,
+          available: !result.failed,
+          version: result.failed ? null : result.stdout.trim() || result.stderr.trim() || null,
+          executable,
+          ...(result.failed ? { error: result.stderr || 'Version probe failed' } : {}),
+        };
+      } catch (error) {
+        return {
+          ...agent,
+          available: false,
+          version: null,
+          executable: null,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }),
+  );
 }
 export function assertSafeArguments(args: readonly string[]): void {
   for (const arg of args) {
@@ -316,7 +549,7 @@ function parseEvent(
   }
 }
 
-async function executablePath(name: Implementer, custom?: string): Promise<string> {
+async function executablePath(name: string, custom?: string): Promise<string> {
   if (custom) return custom;
   const command = name;
   if (process.platform === 'win32') {
@@ -407,6 +640,267 @@ async function execute(
     if (timer) clearTimeout(timer);
     request.signal?.removeEventListener('abort', onAbort);
     await Promise.resolve(killInFlight);
+  }
+}
+
+function acpUpdateText(update: import('@agentclientprotocol/sdk').SessionUpdate): string {
+  switch (update.sessionUpdate) {
+    case 'agent_message_chunk':
+      return update.content.type === 'text' ? update.content.text : '';
+    case 'agent_thought_chunk':
+      return update.content.type === 'text' ? `Thought: ${update.content.text}` : '';
+    case 'tool_call':
+      return `Tool: ${update.title}`;
+    case 'tool_call_update':
+      return `Tool update: ${update.status ?? 'running'}`;
+    case 'plan':
+      return `Plan: ${update.entries.map((entry) => entry.content).join('; ')}`;
+    case 'plan_update':
+      return `Plan updated: ${JSON.stringify(update.plan)}`;
+    case 'usage_update':
+      return `Usage: ${String(update.used)}/${String(update.size)}${update.cost ? ` · ${String(update.cost.amount)} ${update.cost.currency}` : ''}`;
+    default:
+      return JSON.stringify(update);
+  }
+}
+
+async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
+  const artifactsDir = await mkdtemp(join(tmpdir(), 'ferry-delegate-acp-'));
+  const executable = await executablePath('acp', request.executable);
+  const args = request.args ?? [];
+  assertSafeArguments(args);
+  const invocation = commandInvocation(executable, args);
+  const child = execa(invocation.file, invocation.args, {
+    cwd: request.cwd,
+    env: { ...process.env, ...request.env },
+    reject: false,
+    windowsHide: true,
+    buffer: false,
+    ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
+  });
+  child.stderr.on('data', (chunk: Buffer) =>
+    request.onProgress?.(`ACP: ${chunk.toString('utf8').trimEnd()}`),
+  );
+  const stream = ndJsonStream(
+    Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
+    Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
+  );
+  const progress: string[] = [];
+  let final = '';
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let costUsd: number | null = null;
+  let threadId: string | null = null;
+  let connection: ClientConnection | undefined;
+  let killInFlight: Promise<void> | undefined;
+  const killTree = async () => {
+    if (process.platform === 'win32' && child.pid !== undefined) {
+      const result = await execa('taskkill.exe', ['/pid', String(child.pid), '/T', '/F'], {
+        reject: false,
+        windowsHide: true,
+        timeout: 2_000,
+      });
+      if (result.failed) child.kill('SIGKILL');
+    } else child.kill('SIGTERM');
+  };
+  const onAbort = () => {
+    if (connection && threadId)
+      void connection.agent
+        .notify('session/cancel', { sessionId: threadId })
+        .catch(() => undefined);
+    killInFlight = killTree();
+  };
+  const report = (text: string) => {
+    if (!text) return;
+    progress.push(text);
+    request.onProgress?.(text);
+  };
+  const client = acpClient({ name: 'Ferry' })
+    .onRequest('fs/read_text_file', async ({ params }) => {
+      const safePath = await assertAcpWorkspacePath(request.cwd, params.path, false);
+      return { content: await readFile(safePath, 'utf8') };
+    })
+    .onRequest('fs/write_text_file', async ({ params }) => {
+      const safePath = await assertAcpWorkspacePath(request.cwd, params.path, true);
+      const allowed =
+        request.permissionPolicy !== 'read_only' &&
+        (!request.paths?.length ||
+          request.paths.some((path) =>
+            delegatePaths.isWithin(resolve(request.cwd, path), safePath),
+          ));
+      if (!allowed) throw new Error('ACP file write denied by the lane permission policy');
+      await request.checkpoint?.();
+      const { mkdir, writeFile } = await import('node:fs/promises');
+      await mkdir(resolve(safePath, '..'), { recursive: true });
+      await writeFile(safePath, params.content, 'utf8');
+      return {};
+    })
+    .onRequest('session/request_permission', async ({ params }) => {
+      const allowed = request.requestApproval
+        ? await request.requestApproval({
+            title: params.toolCall.title ?? 'ACP agent permission request',
+            command: params.toolCall.rawInput
+              ? JSON.stringify(params.toolCall.rawInput)
+              : (params.toolCall.title ?? 'ACP agent permission request'),
+            permissionPolicy: request.permissionPolicy ?? 'read_only',
+          })
+        : request.permissionPolicy === 'scoped_write';
+      const option = params.options.find(
+        (item) => item.kind === (allowed ? 'allow_once' : 'reject_once'),
+      );
+      return option
+        ? { outcome: { outcome: 'selected' as const, optionId: option.optionId } }
+        : { outcome: { outcome: 'cancelled' as const } };
+    })
+    .onNotification('session/update', ({ params }) => {
+      const message = acpUpdateText(params.update);
+      if (
+        params.update.sessionUpdate === 'agent_message_chunk' &&
+        'content' in params.update &&
+        params.update.content.type === 'text'
+      )
+        final += params.update.content.text;
+      if (params.update.sessionUpdate === 'usage_update') {
+        const usage = params.update as {
+          inputTokens?: number;
+          outputTokens?: number;
+          costUsd?: number;
+        };
+        inputTokens = usage.inputTokens ?? inputTokens;
+        outputTokens = usage.outputTokens ?? outputTokens;
+        costUsd = usage.costUsd ?? costUsd;
+      }
+      report(message);
+    });
+  const timeout = request.timeoutMs ?? 10 * 60_000;
+  let timer: NodeJS.Timeout | undefined;
+  request.signal?.addEventListener('abort', onAbort, { once: true });
+  if (request.signal?.aborted) onAbort();
+  try {
+    const activeConnection = client.connect(stream);
+    connection = activeConnection;
+    const work = (async () => {
+      const initialized = await activeConnection.agent.request('initialize', {
+        protocolVersion: PROTOCOL_VERSION,
+        clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
+        clientInfo: { name: 'Ferry', version: '0.1.0' },
+      });
+      const methods = (initialized.authMethods ?? []).map((method) => ({
+        id: method.id,
+        name: method.name,
+      }));
+      request.onAuthMethods?.(methods);
+      if (methods.length) {
+        if (!request.authMethodId)
+          throw new Error(
+            `ACP authentication required. Available methods: ${methods.map((method) => `${method.id} (${method.name})`).join(', ')}`,
+          );
+        await activeConnection.agent.request('authenticate', { methodId: request.authMethodId });
+      }
+      let activeSessionId: string;
+      let modes: SessionModeState | null | undefined;
+      let configOptions: SessionConfigOption[] | null | undefined;
+      if (request.resumeId) {
+        const resumed = await activeConnection.agent.request('session/resume', {
+          sessionId: request.resumeId,
+          cwd: resolve(request.cwd),
+          mcpServers: [],
+        });
+        activeSessionId = request.resumeId;
+        modes = resumed.modes;
+        configOptions = resumed.configOptions;
+      } else {
+        const created = await activeConnection.agent.request('session/new', {
+          cwd: resolve(request.cwd),
+          mcpServers: [],
+        });
+        activeSessionId = created.sessionId;
+        modes = created.modes;
+        configOptions = created.configOptions;
+      }
+      threadId = activeSessionId;
+      if (request.mode && modes?.availableModes) {
+        const wanted = request.mode.toLowerCase();
+        const mode = modes.availableModes.find(
+          (item) => item.id.toLowerCase() === wanted || item.name.toLowerCase() === wanted,
+        );
+        if (mode)
+          await activeConnection.agent.request('session/set_mode', {
+            sessionId: activeSessionId,
+            modeId: mode.id,
+          });
+      }
+      if (request.model && configOptions) {
+        const modelOption = configOptions.find(
+          (option) =>
+            option.type === 'select' && (option.category === 'model' || /model/i.test(option.id)),
+        );
+        if (modelOption?.type === 'select') {
+          const options = modelOption.options.flatMap((item) =>
+            'options' in item ? item.options : [item],
+          );
+          const selected = options.find(
+            (item) => item.value === request.model || item.name === request.model,
+          );
+          if (selected)
+            await activeConnection.agent.request('session/set_config_option', {
+              sessionId: activeSessionId,
+              configId: modelOption.id,
+              type: 'select',
+              value: selected.value,
+            });
+        }
+      }
+      const response = await activeConnection.agent.request('session/prompt', {
+        sessionId: activeSessionId,
+        prompt: [{ type: 'text', text: request.prompt }],
+      });
+      const usage = response.usage as
+        { inputTokens?: number; outputTokens?: number; costUsd?: number } | undefined;
+      if (usage) {
+        inputTokens = usage.inputTokens ?? inputTokens;
+        outputTokens = usage.outputTokens ?? outputTokens;
+        costUsd = usage.costUsd ?? costUsd;
+      }
+      activeConnection.close();
+      await killTree();
+    })();
+    await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          void killTree();
+          reject(new Error(`Delegate timed out after ${String(timeout)}ms`));
+        }, timeout);
+      }),
+    ]);
+    return {
+      finalMessage: final || 'Delegate completed without a final message.',
+      threadId,
+      usage: { inputTokens, outputTokens, costUsd, provider: 'subscription_cli' },
+      progress,
+      artifactsDir,
+    };
+  } catch (error) {
+    const outcome = await Promise.race([
+      child,
+      new Promise<null>((resolveOutcome) =>
+        setTimeout(() => {
+          resolveOutcome(null);
+        }, 150),
+      ),
+    ]);
+    if (!outcome) await killTree();
+    await rm(artifactsDir, { recursive: true, force: true });
+    if (outcome?.failed) {
+      throw new Error(`ACP agent exited with code ${String(outcome.exitCode)}`, { cause: error });
+    }
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+    request.signal?.removeEventListener('abort', onAbort);
+    await Promise.resolve(killInFlight);
+    connection?.close();
   }
 }
 
@@ -503,6 +997,7 @@ export async function runAdapter(
   name: Implementer,
   request: AdapterRequest,
 ): Promise<AdapterResult> {
+  if (name === 'acp') return await runAcpAdapter(request);
   const artifactsDir = await mkdtemp(join(tmpdir(), 'ferry-delegate-'));
   const outputPath = join(artifactsDir, 'codex-final.txt');
   const raw: string[] = [];
@@ -560,6 +1055,10 @@ export interface StartDelegationInput {
   cwd: string;
   timeoutMs?: number;
   checkpointDiff: () => Promise<FileChange[]>;
+  checkpoint?: () => Promise<void>;
+  requestApproval?: AdapterRequest['requestApproval'];
+  onAuthMethods?: AdapterRequest['onAuthMethods'];
+  authMethodId?: string;
   onUpdate?: (run: DelegationRun) => void;
 }
 export interface DelegationHandle {
@@ -593,19 +1092,47 @@ export function startDelegation(input: StartDelegationInput): DelegationHandle {
   };
   const runPromise = (async () => {
     try {
-      const result = await runAdapter(input.lane.implementer as Implementer, {
-        prompt: input.brief,
-        cwd: input.cwd,
-        ...(input.lane.model ? { model: input.lane.model } : {}),
-        ...(input.lane.effort ? { effort: input.lane.effort } : {}),
-        ...(input.lane.variant ? { variant: input.lane.variant } : {}),
-        mode: input.lane.permission === 'read_only' ? 'plan' : 'build',
-        ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
-        signal: controller.signal,
-        onProgress: (text) => {
-          update(text);
+      const acpEnabled = input.lane.implementer === 'acp' || input.lane.transport === 'acp';
+      const acpAgentId =
+        input.lane.agent ??
+        (['codex', 'opencode', 'claude'].includes(input.lane.implementer)
+          ? input.lane.implementer
+          : null);
+      const acpAgent =
+        acpEnabled && acpAgentId
+          ? ACP_AGENT_REGISTRY.find(
+              (item) =>
+                item.id === acpAgentId || (acpAgentId === 'claude' && item.id === 'claude-code'),
+            )
+          : undefined;
+      if (acpEnabled && !acpAgent)
+        throw new Error(`Unknown ACP agent: ${input.lane.agent ?? '(missing)'}`);
+      const result = await runAdapter(
+        acpEnabled ? 'acp' : (input.lane.implementer as Implementer),
+        {
+          prompt: input.brief,
+          cwd: input.cwd,
+          ...(acpAgent ? { executable: acpAgent.command, args: [...acpAgent.args] } : {}),
+          ...(input.lane.command ? { executable: input.lane.command } : {}),
+          ...(input.lane.args ? { args: [...input.lane.args] } : {}),
+          ...(input.lane.env ? { env: input.lane.env } : {}),
+          permissionPolicy: input.lane.permission ?? 'read_only',
+          paths: input.lane.paths,
+          ...(input.checkpoint ? { checkpoint: input.checkpoint } : {}),
+          ...(input.requestApproval ? { requestApproval: input.requestApproval } : {}),
+          ...(input.onAuthMethods ? { onAuthMethods: input.onAuthMethods } : {}),
+          ...(input.authMethodId ? { authMethodId: input.authMethodId } : {}),
+          ...(input.lane.model ? { model: input.lane.model } : {}),
+          ...(input.lane.effort ? { effort: input.lane.effort } : {}),
+          ...(input.lane.variant ? { variant: input.lane.variant } : {}),
+          mode: input.lane.permission === 'read_only' ? 'plan' : 'build',
+          ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+          signal: controller.signal,
+          onProgress: (text) => {
+            update(text);
+          },
         },
-      });
+      );
       threadId = result.threadId;
       run.status = 'completed';
       run.finalMessage = result.finalMessage;
@@ -629,20 +1156,43 @@ export function startDelegation(input: StartDelegationInput): DelegationHandle {
     },
     async resume(brief: string) {
       if (!threadId) throw new Error('Cannot resume before the CLI returns a session id');
-      const resumed = await runAdapter(input.lane.implementer as Implementer, {
-        prompt: brief,
-        cwd: input.cwd,
-        resumeId: threadId,
-        ...(input.lane.model ? { model: input.lane.model } : {}),
-        ...(input.lane.effort ? { effort: input.lane.effort } : {}),
-        ...(input.lane.variant ? { variant: input.lane.variant } : {}),
-        mode: input.lane.permission === 'read_only' ? 'plan' : 'build',
-        signal: controller.signal,
-        ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
-        onProgress: (text) => {
-          update(text);
+      const resumeAcp = input.lane.implementer === 'acp' || input.lane.transport === 'acp';
+      const resumeAgentId =
+        input.lane.agent ??
+        (['codex', 'opencode', 'claude'].includes(input.lane.implementer)
+          ? input.lane.implementer
+          : null);
+      const resumeAgent =
+        resumeAcp && resumeAgentId
+          ? ACP_AGENT_REGISTRY.find(
+              (item) =>
+                item.id === resumeAgentId ||
+                (resumeAgentId === 'claude' && item.id === 'claude-code'),
+            )
+          : undefined;
+      const resumed = await runAdapter(
+        resumeAcp ? 'acp' : (input.lane.implementer as Implementer),
+        {
+          prompt: brief,
+          cwd: input.cwd,
+          ...(resumeAgent ? { executable: resumeAgent.command, args: [...resumeAgent.args] } : {}),
+          ...(input.lane.command ? { executable: input.lane.command } : {}),
+          ...(input.lane.args ? { args: [...input.lane.args] } : {}),
+          ...(input.lane.env ? { env: input.lane.env } : {}),
+          permissionPolicy: input.lane.permission ?? 'read_only',
+          paths: input.lane.paths,
+          resumeId: threadId,
+          ...(input.lane.model ? { model: input.lane.model } : {}),
+          ...(input.lane.effort ? { effort: input.lane.effort } : {}),
+          ...(input.lane.variant ? { variant: input.lane.variant } : {}),
+          mode: input.lane.permission === 'read_only' ? 'plan' : 'build',
+          signal: controller.signal,
+          ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+          onProgress: (text) => {
+            update(text);
+          },
         },
-      });
+      );
       run.brief = brief;
       run.finalMessage = resumed.finalMessage;
       run.usage = resumed.usage;
@@ -696,3 +1246,30 @@ export const delegatePaths = {
     return pathFromRoot === '' || (!pathFromRoot.startsWith('..') && !isAbsolute(pathFromRoot));
   },
 };
+
+async function assertAcpWorkspacePath(
+  workspace: string,
+  target: string,
+  writing: boolean,
+): Promise<string> {
+  const root = await realpath(resolve(workspace));
+  const absolute = resolve(target);
+  if (!delegatePaths.isWithin(root, absolute))
+    throw new Error('ACP file path escapes the delegation workspace');
+  let probe = absolute;
+  for (;;) {
+    try {
+      const actual = await realpath(probe);
+      if (!delegatePaths.isWithin(root, actual))
+        throw new Error('ACP file path escapes the delegation workspace through a symlink');
+      if (writing && probe !== absolute) return absolute;
+      return actual;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = resolve(probe, '..');
+      if (parent === probe)
+        throw new Error('ACP file path has no existing workspace parent', { cause: error });
+      probe = parent;
+    }
+  }
+}

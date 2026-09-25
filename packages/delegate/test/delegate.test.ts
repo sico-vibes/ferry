@@ -1,8 +1,10 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { installFakeClis } from '@ferry/testkit';
+import type { SessionId } from '@ferry/shared';
 import {
   readLanes,
   runAdapter,
@@ -10,10 +12,14 @@ import {
   buildDelegationBrief,
   detectCli,
   decide,
+  ACP_AGENT_REGISTRY,
+  detectAcpAgents,
+  startDelegation,
 } from '../src/index.js';
 import { sampleDelegationRun } from '@ferry/shared/testing';
 
 const roots: string[] = [];
+const fakeAcpAgent = fileURLToPath(new URL('./fixtures/fake-acp-agent.mjs', import.meta.url));
 async function tempRoot() {
   const root = await mkdtemp(join(tmpdir(), 'ferry-delegate-test-'));
   roots.push(root);
@@ -37,6 +43,153 @@ afterEach(async () => {
 });
 
 describe('external CLI adapters', () => {
+  it('runs the SDK fake ACP agent, streams updates, checkpoints writes and maps approval', async () => {
+    const root = await tempRoot();
+    let checkpoints = 0;
+    const progress: string[] = [];
+    let approved: unknown;
+    const result = await runAdapter('acp', {
+      prompt: 'Implement a change',
+      cwd: root,
+      executable: process.execPath,
+      args: [fakeAcpAgent],
+      permissionPolicy: 'scoped_write',
+      timeoutMs: 5_000,
+      checkpoint: () => {
+        checkpoints += 1;
+        return Promise.resolve();
+      },
+      requestApproval: (request) => {
+        approved = request;
+        return Promise.resolve(true);
+      },
+      onProgress: (text) => progress.push(text),
+    });
+    expect(result.threadId).toBe('fake-acp-session');
+    expect(result.finalMessage).toBe('Fake agent finished.');
+    expect(result.usage).toMatchObject({ inputTokens: 7, outputTokens: 4 });
+    expect(await readFile(join(root, 'fake-acp-session.txt'), 'utf8')).toBe('written by fake ACP');
+    expect(checkpoints).toBe(1);
+    expect(approved).toMatchObject({ title: 'Run test command', permissionPolicy: 'scoped_write' });
+    expect(progress).toContain('Fake agent finished.');
+    await rm(result.artifactsDir, { recursive: true, force: true });
+  }, 30_000);
+
+  it('denies ACP filesystem escapes and surfaces authentication methods without handling credentials', async () => {
+    const root = await tempRoot();
+    const methods: unknown[] = [];
+    await expect(
+      runAdapter('acp', {
+        prompt: 'escape',
+        cwd: root,
+        executable: process.execPath,
+        args: [fakeAcpAgent],
+        env: { FAKE_ACP_ESCAPE: '1' },
+        permissionPolicy: 'scoped_write',
+        onAuthMethods: (value) => methods.push(...value),
+      }),
+    ).rejects.toThrow(/Internal error/);
+    await expect(
+      runAdapter('acp', {
+        prompt: 'auth',
+        cwd: root,
+        executable: process.execPath,
+        args: [fakeAcpAgent],
+        env: { FAKE_ACP_AUTH: '1' },
+        onAuthMethods: (value) => methods.push(...value),
+      }),
+    ).rejects.toThrow(/authentication required/);
+    expect(methods).toContainEqual({ id: 'fake-login', name: 'Fake login' });
+    const authResult = await runAdapter('acp', {
+      prompt: 'auth',
+      cwd: root,
+      executable: process.execPath,
+      args: [fakeAcpAgent],
+      env: { FAKE_ACP_AUTH: '1' },
+      authMethodId: 'fake-login',
+      permissionPolicy: 'scoped_write',
+    });
+    await rm(authResult.artifactsDir, { recursive: true, force: true });
+  }, 30_000);
+
+  it('reports ACP crashes and cancels an active turn', async () => {
+    const root = await tempRoot();
+    await expect(
+      runAdapter('acp', {
+        prompt: 'crash',
+        cwd: root,
+        executable: process.execPath,
+        args: [fakeAcpAgent],
+        env: { FAKE_ACP_CRASH: '1' },
+      }),
+    ).rejects.toThrow(/ACP agent exited/);
+    const crashedRun = startDelegation({
+      sessionId: 'session_1' as SessionId,
+      lane: {
+        name: 'acp-crash',
+        implementer: 'acp',
+        agent: 'pi',
+        command: process.execPath,
+        args: [fakeAcpAgent],
+        env: { FAKE_ACP_CRASH: '1' },
+        profile: null,
+        model: null,
+        effort: null,
+        variant: null,
+        permission: 'scoped_write',
+        paths: [],
+        source: 'ferry',
+        trusted: true,
+      },
+      brief: 'crash',
+      cwd: root,
+      checkpointDiff: () => Promise.resolve([]),
+    });
+    expect((await crashedRun.run).status).toBe('failed');
+    const controller = new AbortController();
+    const pidFile = join(root, 'acp-child.pid');
+    const running = runAdapter('acp', {
+      prompt: 'hold',
+      cwd: root,
+      executable: process.execPath,
+      args: [fakeAcpAgent],
+      env: { FAKE_ACP_HOLD: '1', FAKE_ACP_CHILD_PID_FILE: pidFile },
+      signal: controller.signal,
+    });
+    const pidDeadline = Date.now() + 5_000;
+    let pidExists = false;
+    while (!pidExists && Date.now() < pidDeadline) {
+      try {
+        await readFile(pidFile, 'utf8');
+        pidExists = true;
+      } catch {
+        await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+      }
+    }
+    expect(pidExists).toBe(true);
+    controller.abort();
+    await expect(running).rejects.toThrow();
+    const pid = Number(await readFile(pidFile, 'utf8'));
+    const deadline = Date.now() + 3_000;
+    let childAlive = true;
+    while (childAlive && Date.now() < deadline) {
+      try {
+        process.kill(pid, 0);
+        await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+      } catch {
+        childAlive = false;
+      }
+    }
+    expect(childAlive).toBe(false);
+  }, 30_000);
+
+  it('lists the configured ACP registry and leaves unverified launch flags explicit', async () => {
+    expect(ACP_AGENT_REGISTRY.map(({ id }) => id)).toContain('pi');
+    expect(ACP_AGENT_REGISTRY.every(({ launchVerified }) => !launchVerified)).toBe(true);
+    const detected = await detectAcpAgents({ timeoutMs: 250 });
+    expect(detected).toHaveLength(ACP_AGENT_REGISTRY.length);
+    expect(detected.every(({ installHint }) => installHint.length > 0)).toBe(true);
+  });
   it.each(['codex', 'opencode', 'claude'] as const)(
     '%s streams progress and returns completion, usage, and session id',
     async (name) => {
