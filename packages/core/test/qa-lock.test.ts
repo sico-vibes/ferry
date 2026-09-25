@@ -88,9 +88,18 @@ describe('QA single-writer lock', () => {
       const winnerIndex = results.findIndex((result) => result.status === 'fulfilled');
       const winners = results.filter((result) => result.status === 'fulfilled');
       const losers = results.filter((result) => result.status === 'rejected');
-      expect(winners).toHaveLength(1);
-      expect(losers).toHaveLength(19);
-      expect(losers.every((result) => result.reason instanceof CoreLockError)).toBe(true);
+      const outcome = results
+        .map((result, index) => {
+          if (result.status === 'fulfilled') return `${String(index)}:winner`;
+          return `${String(index)}:${result.reason instanceof Error ? `${result.reason.name}:${result.reason.message}` : String(result.reason)}`;
+        })
+        .join(' | ');
+      expect(winners, `iteration ${String(iteration)} outcomes: ${outcome}`).toHaveLength(1);
+      expect(losers, `iteration ${String(iteration)} outcomes: ${outcome}`).toHaveLength(19);
+      expect(
+        losers.every((result) => result.reason instanceof CoreLockError),
+        `iteration ${String(iteration)} outcomes: ${outcome}`,
+      ).toBe(true);
       const winner = hosts[winnerIndex];
       if (!winner) throw new Error('Expected a winning host');
       await winner.stop();
