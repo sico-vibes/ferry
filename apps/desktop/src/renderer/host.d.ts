@@ -16,5 +16,6 @@ declare global {
     ferryHybrid?: import('@ferry/client').HybridFerryClient;
     ferryEngineHello?: import('@ferry/shared').HelloResult;
     ferryRpcClient?: import('@ferry/client').RpcFerryClient;
+    ferryE2EMockClient?: import('@ferry/client').FerryClient;
   }
 }

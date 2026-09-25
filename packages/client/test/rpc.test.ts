@@ -41,6 +41,12 @@ runFerryClientContract('HybridClient all-mock', () => {
 });
 
 describe('RPC client', () => {
+  it('can be returned from an async bootstrap without thenable assimilation', async () => {
+    const mock = createMockFerryClient({ behavior: 'test' });
+    const hybrid = createHybridClient(mock, mock, []);
+    await expect(Promise.resolve(hybrid)).resolves.toBe(hybrid);
+  });
+
   it('maps calls to JSON-RPC and delivers event subscriptions', async () => {
     const fake = fakeTransport();
     const client = createRpcFerryClient(fake.transport);

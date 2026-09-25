@@ -256,6 +256,7 @@ export function createHybridClient(
     {},
     {
       get(_target, key) {
+        if (key === 'then') return undefined;
         if (key === 'setRealDomains')
           return (domains: readonly string[]) => {
             real.clear();

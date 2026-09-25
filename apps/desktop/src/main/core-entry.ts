@@ -22,6 +22,7 @@ parentPort.on('message', (event) => {
     : createCoreHost({
         dataDir: process.env.FERRY_CORE_DATA_DIR ?? join(process.cwd(), 'engine'),
         selfTest: runNativeSelfTest,
+        websocketEnabled: process.env.FERRY_E2E_WEBSOCKET === '1',
         transport: {
           send(message) {
             activePort?.postMessage(message);
@@ -54,6 +55,7 @@ parentPort.on('message', (event) => {
         selfTest: runNativeSelfTest(),
         realDomains: runningHost.realDomains,
         dataDir: runningHost.dataDir,
+        websocketUrl: runningHost.websocket?.url,
       });
     })
     .catch((error: unknown) => {

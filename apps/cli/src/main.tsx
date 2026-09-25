@@ -1,31 +1,14 @@
-import React from 'react';
-import { render } from 'ink';
 import { defineCommand, runMain } from 'citty';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { createClientAsync } from './client.js';
-import { Chat } from './tui.js';
-import { gradient, good, muted, warn } from './format.js';
+import { good, muted, warn } from './colors.js';
 import { collectDoctor } from './doctor.js';
-import { InitWizard, initDefaults } from './init.js';
 import type { FerryClient } from '@ferry/client';
 
 /* Event handlers intentionally return promises to the event emitter; the parser narrows argv flags. */
 /* eslint-disable @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/return-await, @typescript-eslint/consistent-type-definitions, @typescript-eslint/restrict-template-expressions */
-
-export async function interactive(client: FerryClient, cwd: string): Promise<void> {
-  const workspace = await client.workspaces.open(cwd);
-  const profiles = await client.profiles.list();
-  const settings = await client.settings.get();
-  const profile = profiles.find((item) => item.id === settings.activeProfileId) ?? profiles[0];
-  if (!profile) throw new Error('No profiles configured. Run ferry init.');
-  process.stdout.write(
-    `${gradient('Ferry — your coding companion')}\n${muted('Use /help for commands · Ctrl+C twice exits')}\n`,
-  );
-  const app = render(<Chat client={client} workspace={workspace} profile={profile} />);
-  await app.waitUntilExit();
-}
 
 export async function runPrompt(
   client: FerryClient,
@@ -157,32 +140,35 @@ function summarize(part: import('@ferry/shared').MessagePart): string | undefine
 }
 
 export async function runCli(argv = process.argv.slice(2)): Promise<number> {
-  const flags = readFlags(argv);
-  const command = flags.positionals[0];
-  const dataDir = stringFlag(flags.values['data-dir']);
-  const cwd = stringFlag(flags.values.cwd) ?? process.cwd();
-  const client = await createClientAsync({
-    engine: flags.values.engine === 'local' ? 'local' : 'mock',
-    ...(dataDir ? { dataDir } : {}),
-  });
+  let json = argv.includes('--json') || argv.some((arg) => arg.startsWith('--json='));
+  let verbose = argv.includes('--verbose');
+  let client: (FerryClient & { dispose?: () => Promise<void> }) | undefined;
   try {
+    const flags = readFlags(argv);
+    json = flags.values.json === true;
+    verbose = flags.values.verbose === true;
+    validateFlags(flags.values);
+    const command = flags.positionals[0];
+    const dataDir = stringFlag(flags.values['data-dir']);
+    const cwd = stringFlag(flags.values.cwd) ?? process.cwd();
+    const engine = flags.values.engine ?? 'mock';
+    if (engine !== 'mock' && engine !== 'local')
+      throw new CliError(2, 'Invalid --engine. Use mock or local.');
+    if (command === 'run') validateRunArguments(flags);
+    if (command === 'resume' && !flags.positionals[1])
+      throw new CliError(2, 'Usage: ferry resume <sessionId>');
+    if (command && !CLI_COMMANDS.has(command)) throw new CliError(2, `Unknown command: ${command}`);
+    client = await createClientAsync({
+      engine,
+      ...(dataDir ? { dataDir } : {}),
+    });
     if (!command) {
+      const { interactive } = await import('./interactive.js');
       await interactive(client, cwd);
       return 0;
     }
     if (command === 'run') {
       const prompt = flags.positionals.slice(1).join(' ');
-      if (!prompt) return 2;
-      if (
-        typeof flags.values.permission === 'string' &&
-        !['ask', 'auto_edit', 'full_auto'].includes(flags.values.permission)
-      )
-        return 2;
-      if (
-        typeof flags.values['max-steps'] === 'string' &&
-        (!/^\d+$/.test(flags.values['max-steps']) || Number(flags.values['max-steps']) < 1)
-      )
-        return 2;
       const code = await runPrompt(
         client,
         prompt,
@@ -202,36 +188,59 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       );
       return code;
     }
-    if (command === 'resume')
-      return resume(client, flags.positionals[1], flags.values.json === true);
+    if (command === 'resume') return await resume(client, flags.positionals[1], json);
     if (command === 'serve') {
-      process.stdout.write('engine transport coming in B0\n');
+      writeResult(
+        json,
+        { message: 'engine transport coming in B0' },
+        'engine transport coming in B0\n',
+      );
       return 0;
     }
     if (command === 'quota')
-      return flags.values.watch === true
-        ? quotaWatch(client)
-        : quota(client, flags.values.json === true);
-    if (command === 'providers') return providers(client, flags.positionals.slice(1));
-    if (command === 'profiles') return profiles(client, flags.positionals.slice(1));
-    if (command === 'skills') return skills(client, flags.positionals.slice(1));
-    if (command === 'mcp') return listDomain(client, 'mcp');
-    if (command === 'lanes') return lanes(client, flags.positionals.slice(1));
+      return flags.values.watch === true ? quotaWatch(client, json) : await quota(client, json);
+    if (command === 'providers') return await providers(client, flags.positionals.slice(1), json);
+    if (command === 'profiles') return await profiles(client, flags.positionals.slice(1), json);
+    if (command === 'skills') return await skills(client, flags.positionals.slice(1), json);
+    if (command === 'mcp') return await listDomain(client, 'mcp', json);
+    if (command === 'lanes') return await lanes(client, flags.positionals.slice(1), json);
     if (command === 'optimize') {
-      process.stdout.write(JSON.stringify(await client.optimizer.stats(), null, 2) + '\n');
+      const stats = await client.optimizer.stats();
+      writeResult(json, stats, JSON.stringify(stats, null, 2) + '\n');
       return 0;
     }
-    if (command === 'doctor') return doctor(dataDir);
-    if (command === 'keys') return keys(client, flags.positionals.slice(1));
-    if (command === 'init') return runInit(client, cwd, flags.values.yes === true);
-    process.stderr.write(`Unknown command: ${command}\n`);
-    return 2;
+    if (command === 'doctor') return await doctor(dataDir, undefined, json);
+    if (command === 'keys') return await keys(client, flags.positionals.slice(1), json);
+    if (command === 'init') return await runInit(client, cwd, flags.values.yes === true, json);
+    throw new CliError(2, `Unknown command: ${command}`);
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    return 1;
+    const code = error instanceof CliError ? error.code : 1;
+    const message = error instanceof Error ? error.message : String(error);
+    if (json) process.stdout.write(`${JSON.stringify({ error: { code, message } })}\n`);
+    else
+      process.stderr.write(
+        verbose && error instanceof Error && error.stack
+          ? `ferry: ${message}\n${error.stack}\n`
+          : `ferry: ${message}\n`,
+      );
+    return code;
   } finally {
-    await client.dispose?.();
+    await client?.dispose?.();
   }
+}
+
+class CliError extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'CliError';
+  }
+}
+
+function writeResult(json: boolean, value: unknown, human: string): void {
+  process.stdout.write(json ? `${JSON.stringify(value)}\n` : human);
 }
 
 export async function main(): Promise<void> {
@@ -245,6 +254,31 @@ export async function main(): Promise<void> {
 }
 
 type Flags = { positionals: string[]; values: Record<string, string | boolean> };
+const CLI_COMMANDS = new Set([
+  'run',
+  'resume',
+  'serve',
+  'quota',
+  'providers',
+  'profiles',
+  'skills',
+  'mcp',
+  'lanes',
+  'optimize',
+  'doctor',
+  'keys',
+  'init',
+]);
+const VALUE_FLAGS = new Set([
+  'cwd',
+  'profile',
+  'data-dir',
+  'engine',
+  'permission',
+  'max-steps',
+  'delegation',
+  'model',
+]);
 function readFlags(argv: string[]): Flags {
   const positionals: string[] = [];
   const values: Record<string, string | boolean> = {};
@@ -258,9 +292,25 @@ function readFlags(argv: string[]): Flags {
     const key = rawKey ?? '';
     if (inline !== undefined) values[key] = inline;
     else if (argv[i + 1] && !argv[i + 1]?.startsWith('--')) values[key] = argv[++i] ?? '';
+    else if (VALUE_FLAGS.has(key)) throw new CliError(2, `Missing value for --${key}`);
     else values[key] = true;
   }
   return { positionals, values };
+}
+function validateFlags(values: Record<string, string | boolean>): void {
+  for (const key of VALUE_FLAGS) {
+    const value = values[key];
+    if (value === '') throw new CliError(2, `Missing value for --${key}`);
+  }
+}
+function validateRunArguments(flags: Flags): void {
+  if (!flags.positionals.slice(1).join(' ')) throw new CliError(2, 'Usage: ferry run <prompt>');
+  const permission = flags.values.permission;
+  if (typeof permission === 'string' && !['ask', 'auto_edit', 'full_auto'].includes(permission))
+    throw new CliError(2, 'Invalid --permission. Use ask, auto_edit, or full_auto.');
+  const maxSteps = flags.values['max-steps'];
+  if (typeof maxSteps === 'string' && (!/^\d+$/.test(maxSteps) || Number(maxSteps) < 1))
+    throw new CliError(2, 'Invalid --max-steps. Provide a positive integer.');
 }
 function stringFlag(value: string | boolean | undefined): string | undefined {
   return typeof value === 'string' ? value : undefined;
@@ -281,10 +331,21 @@ async function quota(client: FerryClient, json: boolean) {
   }
   return value.stepsLeftToday === 0 ? 4 : 0;
 }
-async function quotaWatch(client: FerryClient): Promise<number> {
-  if (!process.stdin.isTTY || !process.stdin.setRawMode) return quota(client, false);
+async function quotaWatch(client: FerryClient, json: boolean): Promise<number> {
+  if (!process.stdin.isTTY || !process.stdin.setRawMode) {
+    if (json) {
+      const snapshot = await client.quota.capacity();
+      process.stdout.write(`${JSON.stringify({ type: 'quota.update', payload: snapshot })}\n`);
+      return snapshot.stepsLeftToday === 0 ? 4 : 0;
+    }
+    return quota(client, false);
+  }
   let snapshot = await client.quota.capacity();
   const redraw = () => {
+    if (json) {
+      process.stdout.write(`${JSON.stringify({ type: 'quota.update', payload: snapshot })}\n`);
+      return;
+    }
     process.stdout.write('\u001b[2J\u001b[H');
     const barCount = Math.round((snapshot.percentRemaining / 100) * 9);
     process.stdout.write(
@@ -296,7 +357,7 @@ async function quotaWatch(client: FerryClient): Promise<number> {
         `  ${reset.providerId} · ${reset.label} · reset in ${Math.floor(minutes / 60)}h ${minutes % 60}m\n`,
       );
     }
-    process.stdout.write('\nPress q or Ctrl+C to exit.\n');
+    if (!json) process.stdout.write('\nPress q or Ctrl+C to exit.\n');
   };
   redraw();
   const off = client.on('quota.updated', (value) => {
@@ -322,12 +383,12 @@ async function quotaWatch(client: FerryClient): Promise<number> {
     stdin.on('data', onData);
   });
 }
-async function providers(client: FerryClient, args: string[]) {
+async function providers(client: FerryClient, args: string[], json = false) {
   const [action, id] = args;
   const rows = await client.providers.list();
   if (action === 'test' && id) {
     const result = await client.providers.probe(id as import('@ferry/shared').ProviderId);
-    process.stdout.write(`${result.ok ? good('OK') : warn('CHECK')} ${result.message}\n`);
+    writeResult(json, result, `${result.ok ? good('OK') : warn('CHECK')} ${result.message}\n`);
     return result.ok ? 0 : 1;
   }
   if ((action === 'enable' || action === 'disable') && id) {
@@ -335,60 +396,68 @@ async function providers(client: FerryClient, args: string[]) {
       id as import('@ferry/shared').ProviderId,
       action === 'enable',
     );
+    writeResult(json, { providerId: id, enabled: action === 'enable' }, '');
     return 0;
   }
-  process.stdout.write(
+  writeResult(
+    json,
+    rows,
     rows
       .map((p) => `${p.enabled ? good('●') : muted('○')} ${p.id} · ${p.name} · ${p.keyStatus}`)
       .join('\n') + '\n',
   );
   return 0;
 }
-async function profiles(client: FerryClient, args: string[]) {
+async function profiles(client: FerryClient, args: string[], json = false) {
   const [action, name] = args;
   const rows = await client.profiles.list();
   if (action === 'use' && name) {
     const profile = rows.find((item) => item.name === name);
-    if (!profile) return 1;
+    if (!profile) throw new Error(`Profile not found: ${name}`);
     await client.profiles.activate(profile.id);
+    writeResult(json, { activeProfileId: profile.id, name: profile.name }, '');
     return 0;
   }
-  process.stdout.write(rows.map((p) => `${p.name} · ${p.description}`).join('\n') + '\n');
+  writeResult(json, rows, rows.map((p) => `${p.name} · ${p.description}`).join('\n') + '\n');
   return 0;
 }
-async function skills(client: FerryClient, args: string[]) {
+async function skills(client: FerryClient, args: string[], json = false) {
   const [action, id] = args;
   const rows = await client.skills.list();
   if ((action === 'enable' || action === 'disable') && id) {
     const skill = rows.find((item) => item.id === id);
-    if (!skill) return 1;
+    if (!skill) throw new Error(`Skill not found: ${id}`);
     await client.skills.setEnabled(skill.id, action === 'enable');
+    writeResult(json, { skillId: id, enabled: action === 'enable' }, '');
     return 0;
   }
-  process.stdout.write(
+  writeResult(
+    json,
+    rows,
     rows.map((s) => `${s.enabled ? '●' : '○'} ${s.name} · ${s.description}`).join('\n') + '\n',
   );
   return 0;
 }
-async function lanes(client: FerryClient, args: string[]) {
+async function lanes(client: FerryClient, args: string[], json = false) {
   const rows =
     args[0] === 'approve'
       ? await client.delegation.approveProjectLanes()
       : await client.delegation.lanes();
-  process.stdout.write(
+  writeResult(
+    json,
+    rows,
     rows.map((row) => `${row.trusted ? '✓' : '○'} ${row.name} · ${row.implementer}`).join('\n') +
       '\n',
   );
   return 0;
 }
-async function listDomain(client: FerryClient, domain: 'mcp') {
-  process.stdout.write(
-    (await client[domain].list()).map((item) => `${item.name} · ${item.status}`).join('\n') + '\n',
-  );
+async function listDomain(client: FerryClient, domain: 'mcp', json = false) {
+  const rows = await client[domain].list();
+  writeResult(json, rows, rows.map((item) => `${item.name} · ${item.status}`).join('\n') + '\n');
   return 0;
 }
 async function resume(client: FerryClient, id: string | undefined, json: boolean) {
-  if (!id) return 2;
+  if (!id) throw new CliError(2, 'Usage: ferry resume <sessionId>');
   const session = await client.sessions.get(id as import('@ferry/shared').SessionId);
   if (json)
     process.stdout.write(
@@ -400,28 +469,39 @@ async function resume(client: FerryClient, id: string | undefined, json: boolean
         if (part.type === 'text') process.stdout.write(`${message.role}: ${part.text}\n`);
   return 0;
 }
-async function keys(client: FerryClient, args: string[]) {
+async function keys(client: FerryClient, args: string[], json = false) {
   const [action, id] = args;
   if (action === 'remove' && id) {
     await client.providers.removeKey(id as import('@ferry/shared').ProviderId);
+    writeResult(json, { removed: true, providerId: id }, '');
     return 0;
   }
-  if (action !== 'set' || !id) return 2;
-  const key = await readSecret();
-  if (!key) return 2;
+  if (action !== 'set' || !id)
+    throw new CliError(2, 'Usage: ferry keys set <provider> | remove <provider>');
+  const key = await readSecret(json);
+  if (!key) throw new CliError(2, 'No key received; enter a key or provide input on stdin.');
   await client.providers.setKey(id as import('@ferry/shared').ProviderId, key);
-  process.stdout.write('Key saved.\n');
+  writeResult(json, { saved: true, providerId: id }, 'Key saved.\n');
   return 0;
 }
-async function readSecret(): Promise<string> {
+async function readSecret(silent = false): Promise<string> {
   const { stdin, stdout } = process;
-  stdout.write('API key: ');
+  if (!silent) stdout.write('API key: ');
   if (!stdin.isTTY || !stdin.setRawMode) {
     const { createInterface } = await import('node:readline');
     const rl = createInterface({ input: stdin, terminal: false });
-    const line = await new Promise<string>((resolve) => rl.once('line', resolve));
+    const line = await new Promise<string | null>((resolve) => {
+      let settled = false;
+      rl.once('line', (value) => {
+        settled = true;
+        resolve(value);
+      });
+      rl.once('close', () => {
+        if (!settled) resolve(null);
+      });
+    });
     rl.close();
-    return line;
+    return line ?? '';
   }
   stdin.setRawMode(true);
   stdin.resume();
@@ -454,16 +534,30 @@ async function readSecret(): Promise<string> {
 export async function doctor(
   dataDir?: string,
   probes?: import('./doctor.js').DoctorProbes,
+  json = false,
 ): Promise<number> {
   const rows = await collectDoctor({
     ...(probes ?? {}),
     dataDirectory: probes?.dataDirectory ?? dataDir ?? join(homedir(), '.ferry'),
   });
-  for (const row of rows)
-    process.stdout.write(`${row.status.toUpperCase().padEnd(4)} ${row.name}: ${row.reason}\n`);
+  if (json) process.stdout.write(`${JSON.stringify(rows)}\n`);
+  else
+    for (const row of rows)
+      process.stdout.write(`${row.status.toUpperCase().padEnd(4)} ${row.name}: ${row.reason}\n`);
   return rows.some((row) => row.status === 'fail') ? 1 : 0;
 }
-async function runInit(client: FerryClient, cwd: string, yes: boolean): Promise<number> {
+async function runInit(
+  client: FerryClient,
+  cwd: string,
+  yes: boolean,
+  json = false,
+): Promise<number> {
+  const { initDefaults } = await import('./init.js');
+  if (json) {
+    await initDefaults(client, cwd);
+    writeResult(json, { initialized: true, config: join(cwd, '.ferry', 'config.json') }, '');
+    return 0;
+  }
   if (yes) {
     await initDefaults(client, cwd);
     process.stdout.write(`Initialized .ferry/config.json with detected checks.\n`);
@@ -473,7 +567,7 @@ async function runInit(client: FerryClient, cwd: string, yes: boolean): Promise<
     process.stderr.write('ferry init needs a TTY; pass --yes to accept recommended defaults.\n');
     return 2;
   }
-  const app = render(<InitWizard client={client} cwd={cwd} onDone={() => app.unmount()} />);
-  await app.waitUntilExit();
+  const { launchInitWizard } = await import('./init-prompt.js');
+  await launchInitWizard(client, cwd);
   return 0;
 }

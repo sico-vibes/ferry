@@ -7,6 +7,7 @@ import {
   createHybridClient,
   createMessagePortTransport,
   createRpcFerryClient,
+  createWebSocketRpcTransport,
 } from '@ferry/client';
 import type { FerryClient } from '@ferry/client';
 import { FerryProvider } from './data/client';
@@ -27,15 +28,23 @@ const mock = createDemoFerryClient({
     : {}),
 });
 const bootstrapClient = async () => {
-  if (!window.ferryHost) return mock;
-  const port = await window.ferryHost.connectCore();
-  const rpc = createRpcFerryClient(
-    createMessagePortTransport(port, {
-      reconnect: () =>
-        window.ferryHost?.connectCore() ?? Promise.reject(new Error('Desktop host unavailable')),
-      onRestarting: (handler) => window.ferryHost?.onEngineRestarting(handler) ?? (() => undefined),
-    }),
-  );
+  let rpc: ReturnType<typeof createRpcFerryClient>;
+  if (window.ferryHost) {
+    const port = await window.ferryHost.connectCore();
+    rpc = createRpcFerryClient(
+      createMessagePortTransport(port, {
+        reconnect: () =>
+          window.ferryHost?.connectCore() ?? Promise.reject(new Error('Desktop host unavailable')),
+        onRestarting: (handler) =>
+          window.ferryHost?.onEngineRestarting(handler) ?? (() => undefined),
+      }),
+    );
+  } else {
+    const e2eCoreUrl = new URLSearchParams(location.search).get('e2eCore');
+    if (!e2eCoreUrl) return mock;
+    window.ferryE2EMockClient = mock;
+    rpc = createRpcFerryClient(createWebSocketRpcTransport(e2eCoreUrl));
+  }
   const hello = await rpc.hello;
   window.ferryEngineHello = hello;
   window.ferryRpcClient = rpc;

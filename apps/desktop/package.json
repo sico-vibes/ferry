@@ -17,7 +17,7 @@
     "shot": "node scripts/shot.mjs",
     "perf:start": "node scripts/perf-startup.mjs",
     "perf:long": "node scripts/perf-long-transcript.mjs",
-    "test:e2e": "node scripts/e2e.mjs && node scripts/e2e-electron.mjs"
+    "test:e2e": "node scripts/e2e-runner.mjs"
   },
   "dependencies": {
     "@ferry/core": "workspace:*",
