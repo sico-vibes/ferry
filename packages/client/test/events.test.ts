@@ -16,6 +16,8 @@ import {
   sampleProvider,
   sampleSession,
   sampleTaskRecord,
+  sampleWorkspace,
+  sampleSettings,
 } from '@ferry/shared/testing';
 import type { FerryClient } from '../src/ferry-client.js';
 import { FerryEventSchemas } from '../src/events.js';
@@ -39,6 +41,9 @@ const samples = {
   'quota.updated': sampleCapacitySummary satisfies CapacitySummary,
   'provider.updated': sampleProvider satisfies Provider,
   'delegation.updated': sampleDelegationRun satisfies DelegationRun,
+  'workspace.updated': sampleWorkspace,
+  'workspace.removed': { id: sampleWorkspace.id },
+  'settings.updated': sampleSettings,
   toast: { kind: 'info', title: 'Ready', body: null },
 } as const;
 

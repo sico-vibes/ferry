@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -17,6 +17,8 @@ const application = spawn(
     env: {
       ...process.env,
       FERRY_E2E_USER_DATA_DIR: userDataDirectory,
+      FERRY_HOME: join(userDataDirectory, 'ferry-home'),
+      FERRY_REAL_DOMAINS: 'settings,workspaces,checkpoints',
       FERRY_E2E_CORE_ONLY: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -48,8 +50,11 @@ application.once('exit', (code) => {
 });
 
 try {
-  const selfTest = await ready;
+  const core = await ready;
   clearTimeout(timeout);
+  const selfTest = core.selfTest;
+  assert.deepEqual(core.realDomains, ['settings', 'workspaces', 'checkpoints']);
+  assert.equal(core.dataDir, join(userDataDirectory, 'ferry-home'));
   assert.deepEqual(
     selfTest.modules.map(({ name }) => name),
     ['better-sqlite3', 'node-pty', '@napi-rs/keyring'],

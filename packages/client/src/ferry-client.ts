@@ -62,6 +62,7 @@ export interface FerryClient {
   };
   checkpoints: {
     list(sessionId: SessionId): Promise<Checkpoint[]>;
+    diff(id: CheckpointId): Promise<string>;
     restore(id: CheckpointId, paths?: string[]): Promise<void>;
   };
   providers: {

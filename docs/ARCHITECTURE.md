@@ -51,3 +51,7 @@ core: agent loop · router · quota ledger · providers (AI SDK) · workspace to
 - **App mount:** add a React component to `app/mounts.tsx` and append it to `appMounts`.
 - **UI state:** add the concern's state/actions in its own `state/ui-*.ts` slice and compose it from `state/ui.ts`.
 - **UI kit exports:** add folder exports to that folder's `index.ts`; the package root re-exports folder barrels.
+
+## Adding a real domain
+
+Add `packages/core/src/domains/<domain>.ts` with an exported `register(host, services)` function, then add that registrar as one line in `packages/core/src/domains/index.ts`. Validate positional params and returned values with the corresponding `@ferry/shared` Zod schemas, and emit shared-contract events when state changes. Add or extend the `FerryClient` contract test for the domain, run it against both mock and in-process RPC clients, then flip the domain in the desktop `FERRY_REAL_DOMAINS` default after its end-to-end flow passes.

@@ -7,9 +7,12 @@ import {
   MessageSchema,
   PartIdSchema,
   ProviderSchema,
+  SettingsSchema,
   SessionIdSchema,
   SessionSchema,
   TaskRecordSchema,
+  WorkspaceSchema,
+  WorkspaceIdSchema,
 } from '@ferry/shared';
 import type {
   CapacitySummary,
@@ -39,6 +42,9 @@ export const FerryEventSchemas = {
   'quota.updated': CapacitySummarySchema,
   'provider.updated': ProviderSchema,
   'delegation.updated': DelegationRunSchema,
+  'workspace.updated': WorkspaceSchema,
+  'workspace.removed': z.object({ id: WorkspaceIdSchema }),
+  'settings.updated': SettingsSchema,
   toast: z.object({
     kind: z.enum(['info', 'success', 'warning', 'error']),
     title: z.string(),
@@ -63,5 +69,8 @@ export interface FerryEvents {
   'quota.updated': CapacitySummary;
   'provider.updated': Provider;
   'delegation.updated': DelegationRun;
+  'workspace.updated': import('@ferry/shared').Workspace;
+  'workspace.removed': { id: import('@ferry/shared').WorkspaceId };
+  'settings.updated': import('@ferry/shared').Settings;
   toast: { kind: 'info' | 'success' | 'warning' | 'error'; title: string; body: string | null };
 }

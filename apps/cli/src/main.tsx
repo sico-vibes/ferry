@@ -4,7 +4,7 @@ import { defineCommand, runMain } from 'citty';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { createClient } from './client.js';
+import { createClientAsync } from './client.js';
 import { Chat } from './tui.js';
 import { gradient, good, muted, warn } from './format.js';
 import { collectDoctor } from './doctor.js';
@@ -161,7 +161,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
   const command = flags.positionals[0];
   const dataDir = stringFlag(flags.values['data-dir']);
   const cwd = stringFlag(flags.values.cwd) ?? process.cwd();
-  const client = createClient({
+  const client = await createClientAsync({
     engine: flags.values.engine === 'local' ? 'local' : 'mock',
     ...(dataDir ? { dataDir } : {}),
   });
@@ -229,6 +229,8 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
+  } finally {
+    await client.dispose?.();
   }
 }
 

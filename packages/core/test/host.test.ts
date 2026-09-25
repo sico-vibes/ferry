@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -10,8 +10,22 @@ import {
   createStdioRpcTransport,
   createWebSocketRpcTransport,
 } from '@ferry/client';
-import { FERRY_PROTOCOL, JsonRpcRequestSchema } from '@ferry/shared';
-import { CoreHost, CoreLockError, createStdioTransport, mapError } from '../src/index.js';
+import {
+  FERRY_PROTOCOL,
+  JsonRpcRequestSchema,
+  SessionIdSchema,
+  SettingsSchema,
+  WorkspaceSchema,
+} from '@ferry/shared';
+import { ShadowCheckpoints, WorkspaceJail } from '@ferry/workspace';
+import {
+  CoreHost,
+  CoreLockError,
+  createCoreHost,
+  createMemoryTransportPair,
+  createStdioTransport,
+  mapError,
+} from '../src/index.js';
 import { runFerryClientContract } from '../../client/src/testing/contract.js';
 import { createFakeClock } from '../../client/src/mock/clock.js';
 
@@ -48,12 +62,81 @@ async function makeStdioHarness() {
 
 runFerryClientContract('HybridClient contract over core stdio RPC harness', makeStdioHarness);
 
+async function makeRealDomainsHarness() {
+  const [coreTransport, clientTransport] = createMemoryTransportPair();
+  const host = await createCoreHost({
+    dataDir: join(dataDir, 'real-domain-contract'),
+    transport: coreTransport,
+  });
+  const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 2500 });
+  await rpc.hello;
+  const mock = createMockFerryClient({ behavior: 'test' });
+  return {
+    client: createHybridClient(mock, rpc, ['settings', 'workspaces', 'checkpoints']),
+    cleanup: async () => {
+      rpc.close();
+      await host.stop();
+    },
+  };
+}
+
+runFerryClientContract('In-process Core RPC selected domains', makeRealDomainsHarness, {
+  domains: ['settings', 'workspaces', 'checkpoints', 'system'],
+});
+
 afterAll(async () => {
   await activeHost?.stop();
   await rm(dataDir, { recursive: true, force: true });
 });
 
 describe('core host dispatcher and lifecycle', () => {
+  it('runs the real settings, workspaces, checkpoints and system domains over loopback RPC', async () => {
+    const path = join(dataDir, 'composition');
+    const [coreTransport, clientTransport] = createMemoryTransportPair();
+    const host = await createCoreHost({ dataDir: path, transport: coreTransport });
+    const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 2500 });
+    try {
+      const hello = await rpc.hello;
+      expect(hello.realDomains).toEqual(['settings', 'workspaces', 'checkpoints']);
+      await mkdir(join(path, 'workspace'), { recursive: true });
+      const opened = await rpc.workspaces.open(join(path, 'workspace'));
+      WorkspaceSchema.parse(opened);
+      expect((await rpc.workspaces.list()).map((workspace) => workspace.id)).toContain(opened.id);
+      SettingsSchema.parse(await rpc.settings.update({ theme: 'light' }));
+      const sessionId = SessionIdSchema.parse('contract_session');
+      const projectFile = join(opened.path, 'project.txt');
+      await writeFile(projectFile, 'before checkpoint\n', 'utf8');
+      const shadow = new ShadowCheckpoints(new WorkspaceJail(opened.path), path);
+      const checkpointId = await shadow.snapshot('Before change');
+      await writeFile(projectFile, 'after checkpoint\n', 'utf8');
+      expect(
+        await rpc.checkpoints.diff(checkpointId as import('@ferry/shared').CheckpointId),
+      ).toContain('before checkpoint');
+      expect((await rpc.checkpoints.list(sessionId)).map((checkpoint) => checkpoint.id)).toContain(
+        checkpointId,
+      );
+      await rpc.checkpoints.restore(checkpointId as import('@ferry/shared').CheckpointId);
+      expect(await readFile(projectFile, 'utf8')).toBe('before checkpoint\n');
+      expect(await rpc.system.info()).toMatchObject({
+        dataDir: path,
+        realDomains: hello.realDomains,
+      });
+    } finally {
+      rpc.close();
+      await host.stop();
+    }
+
+    const [nextCoreTransport, nextClientTransport] = createMemoryTransportPair();
+    const nextHost = await createCoreHost({ dataDir: path, transport: nextCoreTransport });
+    const nextClient = createRpcFerryClient(nextClientTransport, { timeoutMs: 2500 });
+    try {
+      expect((await nextClient.settings.get()).theme).toBe('light');
+    } finally {
+      nextClient.close();
+      await nextHost.stop();
+    }
+  }, 60_000);
+
   it('distinguishes unknown methods from known unimplemented methods', async () => {
     const host = new CoreHost({ dataDir: join(dataDir, 'dispatch') });
     const unimplemented = await host

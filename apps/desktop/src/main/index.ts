@@ -98,7 +98,11 @@ function launchCore(): void {
   const coreEntry = join(import.meta.dirname, 'core-entry.js');
   const child = utilityProcess.fork(coreEntry, [], {
     serviceName: 'Ferry Core',
-    env: { ...process.env, FERRY_CORE_DATA_DIR: join(app.getPath('userData'), 'engine') },
+    env: {
+      ...process.env,
+      FERRY_REAL_DOMAINS: process.env.FERRY_REAL_DOMAINS ?? 'settings,workspaces,checkpoints',
+      FERRY_CORE_DATA_DIR: process.env.FERRY_HOME ?? join(app.getPath('userData'), 'engine'),
+    },
     stdio: process.env.FERRY_E2E_USER_DATA_DIR ? 'pipe' : 'inherit',
   });
   if (process.env.FERRY_E2E_USER_DATA_DIR)
@@ -121,7 +125,7 @@ function launchCore(): void {
     restartCount = 0;
     broadcastEngineConnected();
     if (process.env.FERRY_E2E_USER_DATA_DIR && 'selfTest' in message)
-      console.log(`FERRY_CORE_READY ${JSON.stringify(message.selfTest)}`);
+      console.log(`FERRY_CORE_READY ${JSON.stringify(message)}`);
   });
   child.on('exit', (code) => {
     if (process.env.FERRY_E2E_USER_DATA_DIR) console.error(`FERRY_CORE_EXIT ${String(code)}`);

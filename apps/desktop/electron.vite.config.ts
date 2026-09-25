@@ -1,16 +1,30 @@
 import { resolve } from 'node:path';
+import { copyFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'electron-vite';
 
+const copyStorageMigrations = {
+  name: 'ferry-copy-storage-migrations',
+  async closeBundle() {
+    const output = resolve('out/main/migrations');
+    await mkdir(output, { recursive: true });
+    await copyFile(
+      resolve('../../packages/storage/src/migrations/0001_initial.sql'),
+      resolve(output, '0001_initial.sql'),
+    );
+  },
+};
+
 export default defineConfig({
   main: {
+    plugins: [copyStorageMigrations],
     resolve: { alias: { '@ferry/core': resolve('../../packages/core/src/index.ts') } },
     build: {
       externalizeDeps: {
         exclude: ['@ferry/core', '@ferry/shared'],
-        include: ['better-sqlite3', 'node-pty', '@napi-rs/keyring'],
+        include: ['better-sqlite3', 'node-pty', '@napi-rs/keyring', 'pino', 'pino-roll'],
       },
       rollupOptions: {
         input: {

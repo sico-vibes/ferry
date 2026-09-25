@@ -302,6 +302,12 @@ function ChangesPanel({ detail }: { detail: ReturnType<typeof useSessionDetail>[
   } | null>(null);
   const client = useFerryClient();
   const navigate = useNavigate();
+  const cache = useQueryClient();
+  const { data: checkpoints = [] } = useQuery({
+    queryKey: ['checkpoints', detail?.session.id],
+    queryFn: () => (detail ? client.checkpoints.list(detail.session.id) : Promise.resolve([])),
+    enabled: Boolean(detail?.session.id),
+  });
   const { data: runs = [] } = useQuery({
     queryKey: ['delegation', detail?.session.id],
     queryFn: () => (detail ? client.delegation.runs(detail.session.id) : Promise.resolve([])),
@@ -360,6 +366,29 @@ function ChangesPanel({ detail }: { detail: ReturnType<typeof useSessionDetail>[
         ))
       ) : (
         <p className="empty-search">No changed files yet.</p>
+      )}
+      {checkpoints.length > 0 && (
+        <section aria-label="Checkpoints" className="checkpoint-list">
+          <h3>Checkpoints</h3>
+          {checkpoints.map((checkpoint) => (
+            <button
+              className="change-row"
+              key={checkpoint.id}
+              aria-label={`Restore checkpoint ${checkpoint.label}`}
+              onClick={() =>
+                void client.checkpoints.restore(checkpoint.id).then(async () => {
+                  await cache.invalidateQueries({
+                    queryKey: ['checkpoints', detail?.session.id],
+                  });
+                })
+              }
+              type="button"
+            >
+              <span>{checkpoint.label}</span>
+              <span>Restore</span>
+            </button>
+          ))}
+        </section>
       )}
       {selected && (
         <div className="diff-view">

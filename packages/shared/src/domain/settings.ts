@@ -24,5 +24,7 @@ export const SystemInfoSchema = z.object({
   version: z.string(),
   mock: z.boolean(),
   platform: z.enum(['win32', 'darwin', 'linux', 'web']),
+  dataDir: z.string().nullable(),
+  realDomains: z.array(z.string()),
 });
 export type SystemInfo = z.infer<typeof SystemInfoSchema>;

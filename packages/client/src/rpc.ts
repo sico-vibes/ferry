@@ -270,13 +270,19 @@ export function createHybridClient(
             const domain =
               event.startsWith('session.') || event === 'task.updated'
                 ? 'sessions'
-                : event === 'quota.updated'
-                  ? 'quota'
-                  : event === 'provider.updated'
-                    ? 'providers'
-                    : event === 'delegation.updated'
-                      ? 'delegation'
-                      : '';
+                : event === 'settings.updated'
+                  ? 'settings'
+                  : event.startsWith('workspace.')
+                    ? 'workspaces'
+                    : event === 'quota.updated'
+                      ? 'quota'
+                      : event === 'provider.updated'
+                        ? 'providers'
+                        : event === 'delegation.updated'
+                          ? 'delegation'
+                          : event === 'workspace.updated'
+                            ? 'workspaces'
+                            : '';
             return (real.has(domain) ? rpc : mock).on(event, handler);
           };
         if (typeof key !== 'string') return undefined;
@@ -288,6 +294,23 @@ export function createHybridClient(
             if (typeof value !== 'function') return value;
             return (...args: unknown[]): unknown => {
               const result: unknown = Reflect.apply(value, target, args);
+              if (key === 'settings' && method === 'update')
+                return Promise.resolve(result).then((settings: unknown) => {
+                  if (
+                    typeof settings === 'object' &&
+                    settings !== null &&
+                    'developer' in settings &&
+                    typeof settings.developer === 'object' &&
+                    settings.developer !== null &&
+                    'realDomains' in settings.developer &&
+                    Array.isArray(settings.developer.realDomains)
+                  ) {
+                    real.clear();
+                    for (const domain of settings.developer.realDomains)
+                      if (typeof domain === 'string') real.add(domain);
+                  }
+                  return settings;
+                });
               return result;
             };
           },

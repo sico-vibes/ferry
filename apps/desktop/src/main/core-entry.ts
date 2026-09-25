@@ -1,30 +1,11 @@
 import type { MessagePortMain } from 'electron';
 import { join } from 'node:path';
-import { CoreHost, runNativeSelfTest } from '@ferry/core';
+import { createCoreHost, runNativeSelfTest } from '@ferry/core';
 
 let activePort: MessagePortMain | undefined;
 let inputHandler: ((message: unknown) => void) | undefined;
-let started = false;
+let host: Awaited<ReturnType<typeof createCoreHost>> | undefined;
 const pendingMessages: unknown[] = [];
-const host = new CoreHost({
-  dataDir: process.env.FERRY_CORE_DATA_DIR ?? join(process.cwd(), 'engine'),
-  selfTest: runNativeSelfTest,
-  transport: {
-    send(message) {
-      activePort?.postMessage(message);
-    },
-    subscribe(handler) {
-      inputHandler = handler;
-      while (pendingMessages.length) {
-        const message = pendingMessages.shift();
-        if (message !== undefined) inputHandler(message);
-      }
-      return () => {
-        inputHandler = undefined;
-      };
-    },
-  },
-});
 const parentPort = process.parentPort;
 parentPort.on('message', (event) => {
   const port = event.ports[0];
@@ -36,13 +17,32 @@ parentPort.on('message', (event) => {
     else pendingMessages.push(messageEvent.data);
   });
   port.start();
-  const ready = started
-    ? Promise.resolve()
-    : host.start().then(() => {
-        started = true;
+  const ready = host
+    ? Promise.resolve(host)
+    : createCoreHost({
+        dataDir: process.env.FERRY_CORE_DATA_DIR ?? join(process.cwd(), 'engine'),
+        selfTest: runNativeSelfTest,
+        transport: {
+          send(message) {
+            activePort?.postMessage(message);
+          },
+          subscribe(handler) {
+            inputHandler = handler;
+            while (pendingMessages.length) {
+              const message = pendingMessages.shift();
+              if (message !== undefined) inputHandler(message);
+            }
+            return () => {
+              inputHandler = undefined;
+            };
+          },
+        },
+      }).then((created) => {
+        host = created;
+        return created;
       });
   void ready
-    .then(() => {
+    .then((runningHost) => {
       port.postMessage({
         jsonrpc: '2.0',
         method: 'system.coreReady',
@@ -52,6 +52,8 @@ parentPort.on('message', (event) => {
         type: 'ferry:core-ready',
         pid: process.pid,
         selfTest: runNativeSelfTest(),
+        realDomains: runningHost.realDomains,
+        dataDir: runningHost.dataDir,
       });
     })
     .catch((error: unknown) => {

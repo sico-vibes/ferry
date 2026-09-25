@@ -315,4 +315,10 @@ export const sampleSettings: Settings = {
     realDomains: [],
   },
 };
-export const sampleSystemInfo: SystemInfo = { version: '0.0.0', mock: true, platform: 'web' };
+export const sampleSystemInfo: SystemInfo = {
+  version: '0.0.0',
+  mock: true,
+  platform: 'web',
+  dataDir: null,
+  realDomains: [],
+};

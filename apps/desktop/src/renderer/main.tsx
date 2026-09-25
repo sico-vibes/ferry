@@ -39,10 +39,10 @@ const bootstrapClient = async () => {
   const hello = await rpc.hello;
   window.ferryEngineHello = hello;
   window.ferryRpcClient = rpc;
-  const settings = await mock.settings.get();
-  const envDomains = import.meta.env.DEV ? window.ferryHost.realDomainsFromEnvironment() : [];
-  const requested = [...new Set([...settings.developer.realDomains, ...envDomains])];
-  const domains = requested.filter((domain) => hello.realDomains.includes(domain));
+  const settings = await rpc.settings.get();
+  const domains = [...new Set(settings.developer.realDomains)].filter((domain) =>
+    hello.realDomains.includes(domain),
+  );
   const hybrid = createHybridClient(mock, rpc, domains);
   window.ferryHybrid = hybrid;
   return hybrid;

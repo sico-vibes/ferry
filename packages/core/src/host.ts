@@ -3,14 +3,17 @@ import { dirname, resolve } from 'node:path';
 import {
   DomainErrorKindSchema,
   FERRY_DOMAINS,
+  FERRY_EVENTS,
   FERRY_METHODS,
   FERRY_PROTOCOL,
   HelloParamsSchema,
   JsonRpcRequestSchema,
+  SystemInfoSchema,
   rpcError,
   type JsonRpcRequest,
 } from '@ferry/shared';
 import { startCoreWebSocketServer, type CoreWebSocketHandle } from './websocket.js';
+import { ZodError } from 'zod';
 
 export type RpcHandler = (...params: unknown[]) => unknown;
 export interface CoreTransport {
@@ -28,6 +31,7 @@ export interface CoreOptions {
       }>;
   websocketEnabled?: boolean;
   websocketPort?: number;
+  services?: import('./services.js').FerryServices;
 }
 
 export class CoreLockError extends Error {
@@ -38,6 +42,8 @@ export class CoreLockError extends Error {
 }
 
 export function mapError(error: unknown) {
+  if (error instanceof ZodError)
+    return rpcError(-32010, 'validation', 'Domain parameters or result failed validation');
   if (
     typeof error === 'object' &&
     error !== null &&
@@ -53,6 +59,14 @@ export function mapError(error: unknown) {
     );
   }
   return rpcError(-32603, 'internal', error instanceof Error ? error.message : 'Internal error');
+}
+
+export function rpcDomainError(
+  code: number,
+  kind: 'not_found' | 'validation' | 'conflict' | 'permission_denied' | 'unavailable',
+  message: string,
+): Error & { code: number; kind: string } {
+  return Object.assign(new Error(message), { code, kind });
 }
 
 export class CoreHost {
@@ -72,6 +86,10 @@ export class CoreHost {
     return this.#websocket;
   }
 
+  get realDomains(): string[] {
+    return [...this.#registry.keys()];
+  }
+
   registerDomain(domain: string, handlers: Record<string, RpcHandler>): void {
     if (this.#started) throw new Error('Cannot register handlers after core start');
     if (!FERRY_DOMAINS.includes(domain)) throw new Error(`Unknown Ferry domain: ${domain}`);
@@ -86,7 +104,7 @@ export class CoreHost {
   }
 
   emit(method: string, payload: unknown): void {
-    if (!(FERRY_METHODS as readonly string[]).includes(method))
+    if (!(FERRY_EVENTS as readonly string[]).includes(method))
       throw new Error(`Unknown Ferry event: ${method}`);
     for (const listener of this.#events) listener(method, payload);
   }
@@ -163,6 +181,7 @@ export class CoreHost {
     await this.#websocket?.close();
     this.#websocket = undefined;
     this.options.transport?.close?.();
+    await this.options.services?.dispose();
     await this.#releaseLock?.();
     this.#started = false;
   }
@@ -193,8 +212,16 @@ export class CoreHost {
   }
 
   async dispatch(request: JsonRpcRequest): Promise<unknown> {
-    if (request.method === 'system.info')
-      return { version: '0.1.0', mock: false, platform: process.platform };
+    if (request.method === 'system.info') {
+      const info = {
+        version: '0.1.0',
+        mock: false,
+        platform: process.platform,
+        dataDir: this.dataDir,
+        realDomains: this.realDomains,
+      };
+      return SystemInfoSchema.parse(info);
+    }
     if (request.method === 'system.hello') {
       const params = HelloParamsSchema.safeParse(request.params?.[0]);
       if (!params.success || params.data.protocol !== FERRY_PROTOCOL)
@@ -307,6 +334,30 @@ export async function serveStdio(dataDir: string): Promise<CoreHost> {
     transport: createStdioTransport(process.stdin, process.stdout),
   });
   await host.start();
+  return host;
+}
+
+export async function createCoreHost(
+  options: Omit<CoreOptions, 'services'> & {
+    clock?: import('./services.js').FerryClock;
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<CoreHost> {
+  const { createServices } = await import('./services.js');
+  const { domainRegistrars } = await import('./domains/index.js');
+  const services = await createServices({
+    dataDir: options.dataDir,
+    ...(options.clock ? { clock: options.clock } : {}),
+    ...(options.env ? { env: options.env } : {}),
+  });
+  const host = new CoreHost({ ...options, services });
+  for (const register of domainRegistrars) register(host, services);
+  try {
+    await host.start();
+  } catch (error) {
+    await services.dispose();
+    throw error;
+  }
   return host;
 }
 

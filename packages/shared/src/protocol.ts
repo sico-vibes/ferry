@@ -27,6 +27,7 @@ export const FERRY_METHODS = [
   'sessions.remove',
   'approvals.respond',
   'checkpoints.list',
+  'checkpoints.diff',
   'checkpoints.restore',
   'providers.list',
   'providers.setKey',
@@ -59,6 +60,20 @@ export const FERRY_METHODS = [
   'system.info',
   'system.hello',
   'system.selfTest',
+] as const;
+export const FERRY_EVENTS = [
+  'session.updated',
+  'session.message',
+  'session.part',
+  'session.delta',
+  'task.updated',
+  'quota.updated',
+  'provider.updated',
+  'delegation.updated',
+  'workspace.updated',
+  'workspace.removed',
+  'settings.updated',
+  'toast',
 ] as const;
 export const FERRY_DOMAINS = [
   ...new Set(FERRY_METHODS.map((method) => method.split('.')[0] ?? '')),

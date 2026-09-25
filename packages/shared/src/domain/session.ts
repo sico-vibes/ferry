@@ -142,3 +142,4 @@ export const CheckpointSchema = z.object({
   fileCount: z.number().int().nonnegative(),
 });
 export type Checkpoint = z.infer<typeof CheckpointSchema>;
+export const CheckpointDiffSchema = z.string();

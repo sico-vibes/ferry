@@ -10,6 +10,8 @@ export function createSystemDomain(_store: MockStore, deps: MockDeps): FerryClie
         version: '0.1.0-mock',
         mock: true,
         platform: navigator.userAgent.includes('Windows') ? 'win32' : 'web',
+        dataDir: null,
+        realDomains: [],
       };
     },
   };

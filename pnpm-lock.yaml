@@ -50,6 +50,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@ferry/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@ferry/client':
         specifier: workspace:*
         version: link:../../packages/client
@@ -89,6 +92,12 @@ importers:
       node-pty:
         specifier: 1.1.0
         version: 1.1.0
+      pino:
+        specifier: 10.3.1
+        version: 10.3.1
+      pino-roll:
+        specifier: 4.0.0
+        version: 4.0.0
       react:
         specifier: 19.3.0
         version: 19.3.0
@@ -111,6 +120,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@ferry/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@ferry/client':
         specifier: workspace:*
         version: link:../../packages/client
@@ -126,6 +138,9 @@ importers:
       '@napi-rs/keyring':
         specifier: 2.1.0
         version: 2.1.0
+      '@vscode/ripgrep':
+        specifier: 1.18.0
+        version: 1.18.0
       '@tanstack/react-query':
         specifier: 5.103.2
         version: 5.103.2(react@19.3.0)
@@ -159,6 +174,12 @@ importers:
       node-pty:
         specifier: 1.1.0
         version: 1.1.0
+      pino:
+        specifier: 10.3.1
+        version: 10.3.1
+      pino-roll:
+        specifier: 4.0.0
+        version: 4.0.0
       radix-ui:
         specifier: 1.6.7
         version: 1.6.7(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -311,12 +332,24 @@ importers:
 
   packages/core:
     dependencies:
+      '@ferry/config':
+        specifier: workspace:*
+        version: link:../config
       '@ferry/client':
         specifier: workspace:*
         version: link:../client
+      '@ferry/secrets':
+        specifier: workspace:*
+        version: link:../secrets
       '@ferry/shared':
         specifier: workspace:*
         version: link:../shared
+      '@ferry/storage':
+        specifier: workspace:*
+        version: link:../storage
+      '@ferry/workspace':
+        specifier: workspace:*
+        version: link:../workspace
       cockatiel:
         specifier: 4.0.0
         version: 4.0.0
