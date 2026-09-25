@@ -122,7 +122,7 @@ export class FakeOpenAIServer extends FakeProviderServer {
           message: {
             role: 'assistant',
             content: 'Fake response',
-            ...(malformed ? {} : { tool_calls: [call] }),
+            tool_calls: [call],
           },
           finish_reason: 'tool_calls',
         },

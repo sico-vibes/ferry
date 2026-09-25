@@ -5,7 +5,25 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { generateText, type LanguageModel } from 'ai';
 import { loadCatalog } from '@ferry/catalog';
-import type { ModelRef, ProbeResult as SharedProbeResult, ProviderId } from '@ferry/shared';
+import {
+  ProviderIdSchema,
+  RawCallObservationSchema,
+  UsageRecordSchema,
+  type ModelRef,
+  type ProbeResult,
+  type ProviderErrorKind,
+  type ProviderId,
+  type QuotaObservation,
+  type RawCallObservation,
+  type UsageRecord,
+} from '@ferry/shared';
+export type {
+  ProbeResult,
+  ProviderErrorKind,
+  QuotaObservation,
+  RawCallObservation,
+  UsageRecord,
+} from '@ferry/shared';
 
 export const PACKAGE = '@ferry/providers';
 const FERRY_VERSION = '0.0.0';
@@ -19,57 +37,18 @@ export interface ModelFactoryOptions {
   sessionId?: string;
 }
 
-export interface RawCallObservation {
-  providerId: string;
-  model: string;
-  startedAt: number;
-  latencyMs: number;
-  status: number | null;
-  requestBytes: number | null;
-  rateLimitHeaders: Record<string, string>;
-  errorKind: ProviderErrorKind | null;
-}
-
-export interface UsageRecord {
-  providerId: string;
-  model: string;
-  inputTokens: number | null;
-  outputTokens: number | null;
-  cachedTokens: number | null;
-  reasoningTokens: number | null;
-  latencyMs: number;
-  status: number | null;
-  errorKind: ProviderErrorKind | null;
-}
-
-export type ProviderErrorKind =
-  | 'auth'
-  | 'rate_limit'
-  | 'quota_exhausted'
-  | 'context_overflow'
-  | 'bad_request'
-  | 'server'
-  | 'network'
-  | 'timeout';
-
 export interface MappedProviderError {
   kind: ProviderErrorKind;
   retryAfterMs: number | null;
   message: string;
 }
 
-export interface QuotaObservation {
+export interface ParsedQuotaWindow {
   windowId: string;
   remaining: number | null;
   limit: number | null;
   resetAt: string | null;
   confidence: 'exact';
-}
-
-export interface ProbeResult extends SharedProbeResult {
-  keyValid: boolean;
-  models: string[];
-  errorKind: ProviderErrorKind | null;
 }
 
 export function providerFromRef(ref: ModelRef | string): string {
@@ -225,28 +204,32 @@ export function createObservedFetch(
       response.headers.forEach((value, name) => {
         if (isRateLimitHeader(name)) rateLimitHeaders[name.toLowerCase()] = value;
       });
-      onObservation({
-        providerId,
-        model,
-        startedAt,
-        latencyMs: Math.max(0, performance.now() - started),
-        status: response.status,
-        requestBytes: requestSize(input, init),
-        rateLimitHeaders,
-        errorKind: response.ok ? null : mapProviderError({ status: response.status }).kind,
-      });
+      onObservation(
+        RawCallObservationSchema.parse({
+          providerId: ProviderIdSchema.parse(providerId),
+          modelRef: model,
+          startedAt,
+          latencyMs: Math.max(0, performance.now() - started),
+          statusCode: response.status,
+          requestBytes: requestSize(input, init),
+          rateLimitHeaders,
+          errorKind: response.ok ? null : mapProviderError({ status: response.status }).kind,
+        }),
+      );
       return response;
     } catch (error) {
-      onObservation({
-        providerId,
-        model,
-        startedAt,
-        latencyMs: Math.max(0, performance.now() - started),
-        status: null,
-        requestBytes: requestSize(input, init),
-        rateLimitHeaders: {},
-        errorKind: mapProviderError(error).kind,
-      });
+      onObservation(
+        RawCallObservationSchema.parse({
+          providerId: ProviderIdSchema.parse(providerId),
+          modelRef: model,
+          startedAt,
+          latencyMs: Math.max(0, performance.now() - started),
+          statusCode: null,
+          requestBytes: requestSize(input, init),
+          rateLimitHeaders: {},
+          errorKind: mapProviderError(error).kind,
+        }),
+      );
       throw error;
     }
   };
@@ -263,21 +246,25 @@ export function mergeUsage(
     outputTokenDetails?: { reasoningTokens?: number | null };
   } = {},
 ): UsageRecord {
-  return {
+  const cachedTokens =
+    usage.cachedInputTokens ??
+    ((usage.inputTokenDetails?.cacheReadTokens ?? 0) +
+      (usage.inputTokenDetails?.cacheWriteTokens ?? 0) ||
+      null);
+  const reasoningTokens = usage.reasoningTokens ?? usage.outputTokenDetails?.reasoningTokens;
+  return UsageRecordSchema.parse({
+    id: globalThis.crypto.randomUUID(),
     providerId: observation.providerId,
-    model: observation.model,
-    inputTokens: usage.inputTokens ?? null,
-    outputTokens: usage.outputTokens ?? null,
-    cachedTokens:
-      usage.cachedInputTokens ??
-      ((usage.inputTokenDetails?.cacheReadTokens ?? 0) +
-        (usage.inputTokenDetails?.cacheWriteTokens ?? 0) ||
-        null),
-    reasoningTokens: usage.reasoningTokens ?? usage.outputTokenDetails?.reasoningTokens ?? null,
+    modelRef: observation.modelRef,
+    occurredAt: new Date(observation.startedAt).toISOString(),
+    ...(usage.inputTokens == null ? {} : { inputTokens: usage.inputTokens }),
+    ...(usage.outputTokens == null ? {} : { outputTokens: usage.outputTokens }),
+    ...(cachedTokens == null ? {} : { cachedTokens }),
+    ...(reasoningTokens == null ? {} : { reasoningTokens }),
     latencyMs: observation.latencyMs,
-    status: observation.status,
+    status: observation.errorKind === null ? 'success' : 'error',
     errorKind: observation.errorKind,
-  };
+  });
 }
 
 function num(value: string | null | undefined): number | null {
@@ -291,6 +278,14 @@ function resetTime(value: string | null | undefined, now: Date): string | null {
   const seconds = num(value);
   const date = seconds !== null ? new Date(now.getTime() + seconds * 1000) : new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+function retryAfterTime(value: string, now: Date): string | null {
+  const seconds = num(value);
+  if (seconds === null) return resetTime(value, now);
+  const timestamp = now.getTime() + seconds * 1000;
+  return Number.isFinite(timestamp) && Math.abs(timestamp) <= 8.64e15
+    ? new Date(timestamp).toISOString()
+    : null;
 }
 
 function nextMidnight(now: Date, timeZone: string): string {
@@ -325,7 +320,7 @@ function headerQuota(
   suffix: string,
   now: Date,
   windowId: string,
-): QuotaObservation | null {
+): ParsedQuotaWindow | null {
   const lower = Object.fromEntries(
     Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
   );
@@ -339,31 +334,27 @@ function headerQuota(
 export function parseGroqRateLimits(
   headers: Record<string, string>,
   now = new Date(),
-): QuotaObservation[] {
+): ParsedQuotaWindow[] {
   const result = [
     headerQuota(headers, 'requests', '', now, 'requests-day'),
     headerQuota(headers, 'tokens', '', now, 'tokens-minute'),
-  ].filter((entry): entry is QuotaObservation => entry !== null);
+  ].filter((entry): entry is ParsedQuotaWindow => entry !== null);
   const lower = Object.fromEntries(
     Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
   );
   if (lower['retry-after'] && !result.some((entry) => entry.windowId === 'retry-after')) {
-    const seconds = num(lower['retry-after']);
     result.push({
       windowId: 'retry-after',
       remaining: null,
       limit: null,
-      resetAt:
-        seconds === null
-          ? resetTime(lower['retry-after'], now)
-          : new Date(now.getTime() + seconds * 1000).toISOString(),
+      resetAt: retryAfterTime(lower['retry-after'] ?? '', now),
       confidence: 'exact',
     });
   }
   return result;
 }
 
-export function parseOpenRouterKey(body: unknown, now = new Date()): QuotaObservation[] {
+export function parseOpenRouterKey(body: unknown, now = new Date()): ParsedQuotaWindow[] {
   const root = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
   const data =
     root.data && typeof root.data === 'object' ? (root.data as Record<string, unknown>) : root;
@@ -371,7 +362,7 @@ export function parseOpenRouterKey(body: unknown, now = new Date()): QuotaObserv
     data.free_model_daily_requests && typeof data.free_model_daily_requests === 'object'
       ? (data.free_model_daily_requests as Record<string, unknown>)
       : {};
-  const result: QuotaObservation[] = [];
+  const result: ParsedQuotaWindow[] = [];
   const remaining = typeof data.limit_remaining === 'number' ? data.limit_remaining : null;
   if (remaining !== null)
     result.push({
@@ -397,7 +388,7 @@ export function parseGeminiQuota(
   body: unknown,
   now = new Date(),
   status = 429,
-): QuotaObservation[] {
+): ParsedQuotaWindow[] {
   if (status !== 429) return [];
   const root = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
   const error =
@@ -424,7 +415,7 @@ export function parseGeminiQuota(
   const metric = typeof candidateMetric === 'string' ? candidateMetric : 'requests';
   const delay = typeof retry?.retryDelay === 'string' ? /([\d.]+)s/.exec(retry.retryDelay) : null;
   const retryAt = delay ? new Date(now.getTime() + Number(delay[1]) * 1000).toISOString() : null;
-  const observations: QuotaObservation[] = [
+  const observations: ParsedQuotaWindow[] = [
     {
       windowId: `gemini:${metric}`,
       remaining: 0,
@@ -455,11 +446,11 @@ const CEREBRAS_WINDOWS = [
 export function parseCerebrasRateLimits(
   headers: Record<string, string>,
   now = new Date(),
-): QuotaObservation[] {
+): ParsedQuotaWindow[] {
   const values = Object.fromEntries(
     Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
   );
-  const output: QuotaObservation[] = [];
+  const output: ParsedQuotaWindow[] = [];
   for (const [key, value] of Object.entries(values)) {
     if (!key.startsWith('x-ratelimit-')) continue;
     const match = /^x-ratelimit-(limit|remaining|reset)-(.+)$/.exec(key);
@@ -486,16 +477,18 @@ export function parseCerebrasRateLimits(
 export function parseGenericRateLimits(
   headers: Record<string, string>,
   now = new Date(),
-): QuotaObservation[] {
+): ParsedQuotaWindow[] {
   const values = Object.fromEntries(
     Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
   );
-  const output: QuotaObservation[] = [];
+  const output: ParsedQuotaWindow[] = [];
   const keys = new Set([...Object.keys(values).filter((key) => key.startsWith('x-ratelimit-'))]);
   const dimensions = [...keys]
     .map((key) => key.replace(/^x-ratelimit-(?:limit|remaining|reset)-?/, ''))
     .filter(Boolean);
   const unique = [...new Set(dimensions)];
+  if ([...keys].some((key) => /^x-ratelimit-(?:limit|remaining|reset)$/.test(key)))
+    unique.unshift('default');
   for (const dimension of unique.length ? unique : ['default']) {
     const suffix = dimension === 'default' ? '' : `-${dimension}`;
     const limit = num(values[`x-ratelimit-limit${suffix}`]);
@@ -511,15 +504,11 @@ export function parseGenericRateLimits(
       });
   }
   if (values['retry-after']) {
-    const seconds = num(values['retry-after']);
     output.push({
       windowId: 'retry-after',
       remaining: null,
       limit: null,
-      resetAt:
-        seconds === null
-          ? resetTime(values['retry-after'], now)
-          : new Date(now.getTime() + seconds * 1000).toISOString(),
+      resetAt: retryAfterTime(values['retry-after'], now),
       confidence: 'exact',
     });
   }
@@ -529,7 +518,7 @@ export function parseGenericRateLimits(
 export function parseQuota(
   parserId: string | null | undefined,
   input: { headers?: Record<string, string>; body?: unknown; status?: number; now?: Date },
-): QuotaObservation[] {
+): ParsedQuotaWindow[] {
   const now = input.now ?? new Date();
   switch (parserId) {
     case 'groq_rate_limit_headers':
@@ -650,7 +639,7 @@ export async function probe(
       ? catalog.models.find((model) => model.ref === options.modelRef)
       : catalog.models.find((model) => model.providerId === providerId);
     if (!modelInfo) throw new Error(`No catalog model found for ${providerId}`);
-    let openRouterSnapshot: QuotaObservation[] = [];
+    let openRouterSnapshot: ParsedQuotaWindow[] = [];
     if (providerId === 'openrouter') {
       const configured = (options.baseUrl ?? 'https://openrouter.ai').replace(/\/$/, '');
       const origin = configured.endsWith('/api/v1') ? configured.slice(0, -7) : configured;
@@ -687,7 +676,17 @@ export async function probe(
       catalog.providers.find((provider) => provider.provider === providerId)?.parser,
     );
     const headers = observations[observations.length - 1]?.rateLimitHeaders ?? {};
-    const windows = quotaWindows([...openRouterSnapshot, ...parseQuota(parser, { headers })]);
+    const observedAt = new Date().toISOString();
+    const quotaObservations = toQuotaObservations(
+      [...openRouterSnapshot, ...parseQuota(parser, { headers })],
+      {
+        providerId: ProviderIdSchema.parse(providerId),
+        source: openRouterSnapshot.length ? 'endpoint' : 'header',
+        observedAt,
+        statusCode: observations.at(-1)?.statusCode ?? undefined,
+      },
+    );
+    const windows = quotaWindows(quotaObservations);
     const catalogModels = catalog.models
       .filter((model) => model.providerId === providerId)
       .map((model) => model.ref.slice(String(providerId).length + 1));
@@ -715,10 +714,10 @@ export async function probe(
         ? {
             ...(error as Record<string, unknown>),
             ...(retryAfter ? { retryAfter } : {}),
-            ...(latestObservation?.status ? { statusCode: latestObservation.status } : {}),
+            ...(latestObservation?.statusCode ? { statusCode: latestObservation.statusCode } : {}),
           }
-        : latestObservation?.status
-          ? { statusCode: latestObservation.status, retryAfter, message: String(error) }
+        : latestObservation?.statusCode
+          ? { statusCode: latestObservation.statusCode, retryAfter, message: String(error) }
           : error;
     const mapped = mapProviderError(enrichedError);
     return {
@@ -761,21 +760,62 @@ async function listProviderModels(
   });
 }
 
-function quotaWindows(observations: QuotaObservation[]): SharedProbeResult['windows'] {
-  return observations.map((window) => ({
-    id: window.windowId,
-    scope: 'provider' as const,
-    modelRef: null,
-    metric: 'requests' as const,
-    kind: 'rolling' as const,
-    periodLabel: window.windowId,
-    used:
-      window.limit !== null && window.remaining !== null
-        ? Math.max(0, window.limit - window.remaining)
-        : 0,
+function toQuotaObservations(
+  windows: ParsedQuotaWindow[],
+  details: {
+    providerId: ProviderId;
+    source: QuotaObservation['source'];
+    observedAt: string;
+    statusCode: number | undefined;
+  },
+): QuotaObservation[] {
+  return windows.map((window) => ({
+    id: globalThis.crypto.randomUUID(),
+    providerId: details.providerId,
+    windowId: window.windowId,
+    metric: window.windowId.includes('token')
+      ? 'tokens'
+      : window.windowId === 'credits'
+        ? 'credits'
+        : 'requests',
+    ...(window.limit === null || window.remaining === null
+      ? {}
+      : { value: Math.max(0, window.limit - window.remaining) }),
     limit: window.limit,
     remaining: window.remaining,
     resetAt: window.resetAt,
-    confidence: window.confidence,
+    source: details.source,
+    observedAt: details.observedAt,
+    ...(details.statusCode === undefined ? {} : { statusCode: details.statusCode }),
   }));
+}
+
+function quotaWindows(observations: QuotaObservation[]): ProbeResult['windows'] {
+  return observations.map((window) => {
+    const limit = window.limit ?? null;
+    const remaining = window.remaining ?? null;
+    const kind = /daily|day/i.test(window.windowId)
+      ? 'fixed_daily'
+      : /minute|second/i.test(window.windowId)
+        ? 'rolling'
+        : /weekly|week/i.test(window.windowId)
+          ? 'weekly'
+          : /monthly|month/i.test(window.windowId)
+            ? 'monthly'
+            : 'dynamic';
+    return {
+      id: window.windowId,
+      scope: 'provider' as const,
+      modelRef: null,
+      metric: window.metric,
+      kind,
+      periodLabel: window.windowId,
+      used:
+        window.value ?? (limit !== null && remaining !== null ? Math.max(0, limit - remaining) : 0),
+      limit,
+      remaining,
+      resetAt: window.resetAt ?? null,
+      confidence: 'exact' as const,
+    };
+  });
 }

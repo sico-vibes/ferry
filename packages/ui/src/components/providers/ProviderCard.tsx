@@ -23,8 +23,11 @@ export function ProviderCard({
   const cooldown = provider.cooldownUntil
     ? Math.max(0, Math.ceil((new Date(provider.cooldownUntil).getTime() - Date.now()) / 1000))
     : 0;
-  const status =
-    provider.health === 'down'
+  const terminalHealth =
+    provider.health === 'auth_invalid' || provider.health === 'account_disabled';
+  const status = terminalHealth
+    ? 'Needs attention'
+    : provider.health === 'down'
       ? 'Down'
       : provider.health === 'cooldown'
         ? `Cooldown · ${String(cooldown)}s`
@@ -32,13 +35,14 @@ export function ProviderCard({
           ? 'Unknown'
           : 'Available';
   const statusColor =
-    provider.health === 'down'
+    terminalHealth || provider.health === 'down'
       ? 'bg-danger'
       : provider.health === 'cooldown'
         ? 'bg-warn'
         : 'bg-success';
-  const keyText =
-    provider.keyStatus === 'valid'
+  const keyText = terminalHealth
+    ? 'Needs attention: re-enter key'
+    : provider.keyStatus === 'valid'
       ? 'Key: valid'
       : provider.keyStatus === 'missing'
         ? 'Key: missing'

@@ -1,0 +1,31 @@
+{
+  "name": "@ferry/agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ferry/shared": "workspace:*",
+    "@ferry/providers": "workspace:*",
+    "@ferry/workspace": "workspace:*",
+    "@ferry/router": "workspace:*",
+    "@ferry/optimizer": "workspace:*",
+    "@ferry/quota": "workspace:*",
+    "@ferry/storage": "workspace:*",
+    "@ferry/config": "workspace:*",
+    "@ferry/catalog": "workspace:*",
+    "zod": "4.6.5",
+    "ai": "7.0.113",
+    "jsonrepair": "3.15.0"
+  },
+  "devDependencies": {
+    "@ferry/testkit": "workspace:*"
+  }
+}

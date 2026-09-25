@@ -201,10 +201,12 @@ export interface CliDetection {
   executable: string | null;
   error?: string;
 }
-const tokenUnsafe = /[\0;&|<>^%!]/;
 export function assertSafeArguments(args: readonly string[]): void {
   for (const arg of args) {
-    if (tokenUnsafe.test(arg)) throw new Error(`Unsafe CLI argument rejected: ${arg}`);
+    const standaloneOperator =
+      !arg.includes('\n') && /(?:;\s|\s&&\s|\s\|\s|\s\|\|\s|\s[<>^%!]\s)/.test(arg);
+    if (arg.includes('\0') || standaloneOperator)
+      throw new Error(`Unsafe CLI argument rejected: ${arg}`);
   }
 }
 
@@ -221,7 +223,7 @@ function cliArgs(name: Implementer, request: AdapterRequest, outputPath: string)
       request.mode === 'plan' ? 'read-only' : 'workspace-write',
       '--cd',
       request.cwd,
-      request.prompt,
+      '-',
     );
   } else if (name === 'opencode') {
     args.push('run');
@@ -230,9 +232,9 @@ function cliArgs(name: Implementer, request: AdapterRequest, outputPath: string)
     if (request.mode) args.push('--agent', request.mode);
     if (request.variant) args.push('--variant', request.variant);
     if (request.mode === 'build') args.push('--yolo');
-    args.push('--format', 'json', request.prompt);
+    args.push('--format', 'json');
   } else {
-    args.push('-p', request.prompt, '--output-format', 'stream-json', '--verbose');
+    args.push('-p', '--output-format', 'stream-json', '--verbose');
     if (request.model) args.push('--model', request.model);
     if (request.resumeId) args.push('--resume', request.resumeId);
     args.push('--permission-mode', request.mode === 'plan' ? 'plan' : 'acceptEdits');
@@ -340,14 +342,17 @@ async function execute(
   onProgress: (text: string) => void,
 ): Promise<{ stdout: string; stderr: string }> {
   const executable = await executablePath(name, request.executable);
-  const command = execa(executable, args, {
+  const invocation = commandInvocation(executable, args);
+  const launchFile = invocation.file;
+  const launchArgs = invocation.args;
+  const command = execa(launchFile, launchArgs, {
     cwd: request.cwd,
     reject: false,
-    shell:
-      process.platform === 'win32' && ['.cmd', '.bat'].includes(extname(executable).toLowerCase()),
     windowsHide: true,
     buffer: false,
+    ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
   });
+  command.stdin.end(request.prompt);
   let stdout = '';
   let stderr = '';
   let stdoutTail = '';
@@ -380,17 +385,20 @@ async function execute(
   request.signal?.addEventListener('abort', onAbort, { once: true });
   if (request.signal?.aborted) onAbort();
   let timer: NodeJS.Timeout | undefined;
+  const watchdog = { timedOut: false };
   try {
     const outcome = await Promise.race([
       command,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
+          watchdog.timedOut = true;
           void killTree().finally(() => {
             reject(new Error(`Delegate timed out after ${String(timeout)}ms`));
           });
         }, timeout);
       }),
     ]);
+    if (watchdog.timedOut) throw new Error(`Delegate timed out after ${String(timeout)}ms`);
     if (stdoutTail.trim()) onProgress(stdoutTail);
     if (outcome.failed)
       throw new Error(stderr || `CLI exited with code ${String(outcome.exitCode)}`);
@@ -402,6 +410,34 @@ async function execute(
   }
 }
 
+function quoteCmdArgument(argument: string): string {
+  return `"${argument.replaceAll('"', '""')}"`;
+}
+
+function commandInvocation(
+  executable: string,
+  args: string[],
+): {
+  file: string;
+  args: string[];
+  verbatim: boolean;
+} {
+  const isShim =
+    process.platform === 'win32' && ['.cmd', '.bat'].includes(extname(executable).toLowerCase());
+  return isShim
+    ? {
+        file: process.env.ComSpec ?? 'cmd.exe',
+        args: [
+          '/d',
+          '/s',
+          '/c',
+          `"${quoteCmdArgument(executable)} ${args.map(quoteCmdArgument).join(' ')}"`,
+        ],
+        verbatim: true,
+      }
+    : { file: executable, args, verbatim: false };
+}
+
 export async function detectCli(
   name: Implementer,
   options: { executable?: string; cwd?: string; timeoutMs?: number; checkAuth?: boolean } = {},
@@ -409,7 +445,14 @@ export async function detectCli(
   const executable = await executablePath(name, options.executable);
   const timeoutMs = options.timeoutMs ?? 15_000;
   try {
-    const version = await probeExecutable(executable, ['--version'], options.cwd, timeoutMs);
+    const versionInvocation = commandInvocation(executable, ['--version']);
+    const version = await execa(versionInvocation.file, versionInvocation.args, {
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      reject: false,
+      windowsHide: true,
+      timeout: timeoutMs,
+      ...(versionInvocation.verbatim ? { windowsVerbatimArguments: true } : {}),
+    });
     if (version.failed)
       return {
         available: false,
@@ -431,7 +474,14 @@ export async function detectCli(
         : name === 'opencode'
           ? ['auth', 'list']
           : ['auth', 'status'];
-    const auth = await probeExecutable(executable, authArgs, options.cwd, timeoutMs);
+    const authInvocation = commandInvocation(executable, authArgs);
+    const auth = await execa(authInvocation.file, authInvocation.args, {
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      reject: false,
+      windowsHide: true,
+      timeout: timeoutMs,
+      ...(authInvocation.verbatim ? { windowsVerbatimArguments: true } : {}),
+    });
     return {
       available: true,
       authenticated: !auth.failed,
@@ -447,27 +497,6 @@ export async function detectCli(
       error: error instanceof Error ? error.message : String(error),
     };
   }
-}
-
-function probeExecutable(
-  executable: string,
-  args: string[],
-  cwd: string | undefined,
-  timeoutMs: number,
-) {
-  const isWindowsShim =
-    process.platform === 'win32' && extname(executable).toLowerCase() === '.cmd';
-  return execa(
-    isWindowsShim ? 'cmd.exe' : executable,
-    isWindowsShim ? ['/d', '/s', '/c', `""${executable}" ${args.join(' ')}"`] : args,
-    {
-      ...(cwd ? { cwd } : {}),
-      reject: false,
-      windowsVerbatimArguments: isWindowsShim,
-      windowsHide: true,
-      timeout: timeoutMs,
-    },
-  );
 }
 
 export async function runAdapter(

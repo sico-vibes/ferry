@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { streamText } from 'ai';
 import { z } from 'zod';
-import { ModelRefSchema } from '@ferry/shared';
+import {
+  ModelRefSchema,
+  ProbeResultSchema,
+  RawCallObservationSchema,
+  UsageRecordSchema,
+  type RawCallObservation,
+} from '@ferry/shared';
 import { FakeOpenAIServer, FakeProviderServer } from '@ferry/testkit';
 import {
   createLanguageModel,
@@ -128,11 +134,7 @@ describe('provider adapters', () => {
     });
     servers.push(fake);
     await fake.start();
-    const observations: {
-      status: number | null;
-      requestBytes: number | null;
-      rateLimitHeaders: Record<string, string>;
-    }[] = [];
+    const observations: RawCallObservation[] = [];
     const fetcher = createObservedFetch((value) => observations.push(value), {
       providerId: 'fake',
       model: 'm',
@@ -143,14 +145,23 @@ describe('provider adapters', () => {
     });
     await response.json();
     expect(observations[0]).toMatchObject({
-      status: 200,
+      statusCode: 200,
       requestBytes: 11,
       rateLimitHeaders: { 'x-ratelimit-remaining-requests': '7' },
     });
     expect(JSON.stringify(observations)).not.toContain('must-not-leak');
-    expect(
-      mergeUsage(observations[0] as never, { inputTokens: 12, outputTokens: 4 }),
-    ).toMatchObject({ inputTokens: 12, outputTokens: 4, cachedTokens: null });
+    expect(RawCallObservationSchema.safeParse(observations[0]).success).toBe(true);
+    const observation = observations[0];
+    if (!observation) throw new Error('Expected a provider call observation.');
+    const usage = mergeUsage(observation, { inputTokens: 12, outputTokens: 4 });
+    expect(usage).toMatchObject({
+      providerId: 'fake',
+      modelRef: 'm',
+      inputTokens: 12,
+      outputTokens: 4,
+      status: 'success',
+    });
+    expect(UsageRecordSchema.safeParse(usage).success).toBe(true);
   });
 });
 
@@ -161,6 +172,7 @@ describe('provider probes', () => {
     await success.start();
     const ok = await probe('groq', 'fake-key', { baseUrl: `${success.baseUrl}/v1` });
     expect(ok).toMatchObject({ ok: true, keyValid: true, message: 'Key valid' });
+    expect(ProbeResultSchema.safeParse(ok).success).toBe(true);
     expect(success.requests[0]?.body).toMatchObject({ max_tokens: 1 });
 
     const invalid = new FakeOpenAIServer({
@@ -180,6 +192,7 @@ describe('provider probes', () => {
       errorKind: 'auth',
       message: 'Key invalid',
     });
+    expect(ProbeResultSchema.safeParse(invalidResult).success).toBe(true);
 
     const limited = new FakeOpenAIServer({
       responses: [

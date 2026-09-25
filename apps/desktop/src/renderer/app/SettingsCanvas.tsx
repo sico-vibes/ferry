@@ -19,6 +19,7 @@ import {
   Switch,
   TextField,
 } from '@ferry/ui';
+import { FERRY_DOMAINS } from '@ferry/shared';
 import type { Profile, StepKind, Tier } from '@ferry/shared';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
@@ -664,12 +665,15 @@ export function SettingsCanvas() {
         <DeveloperSettings
           mockLatency={settings?.developer.mockLatency ?? false}
           injectErrors={settings?.developer.injectErrors ?? false}
+          realDomains={settings?.developer.realDomains ?? []}
+          availableDomains={window.ferryEngineHello?.realDomains ?? []}
           update={(patch) =>
             void update({
               developer: {
                 showReferenceOverlay: settings?.developer.showReferenceOverlay ?? false,
                 mockLatency: patch.mockLatency ?? settings?.developer.mockLatency ?? false,
                 injectErrors: patch.injectErrors ?? settings?.developer.injectErrors ?? false,
+                realDomains: patch.realDomains ?? settings?.developer.realDomains ?? [],
               },
             })
           }
@@ -1046,21 +1050,112 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
 function DeveloperSettings({
   mockLatency,
   injectErrors,
+  realDomains,
+  availableDomains,
   update,
 }: {
   mockLatency: boolean;
   injectErrors: boolean;
-  update: (patch: { mockLatency?: boolean; injectErrors?: boolean }) => void;
+  realDomains: string[];
+  availableDomains: string[];
+  update: (patch: {
+    mockLatency?: boolean;
+    injectErrors?: boolean;
+    realDomains?: string[];
+  }) => void;
 }) {
   const [simulateOffline, setSimulateOffline] = useState(
     () => localStorage.getItem('ferry.simulateOffline') === 'true',
   );
+  const [engine, setEngine] = useState<{ status: string; pid: number | null } | null>(null);
+  const [nativeModules, setNativeModules] = useState<
+    { name: string; ok: boolean; version: string | null; error: string | null }[]
+  >([]);
   useEffect(() => {
     localStorage.setItem('ferry.simulateOffline', String(simulateOffline));
     window.dispatchEvent(new Event('ferry:offline-change'));
   }, [simulateOffline]);
+  useEffect(() => {
+    let active = true;
+    if (!window.ferryHost) return;
+    void window.ferryHost.getEngineStatus().then((status) => {
+      if (active) setEngine(status);
+    });
+    const selfTest = window.ferryRpcClient?.system as
+      { selfTest?: () => Promise<{ modules: typeof nativeModules }> } | undefined;
+    if (selfTest?.selfTest)
+      void selfTest.selfTest().then((result) => {
+        if (active) setNativeModules(result.modules);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
   return (
     <Group title="Developer">
+      <SettingRow
+        title="Core engine"
+        helper={
+          engine
+            ? `PID ${String(engine.pid ?? 'restarting')} · protocol ${window.ferryEngineHello?.protocol ?? 'ferry/1'}`
+            : 'Connecting to the local core process…'
+        }
+      >
+        <span className={`status-pill ${engine?.status === 'connected' ? 'ok' : 'pending'}`}>
+          {engine?.status ?? 'connecting'}
+        </span>
+      </SettingRow>
+      <SettingRow
+        title="Domain routing"
+        helper="Domains stay on mock until the core reports an implementation."
+      >
+        <div className="setting-inline-stack">
+          {FERRY_DOMAINS.map((domain) => {
+            const selectable = availableDomains.includes(domain);
+            const route = realDomains.includes(domain) && selectable ? 'real' : 'mock';
+            return (
+              <label className="domain-route-control" key={domain}>
+                <span>{domain}</span>
+                <select
+                  aria-label={`${domain} route`}
+                  disabled={!selectable}
+                  value={route}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    const next =
+                      value === 'real'
+                        ? [...new Set([...realDomains, domain])]
+                        : realDomains.filter((name) => name !== domain);
+                    window.ferryHybrid?.setRealDomains(
+                      next.filter((name) => availableDomains.includes(name)),
+                    );
+                    update({ realDomains: next });
+                  }}
+                >
+                  <option value="mock">Mock</option>
+                  <option value="real">Real</option>
+                </select>
+              </label>
+            );
+          })}
+        </div>
+      </SettingRow>
+      <SettingRow
+        title="Native module self-test"
+        helper="Loaded inside the Electron utility process."
+      >
+        <div className="native-test-results">
+          {nativeModules.length === 0 ? (
+            <span className="muted">Not run</span>
+          ) : (
+            nativeModules.map((module) => (
+              <span key={module.name} title={module.error ?? undefined}>
+                {module.name}: {module.ok ? module.version : `failed: ${String(module.error)}`}
+              </span>
+            ))
+          )}
+        </div>
+      </SettingRow>
       <SettingRow title="Mock latency" helper="Add realistic delays to simulated responses.">
         <Switch
           label="Mock latency"

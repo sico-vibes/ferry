@@ -425,6 +425,48 @@ body {
   color: var(--text-2);
   font-size: 10px;
 }
+.engine-restarting {
+  height: 24px;
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-item);
+  background: var(--bg-raised);
+  color: var(--text-2);
+  font-size: 10px;
+}
+.setting-inline-stack {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.domain-route-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 11px;
+}
+.domain-route-control select {
+  min-height: 30px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-pill);
+  background: var(--bg-raised);
+  color: var(--text-1);
+  padding: 0 10px;
+}
+.domain-route-control select:disabled {
+  opacity: 0.55;
+}
+.native-test-results {
+  display: grid;
+  gap: 4px;
+  max-width: 440px;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+  font-size: 11px;
+}
 .capacity-exhausted {
   display: flex;
   align-items: center;

@@ -36,6 +36,10 @@ core: agent loop · router · quota ledger · providers (AI SDK) · workspace to
 4. The ledger and reconciler record it and emit `quota.update`.
 5. Tool calls are validated, pass the permission check and execute.
 6. The optimizer filters the output and keeps a recovery handle.
+
+## Provider telemetry contracts
+
+`@ferry/shared` owns the Zod schemas and types for `RawCallObservation`, `UsageRecord`, `QuotaObservation`, and `ProbeResult`; provider and quota packages import these shared contracts. The richer shared fields are canonical: calls use `modelRef` and `statusCode`, usage adds stable identity and occurrence time plus optional session, task, cost, and plan data, and quota observations include source and observation time. Provider-specific header or endpoint parsers return `ParsedQuotaWindow` snapshots that the adapter normalizes into `QuotaObservation` before deriving display windows. Probe results include key validity, discovered models, and a typed provider error kind.
 7. The step and the task record are persisted.
 8. If the model changes, a handoff briefing and a `handoff_marker` are produced.
 

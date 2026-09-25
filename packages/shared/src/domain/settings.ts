@@ -16,6 +16,7 @@ export const SettingsSchema = z.object({
     showReferenceOverlay: z.boolean(),
     mockLatency: z.boolean(),
     injectErrors: z.boolean(),
+    realDomains: z.array(z.string()).default([]),
   }),
 });
 export type Settings = z.infer<typeof SettingsSchema>;

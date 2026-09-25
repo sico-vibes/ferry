@@ -6,7 +6,20 @@ import { defineConfig } from 'electron-vite';
 
 export default defineConfig({
   main: {
-    build: { externalizeDeps: true, rollupOptions: { input: resolve('src/main/index.ts') } },
+    resolve: { alias: { '@ferry/core': resolve('../../packages/core/src/index.ts') } },
+    build: {
+      externalizeDeps: {
+        exclude: ['@ferry/core', '@ferry/shared'],
+        include: ['better-sqlite3', 'node-pty', '@napi-rs/keyring'],
+      },
+      rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          'core-entry': resolve('src/main/core-entry.ts'),
+        },
+        output: { entryFileNames: '[name].js' },
+      },
+    },
   },
   preload: {
     build: {

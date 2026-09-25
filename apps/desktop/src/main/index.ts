@@ -1,4 +1,13 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  MessageChannelMain,
+  shell,
+  utilityProcess,
+  type UtilityProcess,
+} from 'electron';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -10,6 +19,9 @@ import {
 
 // Packaged builds use the icon embedded in the .exe by electron-builder (build/icon.ico).
 const DEV_WINDOW_ICON = join(import.meta.dirname, '../../build/icon.ico');
+
+const e2eUserDataPath = process.env.FERRY_E2E_USER_DATA_DIR;
+if (e2eUserDataPath) app.setPath('userData', e2eUserDataPath);
 
 interface SavedBounds {
   x?: number;
@@ -23,6 +35,13 @@ if (!gotLock) app.quit();
 
 let mainWindow: BrowserWindow | null = null;
 let saveTimer: NodeJS.Timeout | undefined;
+let coreProcess: UtilityProcess | null = null;
+let corePid: number | null = null;
+let coreReady = false;
+let restartCount = 0;
+let coreRestartTimer: NodeJS.Timeout | undefined;
+let shuttingDown = false;
+const coreConnectors: Electron.WebContents[] = [];
 
 function boundsPath(): string {
   return join(app.getPath('userData'), 'window-bounds.json');
@@ -51,6 +70,83 @@ function saveBounds(window: BrowserWindow): void {
 
 function isExternalHttp(url: string): boolean {
   return url.startsWith('https://') || url.startsWith('http://');
+}
+
+function broadcastEngineRestarting(): void {
+  for (const window of BrowserWindow.getAllWindows())
+    window.webContents.send('ferry:engine-restarting');
+}
+
+function broadcastEngineConnected(): void {
+  for (const window of BrowserWindow.getAllWindows())
+    window.webContents.send('ferry:engine-connected');
+}
+
+function transferCorePort(sender: Electron.WebContents): void {
+  if (sender.isDestroyed()) return;
+  if (!coreProcess) {
+    coreConnectors.push(sender);
+    return;
+  }
+  const channel = new MessageChannelMain();
+  coreProcess.postMessage({ type: 'ferry:attach' }, [channel.port1]);
+  sender.postMessage('ferry:core-port', undefined, [channel.port2]);
+}
+
+function launchCore(): void {
+  if (shuttingDown) return;
+  const coreEntry = join(import.meta.dirname, 'core-entry.js');
+  const child = utilityProcess.fork(coreEntry, [], {
+    serviceName: 'Ferry Core',
+    env: { ...process.env, FERRY_CORE_DATA_DIR: join(app.getPath('userData'), 'engine') },
+    stdio: process.env.FERRY_E2E_USER_DATA_DIR ? 'pipe' : 'inherit',
+  });
+  if (process.env.FERRY_E2E_USER_DATA_DIR)
+    child.stderr?.on('data', (chunk: unknown) => {
+      console.error('FERRY_CORE_STDERR ' + String(chunk));
+    });
+  coreProcess = child;
+  corePid = child.pid ?? null;
+  coreReady = false;
+  child.on('message', (message: unknown) => {
+    if (
+      coreProcess !== child ||
+      typeof message !== 'object' ||
+      message === null ||
+      !('type' in message) ||
+      message.type !== 'ferry:core-ready'
+    )
+      return;
+    coreReady = true;
+    restartCount = 0;
+    broadcastEngineConnected();
+    if (process.env.FERRY_E2E_USER_DATA_DIR && 'selfTest' in message)
+      console.log(`FERRY_CORE_READY ${JSON.stringify(message.selfTest)}`);
+  });
+  child.on('exit', (code) => {
+    if (process.env.FERRY_E2E_USER_DATA_DIR) console.error(`FERRY_CORE_EXIT ${String(code)}`);
+    if (coreProcess !== child || shuttingDown) return;
+    coreProcess = null;
+    corePid = null;
+    coreReady = false;
+    restartCount += 1;
+    broadcastEngineRestarting();
+    const delay = Math.min(500 * 2 ** Math.min(restartCount - 1, 5), 15_000);
+    coreRestartTimer = setTimeout(launchCore, delay);
+  });
+  child.on('spawn', () => {
+    if (process.env.FERRY_E2E_USER_DATA_DIR) console.log('FERRY_UTILITY_SPAWN');
+    if (process.env.FERRY_E2E_CORE_ONLY) {
+      const channel = new MessageChannelMain();
+      child.postMessage({ type: 'ferry:attach' }, [channel.port1]);
+      channel.port2.on('message', (event) => {
+        if (process.env.FERRY_E2E_USER_DATA_DIR)
+          console.error('FERRY_CORE_MESSAGE ' + JSON.stringify(event.data));
+      });
+      channel.port2.start();
+    }
+    for (const sender of coreConnectors.splice(0)) transferCorePort(sender);
+  });
 }
 
 async function createWindow(): Promise<void> {
@@ -114,6 +210,14 @@ ipcMain.handle('ferry:open-folder', async () => {
   return result.canceled ? null : (result.filePaths[0] ?? null);
 });
 
+ipcMain.on('ferry:connect-core', (event) => {
+  transferCorePort(event.sender);
+});
+ipcMain.handle('ferry:engine-status', () => ({
+  status: coreReady ? 'connected' : 'restarting',
+  pid: corePid,
+}));
+
 ipcMain.on('ferry:theme', (_event, theme: unknown) => {
   if (!mainWindow || (theme !== 'dark' && theme !== 'light')) return;
   mainWindow.setTitleBarOverlay({
@@ -133,7 +237,11 @@ app
   .whenReady()
   .then(() => {
     app.setAppUserModelId('dev.ferry.app');
-    if (gotLock) openMainWindow();
+    if (gotLock) {
+      launchCore();
+      if (process.env.FERRY_E2E_USER_DATA_DIR) console.log('FERRY_MAIN_READY');
+      if (!process.env.FERRY_E2E_CORE_ONLY) openMainWindow();
+    }
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) openMainWindow();
     });
@@ -145,4 +253,11 @@ app
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => {
+  shuttingDown = true;
+  if (coreRestartTimer) clearTimeout(coreRestartTimer);
+  coreProcess?.kill();
+  coreProcess = null;
 });

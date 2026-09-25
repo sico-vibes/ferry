@@ -71,6 +71,20 @@ function relativeDate(value: string): string {
   return `${String(Math.floor(delta / 86_400_000))}d ago`;
 }
 
+function captureTranscriptAnchor(
+  element: HTMLDivElement | null,
+): { index: number; offset: number } | null {
+  if (!element) return null;
+  const firstVisible = [...element.querySelectorAll<HTMLElement>('.transcript-message')].find(
+    (message) => message.getBoundingClientRect().bottom > element.getBoundingClientRect().top,
+  );
+  if (!firstVisible) return null;
+  return {
+    index: Number(firstVisible.dataset.index),
+    offset: firstVisible.getBoundingClientRect().top - element.getBoundingClientRect().top,
+  };
+}
+
 export function HomeCanvas() {
   const client = useFerryClient();
   const cache = useQueryClient();
@@ -558,7 +572,22 @@ export function SessionCanvas() {
     const speedParam = Number(new URLSearchParams(location.search).get('speed'));
     const streamSpeed = Number.isFinite(speedParam) && speedParam > 0 ? speedParam : 1;
     const stream = window.setInterval(() => {
-      if (!pinnedToBottom.current) setNewOutputCount((count) => count + 1);
+      if (!pinnedToBottom.current) {
+        const element = viewport.current;
+        const firstVisible = element
+          ? [...element.querySelectorAll<HTMLElement>('.transcript-message')].find(
+              (message) =>
+                message.getBoundingClientRect().bottom > element.getBoundingClientRect().top,
+            )
+          : null;
+        if (element && firstVisible) {
+          streamAnchor.current = {
+            index: Number(firstVisible.dataset.index),
+            offset: firstVisible.getBoundingClientRect().top - element.getBoundingClientRect().top,
+          };
+        }
+        setNewOutputCount((count) => count + 1);
+      }
       setStreaming((current) => ({
         ...current,
         'perf-demo-stream': `${current['perf-demo-stream'] ?? ''} token `,
@@ -863,6 +892,7 @@ export function SessionCanvas() {
           if (event.deltaY < 0) {
             pinnedToBottom.current = false;
             setAtBottom(false);
+            streamAnchor.current = captureTranscriptAnchor(viewport.current);
           }
         }}
         onKeyDown={(event) => {
@@ -886,7 +916,10 @@ export function SessionCanvas() {
             pinnedToBottom.current = true;
             setNewOutputCount(0);
             setAtBottom(true);
-          } else if (!pinnedToBottom.current) setAtBottom(false);
+          } else if (!pinnedToBottom.current) {
+            streamAnchor.current = captureTranscriptAnchor(element);
+            setAtBottom(false);
+          }
         }}
       >
         {messages.length === 0 && (
