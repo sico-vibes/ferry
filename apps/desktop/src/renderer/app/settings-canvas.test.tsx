@@ -24,6 +24,9 @@ afterEach(() => {
   cleanup();
   localStorage.removeItem('ferry.permissionRules');
   useUI.setState({ settingsSection: 'General' });
+  delete window.ferryHost;
+  delete window.ferryEngineHello;
+  delete window.ferryRpcClient;
 });
 
 describe('SettingsCanvas', () => {
@@ -66,5 +69,38 @@ describe('SettingsCanvas', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Best Available/ }));
     await screen.findByText('Edit routing and spending limits.');
     expect(screen.getAllByText('Paid models')).toHaveLength(1);
+  });
+
+  it('shows the connected core details and disables domains with no registered handlers', async () => {
+    useUI.setState({ settingsSection: 'Developer' });
+    window.ferryHost = {
+      getEngineStatus: vi.fn().mockResolvedValue({ status: 'connected', pid: 4321 }),
+    } as never;
+    window.ferryEngineHello = {
+      protocol: 'ferry/1',
+      capabilities: ['events', 'selfTest'],
+      realDomains: [],
+      implementedMethods: [],
+    };
+    window.ferryRpcClient = {
+      system: {
+        info: vi.fn(),
+        selfTest: vi.fn().mockResolvedValue({
+          modules: [
+            { name: 'better-sqlite3', ok: false, version: null, error: 'MODULE_NOT_FOUND' },
+            { name: 'node-pty', ok: true, version: 'loaded', error: null },
+            { name: '@napi-rs/keyring', ok: false, version: null, error: 'ABI mismatch' },
+          ],
+        }),
+      },
+    } as never;
+    mount();
+    expect((await screen.findByText('connected')).textContent).toBe('connected');
+    expect(screen.getByText('PID 4321 · protocol ferry/1').textContent).toContain('4321');
+    expect(
+      (await screen.findByText('better-sqlite3: failed: MODULE_NOT_FOUND')).textContent,
+    ).toContain('MODULE_NOT_FOUND');
+    const providerRoute = screen.getByRole('combobox', { name: 'providers route' });
+    expect(providerRoute instanceof HTMLSelectElement && providerRoute.disabled).toBe(true);
   });
 });

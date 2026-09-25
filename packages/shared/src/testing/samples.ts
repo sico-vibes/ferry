@@ -266,6 +266,11 @@ export const sampleSettings: Settings = {
   activeProfileId: profileId,
   onboardingComplete: true,
   optimizers: sampleOptimizerToggles,
-  developer: { showReferenceOverlay: false, mockLatency: false, injectErrors: false },
+  developer: {
+    showReferenceOverlay: false,
+    mockLatency: false,
+    injectErrors: false,
+    realDomains: [],
+  },
 };
 export const sampleSystemInfo: SystemInfo = { version: '0.0.0', mock: true, platform: 'web' };

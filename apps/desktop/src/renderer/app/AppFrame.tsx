@@ -18,7 +18,26 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const cache = useQueryClient();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const [engineRestarting, setEngineRestarting] = useState(false);
   useFerryEvents();
+  useEffect(() => {
+    if (!window.ferryHost) return;
+    let active = true;
+    void window.ferryHost.getEngineStatus().then((status) => {
+      if (active) setEngineRestarting(status.status === 'restarting');
+    });
+    const off = window.ferryHost.onEngineRestarting(() => {
+      setEngineRestarting(true);
+    });
+    const offConnected = window.ferryHost.onEngineConnected(() => {
+      setEngineRestarting(false);
+    });
+    return () => {
+      active = false;
+      off();
+      offConnected();
+    };
+  }, []);
   const { data: sessions = [] } = useSessions();
   const { data: settings } = useSettings();
   useEffect(() => {
@@ -327,6 +346,11 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           {((settings?.developer.injectErrors ?? false) || simulatedOffline) && (
             <div className="offline-warning" role="status">
               Offline · showing saved demo data
+            </div>
+          )}
+          {engineRestarting && (
+            <div className="engine-restarting" role="status">
+              Engine restarting…
             </div>
           )}
           <div className="canvas-slot">{children}</div>

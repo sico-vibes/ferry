@@ -6,7 +6,8 @@
     "moduleResolution": "Bundler",
     "target": "ES2023",
     "lib": ["ES2023"],
-    "noEmit": true
+    "noEmit": true,
+    "paths": { "@ferry/core": ["../../packages/core/src/index.ts"] }
   },
   "include": ["src/main/**/*.ts", "src/preload/**/*.ts", "electron.vite.config.ts"]
 }
