@@ -80,7 +80,8 @@ type Snapshot = Record<string, SnapshotProvider>;
 export function normalizeModels(snapshot: unknown, tiers: TierCatalog = {}): ModelInfo[] {
   const result: ModelInfo[] = [];
   if (snapshot === null || typeof snapshot !== 'object' || Array.isArray(snapshot)) return result;
-  for (const [providerId, provider] of Object.entries(snapshot as Snapshot)) {
+  for (const [snapshotProviderId, provider] of Object.entries(snapshot as Snapshot)) {
+    const providerId = snapshotProviderId === 'google' ? 'gemini' : snapshotProviderId;
     for (const model of Object.values(provider.models ?? {})) {
       const ref = `${providerId}/${model.id}`;
       const tierInfo = tiers[ref] ?? tiers[model.id];

@@ -108,7 +108,12 @@ export function createLanguageModel(ref: ModelRef, opts: ModelFactoryOptions): L
 
   switch (providerId) {
     case 'gemini':
-      return createGoogleGenerativeAI({ apiKey: opts.apiKey, headers, ...fetchOptions })(modelId);
+      return createGoogleGenerativeAI({
+        apiKey: opts.apiKey,
+        headers,
+        ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
+        ...fetchOptions,
+      })(modelId);
     case 'anthropic':
       return createAnthropic({ apiKey: opts.apiKey, headers, ...fetchOptions })(modelId);
     case 'openai':
@@ -389,7 +394,7 @@ export function parseOpenRouterKey(body: unknown, now = new Date()): ParsedQuota
   return result;
 }
 
-export function parseGeminiQuota(
+function parseGeminiQuotaUnsafe(
   body: unknown,
   now = new Date(),
   status = 429,
@@ -419,7 +424,12 @@ export function parseGeminiQuota(
       : null;
   const metric = typeof candidateMetric === 'string' ? candidateMetric : 'requests';
   const delay = typeof retry?.retryDelay === 'string' ? /([\d.]+)s/.exec(retry.retryDelay) : null;
-  const retryAt = delay ? new Date(now.getTime() + Number(delay[1]) * 1000).toISOString() : null;
+  const retrySeconds = delay ? Number(delay[1]) : NaN;
+  const retryDate = Number.isFinite(retrySeconds)
+    ? new Date(now.getTime() + Math.min(retrySeconds, 365 * 86400) * 1000)
+    : null;
+  const retryAt =
+    retryDate && Number.isFinite(retryDate.getTime()) ? retryDate.toISOString() : null;
   const observations: ParsedQuotaWindow[] = [
     {
       windowId: `gemini:${metric}`,
@@ -439,6 +449,18 @@ export function parseGeminiQuota(
     });
   }
   return observations;
+}
+
+export function parseGeminiQuota(
+  body: unknown,
+  now = new Date(),
+  status = 429,
+): ParsedQuotaWindow[] {
+  try {
+    return parseGeminiQuotaUnsafe(body, now, status);
+  } catch {
+    return [];
+  }
 }
 
 const CEREBRAS_WINDOWS = [
@@ -625,13 +647,15 @@ export interface ProbeOptions {
   baseUrl?: string;
   fetch?: typeof globalThis.fetch;
   sessionId?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 function providerCatalog(): ReturnType<typeof loadCatalog> {
   return Promise.resolve(providerCatalogData);
 }
 
-export async function probe(
+async function probeWithSignal(
   providerId: ProviderId | string,
   key: string,
   options: ProbeOptions = {},
@@ -650,6 +674,7 @@ export async function probe(
       const origin = configured.endsWith('/api/v1') ? configured.slice(0, -7) : configured;
       const response = await (options.fetch ?? globalThis.fetch)(`${origin}/api/v1/key`, {
         headers: { Authorization: `Bearer ${key}` },
+        ...(options.signal ? { signal: options.signal } : {}),
       });
       const payload: unknown = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -676,6 +701,7 @@ export async function probe(
       prompt: 'Reply with one character.',
       maxOutputTokens: 1,
       maxRetries: 0,
+      ...(options.signal ? { abortSignal: options.signal } : {}),
     });
     const parser = parserIdForProvider(
       String(providerId),
@@ -760,6 +786,39 @@ export async function probe(
   }
 }
 
+export async function probe(
+  providerId: ProviderId | string,
+  key: string,
+  options: ProbeOptions = {},
+): Promise<ProbeResult> {
+  const controller = new AbortController();
+  const requestedTimeoutMs = options.timeoutMs ?? 20_000;
+  const timeoutMs = Number.isFinite(requestedTimeoutMs) ? Math.max(1, requestedTimeoutMs) : 20_000;
+  const signal = options.signal
+    ? AbortSignal.any([controller.signal, options.signal])
+    : controller.signal;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<ProbeResult>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort(new DOMException('Provider request timed out', 'TimeoutError'));
+      resolve({
+        ok: false,
+        keyValid: true,
+        latencyMs: timeoutMs,
+        message: 'Provider request timed out',
+        windows: [],
+        models: [],
+        errorKind: 'timeout',
+      });
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([probeWithSignal(providerId, key, { ...options, signal }), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function listProviderModels(
   providerId: string,
   key: string,
@@ -775,6 +834,7 @@ async function listProviderModels(
   if (!baseURL) return [];
   const response = await fetchImpl(`${baseURL.replace(/\/$/, '')}/models`, {
     headers: { Authorization: `Bearer ${key}` },
+    ...(options.signal ? { signal: options.signal } : {}),
   });
   if (!response.ok) return [];
   const payload: unknown = await response.json().catch(() => ({}));

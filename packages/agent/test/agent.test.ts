@@ -264,14 +264,14 @@ describe('@ferry/agent', () => {
     try {
       const alternate = ModelInfoSchema.parse({
         ...state.model,
-        ref: 'google/test-model',
-        providerId: 'google',
-        name: 'Alternate',
+        ref: 'gemini/test-model',
+        providerId: 'gemini',
+        name: 'Gemini',
       });
       const alternateProvider = ProviderSchema.parse({
         ...state.provider,
-        id: ProviderIdSchema.parse('google'),
-        name: 'Google',
+        id: ProviderIdSchema.parse('gemini'),
+        name: 'Gemini',
       });
       const catalog = { ...state.catalog, models: [state.model, alternate] };
       state.store.updateSession(state.session.id, { modelRef: state.model.ref });

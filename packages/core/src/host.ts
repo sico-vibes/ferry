@@ -15,6 +15,7 @@ import {
 } from '@ferry/shared';
 import { startCoreWebSocketServer, type CoreWebSocketHandle } from './websocket.js';
 import { ZodError } from 'zod';
+import { redactKnownSecrets } from '@ferry/shared';
 
 const lockRecoveryGraceMs = 5_000;
 
@@ -58,7 +59,7 @@ export function mapError(error: unknown) {
       error.code,
       parsedKind?.success ? parsedKind.data : 'domain_error',
       error instanceof Error ? error.message : 'Domain request failed',
-      'details' in error ? error.details : undefined,
+      'details' in error ? redactKnownSecrets(error.details) : undefined,
     );
   }
   return rpcError(-32603, 'internal', error instanceof Error ? error.message : 'Internal error');

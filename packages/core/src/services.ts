@@ -69,6 +69,7 @@ export async function createServices({
     mkdir(paths.logs, { recursive: true }),
     mkdir(paths.checkpoints, { recursive: true }),
   ]);
+  const logger = createLogger({ logsDir: paths.logs });
   const databasePath = resolve(paths.db, 'ferry.sqlite');
   let db: DatabaseConnection;
   let databaseRecoveryMessage: string | undefined;
@@ -98,11 +99,21 @@ export async function createServices({
     requestRepository: new RequestRepository(db.client),
     observationRepository: quotaObservations,
     now: () => (clock ?? { now: () => new Date() }).now(),
+    onError: (error) => {
+      logger.error({ err: error }, 'Failed to emit quota.updated');
+    },
   });
   const testKeyringNamespace = env.FERRY_TEST_KEYRING_NAMESPACE;
+  const safeMemoryKeyring =
+    env.NODE_ENV === 'test' ||
+    (env.NODE_ENV !== 'production' &&
+      env.FERRY_DEV_MODE === 'true' &&
+      env.FERRY_PACKAGED !== 'true');
+  if (testKeyringNamespace && !safeMemoryKeyring)
+    logger.warn('Ignoring FERRY_TEST_KEYRING_NAMESPACE outside test or unpackaged dev mode');
   const secretStore =
     secrets ??
-    (testKeyringNamespace
+    (testKeyringNamespace && safeMemoryKeyring
       ? new MemorySecretStore(testKeyringNamespace)
       : new KeyringSecretStore(env.FERRY_KEYRING_SERVICE ?? 'Ferry'));
   const stopOpenRouterPolling = quota.startOpenRouterPolling(
@@ -140,7 +151,6 @@ export async function createServices({
     },
     () => Boolean(providerKeys.get('openrouter')),
   );
-  const logger = createLogger({ logsDir: paths.logs });
   let disposed = false;
   return {
     dataDir: home,

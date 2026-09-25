@@ -26,7 +26,7 @@ const provider = {
 const usage = (id: string, time: string, extra: Partial<UsageRecord> = {}): UsageRecord => ({
   id,
   providerId: 'gemini' as UsageRecord['providerId'],
-  modelRef: 'google/gemini-flash',
+  modelRef: 'gemini/gemini-flash',
   occurredAt: time,
   status: 'success',
   inputTokens: 10,
@@ -42,6 +42,22 @@ const getWindow = (engine: QuotaEngine, providerId: string) => {
 
 describe('QuotaEngine', () => {
   afterEach(() => vi.useRealTimers());
+
+  it('logs quota.updated callback failures without an unhandled throw', async () => {
+    vi.useFakeTimers();
+    const onError = vi.fn();
+    const engine = new QuotaEngine({
+      catalog: { providers: [provider], models: [] },
+      emit: () => {
+        throw new Error('schema failure');
+      },
+      onError,
+    });
+    engine.recordUsage(usage('quota-update-failure', '2026-06-01T09:59:00Z'));
+    await vi.advanceTimersByTimeAsync(251);
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'schema failure' }));
+    engine.dispose();
+  });
 
   it('persists request usage and rebuilds ledger records on restart', async () => {
     const db = await openDatabase(':memory:');
@@ -121,10 +137,10 @@ describe('QuotaEngine', () => {
       observedAt: '2026-06-01T10:00:00Z',
     });
     expect(engine.getWindows('gemini')[0]?.remaining).toBe(3);
-    expect(engine.noteFailure('gemini', 'google/gemini-flash', 'key', 'auth_invalid').retry).toBe(
+    expect(engine.noteFailure('gemini', 'gemini/gemini-flash', 'key', 'auth_invalid').retry).toBe(
       false,
     );
-    expect(engine.health('gemini', 'google/gemini-flash', 'key').health).toBe('auth_invalid');
+    expect(engine.health('gemini', 'gemini/gemini-flash', 'key').health).toBe('auth_invalid');
     engine.dispose();
   });
 

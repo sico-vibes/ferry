@@ -31,6 +31,8 @@ import { runFerryClientContract } from '../../client/src/testing/contract.js';
 import { createFakeClock } from '../../client/src/mock/clock.js';
 import { FakeOpenAIServer } from '@ferry/testkit';
 import { MemorySecretStore } from '@ferry/secrets';
+import { redactSecretText } from '@ferry/config';
+import { redactHeaders } from '@ferry/storage';
 import { createServices } from '../src/services.js';
 import { domainRegistrars } from '../src/domains/index.js';
 
@@ -186,6 +188,53 @@ describe('core host dispatcher and lifecycle', () => {
       code: -32040,
       data: { kind: 'domain_error' },
     });
+  });
+
+  it('redacts exact stored secrets from mapped error details', async () => {
+    const secrets = new MemorySecretStore('map-error');
+    const key = 'opaque-value-without-provider-prefix-7192';
+    await secrets.set('openai', key);
+    const error = Object.assign(new Error('failed'), { code: -32040, details: { note: key } });
+    expect(JSON.stringify(mapError(error))).not.toContain(key);
+    expect(redactSecretText(`log text ${key}`)).not.toContain(key);
+    expect(redactHeaders({ note: `stored header text ${key}` })).not.toContain(key);
+    await secrets.delete('openai');
+  });
+
+  it('ignores the test keyring namespace in production mode', async () => {
+    const services = await createServices({
+      dataDir: join(dataDir, 'production-keyring-guard'),
+      env: {
+        ...process.env,
+        NODE_ENV: 'production',
+        FERRY_DEV_MODE: 'true',
+        FERRY_TEST_KEYRING_NAMESPACE: 'must-ignore',
+      },
+    });
+    try {
+      expect(services.secrets).not.toBeInstanceOf(MemorySecretStore);
+    } finally {
+      await services.dispose();
+    }
+  });
+
+  it('keeps every active limits provider backed by at least one catalog model', async () => {
+    const services = await createServices({
+      dataDir: join(dataDir, 'limits-model-coverage'),
+      env: { ...process.env, NODE_ENV: 'test', FERRY_TEST_KEYRING_NAMESPACE: 'limits-coverage' },
+    });
+    try {
+      const missing = services.catalog.providers
+        .filter((provider) => !provider.dead)
+        .filter(
+          (provider) =>
+            !services.catalog.models.some((model) => model.providerId === provider.provider),
+        )
+        .map((provider) => provider.provider);
+      expect(missing).toEqual([]);
+    } finally {
+      await services.dispose();
+    }
   });
 
   it('rejects an incompatible hello protocol', async () => {

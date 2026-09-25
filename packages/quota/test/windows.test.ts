@@ -6,7 +6,7 @@ import { nextReset, remaining, usageIn, windowStart } from '../src/windows.js';
 const record = (id: string, occurredAt: string): UsageRecord => ({
   id,
   providerId: 'gemini' as UsageRecord['providerId'],
-  modelRef: 'google/gemini-flash',
+  modelRef: 'gemini/gemini-flash',
   occurredAt,
   status: 'success',
   inputTokens: 3,

@@ -554,7 +554,7 @@ export function runSimulationScenarios(): ScenarioResult[] {
   return [
     {
       name: 'Gemini RPD exhausted',
-      switches: ['google/gemini-free', 'groq/llama-free'],
+      switches: ['gemini/gemini-free', 'groq/llama-free'],
       outcome: 'switch after daily request limit',
     },
     {
@@ -564,7 +564,7 @@ export function runSimulationScenarios(): ScenarioResult[] {
     },
     {
       name: 'Groq TPM overflow',
-      switches: ['groq/llama', 'google/gemini-free'],
+      switches: ['groq/llama', 'gemini/gemini-free'],
       outcome: 'switch after per-minute token overflow',
     },
     {
