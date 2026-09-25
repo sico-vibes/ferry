@@ -9,11 +9,10 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const cliDirectory = resolve(testDirectory, '..');
@@ -21,21 +20,6 @@ const cliEntry = join(cliDirectory, 'dist', 'ferry.js');
 const temporaryRoots: string[] = [];
 const ONE_SPAWN = 20_000;
 const MANY_SPAWNS = 60_000;
-
-function buildCliIfMissing(): void {
-  if (existsSync(cliEntry)) return;
-  const require = createRequire(import.meta.url);
-  const tsupManifest = require.resolve('tsup/package.json');
-  const tsupBin = join(dirname(tsupManifest), 'dist', 'cli-default.js');
-  const options: SpawnSyncOptionsWithStringEncoding = {
-    cwd: cliDirectory,
-    encoding: 'utf8',
-    timeout: 120_000,
-  };
-  const result = spawnSync(process.execPath, [tsupBin, '--config', 'tsup.config.ts'], options);
-  if (result.status !== 0)
-    throw new Error(`Building the CLI for QA tests failed:\n${result.stdout}\n${result.stderr}`);
-}
 
 interface CliResult {
   status: number | null;
@@ -86,10 +70,6 @@ function readTree(directory: string): string {
   }
   return text;
 }
-
-beforeAll(() => {
-  buildCliIfMissing();
-});
 
 afterAll(() => {
   for (const directory of temporaryRoots) rmSync(directory, { recursive: true, force: true });
@@ -350,7 +330,9 @@ describe('@ferry/cli abort handling', () => {
       );
       try {
         const producedOutput = new Promise<boolean>((resolve) => {
-          const timer = setTimeout(() => { resolve(false); }, ONE_SPAWN);
+          const timer = setTimeout(() => {
+            resolve(false);
+          }, ONE_SPAWN);
           child.stdout.once('data', () => {
             clearTimeout(timer);
             resolve(true);
@@ -358,7 +340,9 @@ describe('@ferry/cli abort handling', () => {
         });
         expect(await producedOutput).toBe(true);
         const exited = new Promise<boolean>((resolve) => {
-          const timer = setTimeout(() => { resolve(false); }, 10_000);
+          const timer = setTimeout(() => {
+            resolve(false);
+          }, 10_000);
           child.once('exit', () => {
             clearTimeout(timer);
             resolve(true);
@@ -375,7 +359,7 @@ describe('@ferry/cli abort handling', () => {
 });
 
 describe('@ferry/cli known bugs (adversarial)', () => {
-  it.fails(
+  it(
     'makes `providers --json` emit JSON rather than human text',
     () => {
       // BUG: providers/profiles/skills/mcp/lanes ignore --json and print human text.
@@ -387,7 +371,7 @@ describe('@ferry/cli known bugs (adversarial)', () => {
     ONE_SPAWN,
   );
 
-  it.fails(
+  it(
     'makes `doctor --json` emit JSON rather than human text',
     () => {
       // BUG: doctor ignores --json (main.tsx doctor() only writes text rows).
@@ -399,7 +383,7 @@ describe('@ferry/cli known bugs (adversarial)', () => {
     ONE_SPAWN,
   );
 
-  it.fails(
+  it(
     'omits ANSI escapes for non-TTY output',
     () => {
       // BUG: ansi() only checks NO_COLOR, never process.stdout.isTTY (format.ts:9-16).
@@ -409,7 +393,7 @@ describe('@ferry/cli known bugs (adversarial)', () => {
     ONE_SPAWN,
   );
 
-  it.fails(
+  it(
     'exits cleanly when `keys set` receives no key on stdin',
     () => {
       // BUG: readSecret awaits 'line' but never handles EOF; Node aborts with an
@@ -422,7 +406,7 @@ describe('@ferry/cli known bugs (adversarial)', () => {
     ONE_SPAWN,
   );
 
-  it.fails(
+  it(
     'rejects a flag whose value is missing instead of silently ignoring it',
     () => {
       // BUG: readFlags() treats a trailing option as boolean true, then stringFlag()
@@ -434,7 +418,7 @@ describe('@ferry/cli known bugs (adversarial)', () => {
     MANY_SPAWNS,
   );
 
-  it.fails(
+  it(
     'reports subcommand errors without leaking a raw stack trace',
     () => {
       // BUG: runCli() uses `return asyncCommand(...)` inside try/catch, so the
