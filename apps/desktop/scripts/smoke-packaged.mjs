@@ -1,0 +1,108 @@
+import { spawn } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+
+const packageRoot = resolve(import.meta.dirname, '..');
+const executable = join(packageRoot, 'release', 'win-unpacked', 'Ferry.exe');
+const userDataDirectory = await mkdtemp(join(tmpdir(), 'ferry-packaged-smoke-'));
+const smokeStartedAt = new Date();
+const child = spawn(executable, ['--disable-gpu', '--in-process-gpu', '--use-gl=swiftshader'], {
+  cwd: packageRoot,
+  env: {
+    ...process.env,
+    FERRY_E2E_USER_DATA_DIR: userDataDirectory,
+    FERRY_E2E_CORE_ONLY: '1',
+  },
+  stdio: ['ignore', 'pipe', 'pipe'],
+  windowsHide: true,
+});
+
+let output = '';
+let settled = false;
+const finish = async (error) => {
+  if (settled) return;
+  settled = true;
+  clearTimeout(timeout);
+  if (child.pid) {
+    await new Promise((resolveKill) => {
+      const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      killer.once('error', resolveKill);
+      killer.once('exit', resolveKill);
+    });
+  }
+  const executableLiteral = executable.replaceAll("'", "''");
+  const startedAtLiteral = smokeStartedAt.toISOString();
+  await new Promise((resolveKill) => {
+    const cleanup = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-Command',
+        `$startedAt = [DateTimeOffset]::Parse('${startedAtLiteral}').LocalDateTime; Get-Process -Name Ferry -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${executableLiteral}' -and $_.StartTime -ge $startedAt } | Stop-Process -Force -ErrorAction SilentlyContinue`,
+      ],
+      { stdio: 'ignore', windowsHide: true },
+    );
+    cleanup.once('error', resolveKill);
+    cleanup.once('exit', resolveKill);
+  });
+  let cleanupError;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      await rm(userDataDirectory, { recursive: true, force: true });
+      cleanupError = undefined;
+      break;
+    } catch (error) {
+      cleanupError = error;
+      await delay(250);
+    }
+  }
+  if (cleanupError) {
+    console.error(`Could not remove smoke data directory: ${cleanupError.message}`);
+    process.exitCode = 1;
+  }
+  if (error) {
+    console.error(error.message);
+    if (output) console.error(output.trim());
+    process.exitCode = 1;
+  }
+};
+
+const timeout = setTimeout(() => {
+  void finish(new Error('Timed out waiting for FERRY_CORE_READY'));
+}, 60_000);
+
+child.once('error', (error) => void finish(error));
+child.once('exit', (code) => {
+  if (!settled)
+    void finish(new Error(`Packaged Ferry exited before ready (code ${code ?? 'unknown'})`));
+});
+for (const stream of [child.stdout, child.stderr]) {
+  stream.setEncoding('utf8');
+  stream.on('data', (chunk) => {
+    output += chunk;
+    const marker = output.match(/FERRY_CORE_READY\s+(\{[^\r\n]*\})/);
+    if (!marker || settled) return;
+    try {
+      const result = JSON.parse(marker[1]);
+      const modules = result.modules;
+      const failures = Array.isArray(modules)
+        ? modules.filter((module) => module?.ok !== true)
+        : [];
+      if (!Array.isArray(modules) || modules.length === 0 || failures.length > 0) {
+        void finish(new Error(`Packaged module self-test failed: ${JSON.stringify(result)}`));
+        return;
+      }
+      console.log(`Packaged smoke passed: ${modules.length} modules ok`);
+      void finish();
+    } catch (error) {
+      void finish(new Error(`Could not parse FERRY_CORE_READY: ${error.message}`));
+    }
+  });
+}
+
+await delay(0);

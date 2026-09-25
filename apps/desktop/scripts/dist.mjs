@@ -25,3 +25,16 @@ for (const args of [
   });
   if (result !== 0) process.exit(result);
 }
+
+if (process.env.FERRY_SKIP_SMOKE !== '1') {
+  const result = await new Promise((resolveResult, reject) => {
+    const child = spawn(process.execPath, [resolve(packageRoot, 'scripts', 'smoke-packaged.mjs')], {
+      cwd: packageRoot,
+      env,
+      stdio: 'inherit',
+    });
+    child.once('error', reject);
+    child.once('exit', (code) => resolveResult(code ?? 1));
+  });
+  if (result !== 0) process.exit(result);
+}

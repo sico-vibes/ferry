@@ -126,6 +126,9 @@ importers:
       '@napi-rs/keyring':
         specifier: 2.1.0
         version: 2.1.0
+      '@napi-rs/keyring-win32-x64-msvc':
+        specifier: 2.1.0
+        version: 2.1.0
       '@tanstack/react-query':
         specifier: 5.103.2
         version: 5.103.2(react@19.3.0)
@@ -8430,8 +8433,7 @@ snapshots:
   '@napi-rs/keyring-win32-ia32-msvc@2.1.0':
     optional: true
 
-  '@napi-rs/keyring-win32-x64-msvc@2.1.0':
-    optional: true
+  '@napi-rs/keyring-win32-x64-msvc@2.1.0': {}
 
   '@napi-rs/keyring@2.1.0':
     optionalDependencies:

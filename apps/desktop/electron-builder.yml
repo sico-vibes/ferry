@@ -6,6 +6,37 @@ directories:
 files:
   - out/**
   - package.json
+  - '!**/*.map'
+  - '!**/*.ts'
+  - '!**/*.md'
+  - '!**/test/**'
+  - '!**/tests/**'
+  - '!**/__tests__/**'
+  - '!**/prebuilds/darwin-*.node'
+  - '!**/prebuilds/linux-*.node'
+  - '!**/prebuilds/linuxmusl-*.node'
+  - '!**/prebuilds/win32-arm64.node'
+  - '!**/prebuilds/win32-ia32.node'
+  - '!**/prebuilds/win32-arm64/**'
+  - '!**/prebuilds/win32-ia32/**'
+  - '!**/third_party/**/win10-arm64/**'
+  - '!node_modules/**/*.map'
+  - '!node_modules/**/*.ts'
+  - '!node_modules/**/*.md'
+  - '!node_modules/**/README*'
+  - '!node_modules/**/test/**'
+  - '!node_modules/**/tests/**'
+  - '!node_modules/**/__tests__/**'
+  - '!node_modules/**/*.test.*'
+  - '!node_modules/**/*.spec.*'
+  - '!node_modules/better-sqlite3/prebuilds/darwin-*.node'
+  - '!node_modules/better-sqlite3/prebuilds/linux-*.node'
+  - '!node_modules/better-sqlite3/prebuilds/linuxmusl-*.node'
+  - '!node_modules/better-sqlite3/prebuilds/win32-arm64.node'
+  - '!node_modules/node-pty/prebuilds/darwin-*/**'
+  - '!node_modules/node-pty/prebuilds/linux-*/**'
+  - '!node_modules/node-pty/prebuilds/win32-arm64/**'
+  - '!node_modules/node-pty/third_party/**/win10-arm64/**'
 asar: true
 npmRebuild: false
 asarUnpack:
