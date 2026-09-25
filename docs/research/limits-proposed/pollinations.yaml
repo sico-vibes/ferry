@@ -1,0 +1,15 @@
+provider: pollinations
+name: Pollinations (no recurring free pool)
+tag: caution
+signup_url: https://enter.pollinations.ai/
+docs_url: https://gen.pollinations.ai/docs
+terms_note: >-
+  Pollinations now requires an API key for all generation; model listing is the only
+  unauthenticated endpoint. Free usage is quest-earned "Pollen" credits, not a predictable
+  recurring allowance. Legacy raw publishable keys are 1 pollen/IP/hour. Marked dead as a
+  free provider.
+data_use: N/A
+verified_at: '2026-09-25'
+source_url: https://gen.pollinations.ai/docs
+dead: true
+windows: []

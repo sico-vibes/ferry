@@ -1,0 +1,19 @@
+provider: cohere
+name: Cohere trial key
+tag: caution
+signup_url: https://dashboard.cohere.com/api-keys
+docs_url: https://docs.cohere.com/docs/rate-limits
+terms_note: >-
+  Trial keys: 20 requests/minute per model on Chat; 1,000 API calls/month overall; Embed
+  2,000 inputs/min; Rerank 10 req/min. Trial keys are free but are not permitted for
+  production or commercial purposes.
+data_use: >-
+  De-identified inputs to Cohere-hosted models may be used in limited circumstances where
+  permitted by user controls and Cohere's terms of service.
+verified_at: '2026-09-25'
+source_url: https://docs.cohere.com/docs/rate-limits
+endpoints:
+  - https://api.cohere.com
+windows:
+  - { scope: model, model: command-a, metric: requests, kind: rolling, length: 60, limit: 20 }
+  - { scope: provider, metric: requests, kind: monthly_from_anchor, limit: 1000 }

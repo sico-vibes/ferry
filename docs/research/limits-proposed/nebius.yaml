@@ -1,0 +1,16 @@
+provider: nebius
+name: Nebius Token Factory / AI Studio (Builder credits)
+tag: caution
+signup_url: https://nebius.com/
+docs_url: https://nebius.com/builders-terms-and-conditions
+terms_note: >-
+  Builder Program grants $25 AI Cloud + $25 Token Factory + $25 Tavily credits, with a
+  second $25 + $25 allocation roughly 30 days after verification; max $50 AI Cloud and $50
+  Token Factory. Credits expire 90 days after issuance and are one-time.
+data_use: unknown
+verified_at: '2026-09-25'
+source_url: https://nebius.com/builders-terms-and-conditions
+endpoints:
+  - https://api.studio.nebius.com/v1
+windows:
+  - { scope: provider, metric: usd, kind: monthly_from_anchor, limit: null }

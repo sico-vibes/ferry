@@ -1,0 +1,17 @@
+provider: hyperbolic
+name: Hyperbolic (Basic tier + $1 promo)
+tag: caution
+signup_url: https://app.hyperbolic.ai/
+docs_url: https://www.hyperbolic.ai/docs/inference/performance-limits
+terms_note: >-
+  Basic tier is free for new accounts: 60 requests/minute; Pro (after a $5+ deposit) is 600
+  requests/minute; per-IP cap 600/min. Phone verification grants $1 in promotional credits
+  (inference only). GPU/storage need Pro.
+data_use: Zero Data Retention - prompts and responses are never stored.
+verified_at: '2026-09-25'
+source_url: https://www.hyperbolic.ai/docs/inference/performance-limits
+endpoints:
+  - https://api.hyperbolic.xyz/v1
+windows:
+  - { scope: provider, metric: requests, kind: rolling, length: 60, limit: 60 }
+  - { scope: provider, metric: credits, kind: monthly_from_anchor, limit: null }

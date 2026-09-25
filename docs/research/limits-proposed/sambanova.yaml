@@ -1,0 +1,53 @@
+provider: sambanova
+name: SambaNova Cloud Free Tier
+tag: legit
+signup_url: https://cloud.sambanova.ai/
+docs_url: https://docs.sambanova.ai/docs/en/models/rate-limits
+terms_note: >-
+  Free Tier applies while no payment method is linked: 20 RPM and 20 RPD per model plus
+  200K tokens/day. One busy minute can exhaust the 20 RPD, so RPD is the binding limit.
+data_use: >-
+  Customer Content is processed solely to provide the service and for no other purposes;
+  query logs (Service Usage Data, not Customer Content) may be used to improve the service.
+verified_at: '2026-09-25'
+source_url: https://docs.sambanova.ai/docs/en/models/rate-limits
+endpoints:
+  - https://api.sambanova.ai/v1
+windows:
+  - { scope: model, model: gpt-oss-120b, metric: requests, kind: rolling, length: 60, limit: 20 }
+  - { scope: model, model: gpt-oss-120b, metric: requests, kind: fixed_daily, tz: UTC, limit: 20 }
+  - { scope: model, model: gpt-oss-120b, metric: tokens, kind: fixed_daily, tz: UTC, limit: 200000 }
+  - {
+      scope: model,
+      model: Meta-Llama-3.3-70B-Instruct,
+      metric: requests,
+      kind: rolling,
+      length: 60,
+      limit: 20,
+    }
+  - {
+      scope: model,
+      model: Meta-Llama-3.3-70B-Instruct,
+      metric: requests,
+      kind: fixed_daily,
+      tz: UTC,
+      limit: 20,
+    }
+  - {
+      scope: model,
+      model: Meta-Llama-3.3-70B-Instruct,
+      metric: tokens,
+      kind: fixed_daily,
+      tz: UTC,
+      limit: 200000,
+    }
+  - { scope: model, model: DeepSeek-V3.1, metric: requests, kind: rolling, length: 60, limit: 20 }
+  - { scope: model, model: DeepSeek-V3.1, metric: requests, kind: fixed_daily, tz: UTC, limit: 20 }
+  - {
+      scope: model,
+      model: DeepSeek-V3.1,
+      metric: tokens,
+      kind: fixed_daily,
+      tz: UTC,
+      limit: 200000,
+    }

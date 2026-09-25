@@ -1,0 +1,16 @@
+provider: deepinfra
+name: DeepInfra (no free tier; card required)
+tag: paid
+signup_url: https://deepinfra.com/dash
+docs_url: https://docs.deepinfra.com/account/rate-limits
+terms_note: >-
+  No recurring free allowance. "You have to add a card or pre-pay or you won't be able to
+  use our services." Default 200 concurrent requests per model; a per-model TPM limit is
+  exposed via GET /v1/me/rate_limit.
+data_use: unknown
+verified_at: '2026-09-25'
+source_url: https://deepinfra.com/pricing
+endpoints:
+  - https://api.deepinfra.com/v1/openai
+windows:
+  - { scope: model, metric: requests, kind: rolling, length: 1, limit: null }

@@ -1,0 +1,14 @@
+provider: kiro
+name: Kiro AI (third-party proxy prohibited)
+tag: caution
+signup_url: https://kiro.dev/
+docs_url: https://kiro.dev/
+terms_note: >-
+  Kiro's terms prohibit third-party proxy/harness use; routers report accounts banned for
+  routing it. Not usable as a provider default in an aggregator regardless of its free
+  credits.
+data_use: N/A
+verified_at: '2026-09-25'
+source_url: https://github.com/diegosouzapw/OmniRoute/discussions/9216
+dead: true
+windows: []

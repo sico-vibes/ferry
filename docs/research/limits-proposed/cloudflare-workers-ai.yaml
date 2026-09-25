@@ -1,0 +1,22 @@
+provider: cloudflare-workers-ai
+name: Cloudflare Workers AI
+tag: legit
+signup_url: https://dash.cloudflare.com/
+docs_url: https://developers.cloudflare.com/workers-ai/platform/pricing/
+terms_note: >-
+  Free allocation is 10,000 Neurons/day, reset 00:00 UTC, on both Workers Free and Paid;
+  overage is $0.011 per 1,000 Neurons. Text generation defaults to 300 RPM. Frontier
+  models (Kimi K2.6/2.7, GLM 5.2/5.3, DeepSeek V4) require Workers Paid or AI Gateway
+  credits and are limited to 20 RPM (50 with prepaid credits).
+data_use: >-
+  Cloudflare does not use Customer Content to train any AI models on Workers AI or improve
+  Cloudflare or third-party services without explicit consent.
+verified_at: '2026-09-25'
+source_url: https://developers.cloudflare.com/workers-ai/platform/pricing/
+endpoints:
+  - https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/
+required_headers:
+  - Authorization
+windows:
+  - { scope: provider, metric: credits, kind: fixed_daily, tz: UTC, limit: 10000 }
+  - { scope: provider, metric: requests, kind: rolling, length: 60, limit: 300 }

@@ -1,0 +1,19 @@
+provider: vercel-ai-gateway
+name: Vercel AI Gateway free tier
+tag: legit
+signup_url: https://vercel.com/dashboard
+docs_url: https://vercel.com/docs/ai-gateway/pricing
+terms_note: >-
+  Free tier includes $5/month in AI Gateway credits and a subset of free-tier models,
+  with lower per-model rate limits than paid. Purchasing credits moves the team to the paid
+  tier and the monthly free credit no longer applies. ZDR is default and per-request
+  "Disallow Prompt Training" is free for all users.
+data_use: >-
+  Zero Data Retention by default: prompts and outputs are permanently deleted after a
+  request completes; providers are not permitted to train on prompts.
+verified_at: '2026-09-25'
+source_url: https://vercel.com/docs/ai-gateway/pricing
+endpoints:
+  - https://ai-gateway.vercel.sh/v1
+windows:
+  - { scope: provider, metric: usd, kind: monthly_from_anchor, limit: 5 }

@@ -1,0 +1,17 @@
+provider: stepfun
+name: StepFun Platform (no free API tier)
+tag: paid
+signup_url: https://platform.stepfun.ai/
+docs_url: https://platform.stepfun.ai/docs/en/pricing/details
+terms_note: >-
+  No free API tier. The $0 top-up tier (V0) allows 5 concurrent requests, 10 RPM and
+  5M TPM but still requires account balance to call paid models. Step Plan is a paid
+  subscription.
+data_use: unknown
+verified_at: '2026-09-25'
+source_url: https://platform.stepfun.ai/docs/en/pricing/details
+endpoints:
+  - https://api.stepfun.ai/v1
+windows:
+  - { scope: provider, metric: requests, kind: rolling, length: 60, limit: 10 }
+  - { scope: provider, metric: tokens, kind: rolling, length: 60, limit: 5000000 }

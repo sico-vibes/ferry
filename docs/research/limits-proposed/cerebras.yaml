@@ -1,0 +1,34 @@
+provider: cerebras
+name: Cerebras Inference (Free Trial is credits-only)
+tag: caution
+signup_url: https://cloud.cerebras.ai/
+docs_url: https://inference-docs.cerebras.ai/support/rate-limits
+terms_note: >-
+  CORRECTION: Cerebras no longer offers a permanently free, recurring tier. New accounts get
+  $5 in credits after adding a verified payment method; credits expire 30 days after
+  grant. The rate windows below apply only while those trial credits last. Developer
+  (pay-as-you-go) removes hourly/daily caps.
+data_use: Subject to Cerebras terms.
+verified_at: '2026-09-25'
+source_url: https://inference-docs.cerebras.ai/support/rate-limits
+windows:
+  - { scope: model, model: gpt-oss-120b, metric: requests, kind: rolling, length: 60, limit: 5 }
+  - { scope: model, model: gpt-oss-120b, metric: tokens, kind: rolling, length: 60, limit: 30000 }
+  - {
+      scope: model,
+      model: gpt-oss-120b,
+      metric: tokens,
+      kind: fixed_daily,
+      tz: UTC,
+      limit: 1000000,
+    }
+  - { scope: model, model: qwen-3.8-27b, metric: requests, kind: rolling, length: 60, limit: 5 }
+  - { scope: model, model: qwen-3.8-27b, metric: tokens, kind: rolling, length: 60, limit: 30000 }
+  - {
+      scope: model,
+      model: qwen-3.8-27b,
+      metric: tokens,
+      kind: fixed_daily,
+      tz: UTC,
+      limit: 1000000,
+    }

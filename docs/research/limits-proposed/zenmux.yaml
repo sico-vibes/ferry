@@ -1,0 +1,14 @@
+provider: zenmux
+name: ZenMux (free plan has no API access)
+tag: caution
+signup_url: https://zenmux.ai/
+docs_url: https://zenmux.ai/docs/guide/subscription.html
+terms_note: >-
+  Free plan is Studio Chat only (5 Flows per 5 hours, roughly 5 conversations) and
+  explicitly provides no API request access. API access requires the Starter plan at
+  $20/month or above.
+data_use: unknown
+verified_at: '2026-09-25'
+source_url: https://zenmux.ai/docs/guide/subscription.html
+windows:
+  - { scope: provider, metric: requests, kind: rolling, length: 18000, limit: 5 }
