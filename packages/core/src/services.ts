@@ -14,6 +14,10 @@ import {
   QuotaObservationRepository,
   CooldownRepository,
   HandoffRepository,
+  DelegationRepository,
+  MessageRepository,
+  TaskRepository,
+  OptimizerEventRepository,
   SettingsRepository,
   SessionRepository,
   WorkspaceRepository,
@@ -42,11 +46,15 @@ export interface FerryServices {
   readonly workspaces: WorkspaceRepository;
   readonly sessions: SessionRepository;
   readonly checkpoints: CheckpointRepository;
-  readonly secrets: SecretStore;
+  readonly delegations: DelegationRepository;
+  readonly optimizerEvents: OptimizerEventRepository;
+  readonly messages: MessageRepository;
+  readonly tasks: TaskRepository;
   readonly catalog: Catalog;
+  readonly quota: QuotaEngine;
+  readonly secrets: SecretStore;
   readonly providers: ProviderRepository;
   readonly providerKeys: ProviderKeyRepository;
-  readonly quota: QuotaEngine;
   readonly cooldowns: CooldownRepository;
   readonly quotaObservations: QuotaObservationRepository;
   readonly handoffs: HandoffRepository;
@@ -89,6 +97,11 @@ export async function createServices({
     databaseRecoveryMessage = `Ferry found a corrupt database and started a fresh one. The damaged file was moved to ${backupPath}.`;
   }
   const catalog = await loadCatalog({ now: clock?.now() ?? new Date() });
+  const messages = new MessageRepository(db.client);
+  const tasks = new TaskRepository(db.client);
+  const checkpoints = new CheckpointRepository(db.client);
+  const delegations = new DelegationRepository(db.client);
+  const optimizerEvents = new OptimizerEventRepository(db.client);
   const providers = new ProviderRepository(db.client);
   const providerKeys = new ProviderKeyRepository(db.client);
   const cooldowns = new CooldownRepository(db.client);
@@ -161,22 +174,25 @@ export async function createServices({
     settings: new SettingsRepository(db.client),
     workspaces: new WorkspaceRepository(db.client),
     sessions: new SessionRepository(db.client),
-    checkpoints: new CheckpointRepository(db.client),
+    checkpoints,
+    delegations,
+    optimizerEvents,
+    messages,
+    tasks,
     catalog,
+    quota,
+    secrets: secretStore,
     providers,
     providerKeys,
-    quota,
     cooldowns,
     quotaObservations,
     handoffs,
-    secrets: secretStore,
     logger,
     ...(databaseRecoveryMessage ? { databaseRecoveryMessage } : {}),
     async dispose() {
       if (disposed) return;
       disposed = true;
       stopOpenRouterPolling();
-      quota.dispose();
       if (secretStore instanceof MemorySecretStore) secretStore.clear();
       await new Promise<void>((done, fail) => {
         logger.flush((error) => {
@@ -184,6 +200,7 @@ export async function createServices({
           else done();
         });
       });
+      quota.dispose();
       db.close();
     },
   };

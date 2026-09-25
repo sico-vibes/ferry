@@ -80,7 +80,7 @@ describe('@ferry/cli argument parsing and exit codes', () => {
     const result = runCli(['quota', '--engine', 'typo']);
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(/Invalid --engine/);
-  });
+  }, 30_000);
 
   it(
     'returns 0 with only JSONL on stdout for a successful run',

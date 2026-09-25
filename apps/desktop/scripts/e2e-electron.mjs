@@ -54,11 +54,13 @@ const application = spawn(
     cwd: appDirectory,
     env: {
       ...process.env,
+      NODE_ENV: 'test',
       FERRY_E2E_USER_DATA_DIR: userDataDirectory,
       FERRY_HOME: join(userDataDirectory, 'ferry-home'),
       FERRY_TEST_KEYRING_NAMESPACE: keyringNamespace,
       FERRY_PROVIDER_BASE_URL_OPENAI: `${fake.baseUrl}/v1`,
-      FERRY_REAL_DOMAINS: 'settings,workspaces,checkpoints,providers,models,quota',
+      FERRY_REAL_DOMAINS:
+        'settings,workspaces,checkpoints,providers,models,quota,sessions,approvals,profiles,skills,mcp,optimizer,delegation',
       ELECTRON_RENDERER_URL: rendererServer.url,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -240,5 +242,10 @@ try {
     new Promise((resolve) => rendererServer.server.close(resolve)),
     new Promise((resolve) => setTimeout(resolve, 2_000)),
   ]);
-  await rm(userDataDirectory, { recursive: true, force: true }).catch(() => undefined);
+  await rm(userDataDirectory, {
+    recursive: true,
+    force: true,
+    maxRetries: 8,
+    retryDelay: 100,
+  }).catch(() => undefined);
 }

@@ -101,7 +101,8 @@ function launchCore(): void {
     env: {
       ...process.env,
       FERRY_REAL_DOMAINS:
-        process.env.FERRY_REAL_DOMAINS ?? 'settings,workspaces,checkpoints,providers,models,quota',
+        process.env.FERRY_REAL_DOMAINS ??
+        'settings,workspaces,checkpoints,sessions,approvals,providers,quota,models,profiles,skills,mcp,optimizer,delegation',
       FERRY_CORE_DATA_DIR: process.env.FERRY_HOME ?? join(app.getPath('userData'), 'engine'),
     },
     stdio: process.env.FERRY_E2E_USER_DATA_DIR ? 'pipe' : 'inherit',
@@ -208,6 +209,8 @@ function openMainWindow(): void {
 }
 
 ipcMain.handle('ferry:open-folder', async () => {
+  if (process.env.NODE_ENV === 'test' && process.env.FERRY_E2E_OPEN_FOLDER)
+    return process.env.FERRY_E2E_OPEN_FOLDER;
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],

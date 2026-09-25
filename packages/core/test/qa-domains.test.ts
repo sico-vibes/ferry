@@ -471,7 +471,7 @@ describe('QA system domain', () => {
         expect.arrayContaining(['settings', 'workspaces', 'checkpoints']),
       );
       expect(core.rpc.implementedMethods).toContain('settings.update');
-      expect(core.rpc.implementedMethods).not.toContain('sessions.send');
+      expect(core.rpc.implementedMethods).toContain('sessions.send');
     } finally {
       await core.close();
     }

@@ -553,6 +553,7 @@ export async function runAdapter(
 }
 
 export interface StartDelegationInput {
+  runId?: DelegationRun['id'];
   sessionId: SessionId;
   lane: Lane;
   brief: string;
@@ -568,7 +569,7 @@ export interface DelegationHandle {
 }
 export function startDelegation(input: StartDelegationInput): DelegationHandle {
   const controller = new AbortController();
-  const runId = newId('run') as DelegationRun['id'];
+  const runId = input.runId ?? (newId('run') as DelegationRun['id']);
   const run: DelegationRun = DelegationRunSchema.parse({
     id: runId,
     sessionId: input.sessionId,

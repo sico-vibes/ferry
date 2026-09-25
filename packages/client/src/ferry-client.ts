@@ -40,6 +40,7 @@ export interface FerryClient {
   };
   sessions: {
     list(q?: { workspaceId?: WorkspaceId; query?: string }): Promise<Session[]>;
+    search(q?: { workspaceId?: WorkspaceId; query?: string }): Promise<Session[]>;
     get(id: SessionId): Promise<SessionDetail>;
     create(i: {
       workspaceId: WorkspaceId;

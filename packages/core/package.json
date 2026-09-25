@@ -12,11 +12,16 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@ferry/config": "workspace:*",
-    "@ferry/client": "workspace:*",
+    "@ferry/agent": "workspace:*",
     "@ferry/catalog": "workspace:*",
+    "@ferry/client": "workspace:*",
+    "@ferry/config": "workspace:*",
+    "@ferry/delegate": "workspace:*",
+    "@ferry/extensions": "workspace:*",
+    "@ferry/optimizer": "workspace:*",
     "@ferry/providers": "workspace:*",
     "@ferry/quota": "workspace:*",
+    "@ferry/router": "workspace:*",
     "@ferry/secrets": "workspace:*",
     "@ferry/shared": "workspace:*",
     "@ferry/storage": "workspace:*",

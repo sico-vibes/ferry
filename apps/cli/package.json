@@ -16,12 +16,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@ferry/core": "workspace:*",
-    "@napi-rs/keyring": "2.1.0",
-    "@vscode/ripgrep": "1.18.0",
     "@ferry/client": "workspace:*",
+    "@ferry/core": "workspace:*",
     "@ferry/delegate": "workspace:*",
     "@ferry/shared": "workspace:*",
+    "@napi-rs/keyring": "2.1.0",
+    "@vscode/ripgrep": "1.18.0",
     "better-sqlite3": "13.0.3",
     "citty": "0.2.2",
     "cli-highlight": "2.1.11",
@@ -36,6 +36,7 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@ferry/testkit": "workspace:*",
     "@types/better-sqlite3": "9.6.0",
     "@types/react": "19.3.0",
     "ink-testing-library": "^4.0.0",

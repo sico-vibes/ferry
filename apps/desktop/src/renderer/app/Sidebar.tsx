@@ -147,6 +147,7 @@ export function Sidebar({
     <>
       <IconRail
         active={activeNav}
+        showDemo={!window.ferryHybrid || window.ferryHybrid.getRealDomains().length === 0}
         onNew={() => void createChat()}
         onNavigate={(to) => void navigate({ to: to === 'chats' ? '/' : `/${to}` })}
         onAdd={() => void chooseFolder()}

@@ -17,6 +17,7 @@ export const FERRY_METHODS = [
   'workspaces.remove',
   'workspaces.update',
   'sessions.list',
+  'sessions.search',
   'sessions.get',
   'sessions.create',
   'sessions.send',
@@ -63,6 +64,9 @@ export const FERRY_METHODS = [
 ] as const;
 export const FERRY_EVENTS = [
   'session.updated',
+  'session.status',
+  'approval.request',
+  'mcp.status',
   'session.message',
   'session.part',
   'session.delta',

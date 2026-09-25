@@ -22,6 +22,7 @@ import {
   type Profile,
   type Session,
   type TaskRecord,
+  type UsageRecord,
 } from '@ferry/shared';
 import type { Catalog } from '@ferry/catalog';
 import type { RawCallObservation } from '@ferry/providers';
@@ -32,7 +33,7 @@ import { createWorkspaceTools, type AgentTool, type ToolSource } from './tool-re
 export type AgentEvent =
   | { type: 'session.message'; message: Message }
   | { type: 'session.part'; sessionId: string; messageId: string; part: MessagePart }
-  | { type: 'session.delta'; sessionId: string; messageId: string; text: string }
+  | { type: 'session.delta'; sessionId: string; messageId: string; partId: string; text: string }
   | { type: 'session.updated'; session: Session }
   | { type: 'task.updated'; task: TaskRecord }
   | { type: 'quota.updated'; observation: RawCallObservation }
@@ -64,7 +65,7 @@ export interface StepGeneratorInput {
   messages: readonly Message[];
   tools: readonly AgentTool[];
   signal: AbortSignal;
-  onDelta(text: string): void;
+  onDelta: (text: string) => void;
 }
 export type StepGenerator = (input: StepGeneratorInput) => Promise<GeneratedStep>;
 const discardDelta = (_text: string): void => undefined;
@@ -86,6 +87,7 @@ export interface AgentOptions {
   ) => Promise<'allowed_once' | 'allowed_always' | 'denied'>;
   askUser?: (question: string, signal: AbortSignal) => Promise<string>;
   generator?: StepGenerator;
+  providerBaseUrls?: Readonly<Record<string, string>>;
   providerFetch?: typeof globalThis.fetch;
   toolSources?: readonly ToolSource[];
   promptSections?: readonly PromptSection[];
@@ -101,6 +103,9 @@ export interface AgentOptions {
   pinnedTurns?: number;
   estimateTokens?: (text: string) => number;
   onObservation?: (observation: RawCallObservation) => void;
+  onUsage?: (usage: UsageRecord) => void;
+  onHandoff?: (reason: 'quota' | 'rate_limit', from: string, to: string) => void;
+  resolveCandidates?: (profile: Profile, step: import('@ferry/shared').StepKind) => ModelInfo[];
   stats?: ModelStats[];
   terseLevel?: 'off' | 'lite' | 'full' | 'ultra';
 }
@@ -254,7 +259,7 @@ export class AgentLoop {
           pendingEdits: taskRecord.touchedFiles.length > 0,
           estimatedInputTokens: routeEstimate,
         });
-        const model = this.selectModel(stepKind, routeEstimate, session.modelRef);
+        let model = this.selectModel(stepKind, routeEstimate, session.modelRef);
         if (!model) throw new Error('No eligible model is available for this step');
         let contextMessages = contextSummary ? pinnedMessages : messages;
         if (inputTokens > model.contextWindow * 0.7) {
@@ -324,6 +329,7 @@ export class AgentLoop {
             briefingTokens: marker.briefingTokens,
             explanation: marker.explanation,
           });
+          this.options.onHandoff?.('quota', marker.from, marker.to);
           this.options.emit({
             type: 'toast',
             tone: 'info',
@@ -341,7 +347,7 @@ export class AgentLoop {
           status: 'running',
         });
         this.options.emit({ type: 'session.updated', session });
-        const system = await assembleSystemPrompt({
+        let system = await assembleSystemPrompt({
           workspace: this.options.workspace,
           sessionId,
           task: taskRecord,
@@ -355,8 +361,8 @@ export class AgentLoop {
         const generator = this.options.generator ?? this.createStreamingGenerator(model, sessionId);
         if (stepCount >= maxSteps)
           return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
-        const generated = await generator({
-          model,
+        const stepRequest = (selected: ModelInfo): StepGeneratorInput => ({
+          model: selected,
           system,
           messages: contextMessages,
           tools,
@@ -373,8 +379,61 @@ export class AgentLoop {
               ...currentParts.filter((part) => part.id !== streamedTextPartId),
               partial,
             ]);
-            this.options.emit({ type: 'session.delta', sessionId, messageId: assistant.id, text });
+            this.options.emit({
+              type: 'session.delta',
+              sessionId,
+              messageId: assistant.id,
+              partId: streamedTextPartId,
+              text,
+            });
           },
+        });
+        let generated: GeneratedStep;
+        try {
+          generated = await generator(stepRequest(model));
+        } catch (error) {
+          if (!isRateLimitError(error) || isSignalAborted(signal)) throw error;
+          const fallback = this.selectFallback(stepKind, routeEstimate, model.ref);
+          if (!fallback) throw error;
+          const briefing = buildBriefing(
+            taskRecord,
+            messages,
+            fallback,
+            Math.floor(fallback.contextWindow * 0.25),
+            this.estimates,
+          );
+          const marker = createHandoffMarker(
+            model.ref,
+            fallback.ref,
+            'rate_limit',
+            briefing,
+            `${model.name} returned HTTP 429; continuing with ${fallback.name}.`,
+          );
+          this.addPart(sessionId, {
+            type: 'handoff_marker',
+            id: PartIdSchema.parse(newId('part')),
+            from: marker.from as ModelRef,
+            to: marker.to as ModelRef,
+            reason: marker.reason,
+            briefingTokens: marker.briefingTokens,
+            explanation: marker.explanation,
+          });
+          this.options.onHandoff?.('rate_limit', marker.from, marker.to);
+          model = fallback;
+          system += `\n\nHandoff briefing:\n${briefing.text}`;
+          this.options.store.updateSession(sessionId, { modelRef: fallback.ref });
+          generated = await generator(stepRequest(fallback));
+        }
+        this.options.onUsage?.({
+          id: newId('usage'),
+          providerId: model.providerId,
+          modelRef: model.ref,
+          occurredAt: new Date().toISOString(),
+          sessionId,
+          stepKind,
+          inputTokens: generated.inputTokens ?? 0,
+          outputTokens: generated.outputTokens ?? 0,
+          status: 'success',
         });
         if (isSignalAborted(signal))
           throw signal.reason ?? new DOMException('Aborted', 'AbortError');
@@ -551,59 +610,7 @@ export class AgentLoop {
   }
 
   private createStreamingGenerator(model: ModelInfo, sessionId: string): StepGenerator {
-    const observationFetch = createObservedFetch(
-      (observation) => {
-        this.options.onObservation?.(observation);
-        this.options.emit({ type: 'quota.updated', observation });
-      },
-      { providerId: model.providerId, model: model.ref },
-      this.options.providerFetch ?? globalThis.fetch,
-    );
-    // The SDK generator callback captures its model and loop scope intentionally.
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    return async ({ system, messages, tools, signal, onDelta }) => {
-      const sdkTools: Record<string, unknown> = Object.fromEntries(
-        tools.map((definition) => [
-          definition.name,
-          tool({ description: definition.title, inputSchema: definition.schema }),
-        ]),
-      );
-      if (this.options.askUser)
-        sdkTools.ask_user = tool({
-          description: 'Ask the user a question and pause until they answer.',
-          inputSchema: z.object({ question: z.string() }),
-        });
-      const result = streamText({
-        model: createLanguageModel(model.ref, {
-          apiKey: this.options.apiKeys[model.providerId] ?? '',
-          fetch: observationFetch,
-          sessionId,
-        }),
-        system,
-        prompt: renderMessages(messages),
-        tools: sdkTools as unknown as ToolSet,
-        abortSignal: signal,
-      });
-      let text = '';
-      for await (const chunk of result.textStream) {
-        text += chunk;
-        onDelta(chunk);
-      }
-      const [usage, rawCalls] = await Promise.all([result.usage, result.toolCalls]);
-      const calls = z
-        .array(z.object({ toolCallId: z.string(), toolName: z.string(), input: z.unknown() }))
-        .parse(rawCalls);
-      return {
-        text,
-        toolCalls: calls.map((call) => ({
-          id: call.toolCallId,
-          name: call.toolName,
-          input: call.input,
-        })),
-        inputTokens: usage.inputTokens ?? 0,
-        outputTokens: usage.outputTokens ?? 0,
-      };
-    };
+    return createStepGenerator(this.options, model, sessionId);
   }
 
   private selectModel(
@@ -621,6 +628,27 @@ export class AgentLoop {
       previousModelRef: previous,
     });
     return this.options.catalog.models.find((model) => model.ref === candidates[0]?.ref);
+  }
+
+  private selectFallback(
+    step: import('@ferry/shared').StepKind,
+    inputTokens: number,
+    failedRef: ModelRef,
+  ): ModelInfo | undefined {
+    const candidates = this.options.resolveCandidates?.(this.options.profile, step);
+    if (candidates) return candidates.find((candidate) => candidate.ref !== failedRef);
+    const ranked = scoreModels({
+      models: this.options.catalog.models,
+      capacity: this.options.capacity(),
+      profile: this.options.profile,
+      step,
+      estimate: { inputTokens, requiresTools: true },
+      previousModelRef: failedRef,
+    });
+    const next = ranked.find((candidate) => candidate.ref !== failedRef);
+    return next
+      ? this.options.catalog.models.find((candidate) => candidate.ref === next.ref)
+      : undefined;
   }
 
   private finish(
@@ -694,6 +722,89 @@ export function repairAndValidate<T>(
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/** Provider SDK generator exposed for the Core ModelGateway seam. */
+export function createStepGenerator(
+  options: Pick<
+    AgentOptions,
+    'apiKeys' | 'providerBaseUrls' | 'providerFetch' | 'emit' | 'onObservation' | 'askUser'
+  >,
+  model: ModelInfo,
+  sessionId: string,
+): StepGenerator {
+  const observationFetch = createObservedFetch(
+    (observation) => {
+      options.onObservation?.(observation);
+      options.emit({ type: 'quota.updated', observation });
+    },
+    { providerId: model.providerId, model: model.ref },
+    options.providerFetch ?? globalThis.fetch,
+  );
+  return async ({ system, messages, tools, signal, onDelta }) => {
+    const sdkTools: Record<string, unknown> = Object.fromEntries(
+      tools.map((definition) => [
+        definition.name,
+        tool({ description: definition.title, inputSchema: definition.schema }),
+      ]),
+    );
+    if (options.askUser)
+      sdkTools.ask_user = tool({
+        description: 'Ask the user a question and pause until they answer.',
+        inputSchema: z.object({ question: z.string() }),
+      });
+    const result = streamText({
+      model: createLanguageModel(model.ref, {
+        apiKey: options.apiKeys[model.providerId] ?? '',
+        ...(options.providerBaseUrls?.[model.providerId]
+          ? { baseUrl: options.providerBaseUrls[model.providerId] }
+          : {}),
+        fetch: observationFetch,
+        sessionId,
+      }),
+      system,
+      prompt: renderMessages(messages),
+      tools: sdkTools as unknown as ToolSet,
+      abortSignal: signal,
+      maxRetries: 0,
+    });
+    let text = '';
+    for await (const part of result.stream) {
+      if (part.type === 'error') throw part.error;
+      if (part.type !== 'text-delta') continue;
+      text += part.text;
+      onDelta(part.text);
+    }
+    const [usage, rawCalls] = await Promise.all([result.usage, result.toolCalls]);
+    const calls = z
+      .array(z.object({ toolCallId: z.string(), toolName: z.string(), input: z.unknown() }))
+      .parse(rawCalls);
+    return {
+      text,
+      toolCalls: calls.map((call) => ({
+        id: call.toolCallId,
+        name: call.toolName,
+        input: call.input,
+      })),
+      inputTokens: usage.inputTokens ?? 0,
+      outputTokens: usage.outputTokens ?? 0,
+    };
+  };
+}
+
+function isRateLimitError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+  };
+  return (
+    candidate.status === 429 ||
+    candidate.statusCode === 429 ||
+    candidate.statusCode === '429' ||
+    candidate.response?.status === 429
+  );
 }
 
 function touchFile(task: TaskRecord, path: string, purpose: string): TaskRecord {

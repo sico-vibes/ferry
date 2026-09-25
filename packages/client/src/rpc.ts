@@ -276,15 +276,19 @@ export function createHybridClient(
                   ? 'settings'
                   : event.startsWith('workspace.')
                     ? 'workspaces'
-                    : event === 'quota.updated'
-                      ? 'quota'
-                      : event === 'provider.updated'
-                        ? 'providers'
-                        : event === 'delegation.updated'
-                          ? 'delegation'
-                          : event === 'workspace.updated'
-                            ? 'workspaces'
-                            : '';
+                    : event === 'approval.request'
+                      ? 'sessions'
+                      : event === 'mcp.status'
+                        ? 'mcp'
+                        : event === 'quota.updated'
+                          ? 'quota'
+                          : event === 'provider.updated'
+                            ? 'providers'
+                            : event === 'delegation.updated'
+                              ? 'delegation'
+                              : event === 'workspace.updated'
+                                ? 'workspaces'
+                                : '';
             return (real.has(domain) ? rpc : mock).on(event, handler);
           };
         if (typeof key !== 'string') return undefined;

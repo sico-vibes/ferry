@@ -32,6 +32,7 @@ export function UsageCanvas() {
   const navigate = useNavigate();
   const cache = useQueryClient();
   const realQuota = window.ferryHybrid?.getRealDomains().includes('quota') ?? false;
+  const realOptimizer = window.ferryHybrid?.getRealDomains().includes('optimizer') ?? false;
   const [metric, setMetric] = useState<UsageMetric>('requests');
   const { data: providers = [] } = useQuery({
     queryKey: ['providers'],
@@ -247,7 +248,7 @@ export function UsageCanvas() {
           <Section title="Optimizer savings" ariaLabel="Optimizer savings">
             <header className="mb-3 flex items-center gap-2">
               <span className="mr-auto" />
-              {optimizer?.demo && (
+              {!realOptimizer && optimizer?.demo && (
                 <span className="rounded-pill bg-raised px-2 py-1 text-[10px] leading-[14px] text-text-2">
                   Demo data
                 </span>

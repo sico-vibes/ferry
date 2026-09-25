@@ -13,6 +13,14 @@ const bundledWorkspacePackages = [
   '@ferry/workspace',
   '@ferry/client',
   '@ferry/shared',
+  '@ferry/agent',
+  '@ferry/catalog',
+  '@ferry/delegate',
+  '@ferry/extensions',
+  '@ferry/optimizer',
+  '@ferry/providers',
+  '@ferry/quota',
+  '@ferry/router',
 ];
 
 const copyStorageMigrations = {
@@ -24,19 +32,13 @@ const copyStorageMigrations = {
       resolve('../../packages/storage/src/migrations/0001_initial.sql'),
       resolve(output, '0001_initial.sql'),
     );
-  },
-};
-
-const copyCatalogData = {
-  name: 'ferry-copy-catalog-data',
-  async closeBundle() {
     await cp(resolve('../../packages/catalog/data'), resolve('out/data'), { recursive: true });
   },
 };
 
 export default defineConfig({
   main: {
-    plugins: [copyStorageMigrations, copyCatalogData],
+    plugins: [copyStorageMigrations],
     resolve: { alias: { '@ferry/core': resolve('../../packages/core/src/index.ts') } },
     build: {
       externalizeDeps: {

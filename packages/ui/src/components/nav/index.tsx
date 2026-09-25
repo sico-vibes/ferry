@@ -75,6 +75,7 @@ export function IconRail({
   onAdd,
   onToggleTheme,
   logo,
+  showDemo = true,
 }: {
   active: 'chats' | 'library' | 'explore' | null;
   onNavigate?: (to: 'chats' | 'library' | 'explore') => void;
@@ -82,6 +83,7 @@ export function IconRail({
   onAdd?: () => void;
   onToggleTheme?: () => void;
   logo?: ReactNode;
+  showDemo?: boolean;
 }) {
   return (
     <nav
@@ -136,13 +138,15 @@ export function IconRail({
         <Plus aria-hidden="true" size={16} />
       </button>
       <div className="mt-auto flex w-full flex-col items-center gap-3">
-        <span
-          data-audit-spacing="intentional"
-          className="flex w-full flex-col items-center gap-1 rounded-md border border-border-hair px-0.5 py-1 text-meta leading-4 text-text-3"
-        >
-          <FlaskConical aria-hidden="true" size={13} strokeWidth={1.75} />
-          <span>Demo data</span>
-        </span>
+        {showDemo && (
+          <span
+            data-audit-spacing="intentional"
+            className="flex w-full flex-col items-center gap-1 rounded-md border border-border-hair px-0.5 py-1 text-meta leading-4 text-text-3"
+          >
+            <FlaskConical aria-hidden="true" size={13} strokeWidth={1.75} />
+            <span>Demo data</span>
+          </span>
+        )}
         <span aria-hidden="true" className="h-px w-8 bg-[var(--fade-line)]" />
         <button
           aria-label="Toggle theme"

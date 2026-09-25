@@ -10,10 +10,23 @@ export function register(host: CoreHost, services: FerryServices): void {
     ...DEFAULT_SETTINGS,
     developer: {
       ...DEFAULT_SETTINGS.developer,
-      realDomains:
-        services.env.FERRY_REAL_DOMAINS?.split(',')
-          .map((domain) => domain.trim())
-          .filter(Boolean) ?? [],
+      realDomains: services.env.FERRY_REAL_DOMAINS?.split(',')
+        .map((domain) => domain.trim())
+        .filter(Boolean) ?? [
+        'settings',
+        'workspaces',
+        'checkpoints',
+        'sessions',
+        'approvals',
+        'providers',
+        'quota',
+        'models',
+        'profiles',
+        'skills',
+        'mcp',
+        'optimizer',
+        'delegation',
+      ],
     },
   });
   const get = () => SettingsSchema.parse(services.settings.get('global') ?? defaults);
