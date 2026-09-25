@@ -1,0 +1,357 @@
+/* eslint
+  @typescript-eslint/no-non-null-assertion: off,
+  @typescript-eslint/require-await: off,
+  @typescript-eslint/no-empty-function: off,
+  @typescript-eslint/unbound-method: off
+*/
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import {
+  ModelInfoSchema,
+  ProfileIdSchema,
+  ProviderIdSchema,
+  ProviderSchema,
+  WorkspaceIdSchema,
+} from '@ferry/shared';
+import { openDatabase, MessageRepository, SessionRepository, TaskRepository } from '@ferry/storage';
+import { BUILTIN_PROFILES } from '@ferry/router';
+import { AGENT_EVALS, runAgentEvals } from '../evals/fixtures.js';
+import { AgentLoop, repairAndValidate } from '../src/loop.js';
+import { SessionStore } from '../src/session.js';
+
+const tempDirs: string[] = [];
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+async function setup() {
+  const root = await mkdtemp(path.join(tmpdir(), 'ferry-agent-test-'));
+  tempDirs.push(root);
+  const database = await openDatabase(':memory:');
+  const store = new SessionStore({
+    sessions: new SessionRepository(database.client),
+    messages: new MessageRepository(database.client),
+    tasks: new TaskRepository(database.client),
+  });
+  const model = ModelInfoSchema.parse({
+    ref: 'openai/test-model',
+    providerId: 'openai',
+    name: 'Test Model',
+    tier: 'T2',
+    contextWindow: 8192,
+    maxOutput: 2048,
+    toolCalling: true,
+    reasoning: false,
+    free: true,
+    priceInPerM: 0,
+    priceOutPerM: 0,
+  });
+  const provider = ProviderSchema.parse({
+    id: ProviderIdSchema.parse('openai'),
+    name: 'OpenAI',
+    tag: 'legit',
+    kind: 'api',
+    brand: null,
+    keyStatus: 'valid',
+    enabled: true,
+    health: 'ok',
+    cooldownUntil: null,
+    dataUse: null,
+    termsNote: null,
+    signupUrl: null,
+    docsUrl: null,
+    verifiedAt: null,
+    modelCount: 1,
+    windows: [],
+    stepsLeftToday: 20,
+  });
+  const catalog = { models: [model], providers: [], tiers: {}, warnings: [] };
+  const session = store.create({
+    workspaceId: WorkspaceIdSchema.parse('workspace_test'),
+    profileId: ProfileIdSchema.parse(BUILTIN_PROFILES[0]!.id),
+    prompt: 'Please update the greeting in README.md',
+  });
+  return { root, database, store, session, model, provider, catalog };
+}
+
+describe('@ferry/agent', () => {
+  it('creates, reloads and lists persisted ordered session messages with a fallback title', async () => {
+    const state = await setup();
+    try {
+      expect(state.session.title).toBe('Please update the greeting in README.md');
+      const recovered = new SessionStore({
+        sessions: new SessionRepository(state.database.client),
+        messages: new MessageRepository(state.database.client),
+        tasks: new TaskRepository(state.database.client),
+      });
+      expect(recovered.load(state.session.id)?.messages.map((message) => message.role)).toEqual([
+        'user',
+      ]);
+      expect(recovered.list(state.session.workspaceId)).toHaveLength(1);
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('repairs valid JSON and reports invalid arguments after revalidation', () => {
+    const schema = z.object({ path: z.string() });
+    expect(repairAndValidate(schema, '{path: "README.md"}')).toEqual({
+      ok: true,
+      value: { path: 'README.md' },
+    });
+    expect(repairAndValidate(schema, '{broken')).toMatchObject({ ok: false });
+  });
+
+  it('runs a single model step and persists the assistant response', async () => {
+    const state = await setup();
+    try {
+      const events: string[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: (event) => events.push(event.type),
+        generator: async ({ onDelta }) => {
+          onDelta('Updated ');
+          onDelta('the greeting.');
+          return { text: 'Updated the greeting.', inputTokens: 20, outputTokens: 6 };
+        },
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.status).toBe('completed');
+      expect(result.steps).toBe(1);
+      expect(state.store.load(state.session.id)?.messages.at(-1)?.parts).toContainEqual(
+        expect.objectContaining({ type: 'text', text: 'Updated the greeting.' }),
+      );
+      expect(events).toContain('session.delta');
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('asks approval, checkpoints before a write and resumes with a second step', async () => {
+    const state = await setup();
+    try {
+      let calls = 0;
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'ask',
+        emit: () => {},
+        requestApproval: async () => 'allowed_once',
+        generator: async () =>
+          ++calls === 1
+            ? {
+                toolCalls: [
+                  { name: 'write_file', input: { path: 'README.md', content: 'hello\n' } },
+                ],
+                finishReason: 'tool-calls',
+              }
+            : { text: 'Done.', finishReason: 'stop' },
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.status).toBe('completed');
+      expect(await readFile(path.join(state.root, 'README.md'), 'utf8')).toBe('hello\n');
+      const parts =
+        state.store.load(state.session.id)?.messages.flatMap((message) => message.parts) ?? [];
+      expect(parts.some((part) => part.type === 'approval_request')).toBe(true);
+      expect(parts.some((part) => part.type === 'checkpoint')).toBe(true);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('does not write a denied tool call', async () => {
+    const state = await setup();
+    try {
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'ask',
+        emit: () => {},
+        requestApproval: async () => 'denied',
+        generator: async ({ onDelta }) => {
+          if (
+            !state.store
+              .load(state.session.id)
+              ?.messages.some((message) => message.parts.some((part) => part.type === 'tool_call'))
+          )
+            return {
+              toolCalls: [{ name: 'write_file', input: { path: 'denied.txt', content: 'secret' } }],
+              finishReason: 'tool-calls',
+            };
+          onDelta('The write was denied.');
+          return { text: 'The write was denied.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      await expect(readFile(path.join(state.root, 'denied.txt'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      expect(
+        state.store
+          .load(state.session.id)
+          ?.messages.flatMap((message) => message.parts)
+          .some((part) => part.type === 'approval_request' && part.state === 'denied'),
+      ).toBe(true);
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('compacts context through a summarize step when the token estimate exceeds 70 percent', async () => {
+    const state = await setup();
+    try {
+      const calledModels: string[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        estimateTokens: (value) => (value.length > 100 ? 7000 : Math.ceil(value.length / 4)),
+        generator: async ({ system }) => {
+          if (system.startsWith('Summarize')) {
+            calledModels.push('summarize');
+            return {
+              text: 'Keep the requested README edit in mind.',
+              inputTokens: 20,
+              outputTokens: 8,
+            };
+          }
+          calledModels.push('answer');
+          return { text: 'Done.', finishReason: 'stop' };
+        },
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.status).toBe('completed');
+      expect(calledModels).toEqual(['summarize', 'answer']);
+      expect(
+        result.taskRecord.decisions.some(
+          (decision) => decision.why === 'Automatic context compaction',
+        ),
+      ).toBe(true);
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('hands off to an eligible model after quota capacity removes the current provider', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'google/test-model',
+        providerId: 'google',
+        name: 'Alternate',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: ProviderIdSchema.parse('google'),
+        name: 'Google',
+      });
+      const catalog = { ...state.catalog, models: [state.model, alternate] };
+      state.store.updateSession(state.session.id, { modelRef: state.model.ref });
+      let providers = [state.provider, alternateProvider];
+      let calls = 0;
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog,
+        capacity: () => ({ providers }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        generator: async ({ model }) => {
+          calls++;
+          if (calls === 1) {
+            providers = [
+              ProviderSchema.parse({ ...state.provider, health: 'down' }),
+              alternateProvider,
+            ];
+            return {
+              toolCalls: [{ name: 'read_file', input: { path: 'absent.txt' } }],
+              finishReason: 'tool-calls',
+            };
+          }
+          expect(model.ref).toBe(alternate.ref);
+          return { text: 'Continued on the alternate model.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      const handoff = state.store
+        .load(state.session.id)
+        ?.messages.flatMap((message) => message.parts)
+        .find((part) => part.type === 'handoff_marker');
+      expect(handoff?.type).toBe('handoff_marker');
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('cancels a pending generation and leaves the session resumable', async () => {
+    const state = await setup();
+    try {
+      const controller = new AbortController();
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        generator: async ({ signal }) =>
+          new Promise((_, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => {
+                reject(new Error('aborted'));
+              },
+              { once: true },
+            );
+          }),
+      });
+      const running = loop.run({ sessionId: state.session.id, signal: controller.signal });
+      controller.abort();
+      expect((await running).status).toBe('cancelled');
+      expect(state.store.load(state.session.id)).toBeDefined();
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('defines all eight deterministic eval scenarios and reports measurements', async () => {
+    expect(AGENT_EVALS).toHaveLength(8);
+    const report = await runAgentEvals({
+      run: async () => ({ success: true, steps: 1, tokens: 12 }),
+    });
+    expect(report).toMatchObject({ mode: 'fake', passed: 8, total: 8 });
+  });
+});
