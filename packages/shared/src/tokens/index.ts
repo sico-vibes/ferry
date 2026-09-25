@@ -7,6 +7,11 @@ export interface TokenMessage {
 export type TokenInput = string | readonly TokenMessage[];
 export type TokenCorrectionFactors = Readonly<Record<string, number>>;
 
+// The tokenizer can become quadratic on pathological repeated-character input.
+// Keep exact tokenization for ordinary prompts and use a calibrated byte/character
+// estimate for large payloads so tool output measurement stays bounded.
+const EXACT_TOKEN_LIMIT = 16_384;
+
 function familyKey(modelFamily?: string): string {
   return modelFamily?.trim().toLowerCase() ?? 'default';
 }
@@ -20,7 +25,9 @@ export function estimateTokens(
       ? input
       : input.map(({ role, content }) => `${role}: ${content}`).join('\n');
   const factor = correctionFactors[familyKey(modelFamily)] ?? correctionFactors.default ?? 1;
-  return Math.max(0, Math.ceil(countTokens(messages) * factor));
+  const estimate =
+    messages.length > EXACT_TOKEN_LIMIT ? Math.ceil(messages.length / 4) : countTokens(messages);
+  return Math.max(0, Math.ceil(estimate * factor));
 }
 
 export function updateTokenCorrectionFactor(

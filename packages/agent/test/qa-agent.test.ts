@@ -11,6 +11,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   ModelInfoSchema,
+  MessageSchema,
+  newId,
   ProfileIdSchema,
   ProviderIdSchema,
   ProviderSchema,
@@ -184,59 +186,52 @@ describe('QA agent: cancellation phases', () => {
     }
   }, 30_000);
 
-  it.fails(
-    'resolves a pending approval when cancelled during the approval wait',
-    async () => {
-      // BUG: when the run is cancelled while requestApproval() is awaiting, the
-      // loop aborts the tool race, leaves the approval_request part at
-      // state:"pending" forever, and then appends the "retry once" user message
-      // after the cancellation (loop.ts:239-242, 423-501).
-      const state = await setup();
-      try {
-        const controller = new AbortController();
-        let approvalStarted: () => void = () => {};
-        const started = new Promise<void>((resolve) => {
-          approvalStarted = resolve;
-        });
-        const loop = makeLoop(state, {
-          permissionMode: 'ask',
-          requestApproval: async (_part, signal) => {
-            approvalStarted();
-            return new Promise((_resolve, reject) => {
-              signal.addEventListener(
-                'abort',
-                () => {
-                  reject(new Error('cancelled'));
-                },
-                {
-                  once: true,
-                },
-              );
-            });
-          },
-          generator: async () => ({
-            toolCalls: [{ name: 'write_file', input: { path: 'never.txt', content: 'x' } }],
-            finishReason: 'tool-calls',
-          }),
-        });
-        const running = loop.run({ sessionId: state.session.id, signal: controller.signal });
-        await started;
-        controller.abort();
-        await running;
-        const approval = partsOf(state).find((part) => part.type === 'approval_request');
-        expect(approval?.state).not.toBe('pending');
-        const userText = (
-          state.store.load(state.session.id)?.messages.filter((m) => m.role === 'user') ?? []
-        ).flatMap((message) =>
-          message.parts.filter((part) => part.type === 'text').map((part) => part.text),
-        );
-        expect(userText.some((text) => text.includes('retry once'))).toBe(false);
-      } finally {
-        state.database.close();
-      }
-    },
-    30_000,
-  );
+  it('resolves a pending approval when cancelled during the approval wait', async () => {
+    // Cancellation must settle the persisted approval and stop follow-up writes.
+    const state = await setup();
+    try {
+      const controller = new AbortController();
+      let approvalStarted: () => void = () => {};
+      const started = new Promise<void>((resolve) => {
+        approvalStarted = resolve;
+      });
+      const loop = makeLoop(state, {
+        permissionMode: 'ask',
+        requestApproval: async (_part, signal) => {
+          approvalStarted();
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => {
+                reject(new Error('cancelled'));
+              },
+              {
+                once: true,
+              },
+            );
+          });
+        },
+        generator: async () => ({
+          toolCalls: [{ name: 'write_file', input: { path: 'never.txt', content: 'x' } }],
+          finishReason: 'tool-calls',
+        }),
+      });
+      const running = loop.run({ sessionId: state.session.id, signal: controller.signal });
+      await started;
+      controller.abort();
+      await running;
+      const approval = partsOf(state).find((part) => part.type === 'approval_request');
+      expect(approval?.state).not.toBe('pending');
+      const userText = (
+        state.store.load(state.session.id)?.messages.filter((m) => m.role === 'user') ?? []
+      ).flatMap((message) =>
+        message.parts.filter((part) => part.type === 'text').map((part) => part.text),
+      );
+      expect(userText.some((text) => text.includes('retry once'))).toBe(false);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
 });
 
 describe('QA agent: permissions', () => {
@@ -313,7 +308,7 @@ describe('QA agent: permissions', () => {
     }
   }, 30_000);
 
-  it('auto_edit still gates commands and full_auto still denies dangerous commands', () => {
+  it('asks with a danger warning outside full_auto and denies danger in full_auto', () => {
     const workspace = 'C:\\work';
     expect(
       evaluatePermission(
@@ -327,12 +322,18 @@ describe('QA agent: permissions', () => {
         { mode: 'auto_edit', workspace, rules: [] },
       ).decision,
     ).toBe('allow');
-    expect(
-      evaluatePermission(
-        { tool: 'run_command', command: 'rm -rf /' },
-        { mode: 'auto_edit', workspace, rules: [] },
-      ).decision,
-    ).toBe('deny');
+    const autoEditDanger = evaluatePermission(
+      { tool: 'run_command', command: 'rm -rf /' },
+      { mode: 'auto_edit', workspace, rules: [] },
+    );
+    expect(autoEditDanger.decision).toBe('ask');
+    expect(autoEditDanger.reason).toMatch(/danger warning/i);
+    const askDanger = evaluatePermission(
+      { tool: 'run_command', command: 'rm -rf /' },
+      { mode: 'ask', workspace, rules: [] },
+    );
+    expect(askDanger.decision).toBe('ask');
+    expect(askDanger.reason).toMatch(/danger warning/i);
     expect(
       evaluatePermission(
         { tool: 'run_command', command: 'rm -rf /' },
@@ -522,30 +523,24 @@ describe('QA agent: budgets and compaction', () => {
     }
   }, 30_000);
 
-  it.fails(
-    'never exceeds maxSteps',
-    async () => {
-      // BUG: the tool-dispatch loop increments stepCount for each executed tool
-      // call in addition to the model step (loop.ts:376, 486), so with
-      // maxSteps=1 the run still reports and performs 2 steps.
-      const state = await setup();
-      try {
-        await writeFile(path.join(state.root, 's.txt'), 'data', 'utf8');
-        const loop = makeLoop(state, {
-          maxSteps: 1,
-          generator: async () => ({
-            toolCalls: [{ name: 'read_file', input: { path: 's.txt' } }],
-            finishReason: 'tool-calls',
-          }),
-        });
-        const result = await loop.run({ sessionId: state.session.id });
-        expect(result.steps).toBeLessThanOrEqual(1);
-      } finally {
-        state.database.close();
-      }
-    },
-    30_000,
-  );
+  it('never exceeds maxSteps', async () => {
+    // A model response may include tool calls, but those do not add model steps.
+    const state = await setup();
+    try {
+      await writeFile(path.join(state.root, 's.txt'), 'data', 'utf8');
+      const loop = makeLoop(state, {
+        maxSteps: 1,
+        generator: async () => ({
+          toolCalls: [{ name: 'read_file', input: { path: 's.txt' } }],
+          finishReason: 'tool-calls',
+        }),
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.steps).toBeLessThanOrEqual(1);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
 
   it('compacts at the threshold and preserves the goal and summary for the next step', async () => {
     const state = await setup();
@@ -600,89 +595,123 @@ describe('QA agent: optimizer recovery wiring', () => {
     }
   }, 30_000);
 
-  it.fails(
-    'read_output returns the byte-exact original through the loop',
-    async () => {
-      // BUG (two layers): (1) ToolNameSchema (shared/domain/session.ts:37) omits
-      // "read_output", so persisting the tool_call part rejects the run; and
-      // (2) loop.ts:438 stores the *filtered* text under the recovery handle in
-      // outputHandles, which readRecovery() checks before the byte-exact blob
-      // store (loop.ts:193).
-      const state = await setup();
-      try {
-        await writeFile(path.join(state.root, 'orig.txt'), 'ORIGINAL-CONTENT', 'utf8');
-        const originals = new Map<string, string>();
-        let returned: string | undefined;
-        let calls = 0;
-        const loop = makeLoop(state, {
-          filterOutput: async (name, text) => {
-            if (name === 'read_file') {
-              originals.set('H', text);
-              return { text: 'FILTERED', filtered: true, recoveryHandle: 'H' };
-            }
-            if (name === 'read_output') returned = text;
-            return { text, filtered: false };
-          },
-          readRecovery: async (handle) => originals.get(handle),
-          generator: async () => {
-            calls++;
-            if (calls === 1)
-              return {
-                toolCalls: [{ name: 'read_file', input: { path: 'orig.txt' } }],
-                finishReason: 'tool-calls',
-              };
-            if (calls === 2)
-              return {
-                toolCalls: [{ name: 'read_output', input: { handle: 'H' } }],
-                finishReason: 'tool-calls',
-              };
-            return { text: 'done', finishReason: 'stop' };
-          },
-        });
-        const result = await loop.run({ sessionId: state.session.id });
-        expect(result.status).toBe('completed');
-        expect(returned).toBe('ORIGINAL-CONTENT');
-      } finally {
-        state.database.close();
-      }
-    },
-    30_000,
-  );
+  it('read_output returns the byte-exact original through the loop', async () => {
+    // Recovery must return the original text captured before filtering.
+    const state = await setup();
+    try {
+      await writeFile(path.join(state.root, 'orig.txt'), 'ORIGINAL-CONTENT', 'utf8');
+      const originals = new Map<string, string>();
+      let returned: string | undefined;
+      let calls = 0;
+      const loop = makeLoop(state, {
+        filterOutput: async (name, text) => {
+          if (name === 'read_file') {
+            originals.set('H', text);
+            return { text: 'FILTERED', filtered: true, recoveryHandle: 'H' };
+          }
+          if (name === 'read_output') returned = text;
+          return { text, filtered: false };
+        },
+        readRecovery: async (handle) => originals.get(handle),
+        generator: async () => {
+          calls++;
+          if (calls === 1)
+            return {
+              toolCalls: [{ name: 'read_file', input: { path: 'orig.txt' } }],
+              finishReason: 'tool-calls',
+            };
+          if (calls === 2)
+            return {
+              toolCalls: [{ name: 'read_output', input: { handle: 'H' } }],
+              finishReason: 'tool-calls',
+            };
+          return { text: 'done', finishReason: 'stop' };
+        },
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.status).toBe('completed');
+      expect(returned).toBe(originals.get('H'));
+      expect(returned).not.toBe('FILTERED');
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
 
-  it.fails(
-    'apply_patch is accepted as a persisted tool name',
-    async () => {
-      // BUG: ToolNameSchema omits "apply_patch" even though tool-registry.ts:154
-      // registers and advertises it, so any apply_patch call crashes the session.
-      const state = await setup();
-      try {
-        await writeFile(path.join(state.root, 'p.txt'), 'one\ntwo\nthree\n', 'utf8');
-        const loop = makeLoop(state, {
-          generator: async () =>
-            partsOf(state).some((part) => part.type === 'tool_call')
-              ? { text: 'patched', finishReason: 'stop' }
-              : {
-                  toolCalls: [
-                    {
-                      name: 'apply_patch',
-                      input: {
-                        patch:
-                          '--- a/p.txt\n+++ b/p.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+deux\n three',
-                      },
+  it('apply_patch is accepted as a persisted tool name', async () => {
+    // Registered tools must be persistable before their results are stored.
+    const state = await setup();
+    try {
+      await writeFile(path.join(state.root, 'p.txt'), 'one\ntwo\nthree\n', 'utf8');
+      const loop = makeLoop(state, {
+        generator: async () =>
+          partsOf(state).some((part) => part.type === 'tool_call')
+            ? { text: 'patched', finishReason: 'stop' }
+            : {
+                toolCalls: [
+                  {
+                    name: 'apply_patch',
+                    input: {
+                      patch: '--- a/p.txt\n+++ b/p.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+deux\n three',
                     },
-                  ],
-                  finishReason: 'tool-calls',
-                },
-        });
-        const result = await loop.run({ sessionId: state.session.id });
-        expect(result.status).toBe('completed');
-        expect(await readFile(path.join(state.root, 'p.txt'), 'utf8')).toBe('one\ndeux\nthree\n');
-      } finally {
-        state.database.close();
-      }
-    },
-    30_000,
-  );
+                  },
+                ],
+                finishReason: 'tool-calls',
+              },
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.status).toBe('completed');
+      expect(await readFile(path.join(state.root, 'p.txt'), 'utf8')).toBe('one\ndeux\nthree\n');
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('round-trips every registered tool name through MessageSchema', async () => {
+    const state = await setup();
+    try {
+      let names: string[] = [];
+      const loop = makeLoop(state, {
+        toolSources: [
+          {
+            tools: () =>
+              ['mcp__example__lookup', 'skill__review'].map((name) => ({
+                name,
+                title: name,
+                schema: z.object({}),
+                execute: () => 'unused',
+              })),
+          },
+        ],
+        generator: async ({ tools }) => {
+          names = tools.map((registered) => registered.name);
+          return { text: 'done', finishReason: 'stop' };
+        },
+      });
+      expect((await loop.run({ sessionId: state.session.id })).status).toBe('completed');
+      expect(names.length).toBeGreaterThan(0);
+      const message = MessageSchema.parse({
+        id: newId('message'),
+        sessionId: state.session.id,
+        role: 'assistant',
+        createdAt: new Date().toISOString(),
+        modelRef: null,
+        parts: names.map((tool) => ({
+          type: 'tool_call',
+          id: newId('part'),
+          tool,
+          title: tool,
+          args: {},
+          status: 'pending',
+          output: null,
+          changes: [],
+          durationMs: null,
+        })),
+      });
+      expect(message.parts).toHaveLength(names.length);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
 });
 
 describe('QA agent: evals harness', () => {

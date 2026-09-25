@@ -34,19 +34,9 @@ export const FileChangeSchema = z.object({
   after: z.string().nullable(),
 });
 export type FileChange = z.infer<typeof FileChangeSchema>;
-export const ToolNameSchema = z.enum([
-  'read_file',
-  'write_file',
-  'edit_file',
-  'list_dir',
-  'glob',
-  'grep',
-  'run_command',
-  'repo_map',
-  'update_plan',
-  'delegate',
-  'mcp',
-]);
+// Tool sources are extensible (MCP servers and skills register tools at runtime),
+// so persisted calls must accept any non-empty registered tool name.
+export const ToolNameSchema = z.string().min(1);
 export type ToolName = z.infer<typeof ToolNameSchema>;
 export const ToolOutputSchema = z.object({
   text: z.string(),

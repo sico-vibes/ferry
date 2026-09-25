@@ -55,35 +55,36 @@ describe('QA optimizer recovery: byte-exact round trips', () => {
 });
 
 describe('QA optimizer recovery: error visibility', () => {
-  it.fails('does not claim all tests passed when the output contains an error line', () => {
-    // BUG: testCandidate()'s pass heuristic matches "Tests  N passed (N)" and
-    // ignores failure markers it does not recognize (npm ERR!, "exit code 1"),
-    // so a failed run is rewritten to "All tests passed." (filters.ts:285-300).
+  it('does not claim all tests passed when the output contains an error line', () => {
+    // Error lines must prevent a success summary and remain visible.
     const output = 'Tests  3 passed (3)\nnpm ERR! code ELIFECYCLE\n';
     expect(filterTestOutput(output)).not.toBe('All tests passed.');
   });
 
-  it.fails('does not claim all tests passed when a bare exit code follows a pass line', () => {
-    // BUG: same heuristic — "3 passed in 0.4s" plus "exit code 1" is reported
-    // as a complete success, hiding the non-zero exit status (filters.ts:286).
+  it('does not claim all tests passed when a bare exit code follows a pass line', () => {
+    // A non-zero exit status takes precedence over a pass summary.
     const output = '  3 passed in 0.4s\nProcess completed with exit code 1\n';
     expect(filterTestOutput(output)).not.toBe('All tests passed.');
   });
 });
 
 describe('QA optimizer recovery: pathological inputs', () => {
-  it.fails(
-    'estimates tokens for a large repeated-character payload in bounded time',
-    () => {
-      // BUG: @ferry/shared/tokens estimateTokens() (gpt-tokenizer) is super-linear
-      // for long runs of a single character: 100k identical chars takes multiple
-      // seconds. optimizeOutput calls it 4-6 times per filter, synchronously, so a
-      // large tool output blocks the agent loop and cannot be cancelled.
-      const input = 'x'.repeat(100_000);
-      const started = Date.now();
-      estimateTokens(input);
-      expect(Date.now() - started).toBeLessThan(500);
-    },
-    30_000,
-  );
+  it('estimates tokens for a large repeated-character payload in bounded time', () => {
+    // Large repeated payloads should use the bounded estimator path.
+    const input = 'x'.repeat(2_000_000);
+    const started = Date.now();
+    estimateTokens(input);
+    expect(Date.now() - started).toBeLessThan(500);
+  }, 30_000);
+
+  it('preserves other failure markers and structured non-zero runner exit codes', () => {
+    for (const marker of ['FAIL suite.test.ts', 'Error: test setup failed', 'ELIFECYCLE']) {
+      const filtered = filterTestOutput(`Tests  3 passed (3)\n${marker}\n`);
+      expect(filtered).not.toBe('All tests passed.');
+      expect(filtered).toContain(marker);
+    }
+    expect(
+      filterTestOutput('{"exitCode":1,"stdout":"Tests 3 passed (3)\\n","stderr":""}'),
+    ).not.toBe('All tests passed.');
+  });
 });

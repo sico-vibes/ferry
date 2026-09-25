@@ -271,31 +271,59 @@ function gitLogCandidate(input: string): string {
 }
 
 function testCandidate(input: string): string {
-  const lines = genericFilter(input, { maxLines: 2000 }).split('\n');
-  const fail = lines.filter((line) =>
-    /(^\s*(FAIL|FAILED|ERROR|not ok|✕|✗|×|âœ•|\.{2,}[FExX]|F\.|_{3,}|--- FAIL:|error:)|AssertionError|Traceback|Expected .*received|\bError:)/i.test(
+  let runnerStdout = '';
+  let runnerStderr = '';
+  let runnerExitCode: number | undefined;
+  try {
+    const value: unknown = JSON.parse(input);
+    if (value && typeof value === 'object') {
+      if ('stdout' in value && typeof value.stdout === 'string') runnerStdout = value.stdout;
+      if ('stderr' in value && typeof value.stderr === 'string') runnerStderr = value.stderr;
+      if ('exitCode' in value && typeof value.exitCode === 'number')
+        runnerExitCode = value.exitCode;
+    }
+  } catch {
+    // Command output is usually plain text rather than a structured result.
+  }
+  const source =
+    runnerStdout || runnerStderr
+      ? `${runnerStdout}${runnerStderr ? `${runnerStdout ? '\n' : ''}${runnerStderr}` : ''}`
+      : input;
+  const sourceLines = source.split(/\r?\n/);
+  const hasFailure = (line: string): boolean =>
+    /(^\s*(FAIL|FAILED|ERROR|not ok|\u2715|\u00d7|\.{2,}[FExX]|F\.|_{3,}|--- FAIL:|error:)|AssertionError|Traceback|Expected .*received|\bError:|npm ERR!|ELIFECYCLE|(?:exit(?:ed)?|process completed with exit)\s+(?:code\s+)?[1-9]\d*\b)/i.test(
       line,
-    ),
-  );
-  const summary = lines.filter((line) =>
+    );
+  const hasSummary = (line: string): boolean =>
     /(Test Files|Tests\s+|Suites\s+|Snapshots\s+|Time\s+|passed|failed|skipped|no tests|All tests passed|ok\s+\S+\s+\(\d)/i.test(
       line,
-    ),
-  );
+    );
+  const failed = sourceLines.some(hasFailure);
+  const nonZeroExitCode =
+    runnerExitCode !== undefined
+      ? runnerExitCode !== 0
+      : /(?:exit(?:ed)?|process completed with exit)\s+(?:code\s+)?[1-9]\d*\b/i.test(source);
   if (
     /(All tests passed|Test Files\s+\d+ passed \(\d+\)|Tests\s+\d+ passed \(\d+\)|Tests:\s+\d+ passed,\s+\d+ total|\d+ passed(?:,\s+\d+ skipped)?(?: in [\d.]+s)?$)/im.test(
-      input,
+      source,
     ) &&
-    !fail.length
+    !failed &&
+    !nonZeroExitCode
   )
     return 'All tests passed.';
-  const keptSet = new Set([...fail, ...summary]);
-  const kept = lines
-    .filter((line) => keptSet.has(line) && !/^\s*=+/.test(line))
-    .map((line) => (/^\s*(?:❯|Test Files|Tests\s)/.test(line) ? line.trimStart() : line));
+  const kept = sourceLines
+    .filter((line) => hasFailure(line) || hasSummary(line))
+    .map((line) => (/^\s*❯/.test(line) ? line.trimStart() : line));
+  if (nonZeroExitCode) {
+    const exitSummary =
+      runnerExitCode !== undefined
+        ? `Process exited with code ${String(runnerExitCode)}`
+        : undefined;
+    return [...kept, ...(exitSummary ? [exitSummary] : [])].join('\n') || source;
+  }
   return kept.length
     ? kept.join('\n')
-    : /(passed|success|ok\s)/i.test(input)
+    : /(passed|success|ok\s)/i.test(source) && !failed
       ? 'All tests passed.'
       : genericFilter(input, { maxLines: 30 });
 }
