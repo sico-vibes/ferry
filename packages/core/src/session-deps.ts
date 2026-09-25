@@ -104,7 +104,11 @@ export function createSessionDependencies(
           signupUrl: signup_url,
           docsUrl: docs_url,
           verifiedAt: verified_at,
-          modelCount: services.catalog.models.filter((model) => model.providerId === id).length,
+          modelCount: saved?.availableModels?.length ?? 0,
+          ...(saved?.availableModels
+            ? { availableModels: saved.availableModels, modelCount: saved.availableModels.length }
+            : {}),
+          modelsVerifiedAt: saved?.modelsVerifiedAt ?? null,
           windows: services.quota.getWindows(id),
           stepsLeftToday: services.quota.stepsLeft(id),
         });
@@ -187,9 +191,12 @@ export function createSessionDependencies(
   };
   const gateway: ModelGateway = {
     resolveCandidates(profile, stepKind) {
+      const available = services.catalog.providers.flatMap(
+        ({ provider }) => services.providers.get(provider)?.availableModels ?? [],
+      );
       const eligible = new Set(
         scoreModels({
-          models: services.catalog.models,
+          models: available,
           providers: providers(),
           capacity: capacity(),
           profile,
@@ -197,7 +204,7 @@ export function createSessionDependencies(
           estimate: { inputTokens: 1, requiresTools: false },
         }).map((candidate) => candidate.ref),
       );
-      return services.catalog.models.filter((model) => eligible.has(model.ref));
+      return available.filter((model) => eligible.has(model.ref));
     },
     recordHandoff(sessionId, reason) {
       services.handoffs.put({ id: newId('handoff'), sessionId, reason });
@@ -217,8 +224,45 @@ export function createSessionDependencies(
         req.model,
         req.messages.at(-1)?.sessionId ?? '',
       );
-      return await generator({ ...req, signal });
+      try {
+        return await generator({ ...req, signal });
+      } catch (error) {
+        if (isUnavailableModelError(error)) {
+          const saved = services.providers.get(providerId);
+          if (saved?.availableModels) {
+            const availableModels = saved.availableModels.filter(
+              (model) => model.ref !== req.model.ref,
+            );
+            services.providers.put({
+              ...saved,
+              availableModels,
+              modelCount: availableModels.length,
+              modelsVerifiedAt: services.clock.now().toISOString(),
+            });
+          }
+        }
+        throw error;
+      }
     },
   };
   return { gateway, usage, capacity, providers, apiKeys, providerFetch };
+}
+
+function isUnavailableModelError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+    message?: unknown;
+  };
+  const status = Number(
+    candidate.statusCode ?? candidate.status ?? candidate.response?.status ?? 0,
+  );
+  const message = typeof candidate.message === 'string' ? candidate.message : '';
+  return (
+    status === 404 ||
+    status === 410 ||
+    /model_not_found|not found for account|end of life|no longer available/i.test(message)
+  );
 }

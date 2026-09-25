@@ -1,96 +1,95 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { generateText } from 'ai';
+import { join } from 'node:path';
 import { loadCatalog } from '@ferry/catalog';
-import { createLanguageModel } from './index.js';
+import type { ProviderErrorKind } from '@ferry/shared';
+import type { ProbeResult } from '@ferry/shared';
+import { probe } from './index.js';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const outputDirectory = join(here, '..', 'test', 'fixtures', 'live');
-
-function safeBody(text: string, key: string): unknown {
-  if (!text) return null;
-  try {
-    return redact(JSON.parse(text) as unknown, key);
-  } catch {
-    return text.replaceAll(key, '[REDACTED]').slice(0, 4000);
-  }
+export interface LiveProbeCapture {
+  url: string;
+  status: number;
+  headers: Record<string, string>;
 }
 
-function redact(value: unknown, key: string): unknown {
-  if (Array.isArray(value)) return value.map((entry) => redact(entry, key));
-  if (!value || typeof value !== 'object') {
-    if (typeof value !== 'string') return value;
-    return value.replaceAll(key, '[REDACTED]');
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([name, entry]) => [
-      name,
-      /key|token|secret|authorization|content|prompt|text/i.test(name)
-        ? '[REDACTED]'
-        : redact(entry, key),
-    ]),
-  );
+export interface LiveProbeRow {
+  provider: string;
+  ok: boolean;
+  model: string | null;
+  skipped: { model: string; reason: string }[];
+  windows: ProbeResult['windows'];
+  errorKind: ProviderErrorKind | null;
+  message: string;
 }
 
-export async function runLiveProbe(): Promise<void> {
+export async function runLiveProbe(options: {
+  keys: Record<string, string | undefined>;
+  outputDirectory: string;
+  fetch?: typeof globalThis.fetch;
+  write?: (provider: string, fixture: unknown) => Promise<void>;
+  print?: (line: string) => void;
+}): Promise<LiveProbeRow[]> {
   const catalog = await loadCatalog();
-  await mkdir(outputDirectory, { recursive: true });
-
+  if (!options.write) await mkdir(options.outputDirectory, { recursive: true });
+  const rows: LiveProbeRow[] = [];
   for (const provider of catalog.providers) {
-    const envName = `FERRY_KEY_${provider.provider.replace(/[^a-z0-9]/gi, '_').toUpperCase()}`;
-    const key = process.env[envName];
+    const key = options.keys[provider.provider];
     if (!key) continue;
-    const model = catalog.models.find((entry) => entry.providerId === provider.provider);
-    if (!model) continue;
-    const captures: {
-      url: string;
-      status: number;
-      headers: Record<string, string>;
-      body: unknown;
-    }[] = [];
+    const captures: LiveProbeCapture[] = [];
     const recordingFetch: typeof globalThis.fetch = async (input, init) => {
-      const response = await globalThis.fetch(input, init);
+      const response = await (options.fetch ?? globalThis.fetch)(input, init);
       const headers: Record<string, string> = {};
       response.headers.forEach((value, name) => {
-        if (name.toLowerCase() === 'retry-after' || name.toLowerCase().startsWith('x-ratelimit-')) {
+        if (name.toLowerCase() === 'retry-after' || name.toLowerCase().startsWith('x-ratelimit-'))
           headers[name.toLowerCase()] = value;
-        }
       });
       const url = input instanceof Request ? input.url : String(input);
-      captures.push({
-        url: url.replace(/\?.*$/, ''),
-        status: response.status,
-        headers,
-        body: safeBody(await response.clone().text(), key),
-      });
+      captures.push({ url: url.replace(/\?.*$/, ''), status: response.status, headers });
       return response;
     };
-    let outcome: { ok: true; message: string } | { ok: false; error: string };
-    try {
-      const modelInstance = createLanguageModel(model.ref, {
-        apiKey: key,
-        sessionId: `live-probe-${String(Date.now())}`,
-        fetch: recordingFetch,
-      });
-      await generateText({
-        model: modelInstance,
-        prompt: 'Reply with one character.',
-        maxOutputTokens: 1,
-      });
-      outcome = { ok: true, message: 'Key valid' };
-    } catch (error) {
-      outcome = {
-        ok: false,
-        error: String(error instanceof Error ? error.message : error).replaceAll(key, '[REDACTED]'),
-      };
-    }
-    const path = join(outputDirectory, `${provider.provider}.json`);
-    await writeFile(
-      path,
-      `${JSON.stringify({ provider: provider.provider, model: model.ref, outcome, calls: captures }, null, 2)}\n`,
-      'utf8',
+    const baseUrl =
+      provider.provider === 'openrouter'
+        ? 'https://openrouter.ai/api/v1'
+        : provider.provider === 'gemini'
+          ? 'https://generativelanguage.googleapis.com/v1beta/openai'
+          : undefined;
+    const result = await probe(provider.provider, key, {
+      fetch: recordingFetch,
+      ...(baseUrl ? { baseUrl } : {}),
+      timeoutMs: 60_000,
+    });
+    const model = result.usedModel ?? result.models[0] ?? null;
+    const windows = result.windows;
+    const row: LiveProbeRow = {
+      provider: provider.provider,
+      ok: result.ok,
+      model,
+      skipped: result.skippedModels ?? [],
+      windows,
+      errorKind: result.errorKind,
+      message: result.message.replaceAll(key, '[REDACTED]'),
+    };
+    rows.push(row);
+    const fixture = {
+      provider: provider.provider,
+      capturedAt: new Date().toISOString(),
+      ok: result.ok,
+      model,
+      skipped: row.skipped,
+      windows,
+      errorKind: row.errorKind,
+      message: row.message,
+      calls: captures,
+    };
+    if (options.write) await options.write(provider.provider, fixture);
+    else
+      await writeFile(
+        join(options.outputDirectory, `${provider.provider}.json`),
+        `${JSON.stringify(fixture, null, 2)}\n`,
+        'utf8',
+      );
+    options.print?.(
+      `${row.provider}\t${row.ok ? 'yes' : 'no'}\t${row.model ?? '-'}\t${JSON.stringify(row.skipped)}\t${JSON.stringify(row.windows)}\t${row.errorKind ?? row.message}`,
     );
-    console.log(`Wrote ${path}`);
   }
+  return rows;
 }

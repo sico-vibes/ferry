@@ -374,7 +374,7 @@ describe('provider, model and quota RPC integration', () => {
       const connected = await rpc.providers.setKey(providerId, secret);
       expect(connected.keyStatus).toBe('unchecked');
       expect(JSON.stringify(connected)).not.toContain(secret);
-      expect(await rpc.models.list(providerId)).not.toHaveLength(0);
+      expect(await rpc.models.list(providerId)).toHaveLength(0);
 
       const probeResult = await rpc.providers.probe(providerId).catch((error: unknown) => {
         const requests = fake.requests.map(({ method, url }) => ({ method, url }));
@@ -383,6 +383,7 @@ describe('provider, model and quota RPC integration', () => {
         );
       });
       expect(probeResult).toMatchObject({ ok: true, keyValid: true });
+      expect(await rpc.models.list(providerId)).not.toHaveLength(0);
       expect(probeResult.windows[0]).toMatchObject({ limit: 20, remaining: 13 });
       const capacity = await rpc.quota.capacity();
       expect(capacity.perProvider.find((item) => item.providerId === 'openai')).toMatchObject({

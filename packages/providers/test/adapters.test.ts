@@ -204,7 +204,7 @@ describe('provider probes', () => {
     const ok = await probe('groq', 'fake-key', { baseUrl: `${success.baseUrl}/v1` });
     expect(ok).toMatchObject({ ok: true, keyValid: true, message: 'Key valid' });
     expect(ProbeResultSchema.safeParse(ok).success).toBe(true);
-    expect(success.requests[0]?.body).toMatchObject({ max_tokens: 1 });
+    expect(success.requests.at(-1)?.body).toMatchObject({ max_tokens: 64 });
 
     const invalid = new FakeOpenAIServer({
       responses: [
@@ -221,7 +221,7 @@ describe('provider probes', () => {
       ok: false,
       keyValid: false,
       errorKind: 'auth',
-      message: 'Key invalid',
+      message: 'invalid api key',
     });
     expect(ProbeResultSchema.safeParse(invalidResult).success).toBe(true);
 
@@ -241,7 +241,7 @@ describe('provider probes', () => {
       ok: false,
       keyValid: true,
       errorKind: 'rate_limit',
-      message: 'Rate limited — resets in 0h 14m',
+      message: 'rate limit exceeded',
     });
   }, 30000);
 });

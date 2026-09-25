@@ -1,0 +1,41 @@
+{
+  "provider": "openrouter",
+  "capturedAt": "2026-09-25T22:00:23.751Z",
+  "ok": true,
+  "model": "stealth/space-bunny-alpha",
+  "skipped": [],
+  "windows": [
+    {
+      "id": "free-model-requests-day",
+      "scope": "provider",
+      "modelRef": null,
+      "metric": "requests",
+      "kind": "fixed_daily",
+      "periodLabel": "free-model-requests-day",
+      "used": 1,
+      "limit": 50,
+      "remaining": 49,
+      "resetAt": "2026-09-26T00:00:00.000Z",
+      "confidence": "exact"
+    }
+  ],
+  "errorKind": null,
+  "message": "Key valid",
+  "calls": [
+    {
+      "url": "https://openrouter.ai/api/v1/models",
+      "status": 200,
+      "headers": {}
+    },
+    {
+      "url": "https://openrouter.ai/api/v1/key",
+      "status": 200,
+      "headers": {}
+    },
+    {
+      "url": "https://openrouter.ai/api/v1/chat/completions",
+      "status": 200,
+      "headers": {}
+    }
+  ]
+}

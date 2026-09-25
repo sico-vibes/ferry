@@ -1,0 +1,22 @@
+{
+  "provider": "gemini",
+  "capturedAt": "2026-09-25T21:59:56.477Z",
+  "ok": true,
+  "model": "gemini-3.8-flash",
+  "skipped": [],
+  "windows": [],
+  "errorKind": null,
+  "message": "Key valid",
+  "calls": [
+    {
+      "url": "https://generativelanguage.googleapis.com/v1beta/openai/models",
+      "status": 200,
+      "headers": {}
+    },
+    {
+      "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      "status": 200,
+      "headers": {}
+    }
+  ]
+}

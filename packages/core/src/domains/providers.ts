@@ -6,7 +6,7 @@ import {
   newId,
   type Provider,
 } from '@ferry/shared';
-import { probe } from '@ferry/providers';
+import { discoverProviderModels, probe } from '@ferry/providers';
 import { z } from 'zod';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
@@ -27,7 +27,8 @@ function providerRecord(services: FerryServices, id: string): Provider {
   const saved = services.providers.get(id);
   const keyRef = services.providerKeys.get(id);
   const keyStatus: Provider['keyStatus'] = keyRef ? (saved?.keyStatus ?? 'unchecked') : 'missing';
-  const modelCount = services.catalog.models.filter((model) => model.providerId === id).length;
+  const availableModels = saved?.availableModels;
+  const modelCount = availableModels?.length ?? 0;
   const cooldown = services.cooldowns.get(id);
   const activeCooldown = cooldown && Date.parse(cooldown.until) > services.clock.now().getTime();
   return ProviderSchema.parse({
@@ -50,6 +51,8 @@ function providerRecord(services: FerryServices, id: string): Provider {
     docsUrl: limits.docs_url,
     verifiedAt: limits.verified_at,
     modelCount,
+    ...(availableModels ? { availableModels } : {}),
+    modelsVerifiedAt: saved?.modelsVerifiedAt ?? null,
     windows: services.quota.getWindows(id),
     stepsLeftToday: services.quota.stepsLeft(id),
   });
@@ -77,12 +80,31 @@ export function register(host: CoreHost, services: FerryServices): void {
         createdAt: services.clock.now().toISOString(),
       });
       invalidateSessionProviderKeyCache(services, id);
+      const providerBaseUrl = baseUrlFor(services, id);
+      let discovered: Awaited<ReturnType<typeof discoverProviderModels>> = [];
+      let discoverySucceeded = false;
+      if (services.env.NODE_ENV !== 'test') {
+        try {
+          discovered = await discoverProviderModels(id, key, {
+            ...(providerBaseUrl ? { baseUrl: providerBaseUrl } : {}),
+          });
+          discoverySucceeded = true;
+        } catch {
+          // Keep discovery failures distinct from an empty live model list.
+        }
+      }
+      const now = services.clock.now().toISOString();
       const provider = saveProvider(services, {
         ...current,
         keyStatus: 'unchecked',
         enabled: true,
         health: 'unknown',
         cooldownUntil: null,
+        availableModels: [],
+        modelsVerifiedAt: null,
+        ...(discoverySucceeded
+          ? { availableModels: discovered, modelsVerifiedAt: now, modelCount: discovered.length }
+          : {}),
       });
       host.emit('provider.updated', provider);
       return provider;
@@ -125,6 +147,31 @@ export function register(host: CoreHost, services: FerryServices): void {
       const result = ProbeResultSchema.parse(
         await probe(id, key, { ...(baseUrl ? { baseUrl } : {}) }),
       );
+      let discovered: Awaited<ReturnType<typeof discoverProviderModels>> = [];
+      let discoverySucceeded = false;
+      if (result.ok) {
+        try {
+          discovered = await discoverProviderModels(id, key, { ...(baseUrl ? { baseUrl } : {}) });
+          discoverySucceeded = true;
+        } catch {
+          // Preserve the previous verified list when live discovery fails.
+        }
+      }
+      const unavailableIds = new Set(result.skippedModels?.map((skipped) => skipped.model) ?? []);
+      const knownProbeModels = services.catalog.models.filter(
+        (model) =>
+          model.providerId === id &&
+          result.models.includes(model.ref.slice(id.length + 1)) &&
+          !unavailableIds.has(model.ref.slice(id.length + 1)),
+      );
+      const availableModels = (
+        discoverySucceeded && discovered.length ? discovered : knownProbeModels
+      ).filter((model) => !unavailableIds.has(model.ref.slice(id.length + 1)));
+      const persistedModels = result.ok
+        ? availableModels
+        : (current.availableModels ?? []).filter(
+            (model) => !unavailableIds.has(model.ref.slice(id.length + 1)),
+          );
       const now = services.clock.now().toISOString();
       const limits = services.catalog.providers.find((item) => item.provider === id);
       const modelRef = services.catalog.models.find((model) => model.providerId === id)?.ref;
@@ -193,6 +240,15 @@ export function register(host: CoreHost, services: FerryServices): void {
         verifiedAt: result.ok
           ? services.clock.now().toISOString().slice(0, 10)
           : current.verifiedAt,
+        ...(result.ok || result.skippedModels?.length
+          ? {
+              availableModels: persistedModels,
+              modelsVerifiedAt: result.ok
+                ? services.clock.now().toISOString()
+                : (current.modelsVerifiedAt ?? null),
+              modelCount: persistedModels.length,
+            }
+          : {}),
       });
       host.emit('provider.updated', provider);
       return result;

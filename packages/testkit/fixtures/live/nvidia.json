@@ -1,0 +1,22 @@
+{
+  "provider": "nvidia",
+  "capturedAt": "2026-09-25T22:00:21.093Z",
+  "ok": true,
+  "model": "nvidia/nemotron-3-super-120b-a12b",
+  "skipped": [],
+  "windows": [],
+  "errorKind": null,
+  "message": "Key valid",
+  "calls": [
+    {
+      "url": "https://integrate.api.nvidia.com/v1/models",
+      "status": 200,
+      "headers": {}
+    },
+    {
+      "url": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "status": 200,
+      "headers": {}
+    }
+  ]
+}

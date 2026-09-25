@@ -1,5 +1,4 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
@@ -7,9 +6,11 @@ import { generateText, type LanguageModel } from 'ai';
 import { loadCatalog } from '@ferry/catalog';
 import {
   ProviderIdSchema,
+  ModelInfoSchema,
   RawCallObservationSchema,
   UsageRecordSchema,
   type ModelRef,
+  type ModelInfo,
   type ProbeResult,
   type ProviderErrorKind,
   type ProviderId,
@@ -56,6 +57,7 @@ export function providerFromRef(ref: ModelRef | string): string {
 }
 
 const compatibleDefaults: Record<string, string> = {
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
   groq: 'https://api.groq.com/openai/v1',
   cerebras: 'https://api.cerebras.ai/v1',
   nvidia: 'https://integrate.api.nvidia.com/v1',
@@ -108,12 +110,13 @@ export function createLanguageModel(ref: ModelRef, opts: ModelFactoryOptions): L
 
   switch (providerId) {
     case 'gemini':
-      return createGoogleGenerativeAI({
-        apiKey: opts.apiKey,
+      return createCompatible(
+        providerId,
+        modelId,
+        opts,
+        opts.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta/openai',
         headers,
-        ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
-        ...fetchOptions,
-      })(modelId);
+      );
     case 'anthropic':
       return createAnthropic({ apiKey: opts.apiKey, headers, ...fetchOptions })(modelId);
     case 'openai':
@@ -286,6 +289,18 @@ function num(value: string | null | undefined): number | null {
 function resetTime(value: string | null | undefined, now: Date): string | null {
   if (!value) return null;
   const seconds = num(value);
+  const duration =
+    /^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?(?:(\d+(?:\.\d+)?)ms)?$/i.exec(
+      value.trim(),
+    );
+  if (duration?.slice(1).some(Boolean)) {
+    const milliseconds =
+      Number(duration[1] ?? 0) * 3_600_000 +
+      Number(duration[2] ?? 0) * 60_000 +
+      Number(duration[3] ?? 0) * 1_000 +
+      Number(duration[4] ?? 0);
+    return new Date(now.getTime() + milliseconds).toISOString();
+  }
   const date = seconds !== null ? new Date(now.getTime() + seconds * 1000) : new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
@@ -345,13 +360,32 @@ export function parseGroqRateLimits(
   headers: Record<string, string>,
   now = new Date(),
 ): ParsedQuotaWindow[] {
-  const result = [
-    headerQuota(headers, 'requests', '', now, 'requests-day'),
-    headerQuota(headers, 'tokens', '', now, 'tokens-minute'),
-  ].filter((entry): entry is ParsedQuotaWindow => entry !== null);
   const lower = Object.fromEntries(
     Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
   );
+  const result: ParsedQuotaWindow[] = [];
+  for (const [metric, windows] of [
+    ['requests', ['day', 'hour', 'minute']],
+    ['tokens', ['day', 'hour', 'minute']],
+  ] as const) {
+    for (const window of windows) {
+      const entry = headerQuota(headers, metric, `-${window}`, now, `${metric}-${window}`);
+      if (entry) result.push(entry);
+    }
+  }
+  if (!result.length) {
+    result.push(
+      ...[
+        headerQuota(headers, 'requests', '', now, 'requests'),
+        headerQuota(headers, 'tokens', '', now, 'tokens'),
+      ]
+        .filter((entry): entry is ParsedQuotaWindow => entry !== null)
+        .map((entry) => ({
+          ...entry,
+          windowId: entry.windowId === 'requests' ? 'requests-day' : 'tokens-minute',
+        })),
+    );
+  }
   if (lower['retry-after'] && !result.some((entry) => entry.windowId === 'retry-after')) {
     result.push({
       windowId: 'retry-after',
@@ -374,7 +408,7 @@ export function parseOpenRouterKey(body: unknown, now = new Date()): ParsedQuota
       : {};
   const result: ParsedQuotaWindow[] = [];
   const remaining = typeof data.limit_remaining === 'number' ? data.limit_remaining : null;
-  if (remaining !== null)
+  if (remaining !== null && !(data.is_free_tier === true && remaining === 0))
     result.push({
       windowId: 'credits',
       remaining,
@@ -382,11 +416,17 @@ export function parseOpenRouterKey(body: unknown, now = new Date()): ParsedQuota
       resetAt: null,
       confidence: 'exact',
     });
-  if (typeof free.remaining === 'number' || typeof free.limit === 'number') {
+  if (
+    data.is_free_tier === true ||
+    typeof free.remaining === 'number' ||
+    typeof free.limit === 'number'
+  ) {
+    const dailyLimit =
+      typeof free.limit === 'number' ? free.limit : data.is_free_tier === true ? 50 : 1000;
     result.push({
       windowId: 'free-model-requests-day',
-      remaining: typeof free.remaining === 'number' ? free.remaining : null,
-      limit: typeof free.limit === 'number' ? free.limit : null,
+      remaining: typeof free.remaining === 'number' ? free.remaining : dailyLimit,
+      limit: dailyLimit,
       resetAt: nextMidnight(now, 'UTC'),
       confidence: 'exact',
     });
@@ -465,8 +505,10 @@ export function parseGeminiQuota(
 
 const CEREBRAS_WINDOWS = [
   { pattern: /requests?.*(day|daily)|(?:day|daily).*requests?/, id: 'requests-day' },
+  { pattern: /requests?.*(hour|hourly)|(?:hour|hourly).*requests?/, id: 'requests-hour' },
   { pattern: /requests?.*(minute|min)|(?:minute|min).*requests?/, id: 'requests-minute' },
   { pattern: /tokens?.*(day|daily)|(?:day|daily).*tokens?/, id: 'tokens-day' },
+  { pattern: /tokens?.*(hour|hourly)|(?:hour|hourly).*tokens?/, id: 'tokens-hour' },
   { pattern: /tokens?.*(minute|min)|(?:minute|min).*tokens?/, id: 'tokens-minute' },
 ] as const;
 
@@ -499,6 +541,16 @@ export function parseCerebrasRateLimits(
     if (!prior) output.push(entry);
   }
   return output;
+}
+
+export function parseMistralRateLimits(
+  headers: Record<string, string>,
+  now = new Date(),
+): ParsedQuotaWindow[] {
+  return parseGenericRateLimits(headers, now).map((entry) => ({
+    ...entry,
+    windowId: entry.windowId.replace(/^generic:/, '').replace(/^req-/, 'requests-'),
+  }));
 }
 
 export function parseGenericRateLimits(
@@ -556,6 +608,8 @@ export function parseQuota(
       return parseGeminiQuota(input.body, now, input.status ?? 429);
     case 'cerebras_rate_limit_headers':
       return parseCerebrasRateLimits(input.headers ?? {}, now);
+    case 'mistral_rate_limit_headers':
+      return parseMistralRateLimits(input.headers ?? {}, now);
     case 'generic':
     case null:
     case undefined:
@@ -567,7 +621,39 @@ export function parseQuota(
 
 export function parserIdForProvider(providerId: string, catalogParser?: string | null): string {
   if (catalogParser) return catalogParser;
-  return providerId === 'cerebras' ? 'cerebras_rate_limit_headers' : 'generic';
+  if (providerId === 'cerebras') return 'cerebras_rate_limit_headers';
+  if (providerId === 'mistral') return 'mistral_rate_limit_headers';
+  if (providerId === 'groq') return 'groq_rate_limit_headers';
+  return 'generic';
+}
+
+function providerErrorMessage(record: Record<string, unknown>, error: unknown): string {
+  const body = record.responseBody ?? record.body;
+  if (typeof body === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(body);
+      if (parsed && typeof parsed === 'object') {
+        const root = parsed as Record<string, unknown>;
+        const details =
+          root.error && typeof root.error === 'object'
+            ? (root.error as Record<string, unknown>)
+            : root;
+        if (typeof details.message === 'string') return details.message;
+      }
+    } catch {
+      // Use the SDK's message when the response body is not JSON.
+    }
+  } else if (body && typeof body === 'object') {
+    const root = body as Record<string, unknown>;
+    const details =
+      root.error && typeof root.error === 'object' ? (root.error as Record<string, unknown>) : root;
+    if (typeof details.message === 'string') return details.message;
+  }
+  return typeof record.message === 'string'
+    ? record.message
+    : error instanceof Error
+      ? error.message
+      : 'Provider request failed';
 }
 
 export function mapProviderError(error: unknown): MappedProviderError {
@@ -577,12 +663,7 @@ export function mapProviderError(error: unknown): MappedProviderError {
       ? (record.response as Record<string, unknown>)
       : {};
   const status = Number(record.statusCode ?? record.status ?? response.status ?? 0);
-  const message =
-    typeof record.message === 'string'
-      ? record.message
-      : error instanceof Error
-        ? error.message
-        : 'Provider request failed';
+  const message = providerErrorMessage(record, error);
   const code = typeof record.code === 'string' ? record.code.toLowerCase() : '';
   const rawRetry =
     record.retryAfter ?? readRetryAfter(response.headers) ?? readRetryAfter(record.responseHeaders);
@@ -602,6 +683,12 @@ export function mapProviderError(error: unknown): MappedProviderError {
     (error instanceof DOMException && error.name === 'AbortError')
   )
     kind = 'timeout';
+  else if (status === 401) kind = 'auth';
+  else if (status === 403 && /freetier|free tier.*only be used from within opencode/i.test(message))
+    kind = 'unsupported_free_tier';
+  else if (status === 403) kind = 'forbidden';
+  else if (status === 404) kind = 'not_found';
+  else if (status === 410) kind = 'gone';
   else if (
     status === 401 ||
     status === 403 ||
@@ -615,7 +702,22 @@ export function mapProviderError(error: unknown): MappedProviderError {
   else if (status >= 500) kind = 'server';
   else if (status >= 400) kind = 'bad_request';
   else kind = 'network';
-  return { kind, retryAfterMs, message: friendlyError(kind, retryAfterMs) };
+  return { kind, retryAfterMs, message: safeProviderMessage(message, kind, retryAfterMs) };
+}
+
+function safeProviderMessage(
+  message: string,
+  kind: ProviderErrorKind,
+  retryAfterMs: number | null,
+): string {
+  if (kind === 'network' || kind === 'timeout') return friendlyError(kind, retryAfterMs);
+  const cleaned = message.replace(
+    /(?:Bearer\s+)?(?:sk|key|token)[-_][A-Za-z0-9._-]{8,}/gi,
+    '[REDACTED]',
+  );
+  if (kind === 'unsupported_free_tier')
+    return "Zen's free models only work inside OpenCode; Zen here needs paid balance";
+  return cleaned || friendlyError(kind, retryAfterMs);
 }
 
 function readRetryAfter(headers: unknown): string | number | null {
@@ -637,6 +739,11 @@ function friendlyError(kind: ProviderErrorKind, retryAfterMs: number | null): st
   }
   if (kind === 'context_overflow') return 'Prompt exceeds the model context limit';
   if (kind === 'timeout') return 'Provider request timed out';
+  if (kind === 'unsupported_free_tier')
+    return "Zen's free models only work inside OpenCode; Zen here needs paid balance";
+  if (kind === 'forbidden') return 'Provider denied access';
+  if (kind === 'not_found') return 'Provider resource was not found';
+  if (kind === 'gone') return 'Provider resource is no longer available';
   if (kind === 'network') return 'Could not reach provider';
   if (kind === 'server') return 'Provider is unavailable';
   return 'Provider rejected the request';
@@ -649,6 +756,7 @@ export interface ProbeOptions {
   sessionId?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  probeModels?: string[];
 }
 
 function providerCatalog(): ReturnType<typeof loadCatalog> {
@@ -662,12 +770,21 @@ async function probeWithSignal(
 ): Promise<ProbeResult> {
   const started = performance.now();
   const observations: RawCallObservation[] = [];
+  const skippedModels: { model: string; reason: string }[] = [];
   try {
     const catalog = await providerCatalog();
-    const modelInfo = options.modelRef
-      ? catalog.models.find((model) => model.ref === options.modelRef)
-      : catalog.models.find((model) => model.providerId === providerId);
-    if (!modelInfo) throw new Error(`No catalog model found for ${providerId}`);
+    const catalogModels = catalog.models.filter((model) => model.providerId === providerId);
+    const liveModels = await discoverProviderModels(providerId, key, options).catch(() => []);
+    const discovered = liveModels.length > 0;
+    const models = discovered ? liveModels : catalogModels;
+    const preferred =
+      options.probeModels ??
+      catalog.providers.find((entry) => entry.provider === providerId)?.probe_models ??
+      [];
+    const candidates = options.modelRef
+      ? [options.modelRef.slice(String(providerId).length + 1)]
+      : orderProbeCandidates(models, preferred);
+    if (!candidates.length) throw new Error(`No chat-capable models available for ${providerId}`);
     let openRouterSnapshot: ParsedQuotaWindow[] = [];
     if (providerId === 'openrouter') {
       const configured = (options.baseUrl ?? 'https://openrouter.ai').replace(/\/$/, '');
@@ -685,24 +802,44 @@ async function probeWithSignal(
       }
       openRouterSnapshot = parseOpenRouterKey(payload);
     }
-    const observedFetch = createObservedFetch(
-      (observation) => observations.push(observation),
-      { providerId, model: modelInfo.ref.slice(String(providerId).length + 1) },
-      options.fetch ?? globalThis.fetch,
-    );
-    const languageModel = createLanguageModel(modelInfo.ref, {
-      apiKey: key,
-      ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
-      fetch: observedFetch,
-      ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-    });
-    await generateText({
-      model: languageModel,
-      prompt: 'Reply with one character.',
-      maxOutputTokens: 1,
-      maxRetries: 0,
-      ...(options.signal ? { abortSignal: options.signal } : {}),
-    });
+    let usedModel: string | null = null;
+    let lastModelError: unknown;
+    for (const modelId of candidates.slice(0, 5)) {
+      const observedFetch = createObservedFetch(
+        (observation) => observations.push(observation),
+        { providerId, model: modelId },
+        options.fetch ?? globalThis.fetch,
+      );
+      try {
+        const languageModel = createLanguageModel(`${providerId}/${modelId}` as ModelRef, {
+          apiKey: key,
+          ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
+          fetch: observedFetch,
+          ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+        });
+        await generateText({
+          model: languageModel,
+          prompt: 'Reply with one character.',
+          maxOutputTokens: 64,
+          maxRetries: 0,
+          ...(options.signal ? { abortSignal: options.signal } : {}),
+        });
+        usedModel = modelId;
+        break;
+      } catch (error) {
+        lastModelError = error;
+        if (!isUnavailableModelError(error)) throw error;
+        const reason = errorMessage(error);
+        skippedModels.push({ model: modelId, reason: reason.replaceAll(key, '[REDACTED]') });
+        if (discovered)
+          liveModels.splice(
+            liveModels.findIndex((model) => model.ref.endsWith(`/${modelId}`)),
+            1,
+          );
+      }
+    }
+    if (!usedModel && lastModelError instanceof Error) throw lastModelError;
+    if (!usedModel && lastModelError) throw new Error(errorMessage(lastModelError));
     const parser = parserIdForProvider(
       String(providerId),
       catalog.providers.find((provider) => provider.provider === providerId)?.parser,
@@ -719,23 +856,28 @@ async function probeWithSignal(
       },
     );
     const windows = quotaWindows(quotaObservations);
-    const catalogModels = catalog.models
-      .filter((model) => model.providerId === providerId)
-      .map((model) => model.ref.slice(String(providerId).length + 1));
-    const models = await listProviderModels(
-      String(providerId),
-      key,
-      options,
-      options.fetch ?? globalThis.fetch,
-    ).catch(() => catalogModels);
     return {
       ok: true,
       keyValid: true,
       latencyMs: Math.max(0, performance.now() - started),
       message: 'Key valid',
       windows,
-      models: models.length ? models : catalogModels,
+      models: (discovered
+        ? liveModels
+        : usedModel
+          ? models.filter((model) => model.ref.endsWith(`/${usedModel}`))
+          : []
+      )
+        .filter(
+          (model) =>
+            !skippedModels.some(
+              (skipped) => skipped.model === model.ref.slice(String(providerId).length + 1),
+            ),
+        )
+        .map((model) => model.ref.slice(String(providerId).length + 1)),
       errorKind: null,
+      usedModel,
+      skippedModels,
     };
   } catch (error) {
     const latestObservation = observations.at(-1);
@@ -778,10 +920,11 @@ async function probeWithSignal(
       ok: false,
       keyValid: mapped.kind !== 'auth',
       latencyMs: Math.max(0, performance.now() - started),
-      message: mapped.message,
+      message: mapped.message.replaceAll(key, '[REDACTED]'),
       windows: quotaWindows(failedObservations),
       models: [],
       errorKind: mapped.kind,
+      ...(skippedModels.length ? { skippedModels } : {}),
     };
   }
 }
@@ -819,12 +962,50 @@ export async function probe(
   }
 }
 
-async function listProviderModels(
+function isChatModelId(id: string): boolean {
+  return !/(?:embed|embedding|whisper|guard|tts|text-to-speech|image|vision|translate|reward|safety|rerank|moderation|audio|transcri|ocr)/i.test(
+    id,
+  );
+}
+
+function isUnavailableModelError(error: unknown): boolean {
+  const message = errorMessage(error);
+  const status =
+    error && typeof error === 'object'
+      ? Number(
+          (error as Record<string, unknown>).statusCode ??
+            (error as Record<string, unknown>).status ??
+            0,
+        )
+      : 0;
+  return (
+    status === 404 ||
+    status === 410 ||
+    /model_not_found|not found for account|end of life|no longer available|model.*not found/i.test(
+      message,
+    )
+  );
+}
+
+function errorMessage(error: unknown): string {
+  const record = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+  return providerErrorMessage(record, error);
+}
+
+function orderProbeCandidates(models: ModelInfo[], preferred: string[]): string[] {
+  const ids = models.map((model) => model.ref.slice(model.providerId.length + 1));
+  const orderedPreferred = preferred.filter((id) => ids.includes(id));
+  const free = models
+    .filter((model) => model.free)
+    .map((model) => model.ref.slice(model.providerId.length + 1));
+  return [...new Set([...orderedPreferred, ...free, ...ids])];
+}
+
+export async function discoverProviderModels(
   providerId: string,
   key: string,
-  options: ProbeOptions,
-  fetchImpl: typeof globalThis.fetch,
-): Promise<string[]> {
+  options: Pick<ProbeOptions, 'baseUrl' | 'fetch' | 'signal'> = {},
+): Promise<ReturnType<typeof ModelInfoSchema.parse>[]> {
   let baseURL: string | undefined;
   if (providerId === 'openai') baseURL = options.baseUrl ?? 'https://api.openai.com/v1';
   else if (providerId === 'openrouter') baseURL = options.baseUrl ?? 'https://openrouter.ai/api/v1';
@@ -832,19 +1013,48 @@ async function listProviderModels(
     baseURL = options.baseUrl ?? compatibleDefaults[providerId];
   else if (options.baseUrl) baseURL = options.baseUrl;
   if (!baseURL) return [];
-  const response = await fetchImpl(`${baseURL.replace(/\/$/, '')}/models`, {
-    headers: { Authorization: `Bearer ${key}` },
-    ...(options.signal ? { signal: options.signal } : {}),
-  });
-  if (!response.ok) return [];
+  const response = await (options.fetch ?? globalThis.fetch)(
+    `${baseURL.replace(/\/$/, '')}/models`,
+    {
+      headers: { Authorization: `Bearer ${key}` },
+      ...(options.signal ? { signal: options.signal } : {}),
+    },
+  );
+  if (!response.ok) throw new Error(`Model discovery failed with HTTP ${String(response.status)}`);
   const payload: unknown = await response.json().catch(() => ({}));
   if (!payload || typeof payload !== 'object') return [];
   const data = (payload as Record<string, unknown>).data;
   if (!Array.isArray(data)) return [];
+  const catalog = await providerCatalog();
   return data.flatMap((item) => {
     if (!item || typeof item !== 'object') return [];
     const id = (item as Record<string, unknown>).id;
-    return typeof id === 'string' ? [id] : [];
+    if (typeof id !== 'string') return [];
+    const normalizedId = id.replace(/^models\//, '');
+    if (!isChatModelId(normalizedId)) return [];
+    const known = catalog.models.find(
+      (model) => model.providerId === providerId && model.ref.endsWith(`/${normalizedId}`),
+    );
+    const free = known?.free ?? /:free(?:$|:)/i.test(normalizedId);
+    const contextWindow = known?.contextWindow ?? 8192;
+    const model = ModelInfoSchema.safeParse({
+      ref: `${providerId}/${normalizedId}`,
+      providerId,
+      name:
+        (item as Record<string, unknown>).name &&
+        typeof (item as Record<string, unknown>).name === 'string'
+          ? (item as Record<string, unknown>).name
+          : (known?.name ?? normalizedId),
+      tier: known?.tier ?? 'T2',
+      contextWindow,
+      maxOutput: known?.maxOutput ?? 4096,
+      toolCalling: known?.toolCalling ?? true,
+      reasoning: known?.reasoning ?? false,
+      free,
+      priceInPerM: known?.priceInPerM ?? (free ? 0 : null),
+      priceOutPerM: known?.priceOutPerM ?? (free ? 0 : null),
+    });
+    return model.success ? [model.data] : [];
   });
 }
 

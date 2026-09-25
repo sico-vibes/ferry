@@ -34,6 +34,8 @@ export const ProviderSchema = z.object({
   docsUrl: z.string().nullable(),
   verifiedAt: z.iso.date().nullable(),
   modelCount: z.number().int().nonnegative(),
+  availableModels: z.array(z.lazy(() => ModelInfoSchema)).optional(),
+  modelsVerifiedAt: z.iso.datetime().nullable().optional(),
   windows: z.array(QuotaWindowSchema),
   stepsLeftToday: z.number().nonnegative().nullable(),
 });
@@ -46,6 +48,8 @@ export const ProbeResultSchema = z.object({
   windows: z.array(QuotaWindowSchema),
   models: z.array(z.string()),
   errorKind: ProviderErrorKindSchema.nullable(),
+  usedModel: z.string().nullable().optional(),
+  skippedModels: z.array(z.object({ model: z.string(), reason: z.string() })).optional(),
 });
 export type ProbeResult = z.infer<typeof ProbeResultSchema>;
 export const ModelInfoSchema = z.object({

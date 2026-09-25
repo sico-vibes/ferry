@@ -1,0 +1,55 @@
+{
+  "provider": "mistral",
+  "capturedAt": "2026-09-25T21:59:57.747Z",
+  "ok": true,
+  "model": "codestral-2508",
+  "skipped": [],
+  "windows": [
+    {
+      "id": "requests-minute",
+      "scope": "provider",
+      "modelRef": null,
+      "metric": "requests",
+      "kind": "rolling",
+      "periodLabel": "requests-minute",
+      "used": 1,
+      "limit": 125,
+      "remaining": 124,
+      "resetAt": null,
+      "confidence": "exact"
+    },
+    {
+      "id": "tokens-minute",
+      "scope": "provider",
+      "modelRef": null,
+      "metric": "tokens",
+      "kind": "rolling",
+      "periodLabel": "tokens-minute",
+      "used": 10,
+      "limit": 625000,
+      "remaining": 624990,
+      "resetAt": null,
+      "confidence": "exact"
+    }
+  ],
+  "errorKind": null,
+  "message": "Key valid",
+  "calls": [
+    {
+      "url": "https://api.mistral.ai/v1/models",
+      "status": 200,
+      "headers": {}
+    },
+    {
+      "url": "https://api.mistral.ai/v1/chat/completions",
+      "status": 200,
+      "headers": {
+        "x-ratelimit-limit-req-minute": "125",
+        "x-ratelimit-limit-tokens-minute": "625000",
+        "x-ratelimit-remaining-req-minute": "124",
+        "x-ratelimit-remaining-tokens-minute": "624990",
+        "x-ratelimit-tokens-query-cost": "10"
+      }
+    }
+  ]
+}

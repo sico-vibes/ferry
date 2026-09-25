@@ -1,0 +1,22 @@
+{
+  "provider": "opencode",
+  "capturedAt": "2026-09-25T22:00:21.878Z",
+  "ok": false,
+  "model": null,
+  "skipped": [],
+  "windows": [],
+  "errorKind": "unsupported_free_tier",
+  "message": "Zen's free models only work inside OpenCode; Zen here needs paid balance",
+  "calls": [
+    {
+      "url": "https://opencode.ai/zen/v1/models",
+      "status": 200,
+      "headers": {}
+    },
+    {
+      "url": "https://opencode.ai/zen/v1/chat/completions",
+      "status": 403,
+      "headers": {}
+    }
+  ]
+}

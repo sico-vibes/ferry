@@ -3,6 +3,9 @@ import { ProviderIdSchema } from './ids.js';
 
 export const ProviderErrorKindSchema = z.enum([
   'auth',
+  'forbidden',
+  'not_found',
+  'gone',
   'rate_limit',
   'quota_exhausted',
   'context_overflow',
@@ -10,6 +13,7 @@ export const ProviderErrorKindSchema = z.enum([
   'server',
   'network',
   'timeout',
+  'unsupported_free_tier',
 ]);
 export type ProviderErrorKind = z.infer<typeof ProviderErrorKindSchema>;
 

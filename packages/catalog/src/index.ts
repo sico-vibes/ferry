@@ -47,6 +47,7 @@ export const ProviderLimitsSchema = z.object({
   parser: z.string().nullable().optional(),
   endpoints: z.array(z.url()).optional(),
   required_headers: z.array(z.string().min(1)).optional(),
+  probe_models: z.array(z.string().min(1)).optional(),
   dead: z.boolean().optional(),
   windows: z.array(WindowSchema),
 });

@@ -1,0 +1,114 @@
+{
+  "provider": "cerebras",
+  "capturedAt": "2026-09-25T21:59:53.317Z",
+  "ok": true,
+  "model": "gpt-oss-120b",
+  "skipped": [],
+  "windows": [
+    {
+      "id": "requests-day",
+      "scope": "provider",
+      "modelRef": null,
+      "metric": "requests",
+      "kind": "fixed_daily",
+      "periodLabel": "requests-day",
+      "used": 1,
+      "limit": 2400,
+      "remaining": 2399,
+      "resetAt": null,
+      "confidence": "exact"
+    },
+    {
+      "id": "requests-hour",
+      "scope": "provider",
+      "modelRef": null,
+      "metric": "requests",
+      "kind": "dynamic",
+      "periodLabel": "requests-hour",
+      "used": 1,
+      "limit": 150,
+      "remaining": 149,
+      "resetAt": null,
+      "confidence": "exact"
+    },
+    {
+      "id": "requests-minute",
+      "scope": "provider",
+      "modelRef": null,
+      "metric": "requests",
+      "kind": "rolling",
+      "periodLabel": "requests-minute",
+      "used": 1,
+      "limit": 5,
+      "remaining": 4,
+      "resetAt": null,
+      "confidence": "exact"
+    },
+    {
+      "id": "tokens-day",
+      "scope": "provider",
+      "modelRef": null,
+      "metric": "tokens",
+      "kind": "fixed_daily",
+      "periodLabel": "tokens-day",
+      "used": 70,
+      "limit": 1000000,
+      "remaining": 999930,
+      "resetAt": null,
+      "confidence": "exact"
+    },
+    {
+      "id": "tokens-hour",
+      "scope": "provider",
+      "modelRef": null,
+      "metric": "tokens",
+      "kind": "dynamic",
+      "periodLabel": "tokens-hour",
+      "used": 0,
+      "limit": 1000000,
+      "remaining": 2999930,
+      "resetAt": null,
+      "confidence": "exact"
+    },
+    {
+      "id": "tokens-minute",
+      "scope": "provider",
+      "modelRef": null,
+      "metric": "tokens",
+      "kind": "rolling",
+      "periodLabel": "tokens-minute",
+      "used": 70,
+      "limit": 30000,
+      "remaining": 29930,
+      "resetAt": null,
+      "confidence": "exact"
+    }
+  ],
+  "errorKind": null,
+  "message": "Key valid",
+  "calls": [
+    {
+      "url": "https://api.cerebras.ai/v1/models",
+      "status": 200,
+      "headers": {}
+    },
+    {
+      "url": "https://api.cerebras.ai/v1/chat/completions",
+      "status": 200,
+      "headers": {
+        "x-ratelimit-limit-requests-day": "2400",
+        "x-ratelimit-limit-requests-hour": "150",
+        "x-ratelimit-limit-requests-minute": "5",
+        "x-ratelimit-limit-tokens-day": "1000000",
+        "x-ratelimit-limit-tokens-hour": "1000000",
+        "x-ratelimit-limit-tokens-minute": "30000",
+        "x-ratelimit-remaining-requests-day": "2399",
+        "x-ratelimit-remaining-requests-hour": "149",
+        "x-ratelimit-remaining-requests-minute": "4",
+        "x-ratelimit-remaining-tokens-day": "999930",
+        "x-ratelimit-remaining-tokens-hour": "2999930",
+        "x-ratelimit-remaining-tokens-minute": "29930"
+      }
+    }
+  ]
+}

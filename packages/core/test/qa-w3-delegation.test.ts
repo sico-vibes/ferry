@@ -14,7 +14,9 @@ afterEach(async () => {
   process.env.PATH = originalPath;
   await Promise.all(repos.splice(0).map((repo) => repo.cleanup()));
   await Promise.all(
-    dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 8 })),
+    dirs
+      .splice(0)
+      .map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })),
   );
 });
 
@@ -136,22 +138,26 @@ describe('QA W3 delegation: trust, isolation and lifecycle', () => {
   }, 40_000);
 
   it('cancels a mid-run delegation and marks it cancelled', async () => {
-    const { h } = await setupDelegation({ delayBeforeEventsMs: 30_000, holdOpenMs: 30_000 });
+    const { h, capture } = await setupDelegation({
+      delayBeforeEventsMs: 30_000,
+      holdOpenMs: 30_000,
+    });
     try {
       const sessionId = await createSession(h);
       const run = await h.rpc.delegation.start({ sessionId, lane: 'native', brief: 'long task' });
       expect(run.status).toBe('running');
+      await waitFor(() => fileExists(capture), 30_000);
       await h.rpc.delegation.cancel(run.id);
       await waitFor(
         async () =>
           (await h.rpc.delegation.runs(sessionId)).find((item) => item.id === run.id)?.status ===
           'cancelled',
-        15_000,
+        30_000,
       );
     } finally {
       await h.close();
     }
-  }, 40_000);
+  }, 60_000);
 
   it('rework resumes the same CLI session with the delta brief', async () => {
     const { h, capture } = await setupDelegation();

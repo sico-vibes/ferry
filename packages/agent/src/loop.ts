@@ -104,7 +104,7 @@ export interface AgentOptions {
   estimateTokens?: (text: string) => number;
   onObservation?: (observation: RawCallObservation) => void;
   onUsage?: (usage: UsageRecord) => void;
-  onHandoff?: (reason: 'quota' | 'rate_limit', from: string, to: string) => void;
+  onHandoff?: (reason: 'quota' | 'rate_limit' | 'error', from: string, to: string) => void;
   resolveCandidates?: (profile: Profile, step: import('@ferry/shared').StepKind) => ModelInfo[];
   stats?: ModelStats[];
   terseLevel?: 'off' | 'lite' | 'full' | 'ultra';
@@ -392,7 +392,9 @@ export class AgentLoop {
         try {
           generated = await generator(stepRequest(model));
         } catch (error) {
-          if (!isRateLimitError(error) || isSignalAborted(signal)) throw error;
+          const rateLimited = isRateLimitError(error);
+          const modelUnavailable = isUnavailableModelError(error);
+          if ((!rateLimited && !modelUnavailable) || isSignalAborted(signal)) throw error;
           const fallback = this.selectFallback(stepKind, routeEstimate, model.ref);
           if (!fallback) throw error;
           const briefing = buildBriefing(
@@ -405,9 +407,11 @@ export class AgentLoop {
           const marker = createHandoffMarker(
             model.ref,
             fallback.ref,
-            'rate_limit',
+            rateLimited ? 'rate_limit' : 'error',
             briefing,
-            `${model.name} returned HTTP 429; continuing with ${fallback.name}.`,
+            rateLimited
+              ? `${model.name} returned HTTP 429; continuing with ${fallback.name}.`
+              : `${model.name} is unavailable; continuing with ${fallback.name}.`,
           );
           this.addPart(sessionId, {
             type: 'handoff_marker',
@@ -418,7 +422,7 @@ export class AgentLoop {
             briefingTokens: marker.briefingTokens,
             explanation: marker.explanation,
           });
-          this.options.onHandoff?.('rate_limit', marker.from, marker.to);
+          this.options.onHandoff?.(rateLimited ? 'rate_limit' : 'error', marker.from, marker.to);
           model = fallback;
           system += `\n\nHandoff briefing:\n${briefing.text}`;
           this.options.store.updateSession(sessionId, { modelRef: fallback.ref });
@@ -804,6 +808,25 @@ function isRateLimitError(error: unknown): boolean {
     candidate.statusCode === 429 ||
     candidate.statusCode === '429' ||
     candidate.response?.status === 429
+  );
+}
+
+function isUnavailableModelError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+    message?: unknown;
+  };
+  const status = Number(
+    candidate.statusCode ?? candidate.status ?? candidate.response?.status ?? 0,
+  );
+  const message = typeof candidate.message === 'string' ? candidate.message : '';
+  return (
+    status === 404 ||
+    status === 410 ||
+    /model_not_found|not found for account|end of life|no longer available/i.test(message)
   );
 }
 

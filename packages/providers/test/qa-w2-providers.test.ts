@@ -43,7 +43,7 @@ describe('QA-w2 providers: probe never echoes the key', () => {
       { status: 403, body: { error: { message: `Forbidden key ${key}` } } },
     ]);
     const result = await probe('openai', key, { baseUrl: `${server.baseUrl}/v1` });
-    expect(result.errorKind).toBe('auth');
+    expect(result.errorKind).toBe('forbidden');
     expect(JSON.stringify(result)).not.toContain(key.slice(0, -4));
   }, 30_000);
 
@@ -100,7 +100,7 @@ describe('QA-w2 providers: probe never echoes the key', () => {
 describe('QA-w2 providers: error classification', () => {
   it.each([
     [401, 'auth'],
-    [403, 'auth'],
+    [403, 'forbidden'],
     [500, 'server'],
     [503, 'server'],
   ] as const)(

@@ -315,6 +315,7 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
 }
 
 function providerAllowed(profile: Profile, provider: Provider, model: ModelInfo): boolean {
+  if (!profile.paidAllowed && provider.tag === 'caution') return false;
   if (!profile.paidAllowed && !model.free) return false;
   if (profile.allowedProviders === 'all') return true;
   if (profile.allowedProviders === 'all_free') return model.free;

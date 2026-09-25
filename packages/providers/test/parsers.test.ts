@@ -4,12 +4,92 @@ import {
   parseGeminiQuota,
   parseGenericRateLimits,
   parseGroqRateLimits,
+  parseMistralRateLimits,
   parseOpenRouterKey,
 } from '../src/index.js';
 
 const now = new Date('2026-09-24T12:00:00.000Z');
 
 describe('quota parsers', () => {
+  it('parses the captured Groq, Mistral, and Cerebras windows and subsecond resets', () => {
+    const groq = parseGroqRateLimits(
+      {
+        'x-ratelimit-limit-requests': '14400',
+        'x-ratelimit-limit-tokens': '15000',
+        'x-ratelimit-remaining-requests': '14399',
+        'x-ratelimit-remaining-tokens': '14971',
+        'x-ratelimit-reset-requests': '6s',
+        'x-ratelimit-reset-tokens': '116ms',
+      },
+      now,
+    );
+    expect(groq).toHaveLength(2);
+    expect(groq[0]).toMatchObject({
+      windowId: 'requests-day',
+      limit: 14400,
+      remaining: 14399,
+      resetAt: '2026-09-24T12:00:06.000Z',
+    });
+    expect(groq[1]).toMatchObject({
+      windowId: 'tokens-minute',
+      limit: 15000,
+      remaining: 14971,
+      resetAt: '2026-09-24T12:00:00.116Z',
+    });
+
+    const mistral = parseMistralRateLimits(
+      {
+        'x-ratelimit-limit-req-minute': '125',
+        'x-ratelimit-limit-tokens-minute': '625000',
+        'x-ratelimit-remaining-req-minute': '124',
+        'x-ratelimit-remaining-tokens-minute': '624986',
+        'x-ratelimit-tokens-query-cost': '14',
+      },
+      now,
+    );
+    expect(mistral).toContainEqual(
+      expect.objectContaining({ windowId: 'requests-minute', limit: 125, remaining: 124 }),
+    );
+    expect(mistral).toContainEqual(
+      expect.objectContaining({ windowId: 'tokens-minute', limit: 625000, remaining: 624986 }),
+    );
+
+    const cerebras = parseCerebrasRateLimits(
+      {
+        'x-ratelimit-limit-requests-day': '2400',
+        'x-ratelimit-limit-requests-hour': '150',
+        'x-ratelimit-limit-requests-minute': '5',
+        'x-ratelimit-limit-tokens-day': '1000000',
+        'x-ratelimit-limit-tokens-hour': '1000000',
+        'x-ratelimit-limit-tokens-minute': '30000',
+        'x-ratelimit-remaining-requests-day': '2399',
+        'x-ratelimit-remaining-requests-hour': '149',
+        'x-ratelimit-remaining-requests-minute': '4',
+        'x-ratelimit-remaining-tokens-day': '999976',
+        'x-ratelimit-remaining-tokens-hour': '2999976',
+        'x-ratelimit-remaining-tokens-minute': '29976',
+        'x-ratelimit-reset-requests-minute': '2m59.56s',
+      },
+      now,
+    );
+    expect(cerebras).toContainEqual(
+      expect.objectContaining({ windowId: 'requests-hour', limit: 150, remaining: 149 }),
+    );
+    expect(cerebras).toContainEqual(
+      expect.objectContaining({ windowId: 'tokens-hour', limit: 1000000, remaining: 2999976 }),
+    );
+    expect(cerebras).toContainEqual(
+      expect.objectContaining({ windowId: 'requests-minute', resetAt: '2026-09-24T12:02:59.560Z' }),
+    );
+  });
+
+  it('does not call an OpenRouter free key exhausted when its credit balance is zero', () => {
+    expect(
+      parseOpenRouterKey({ data: { limit: 0, limit_remaining: 0, is_free_tier: true } }, now),
+    ).toEqual([
+      expect.objectContaining({ windowId: 'free-model-requests-day', limit: 50, remaining: 50 }),
+    ]);
+  });
   it('parses Groq daily requests, per-minute tokens, and retry-after', () => {
     expect(
       parseGroqRateLimits(

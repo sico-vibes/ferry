@@ -493,7 +493,7 @@ export function SettingsCanvas() {
             <SettingRow
               key={provider.id}
               title={provider.name}
-              helper={provider.dataUse ?? provider.termsNote ?? 'No data use note provided.'}
+              helper={provider.termsNote ?? provider.dataUse ?? 'No data use note provided.'}
             >
               <span className={`status-pill ${provider.keyStatus === 'valid' ? 'ok' : 'pending'}`}>
                 {provider.keyStatus.replace('_', ' ')}
