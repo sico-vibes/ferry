@@ -3,6 +3,7 @@ import type {
   Checkpoint,
   CheckpointId,
   DelegationRun,
+  AcpAgentDetection,
   HandoffStat,
   Lane,
   McpServer,
@@ -93,6 +94,7 @@ export interface FerryClient {
   optimizer: { stats(): Promise<OptimizerStats> };
   delegation: {
     lanes(): Promise<Lane[]>;
+    detectAgents(): Promise<AcpAgentDetection[]>;
     approveProjectLanes(): Promise<Lane[]>;
     runs(sessionId: SessionId): Promise<DelegationRun[]>;
     start(i: { sessionId: SessionId; lane: string; brief: string }): Promise<DelegationRun>;

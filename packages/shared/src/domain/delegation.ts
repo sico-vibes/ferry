@@ -19,6 +19,26 @@ export const LaneSchema = z.object({
   trusted: z.boolean(),
 });
 export type Lane = z.infer<typeof LaneSchema>;
+export const AcpAgentDetectionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  command: z.string(),
+  args: z.array(z.string()),
+  detectArgs: z.array(z.string()),
+  installHint: z.string(),
+  supportsModel: z.boolean(),
+  supportsMode: z.boolean(),
+  launchVerified: z.boolean(),
+  verified: z.boolean(),
+  verifiedAt: z.iso.date().nullable(),
+  caution: z.boolean(),
+  cautionNote: z.string().nullable(),
+  available: z.boolean(),
+  version: z.string().nullable(),
+  executable: z.string().nullable(),
+  error: z.string().optional(),
+});
+export type AcpAgentDetection = z.infer<typeof AcpAgentDetectionSchema>;
 export const GateResultSchema = z.object({
   command: z.string(),
   ok: z.boolean(),

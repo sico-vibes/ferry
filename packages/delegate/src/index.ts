@@ -247,19 +247,25 @@ export interface AcpAgentDefinition {
   supportsMode: boolean;
   launchVerified: boolean;
   verified: boolean;
+  verifiedAt: string | null;
+  caution: boolean;
+  cautionNote: string | null;
 }
 export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
   {
     id: 'gemini',
     name: 'Gemini CLI',
     command: 'gemini',
-    args: ['--experimental-acp'],
+    args: ['--acp'],
     detectArgs: ['--version'],
-    installHint: 'Install Gemini CLI, then check its ACP launch flag.',
+    installHint: 'Install Gemini CLI.',
     supportsModel: false,
     supportsMode: false,
-    launchVerified: false,
-    verified: false,
+    launchVerified: true,
+    verified: true,
+    verifiedAt: '2026-09-25',
+    caution: false,
+    cautionNote: null,
   },
   {
     id: 'claude-code',
@@ -272,6 +278,9 @@ export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
     supportsMode: false,
     launchVerified: false,
     verified: false,
+    verifiedAt: null,
+    caution: false,
+    cautionNote: null,
   },
   {
     id: 'codex',
@@ -283,7 +292,10 @@ export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
     supportsModel: false,
     supportsMode: false,
     launchVerified: false,
-    verified: false,
+    verified: true,
+    verifiedAt: '2026-09-25',
+    caution: false,
+    cautionNote: null,
   },
   {
     id: 'opencode',
@@ -294,8 +306,11 @@ export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
     installHint: 'Install OpenCode with ACP support.',
     supportsModel: false,
     supportsMode: false,
-    launchVerified: false,
-    verified: false,
+    launchVerified: true,
+    verified: true,
+    verifiedAt: '2026-09-25',
+    caution: false,
+    cautionNote: null,
   },
   {
     id: 'qwen-code',
@@ -308,6 +323,9 @@ export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
     supportsMode: false,
     launchVerified: false,
     verified: false,
+    verifiedAt: null,
+    caution: false,
+    cautionNote: null,
   },
   {
     id: 'kimi-cli',
@@ -320,6 +338,9 @@ export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
     supportsMode: false,
     launchVerified: false,
     verified: false,
+    verifiedAt: null,
+    caution: false,
+    cautionNote: null,
   },
   {
     id: 'mistral-vibe',
@@ -332,6 +353,9 @@ export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
     supportsMode: false,
     launchVerified: false,
     verified: false,
+    verifiedAt: null,
+    caution: false,
+    cautionNote: null,
   },
   {
     id: 'goose',
@@ -344,6 +368,9 @@ export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
     supportsMode: false,
     launchVerified: false,
     verified: false,
+    verifiedAt: null,
+    caution: false,
+    cautionNote: null,
   },
   {
     id: 'github-copilot',
@@ -356,6 +383,9 @@ export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
     supportsMode: false,
     launchVerified: false,
     verified: false,
+    verifiedAt: null,
+    caution: false,
+    cautionNote: null,
   },
   {
     id: 'kiro',
@@ -368,6 +398,9 @@ export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
     supportsMode: false,
     launchVerified: false,
     verified: false,
+    verifiedAt: null,
+    caution: true,
+    cautionNote: 'Kiro terms ban third-party harness use; accounts have been banned',
   },
   {
     id: 'cline',
@@ -380,6 +413,9 @@ export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
     supportsMode: false,
     launchVerified: false,
     verified: false,
+    verifiedAt: null,
+    caution: false,
+    cautionNote: null,
   },
   {
     id: 'pi',
@@ -392,8 +428,12 @@ export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
     supportsMode: false,
     launchVerified: false,
     verified: false,
+    verifiedAt: null,
+    caution: false,
+    cautionNote: null,
   },
 ];
+export const ACP_AGENT_SUGGESTIONS = ACP_AGENT_REGISTRY.filter((agent) => !agent.caution);
 export interface DetectedAcpAgent extends AcpAgentDefinition {
   available: boolean;
   version: string | null;
@@ -403,36 +443,44 @@ export interface DetectedAcpAgent extends AcpAgentDefinition {
 export async function detectAcpAgents(
   options: { cwd?: string; timeoutMs?: number } = {},
 ): Promise<DetectedAcpAgent[]> {
-  return await Promise.all(
-    ACP_AGENT_REGISTRY.map(async (agent) => {
-      try {
-        const executable = await executablePath(agent.command);
-        const invocation = commandInvocation(executable, [...agent.detectArgs]);
-        const result = await execa(invocation.file, invocation.args, {
-          ...(options.cwd ? { cwd: options.cwd } : {}),
-          reject: false,
-          windowsHide: true,
-          timeout: options.timeoutMs ?? 10_000,
-          ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
-        });
-        return {
-          ...agent,
-          available: !result.failed,
-          version: result.failed ? null : result.stdout.trim() || result.stderr.trim() || null,
-          executable,
-          ...(result.failed ? { error: result.stderr || 'Version probe failed' } : {}),
-        };
-      } catch (error) {
-        return {
-          ...agent,
-          available: false,
-          version: null,
-          executable: null,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }),
-  );
+  return await Promise.all(ACP_AGENT_REGISTRY.map((agent) => detectAcpAgent(agent.id, options)));
+}
+export async function detectAcpAgent(
+  id: string,
+  options: { cwd?: string; timeoutMs?: number } = {},
+): Promise<DetectedAcpAgent> {
+  const agent = ACP_AGENT_REGISTRY.find((entry) => entry.id === id);
+  if (!agent) throw new Error(`Unknown ACP agent: ${id}`);
+  try {
+    const executable = await executablePath(agent.command);
+    const invocation = commandInvocation(executable, [...agent.detectArgs]);
+    const result = await execa(invocation.file, invocation.args, {
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      reject: false,
+      windowsHide: true,
+      timeout: options.timeoutMs ?? 10_000,
+      ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
+    });
+    return {
+      ...agent,
+      available: !result.failed,
+      version: result.failed ? null : result.stdout.trim() || result.stderr.trim() || null,
+      executable,
+      ...(result.failed ? { error: result.stderr || 'Version probe failed' } : {}),
+    };
+  } catch (error) {
+    return {
+      ...agent,
+      available: false,
+      version: null,
+      executable: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+export function resolveAcpCommand(executable: string, args: string[]) {
+  assertSafeArguments(args);
+  return commandInvocation(executable, args);
 }
 export function assertSafeArguments(args: readonly string[]): void {
   for (const arg of args) {

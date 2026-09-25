@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { Readable, Writable } from 'node:stream';
+import { execa } from 'execa';
+import { client as acpClient, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk';
 import { installFakeClis } from '@ferry/testkit';
 import type { SessionId } from '@ferry/shared';
 import {
@@ -13,7 +16,10 @@ import {
   detectCli,
   decide,
   ACP_AGENT_REGISTRY,
+  ACP_AGENT_SUGGESTIONS,
   detectAcpAgents,
+  detectAcpAgent,
+  resolveAcpCommand,
   startDelegation,
 } from '../src/index.js';
 import { sampleDelegationRun } from '@ferry/shared/testing';
@@ -185,11 +191,66 @@ describe('external CLI adapters', () => {
 
   it('lists the configured ACP registry and leaves unverified launch flags explicit', async () => {
     expect(ACP_AGENT_REGISTRY.map(({ id }) => id)).toContain('pi');
-    expect(ACP_AGENT_REGISTRY.every(({ launchVerified }) => !launchVerified)).toBe(true);
+    expect(ACP_AGENT_REGISTRY.filter(({ verified }) => verified).map(({ id }) => id)).toEqual([
+      'gemini',
+      'codex',
+      'opencode',
+    ]);
+    expect(ACP_AGENT_REGISTRY.find(({ id }) => id === 'kiro')?.caution).toBe(true);
+    expect(ACP_AGENT_SUGGESTIONS.some(({ id }) => id === 'kiro')).toBe(false);
     const detected = await detectAcpAgents({ timeoutMs: 250 });
     expect(detected).toHaveLength(ACP_AGENT_REGISTRY.length);
     expect(detected.every(({ installHint }) => installHint.length > 0)).toBe(true);
   });
+  it.skipIf(process.env.FERRY_LIVE_ACP !== '1')(
+    'live OpenCode ACP initializes, creates a session, and cancels without prompting',
+    async (context) => {
+      const detected = await detectAcpAgent('opencode', { timeoutMs: 2_000 });
+      if (!detected.available || !detected.executable) {
+        context.skip();
+        return;
+      }
+      const root = await tempRoot();
+      const invocation = resolveAcpCommand(detected.executable, ['acp']);
+      const child = execa(invocation.file, invocation.args, {
+        cwd: root,
+        reject: false,
+        windowsHide: true,
+        buffer: false,
+        ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
+      });
+      try {
+        const connection = acpClient({ name: 'Ferry live smoke' }).connect(
+          ndJsonStream(
+            Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
+            Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
+          ),
+        );
+        await connection.agent.request('initialize', {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {},
+          clientInfo: { name: 'Ferry', version: '0.1.0' },
+        });
+        const session = await connection.agent.request('session/new', {
+          cwd: root,
+          mcpServers: [],
+        });
+        expect(session.sessionId).toBeTruthy();
+        await connection.agent.notify('session/cancel', { sessionId: session.sessionId });
+      } finally {
+        if (process.platform === 'win32' && child.pid !== undefined) {
+          await execa('taskkill.exe', ['/pid', String(child.pid), '/T', '/F'], {
+            reject: false,
+            windowsHide: true,
+            timeout: 5_000,
+          });
+        }
+        child.kill('SIGTERM');
+        await child.catch(() => undefined);
+      }
+    },
+    30_000,
+  );
   it.each(['codex', 'opencode', 'claude'] as const)(
     '%s streams progress and returns completion, usage, and session id',
     async (name) => {

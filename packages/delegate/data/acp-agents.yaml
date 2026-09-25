@@ -3,13 +3,14 @@ agents:
   - id: gemini
     name: Gemini CLI
     command: gemini
-    args: [--experimental-acp]
+    args: [--acp]
     detect: [--version]
     installHint: Install Gemini CLI and verify its ACP flag.
     supportsModel: false
     supportsMode: false
-    launchVerified: false
-    verified: false
+    launchVerified: true
+    verified: true
+    verifiedAt: 2026-09-25
   - id: claude-code
     name: Claude Code
     command: claude-code-acp
@@ -29,7 +30,8 @@ agents:
     supportsModel: false
     supportsMode: false
     launchVerified: false
-    verified: false
+    verified: true
+    verifiedAt: 2026-09-25
   - id: opencode
     name: OpenCode
     command: opencode
@@ -38,8 +40,9 @@ agents:
     installHint: Install OpenCode with ACP support.
     supportsModel: false
     supportsMode: false
-    launchVerified: false
-    verified: false
+    launchVerified: true
+    verified: true
+    verifiedAt: 2026-09-25
   - id: qwen-code
     name: Qwen Code
     command: qwen
@@ -96,6 +99,8 @@ agents:
     args: [acp]
     detect: [--version]
     installHint: Install Kiro CLI with ACP support.
+    caution: true
+    cautionNote: Kiro terms ban third-party harness use; accounts have been banned
     supportsModel: false
     supportsMode: false
     launchVerified: false

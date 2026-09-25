@@ -23,20 +23,6 @@ import { FERRY_DOMAINS } from '@ferry/shared';
 import type { Profile, StepKind, Tier } from '@ferry/shared';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
-const acpAgentHints = [
-  ['gemini', 'Gemini CLI', 'Install Gemini CLI and check its ACP launch flag.'],
-  ['claude-code', 'Claude Code', 'Install the Claude Code ACP adapter.'],
-  ['codex', 'Codex', 'Install a Codex ACP adapter.'],
-  ['opencode', 'OpenCode', 'Install OpenCode with ACP support.'],
-  ['qwen-code', 'Qwen Code', 'Install Qwen Code and check its current ACP flag.'],
-  ['kimi-cli', 'Kimi CLI', 'Install Kimi CLI with ACP support.'],
-  ['mistral-vibe', 'Mistral Vibe', 'Install Mistral Vibe and verify its ACP flag.'],
-  ['goose', 'Goose', 'Install Goose with ACP support.'],
-  ['github-copilot', 'GitHub Copilot CLI', 'Install GitHub Copilot CLI and verify its ACP option.'],
-  ['kiro', 'Kiro CLI', 'Install Kiro CLI with ACP support.'],
-  ['cline', 'Cline', 'Install Cline and verify its ACP mode.'],
-  ['pi', 'Pi', 'Install Pi and pi-free yourself, then install pi-acp.'],
-] as const;
 const stepLabels: Record<StepKind, string> = {
   plan: 'Plan',
   edit: 'Edit',
@@ -86,6 +72,10 @@ export function SettingsCanvas() {
   const { data: lanes = [] } = useQuery({
     queryKey: ['lanes'],
     queryFn: () => client.delegation.lanes(),
+  });
+  const { data: acpAgents = [] } = useQuery({
+    queryKey: ['delegation', 'detected-agents'],
+    queryFn: () => client.delegation.detectAgents(),
   });
   const { data: skills = [] } = useQuery({
     queryKey: ['skills'],
@@ -665,19 +655,31 @@ export function SettingsCanvas() {
             ))}
           <h3>ACP agent detection</h3>
           <p className="muted">
-            Run `ferry doctor` to check PATH and version. Pi credentials remain managed by Pi.
+            Ferry checks PATH and the version command. Pi credentials remain managed by Pi.
           </p>
-          {acpAgentHints.map(([id, name, installHint]) => {
+          {acpAgents.map((agent) => {
             const configured = lanes.some(
-              (lane) => lane.implementer === 'acp' && lane.agent === id,
+              (lane) => lane.implementer === 'acp' && lane.agent === agent.id,
             );
             return (
-              <div className="lane-row" key={id}>
-                <strong>{name}</strong>
-                <small>{configured ? 'Configured in a lane' : installHint}</small>
-                <span className={`status-pill ${configured ? 'ok' : 'pending'}`}>
-                  {configured ? 'Configured' : 'Check in Doctor'}
+              <div className="lane-row" key={agent.id}>
+                <strong>{agent.name}</strong>
+                <small>
+                  {agent.available
+                    ? `${agent.version ?? agent.executable ?? agent.command}${configured ? ' · Configured in a lane' : ''}`
+                    : agent.installHint}
+                </small>
+                <span className={`status-pill ${agent.available ? 'ok' : 'pending'}`}>
+                  {agent.available ? 'Installed' : 'Not installed'}
                 </span>
+                {agent.verified && (
+                  <span className="status-pill ok">Verified · {agent.verifiedAt}</span>
+                )}
+                {agent.caution && (
+                  <span className="status-pill pending" title={agent.cautionNote ?? undefined}>
+                    {agent.cautionNote ?? 'Use caution'}
+                  </span>
+                )}
               </div>
             );
           })}

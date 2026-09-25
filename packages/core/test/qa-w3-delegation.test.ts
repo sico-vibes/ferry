@@ -4,6 +4,7 @@ import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFixtureRepo, installFakeClis, type FixtureRepo } from '@ferry/testkit';
 import type { SessionId } from '@ferry/shared';
+import { AcpAgentDetectionSchema } from '@ferry/shared';
 import { startHarness, waitFor, type CoreHarness } from './qa-w3-harness.js';
 
 const originalPath = process.env.PATH;
@@ -64,6 +65,19 @@ async function createSession(h: CoreHarness): Promise<SessionId> {
 }
 
 describe('QA W3 delegation: trust, isolation and lifecycle', () => {
+  it('detects ACP agents over the delegation RPC with registry metadata', async () => {
+    const { h } = await setupDelegation();
+    try {
+      const agents = await h.rpc.delegation.detectAgents();
+      expect(agents.map(({ id }) => id)).toContain('opencode');
+      expect(
+        agents.map((agent) => AcpAgentDetectionSchema.safeParse(agent).success).every(Boolean),
+      ).toBe(true);
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
+
   it('never runs an untrusted project lane before explicit approval', async () => {
     const { h, touched } = await setupDelegation();
     try {

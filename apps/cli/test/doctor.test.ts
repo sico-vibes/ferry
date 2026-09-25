@@ -16,6 +16,10 @@ describe('doctor probes', () => {
             version: null,
             executable: null,
             installHint: 'Install pi-acp.',
+            verified: false,
+            verifiedAt: null,
+            caution: false,
+            cautionNote: null,
           },
           {
             name: 'OpenCode',
@@ -23,6 +27,10 @@ describe('doctor probes', () => {
             version: '1.2.3',
             executable: '/mock/opencode',
             installHint: 'Install OpenCode.',
+            verified: false,
+            verifiedAt: null,
+            caution: false,
+            cautionNote: null,
           },
         ]),
       loadModule: (specifier) =>

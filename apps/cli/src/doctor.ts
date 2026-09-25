@@ -32,6 +32,10 @@ interface AcpDoctorAgent {
   version: string | null;
   executable: string | null;
   installHint: string;
+  verified: boolean;
+  verifiedAt: string | null;
+  caution: boolean;
+  cautionNote: string | null;
   error?: string;
 }
 
@@ -143,10 +147,10 @@ export async function collectDoctor(overrides: Partial<DoctorProbes> = {}): Prom
     ...cliChecks,
     ...acpAgents.map((agent): DoctorRow => ({
       name: `ACP: ${agent.name}`,
-      status: agent.available ? 'ok' : 'warn',
+      status: agent.available && !agent.caution ? 'ok' : 'warn',
       reason: agent.available
-        ? `${agent.version ?? 'Detected'} · ${agent.executable ?? 'PATH'}`
-        : `${agent.installHint}${agent.error ? ` (${agent.error})` : ''}`,
+        ? `${agent.version ?? 'Detected'} · ${agent.executable ?? 'PATH'}${agent.verified ? ` · Verified ${agent.verifiedAt ?? ''}` : ''}${agent.caution ? ` · Caution: ${agent.cautionNote ?? 'review terms'}` : ''}`
+        : `${agent.installHint}${agent.caution ? ` · Caution: ${agent.cautionNote ?? 'review terms'}` : ''}${agent.error ? ` (${agent.error})` : ''}`,
     })),
   ];
 }
