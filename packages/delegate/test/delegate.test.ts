@@ -122,6 +122,24 @@ describe('external CLI adapters', () => {
     await expect(cancelled).rejects.toThrow();
   }, 20_000);
 
+  it.skipIf(process.platform !== 'win32')(
+    'detects a CMD shim under a path containing spaces',
+    async () => {
+      const root = await tempRoot();
+      const paths = await installFakeClis(join(root, 'directory with spaces', 'bin'));
+      const detected = await detectCli('codex', {
+        executable: paths.codex,
+        timeoutMs: 5_000,
+      });
+      expect(detected).toMatchObject({
+        available: true,
+        authenticated: true,
+        version: 'codex fake 1.0',
+      });
+    },
+    10_000,
+  );
+
   it('reports a watchdog timeout as a timeout (QA: pre-existing, fails on Windows)', async () => {
     // BUG: execute() rejects with "Delegate timed out" only after killTree()
     // resolves, but on Windows the killed process settles the execa promise
@@ -136,6 +154,24 @@ describe('external CLI adapters', () => {
         timeoutMs: 30,
       }),
     ).rejects.toThrow(/timed out/);
+  }, 20_000);
+
+  it('supports a version-only CLI probe without checking authentication', async () => {
+    const root = await tempRoot();
+    const captureArgsPath = join(root, 'args.json');
+    const paths = await installFakeClis(join(root, 'bin'), { captureArgsPath });
+    const detected = await detectCli('codex', {
+      executable: paths.codex,
+      cwd: root,
+      checkAuth: false,
+    });
+    expect(detected).toMatchObject({
+      available: true,
+      authenticated: false,
+      version: 'codex fake 1.0',
+    });
+    expect(await readStringArray(captureArgsPath)).toContain('--version');
+    expect(await readStringArray(captureArgsPath)).not.toContain('login');
   }, 20_000);
 });
 

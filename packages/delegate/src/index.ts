@@ -440,7 +440,7 @@ function commandInvocation(
 
 export async function detectCli(
   name: Implementer,
-  options: { executable?: string; cwd?: string; timeoutMs?: number } = {},
+  options: { executable?: string; cwd?: string; timeoutMs?: number; checkAuth?: boolean } = {},
 ): Promise<CliDetection> {
   const executable = await executablePath(name, options.executable);
   const timeoutMs = options.timeoutMs ?? 15_000;
@@ -460,6 +460,13 @@ export async function detectCli(
         version: null,
         executable,
         error: version.stderr || 'Version probe failed',
+      };
+    if (options.checkAuth === false)
+      return {
+        available: true,
+        authenticated: false,
+        version: version.stdout.trim() || null,
+        executable,
       };
     const authArgs =
       name === 'codex'

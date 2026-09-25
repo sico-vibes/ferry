@@ -9,6 +9,7 @@
   "scripts": {
     "app": "pnpm --filter @ferry/desktop dev",
     "app:web": "pnpm --filter @ferry/desktop dev:web",
+    "cli": "pnpm --filter @ferry/cli exec node dist/ferry.js",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "lint:fix": "turbo run lint -- --fix",
