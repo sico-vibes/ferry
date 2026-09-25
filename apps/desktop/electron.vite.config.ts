@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { copyFile, mkdir } from 'node:fs/promises';
+import { copyFile, cp, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
@@ -14,6 +14,7 @@ const copyStorageMigrations = {
       resolve('../../packages/storage/src/migrations/0001_initial.sql'),
       resolve(output, '0001_initial.sql'),
     );
+    await cp(resolve('../../packages/catalog/data'), resolve('out/data'), { recursive: true });
   },
 };
 

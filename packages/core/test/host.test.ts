@@ -28,6 +28,7 @@ import {
 } from '../src/index.js';
 import { runFerryClientContract } from '../../client/src/testing/contract.js';
 import { createFakeClock } from '../../client/src/mock/clock.js';
+import { FakeOpenAIServer } from '@ferry/testkit';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'ferry-core-test-'));
 let activeHost: CoreHost | undefined;
@@ -63,25 +64,87 @@ async function makeStdioHarness() {
 runFerryClientContract('HybridClient contract over core stdio RPC harness', makeStdioHarness);
 
 async function makeRealDomainsHarness() {
+  const stream = new FakeOpenAIServer({
+    responses: [
+      {
+        chunks: [
+          {
+            id: 'chatcmpl_contract',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'fake',
+            choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+          },
+          {
+            id: 'chatcmpl_contract',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'fake',
+            choices: [{ index: 0, delta: { content: 'Contract response' }, finish_reason: null }],
+          },
+          {
+            id: 'chatcmpl_contract',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'fake',
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          },
+        ],
+      },
+    ],
+  });
+  await stream.start();
   const [coreTransport, clientTransport] = createMemoryTransportPair();
   const host = await createCoreHost({
     dataDir: join(dataDir, 'real-domain-contract'),
     transport: coreTransport,
+    env: {
+      ...process.env,
+      FERRY_PROVIDER_API_KEY_OPENROUTER: 'contract-fixture-key',
+      FERRY_PROVIDER_BASE_URL_OPENROUTER: `${stream.baseUrl}/v1`,
+    },
   });
   const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 2500 });
   await rpc.hello;
   const mock = createMockFerryClient({ behavior: 'test' });
+  const workspacePath = join(dataDir, 'real-domain-contract-workspace');
+  await mkdir(workspacePath, { recursive: true });
+  await rpc.workspaces.open(workspacePath);
   return {
-    client: createHybridClient(mock, rpc, ['settings', 'workspaces', 'checkpoints']),
+    client: createHybridClient(mock, rpc, [
+      'settings',
+      'workspaces',
+      'checkpoints',
+      'sessions',
+      'approvals',
+      'profiles',
+      'skills',
+      'mcp',
+      'optimizer',
+      'delegation',
+    ]),
     cleanup: async () => {
       rpc.close();
       await host.stop();
+      await stream.stop();
     },
   };
 }
 
 runFerryClientContract('In-process Core RPC selected domains', makeRealDomainsHarness, {
-  domains: ['settings', 'workspaces', 'checkpoints', 'system'],
+  domains: [
+    'settings',
+    'workspaces',
+    'checkpoints',
+    'sessions',
+    'approvals',
+    'profiles',
+    'skills',
+    'mcp',
+    'optimizer',
+    'delegation',
+    'system',
+  ],
 });
 
 afterAll(async () => {
@@ -90,14 +153,25 @@ afterAll(async () => {
 });
 
 describe('core host dispatcher and lifecycle', () => {
-  it('runs the real settings, workspaces, checkpoints and system domains over loopback RPC', async () => {
+  it('runs the real W1 and W3 domains over loopback RPC', async () => {
     const path = join(dataDir, 'composition');
     const [coreTransport, clientTransport] = createMemoryTransportPair();
     const host = await createCoreHost({ dataDir: path, transport: coreTransport });
     const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 2500 });
     try {
       const hello = await rpc.hello;
-      expect(hello.realDomains).toEqual(['settings', 'workspaces', 'checkpoints']);
+      expect(hello.realDomains).toEqual([
+        'settings',
+        'workspaces',
+        'checkpoints',
+        'sessions',
+        'approvals',
+        'profiles',
+        'skills',
+        'mcp',
+        'optimizer',
+        'delegation',
+      ]);
       await mkdir(join(path, 'workspace'), { recursive: true });
       const opened = await rpc.workspaces.open(join(path, 'workspace'));
       WorkspaceSchema.parse(opened);

@@ -100,7 +100,9 @@ function launchCore(): void {
     serviceName: 'Ferry Core',
     env: {
       ...process.env,
-      FERRY_REAL_DOMAINS: process.env.FERRY_REAL_DOMAINS ?? 'settings,workspaces,checkpoints',
+      FERRY_REAL_DOMAINS:
+        process.env.FERRY_REAL_DOMAINS ??
+        'settings,workspaces,checkpoints,sessions,approvals,providers,quota,models,profiles,skills,mcp,optimizer,delegation',
       FERRY_CORE_DATA_DIR: process.env.FERRY_HOME ?? join(app.getPath('userData'), 'engine'),
     },
     stdio: process.env.FERRY_E2E_USER_DATA_DIR ? 'pipe' : 'inherit',

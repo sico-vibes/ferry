@@ -50,12 +50,12 @@ importers:
 
   apps/cli:
     dependencies:
-      '@ferry/core':
-        specifier: workspace:*
-        version: link:../../packages/core
       '@ferry/client':
         specifier: workspace:*
         version: link:../../packages/client
+      '@ferry/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@ferry/delegate':
         specifier: workspace:*
         version: link:../../packages/delegate
@@ -105,6 +105,9 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@ferry/testkit':
+        specifier: workspace:*
+        version: link:../../packages/testkit
       '@types/better-sqlite3':
         specifier: 9.6.0
         version: 9.6.0
@@ -120,12 +123,12 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@ferry/core':
-        specifier: workspace:*
-        version: link:../../packages/core
       '@ferry/client':
         specifier: workspace:*
         version: link:../../packages/client
+      '@ferry/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@ferry/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -138,9 +141,6 @@ importers:
       '@napi-rs/keyring':
         specifier: 2.1.0
         version: 2.1.0
-      '@vscode/ripgrep':
-        specifier: 1.18.0
-        version: 1.18.0
       '@tanstack/react-query':
         specifier: 5.103.2
         version: 5.103.2(react@19.3.0)
@@ -150,6 +150,9 @@ importers:
       '@tanstack/react-virtual':
         specifier: 3.14.13
         version: 3.14.13(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@vscode/ripgrep':
+        specifier: 1.18.0
+        version: 1.18.0
       '@xterm/addon-fit':
         specifier: 0.11.0
         version: 0.11.0
@@ -202,6 +205,9 @@ importers:
       '@axe-core/playwright':
         specifier: 4.13.0
         version: 4.13.0(playwright-core@1.63.0)
+      '@ferry/testkit':
+        specifier: workspace:*
+        version: link:../../packages/testkit
       '@playwright/test':
         specifier: 1.63.0
         version: 1.63.0
@@ -332,12 +338,36 @@ importers:
 
   packages/core:
     dependencies:
-      '@ferry/config':
+      '@ferry/agent':
         specifier: workspace:*
-        version: link:../config
+        version: link:../agent
+      '@ferry/catalog':
+        specifier: workspace:*
+        version: link:../catalog
       '@ferry/client':
         specifier: workspace:*
         version: link:../client
+      '@ferry/config':
+        specifier: workspace:*
+        version: link:../config
+      '@ferry/delegate':
+        specifier: workspace:*
+        version: link:../delegate
+      '@ferry/extensions':
+        specifier: workspace:*
+        version: link:../extensions
+      '@ferry/optimizer':
+        specifier: workspace:*
+        version: link:../optimizer
+      '@ferry/providers':
+        specifier: workspace:*
+        version: link:../providers
+      '@ferry/quota':
+        specifier: workspace:*
+        version: link:../quota
+      '@ferry/router':
+        specifier: workspace:*
+        version: link:../router
       '@ferry/secrets':
         specifier: workspace:*
         version: link:../secrets
@@ -356,6 +386,10 @@ importers:
       zod:
         specifier: 4.6.5
         version: 4.6.5
+    devDependencies:
+      '@ferry/testkit':
+        specifier: workspace:*
+        version: link:../testkit
 
   packages/delegate:
     dependencies:
@@ -10077,7 +10111,7 @@ snapshots:
       obug: 2.2.1
       std-env: 4.2.0
       tinyrainbow: 3.1.1
-      vitest: 5.0.1(@types/node@26.6.2)(@vitest/coverage-v8@5.0.1)(jsdom@30.1.1(@noble/hashes@2.4.0))(msw@2.15.0(@types/node@26.6.2)(typescript@6.0.3))(vite@7.3.6(@types/node@26.6.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)(yaml@2.9.1))
+      vitest: 5.0.1(@types/node@26.6.2)(@vitest/coverage-v8@5.0.1)(jsdom@30.1.1(@noble/hashes@2.4.0))(msw@2.15.0(@types/node@26.6.2)(typescript@6.0.3))(vite@8.3.0(@types/node@26.6.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
   '@vitest/istanbul-lib-coverage@1.0.1': {}
 
@@ -10094,6 +10128,7 @@ snapshots:
     optionalDependencies:
       msw: 2.15.0(@types/node@26.6.2)(typescript@6.0.3)
       vite: 7.3.6(@types/node@26.6.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)(yaml@2.9.1)
+    optional: true
 
   '@vitest/mocker@5.0.1(msw@2.15.0(@types/node@26.6.2)(typescript@6.0.3))(vite@8.3.0(@types/node@26.6.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))':
     dependencies:
@@ -14282,6 +14317,7 @@ snapshots:
       jsdom: 30.1.1(@noble/hashes@2.4.0)
     transitivePeerDependencies:
       - msw
+    optional: true
 
   vitest@5.0.1(@types/node@26.6.2)(@vitest/coverage-v8@5.0.1)(jsdom@30.1.1(@noble/hashes@2.4.0))(msw@2.15.0(@types/node@26.6.2)(typescript@6.0.3))(vite@8.3.0(@types/node@26.6.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)):
     dependencies:

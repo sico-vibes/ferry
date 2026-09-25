@@ -27,6 +27,21 @@ const messageId = sampleMessage.id;
 const partId = sampleMessagePart.id;
 const samples = {
   'session.updated': sampleSession satisfies Session,
+  'session.status': sampleSession satisfies Session,
+  'approval.request': {
+    sessionId,
+    messageId,
+    part: {
+      type: 'approval_request',
+      id: partId,
+      kind: 'command',
+      summary: 'Run tests',
+      detail: 'npm test',
+      risk: 'high',
+      state: 'pending',
+    },
+  },
+  'mcp.status': { serverId: 'fixture', status: 'connected', toolCount: 2 },
   'session.message': { sessionId, message: sampleMessage } satisfies {
     sessionId: string;
     message: Message;

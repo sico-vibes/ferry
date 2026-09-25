@@ -53,7 +53,18 @@ try {
   const core = await ready;
   clearTimeout(timeout);
   const selfTest = core.selfTest;
-  assert.deepEqual(core.realDomains, ['settings', 'workspaces', 'checkpoints']);
+  assert.deepEqual(core.realDomains, [
+    'settings',
+    'workspaces',
+    'checkpoints',
+    'sessions',
+    'approvals',
+    'profiles',
+    'skills',
+    'mcp',
+    'optimizer',
+    'delegation',
+  ]);
   assert.equal(core.dataDir, join(userDataDirectory, 'ferry-home'));
   assert.deepEqual(
     selfTest.modules.map(({ name }) => name),

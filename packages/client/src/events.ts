@@ -26,6 +26,20 @@ import type {
 
 export const FerryEventSchemas = {
   'session.updated': SessionSchema,
+  'session.status': SessionSchema,
+  'approval.request': z
+    .object({
+      sessionId: SessionIdSchema,
+      messageId: MessageIdSchema,
+      part: MessagePartSchema,
+    })
+    .refine((event) => event.part.type === 'approval_request'),
+  'mcp.status': z.object({
+    serverId: z.string(),
+    status: z.enum(['connected', 'disconnected', 'error']),
+    toolCount: z.number().int().nonnegative(),
+    error: z.string().optional(),
+  }),
   'session.message': z.object({ sessionId: SessionIdSchema, message: MessageSchema }),
   'session.part': z.object({
     sessionId: SessionIdSchema,
@@ -53,6 +67,18 @@ export const FerryEventSchemas = {
 } as const;
 export interface FerryEvents {
   'session.updated': Session;
+  'session.status': Session;
+  'approval.request': {
+    sessionId: import('@ferry/shared').SessionId;
+    messageId: import('@ferry/shared').MessageId;
+    part: Extract<MessagePart, { type: 'approval_request' }>;
+  };
+  'mcp.status': {
+    serverId: string;
+    status: 'connected' | 'disconnected' | 'error';
+    toolCount: number;
+    error?: string;
+  };
   'session.message': { sessionId: import('@ferry/shared').SessionId; message: Message };
   'session.part': {
     sessionId: import('@ferry/shared').SessionId;

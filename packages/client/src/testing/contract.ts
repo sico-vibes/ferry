@@ -27,6 +27,18 @@ export function runFerryClientContract(
   }>,
   options: { domains?: readonly string[] } = {},
 ) {
+  const waitForSettled = async (
+    client: FerryClient,
+    sessionId: import('@ferry/shared').SessionId,
+  ) => {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      const status = (await client.sessions.get(sessionId)).session.status;
+      if (status === 'idle' || status === 'error') return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`Session ${sessionId} did not settle before contract cleanup`);
+  };
   const selected = options.domains ? new Set(options.domains) : undefined;
   const includes = (domain: string) => selected === undefined || selected.has(domain);
   const skipped = selected
@@ -58,6 +70,9 @@ export function runFerryClientContract(
           expect(() => WorkspaceSchema.parse(x)).not.toThrow();
       if (includes('sessions'))
         for (const x of await client.sessions.list())
+          expect(() => SessionSchema.parse(x)).not.toThrow();
+      if (includes('sessions'))
+        for (const x of await client.sessions.search({ query: 'contract' }))
           expect(() => SessionSchema.parse(x)).not.toThrow();
       if (includes('providers'))
         for (const x of await client.providers.list())
@@ -136,7 +151,7 @@ export function runFerryClientContract(
             await advance(150);
             await advance(150);
             await advance(150);
-          } else await new Promise((resolve) => setTimeout(resolve, 1000));
+          } else await waitForSettled(client, s.id);
           expect(heard).toBeGreaterThanOrEqual(2);
           off();
           const count = heard;
@@ -146,7 +161,7 @@ export function runFerryClientContract(
             await advance(150);
             await advance(150);
             await advance(150);
-          }
+          } else await waitForSettled(client, s.id);
           expect(heard).toBe(count);
         }
         if (includes('settings'))

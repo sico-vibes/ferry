@@ -22,19 +22,21 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
     scenarioRunner,
     stringId,
   } = deps;
+  const list = async (q: { workspaceId?: string; query?: string } = {}) => {
+    await before();
+    return state.sessions
+      .filter(
+        (s) =>
+          (!q.workspaceId || s.workspaceId === q.workspaceId) &&
+          (!q.query ||
+            `${s.title} ${s.preview}`.toLocaleLowerCase().includes(q.query.toLocaleLowerCase())),
+      )
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .map((s) => structuredClone(s));
+  };
   return {
-    async list(q = {}) {
-      await before();
-      return state.sessions
-        .filter(
-          (s) =>
-            (!q.workspaceId || s.workspaceId === q.workspaceId) &&
-            (!q.query ||
-              `${s.title} ${s.preview}`.toLocaleLowerCase().includes(q.query.toLocaleLowerCase())),
-        )
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-        .map((s) => structuredClone(s));
-    },
+    list,
+    search: list,
     async get(id) {
       await before();
       return structuredClone(sessionDetail(id));
