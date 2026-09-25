@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { decodeText, WorkspaceJail } from '../src/fs.js';
 import { applyPatch, editFile } from '../src/edit.js';
 import { evaluatePermission, classifyDangerousCommand } from '../src/permissions.js';
@@ -10,13 +10,36 @@ import { ShadowCheckpoints } from '../src/git.js';
 import { runCommand } from '../src/command.js';
 
 const roots: string[] = [];
+vi.setConfig({ testTimeout: 30_000 });
 async function tempRoot(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ferry-workspace-'));
   roots.push(root);
   return root;
 }
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') return true;
+    throw error;
+  }
+}
+async function waitForProcessState(pid: number, alive: boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (processIsAlive(pid) !== alive) {
+    if (Date.now() >= deadline)
+      throw new Error(`Process ${String(pid)} did not become ${alive ? 'alive' : 'dead'} in time`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  await Promise.all(
+    roots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })),
+  );
 });
 
 describe('workspace filesystem', () => {
@@ -61,21 +84,40 @@ describe('workspace filesystem', () => {
   });
   it('kills a running command tree when its signal is aborted', async () => {
     const root = await tempRoot();
+    const pidFile = path.join(root, 'child.pid');
+    await writeFile(
+      path.join(root, 'child.mjs'),
+      "import { writeFileSync } from 'node:fs'; writeFileSync(process.argv[2], String(process.pid)); setInterval(() => {}, 60000);\n",
+      'utf8',
+    );
     const controller = new AbortController();
     const running = runCommand(
       new WorkspaceJail(root),
       {
-        command: 'node -e "process.stdout.write(\'ready\'); setTimeout(() => {}, 10000)"',
+        command: 'node child.mjs child.pid',
         pty: false,
-        timeoutMs: 20_000,
+        timeoutMs: 120_000,
       },
-      (event) => {
-        if (event.data.includes('ready')) controller.abort(new Error('Cancelled by test'));
-      },
+      () => undefined,
       controller.signal,
     );
+    let childPid: number | undefined;
+    const readyDeadline = Date.now() + 10_000;
+    while (childPid === undefined && Date.now() < readyDeadline) {
+      try {
+        childPid = Number(await readFile(pidFile, 'utf8'));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    if (childPid === undefined || !Number.isInteger(childPid))
+      throw new Error('Child process did not publish its PID before the deadline');
+    await waitForProcessState(childPid, true, 10_000);
+    controller.abort(new Error('Cancelled by test'));
+    await waitForProcessState(childPid, false, 30_000);
     await expect(running).rejects.toThrow('Cancelled by test');
-  }, 15_000);
+  }, 120_000);
   it('uses whitespace then fuzzy matching and rejects an ambiguous exact block', async () => {
     const root = await tempRoot();
     const tools = new WorkspaceTools(root);

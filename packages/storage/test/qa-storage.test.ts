@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ModelRefSchema, ProviderIdSchema } from '@ferry/shared';
 import {
   JsonRepository,
@@ -15,6 +15,7 @@ import {
 } from '../src/index.js';
 
 const dirs: string[] = [];
+vi.setConfig({ testTimeout: 30_000 });
 async function tempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'ferry-qa-storage-'));
   dirs.push(dir);

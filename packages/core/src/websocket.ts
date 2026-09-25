@@ -56,8 +56,10 @@ export async function startCoreWebSocketServer(
     const supplied = Buffer.from(url.searchParams.get('token') ?? '');
     const expected = Buffer.from(token);
     const key = request.headers['sec-websocket-key'];
+    const origin = request.headers.origin;
     if (
       url.pathname !== '/rpc' ||
+      origin !== undefined ||
       supplied.length !== expected.length ||
       !timingSafeEqual(supplied, expected) ||
       !key
@@ -141,7 +143,7 @@ export async function startCoreWebSocketServer(
               );
               return;
             }
-            const result = await host.dispatch(parsed.data);
+            const result = await host.dispatch(parsed.data, false);
             socket.write(frame(JSON.stringify({ jsonrpc: '2.0', id: parsed.data.id, result })));
           } catch (error) {
             writeFailure(socket, id, error);

@@ -98,6 +98,7 @@ export class ShadowCheckpoints {
       .string()
       .regex(/^[0-9a-f]{40}$/i)
       .parse(id);
+    await fs.mkdir(this.jail.root, { recursive: true });
     if (file) {
       const target = await this.jail.resolve(file, { allowMissing: true });
       await fs.mkdir(path.dirname(target), { recursive: true });
@@ -105,6 +106,7 @@ export class ShadowCheckpoints {
         cwd: this.jail.root,
         env: { ...process.env, GIT_DIR: this.dir, GIT_WORK_TREE: this.jail.root },
         encoding: 'buffer',
+        stripFinalNewline: false,
       });
       await fs.writeFile(target, stdout);
     } else {
@@ -125,6 +127,12 @@ export class ShadowCheckpoints {
     }
   }
   private git(args: string[]) {
+    return fs.access(this.jail.root).then(
+      () => this.runGit(args, this.jail.root),
+      () => this.runGit(args, path.dirname(this.dir)),
+    );
+  }
+  private runGit(args: string[], cwd: string) {
     return execa(
       'git',
       [
@@ -147,7 +155,7 @@ export class ShadowCheckpoints {
         ...args,
       ],
       {
-        cwd: this.jail.root,
+        cwd,
         env: { ...process.env, GIT_INDEX_FILE: this.indexFile },
         reject: true,
       },

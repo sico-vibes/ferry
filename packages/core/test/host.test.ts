@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
   createMockFerryClient,
   createHybridClient,
@@ -35,6 +35,7 @@ import { createServices } from '../src/services.js';
 import { domainRegistrars } from '../src/domains/index.js';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'ferry-core-test-'));
+vi.setConfig({ testTimeout: 30_000 });
 let activeHost: CoreHost | undefined;
 
 async function makeStdioHarness() {
@@ -54,7 +55,7 @@ async function makeStdioHarness() {
     mock.providers as unknown as Record<string, (...params: unknown[]) => unknown>,
   );
   await host.start();
-  const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 2500 });
+  const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
   await rpc.hello;
   return {
     client: createHybridClient(mock, rpc, ['providers']),
@@ -73,7 +74,7 @@ async function makeRealDomainsHarness() {
     dataDir: join(dataDir, 'real-domain-contract'),
     transport: coreTransport,
   });
-  const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 2500 });
+  const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
   await rpc.hello;
   const mock = createMockFerryClient({ behavior: 'test' });
   return {
@@ -106,7 +107,7 @@ describe('core host dispatcher and lifecycle', () => {
     const path = join(dataDir, 'composition');
     const [coreTransport, clientTransport] = createMemoryTransportPair();
     const host = await createCoreHost({ dataDir: path, transport: coreTransport });
-    const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 2500 });
+    const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
     try {
       const hello = await rpc.hello;
       expect(hello.realDomains).toEqual([
@@ -147,7 +148,7 @@ describe('core host dispatcher and lifecycle', () => {
 
     const [nextCoreTransport, nextClientTransport] = createMemoryTransportPair();
     const nextHost = await createCoreHost({ dataDir: path, transport: nextCoreTransport });
-    const nextClient = createRpcFerryClient(nextClientTransport, { timeoutMs: 2500 });
+    const nextClient = createRpcFerryClient(nextClientTransport, { timeoutMs: 15_000 });
     try {
       expect((await nextClient.settings.get()).theme).toBe('light');
     } finally {

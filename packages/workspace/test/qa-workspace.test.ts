@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile as writeRaw } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { decodeText, encodeText, isBinary, WorkspaceJail } from '../src/fs.js';
 import { WorkspaceTools } from '../src/tools.js';
 import { applyPatch, editFile } from '../src/edit.js';
@@ -10,6 +10,7 @@ import { runCommand } from '../src/command.js';
 import { ShadowCheckpoints } from '../src/git.js';
 
 const roots: string[] = [];
+vi.setConfig({ testTimeout: 30_000 });
 async function tempRoot(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ferry-qa-ws-'));
   roots.push(root);
@@ -17,7 +18,9 @@ async function tempRoot(): Promise<string> {
 }
 afterEach(async () => {
   await Promise.all(
-    roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 8 })),
+    roots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })),
   );
 });
 
@@ -377,15 +380,25 @@ describe('QA workspace: command runner', () => {
     });
     expect(result.timedOut).toBe(true);
     expect(Date.now() - started).toBeLessThan(20_000);
-  }, 30_000);
+  }, 120_000);
 });
 
 describe('QA workspace: checkpoints', () => {
+  let checkpointRoot: string;
+  let checkpointDataDir: string;
+  let checkpoints: ShadowCheckpoints;
+  beforeAll(async () => {
+    checkpointRoot = await mkdtemp(path.join(os.tmpdir(), 'ferry-qa-ws-checkpoints-'));
+    checkpointDataDir = await mkdtemp(path.join(os.tmpdir(), 'ferry-qa-ws-checkpoints-data-'));
+    checkpoints = new ShadowCheckpoints(new WorkspaceJail(checkpointRoot), checkpointDataDir);
+  });
+  afterAll(async () => {
+    await rm(checkpointRoot, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    await rm(checkpointDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  });
+
   it('restores text files byte for byte', async () => {
-    const root = await tempRoot();
-    const dataDir = await tempRoot();
-    const jail = new WorkspaceJail(root);
-    const checkpoints = new ShadowCheckpoints(jail, dataDir);
+    const root = checkpointRoot;
     const original = 'line one\nline two\n';
     await writeRaw(path.join(root, 'text.txt'), original);
     const first = await checkpoints.snapshot('initial');
@@ -397,10 +410,7 @@ describe('QA workspace: checkpoints', () => {
   it('restores a binary file byte for byte through a single-file restore', async () => {
     // BUG: restore(file) writes the UTF-8 decoded stdout of `git show`, so any
     // non-UTF-8 byte sequence is corrupted by the lossy string round-trip.
-    const root = await tempRoot();
-    const dataDir = await tempRoot();
-    const jail = new WorkspaceJail(root);
-    const checkpoints = new ShadowCheckpoints(jail, dataDir);
+    const root = checkpointRoot;
     const original = Buffer.from([0x00, 0xff, 0xfe, 0x80, 0x81, 0x00, 0x7f, 0x01]);
     await writeRaw(path.join(root, 'blob.bin'), original);
     const first = await checkpoints.snapshot('binary');

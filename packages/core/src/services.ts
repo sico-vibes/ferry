@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createLogger, getDataPaths, type DataPaths } from '@ferry/config';
 import { KeyringSecretStore, MemorySecretStore, type SecretStore } from '@ferry/secrets';
@@ -51,6 +51,7 @@ export interface FerryServices {
   readonly quotaObservations: QuotaObservationRepository;
   readonly handoffs: HandoffRepository;
   readonly logger: ReturnType<typeof createLogger>;
+  readonly databaseRecoveryMessage?: string;
   dispose(): Promise<void>;
 }
 
@@ -68,7 +69,24 @@ export async function createServices({
     mkdir(paths.logs, { recursive: true }),
     mkdir(paths.checkpoints, { recursive: true }),
   ]);
-  const db = await openDatabase(resolve(paths.db, 'ferry.sqlite'));
+  const databasePath = resolve(paths.db, 'ferry.sqlite');
+  let db: DatabaseConnection;
+  let databaseRecoveryMessage: string | undefined;
+  try {
+    db = await openDatabase(databasePath);
+  } catch (error) {
+    if (!isCorruptDatabaseError(error)) throw error;
+    const suffix = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = `${databasePath}.corrupt-${suffix}`;
+    await rename(databasePath, backupPath);
+    for (const sidecar of [`${databasePath}-wal`, `${databasePath}-shm`]) {
+      await rename(sidecar, `${backupPath}${sidecar.slice(databasePath.length)}`).catch(
+        () => undefined,
+      );
+    }
+    db = await openDatabase(databasePath);
+    databaseRecoveryMessage = `Ferry found a corrupt database and started a fresh one. The damaged file was moved to ${backupPath}.`;
+  }
   const catalog = await loadCatalog({ now: clock?.now() ?? new Date() });
   const providers = new ProviderRepository(db.client);
   const providerKeys = new ProviderKeyRepository(db.client);
@@ -143,6 +161,7 @@ export async function createServices({
     handoffs,
     secrets: secretStore,
     logger,
+    ...(databaseRecoveryMessage ? { databaseRecoveryMessage } : {}),
     async dispose() {
       if (disposed) return;
       disposed = true;
@@ -158,4 +177,11 @@ export async function createServices({
       db.close();
     },
   };
+}
+
+function isCorruptDatabaseError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const code = 'code' in error ? String(error.code) : '';
+  const message = error instanceof Error ? error.message : '';
+  return /SQLITE_(?:CORRUPT|NOTADB)/.test(code) || /SQLITE_(?:CORRUPT|NOTADB)/i.test(message);
 }
