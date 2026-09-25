@@ -103,6 +103,24 @@ describe('external CLI adapters', () => {
     expect(await readStringArray(captureArgsPath)).toContain('--yolo');
   }, 20_000);
 
+  it.skipIf(process.platform !== 'win32')(
+    'detects a CMD shim under a path containing spaces',
+    async () => {
+      const root = await tempRoot();
+      const paths = await installFakeClis(join(root, 'directory with spaces', 'bin'));
+      const detected = await detectCli('codex', {
+        executable: paths.codex,
+        timeoutMs: 5_000,
+      });
+      expect(detected).toMatchObject({
+        available: true,
+        authenticated: true,
+        version: 'codex fake 1.0',
+      });
+    },
+    10_000,
+  );
+
   it('cancels a delayed process and enforces the watchdog timeout', async () => {
     const root = await tempRoot();
     const delayed = await installFakeClis(join(root, 'delayed'), { delayBeforeEventsMs: 1_000 });

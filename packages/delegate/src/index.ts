@@ -404,18 +404,12 @@ async function execute(
 
 export async function detectCli(
   name: Implementer,
-  options: { executable?: string; cwd?: string; timeoutMs?: number } = {},
+  options: { executable?: string; cwd?: string; timeoutMs?: number; checkAuth?: boolean } = {},
 ): Promise<CliDetection> {
   const executable = await executablePath(name, options.executable);
   const timeoutMs = options.timeoutMs ?? 15_000;
   try {
-    const version = await execa(executable, ['--version'], {
-      ...(options.cwd ? { cwd: options.cwd } : {}),
-      reject: false,
-      shell: process.platform === 'win32' && extname(executable).toLowerCase() === '.cmd',
-      windowsHide: true,
-      timeout: timeoutMs,
-    });
+    const version = await probeExecutable(executable, ['--version'], options.cwd, timeoutMs);
     if (version.failed)
       return {
         available: false,
@@ -424,19 +418,20 @@ export async function detectCli(
         executable,
         error: version.stderr || 'Version probe failed',
       };
+    if (options.checkAuth === false)
+      return {
+        available: true,
+        authenticated: false,
+        version: version.stdout.trim() || null,
+        executable,
+      };
     const authArgs =
       name === 'codex'
         ? ['login', 'status']
         : name === 'opencode'
           ? ['auth', 'list']
           : ['auth', 'status'];
-    const auth = await execa(executable, authArgs, {
-      ...(options.cwd ? { cwd: options.cwd } : {}),
-      reject: false,
-      shell: process.platform === 'win32' && extname(executable).toLowerCase() === '.cmd',
-      windowsHide: true,
-      timeout: timeoutMs,
-    });
+    const auth = await probeExecutable(executable, authArgs, options.cwd, timeoutMs);
     return {
       available: true,
       authenticated: !auth.failed,
@@ -452,6 +447,27 @@ export async function detectCli(
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+function probeExecutable(
+  executable: string,
+  args: string[],
+  cwd: string | undefined,
+  timeoutMs: number,
+) {
+  const isWindowsShim =
+    process.platform === 'win32' && extname(executable).toLowerCase() === '.cmd';
+  return execa(
+    isWindowsShim ? 'cmd.exe' : executable,
+    isWindowsShim ? ['/d', '/s', '/c', `""${executable}" ${args.join(' ')}"`] : args,
+    {
+      ...(cwd ? { cwd } : {}),
+      reject: false,
+      windowsVerbatimArguments: isWindowsShim,
+      windowsHide: true,
+      timeout: timeoutMs,
+    },
+  );
 }
 
 export async function runAdapter(
