@@ -6,6 +6,9 @@ export interface FakeCliOptions {
   targetDir?: string;
   finalText?: string;
   events?: unknown[];
+  delayBeforeEventsMs?: number;
+  holdOpenMs?: number;
+  captureArgsPath?: string;
 }
 function stream(name: FakeCliName, finalText: string): unknown[] {
   const session = `fake-${name}-session-001`;
@@ -81,7 +84,7 @@ export async function installFakeClis(
     const events = JSON.stringify(
       options.events ?? stream(name, options.finalText ?? 'Fake delegate completed.'),
     );
-    const script = `import { appendFile, writeFile } from 'node:fs/promises';\nimport { resolve, join } from 'node:path';\nconst args = process.argv.slice(2);\nconst target = process.env.FAKE_CLI_TARGET ?? ${JSON.stringify(options.targetDir ?? '')};\nif (target) { await appendFile(join(resolve(target), 'FAKE_CLI_TOUCHED.txt'), ${JSON.stringify(`${name} executed\n`)}); }\nconst events = ${events};\nfor (const event of events) process.stdout.write(JSON.stringify(event) + '\\n');\n`;
+    const script = `import { appendFile, writeFile } from 'node:fs/promises';\nimport { resolve, join } from 'node:path';\nconst args = process.argv.slice(2);\nconst target = process.env.FAKE_CLI_TARGET ?? ${JSON.stringify(options.targetDir ?? '')};\nif (target) { await appendFile(join(resolve(target), 'FAKE_CLI_TOUCHED.txt'), ${JSON.stringify(`${name} executed\n`)}); }\nif (${JSON.stringify(options.captureArgsPath ?? '')}) await writeFile(${JSON.stringify(options.captureArgsPath ?? '')}, JSON.stringify(args));\nif (args.includes('--version')) { process.stdout.write(${JSON.stringify(`${name} fake 1.0`)}); process.exit(0); }\nif (['login','auth'].includes(args[0])) { process.stdout.write('Logged in'); process.exit(0); }\nawait new Promise(resolve => setTimeout(resolve, ${String(options.delayBeforeEventsMs ?? 0)}));\nconst events = ${events};\nfor (const event of events) process.stdout.write(JSON.stringify(event) + '\\n');\nawait new Promise(resolve => setTimeout(resolve, ${String(options.holdOpenMs ?? 0)}));\n`;
     await writeFile(scriptPath, script, 'utf8');
     const shim = join(binDir, `${name}.cmd`);
     await writeFile(shim, `@echo off\r\nnode "%~dp0\\${name}-fake.mjs" %*\r\n`, 'utf8');

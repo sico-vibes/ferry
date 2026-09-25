@@ -4,9 +4,12 @@ import { FileChangeSchema } from './session.js';
 export const LaneSchema = z.object({
   name: z.string(),
   implementer: z.enum(['codex', 'opencode', 'claude', 'ferry']),
+  profile: z.string().nullable().default(null),
   model: z.string().nullable(),
   effort: z.string().nullable(),
   variant: z.string().nullable(),
+  permission: z.enum(['read_only', 'scoped_write']).nullable().default(null),
+  paths: z.array(z.string()).default([]),
   source: z.enum(['global', 'project', 'ferry']),
   trusted: z.boolean(),
 });
@@ -35,6 +38,7 @@ export const DelegationRunSchema = z.object({
       inputTokens: z.number().nonnegative(),
       outputTokens: z.number().nonnegative(),
       costUsd: z.number().nonnegative().nullable(),
+      provider: z.literal('subscription_cli').default('subscription_cli'),
     })
     .nullable(),
   decision: z.enum(['accepted', 'rejected', 'rework']).nullable(),

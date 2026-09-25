@@ -96,6 +96,7 @@ export interface MockOptions {
   storage?: StorageAdapter;
   seed?: number;
   behavior?: 'test' | 'live';
+  latencyMs?: number;
   scenarioRunner?: ScenarioRunner;
 }
 
@@ -226,8 +227,10 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
     },
   };
   const before = async () => {
-    if (behavior.latency)
-      await new Promise<void>((resolve) => clock.setTimeout(resolve, rng.int(50, 400)));
+    if (behavior.latency) {
+      const latencyMs = options.latencyMs ?? rng.int(50, 400);
+      if (latencyMs > 0) await new Promise<void>((resolve) => clock.setTimeout(resolve, latencyMs));
+    }
     if (behavior.injectErrors && rng.next() < 0.1) throw new MockInjectedError();
   };
   const emit = <E extends keyof FerryEvents>(event: E, payload: FerryEvents[E]) => {
@@ -342,7 +345,7 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
       { command: 'pnpm test', ok: true, outputTail: 'All tests passed' },
       { command: 'pnpm lint', ok: true, outputTail: 'No issues found' },
     ];
-    r.usage = { inputTokens: 2300, outputTokens: 680, costUsd: null };
+    r.usage = { inputTokens: 2300, outputTokens: 680, costUsd: null, provider: 'subscription_cli' };
     emit('delegation.updated', r);
     persist();
   }

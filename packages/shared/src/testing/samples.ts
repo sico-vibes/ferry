@@ -267,9 +267,12 @@ export const sampleSkill: Skill = {
 export const sampleLane: Lane = {
   name: 'Codex',
   implementer: 'codex',
+  profile: null,
   model: null,
   effort: null,
   variant: null,
+  permission: null,
+  paths: [],
   source: 'global',
   trusted: true,
 };
@@ -287,7 +290,7 @@ export const sampleDelegationRun: DelegationRun = {
   finalMessage: 'Done',
   touchedFiles: [sampleFileChange],
   gateResults: [sampleGateResult],
-  usage: { inputTokens: 100, outputTokens: 50, costUsd: null },
+  usage: { inputTokens: 100, outputTokens: 50, costUsd: null, provider: 'subscription_cli' },
   decision: 'accepted',
 };
 export const sampleOptimizerStats: OptimizerStats = {
