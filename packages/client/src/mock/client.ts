@@ -7,6 +7,7 @@ import { createSessionsDomain } from './domains/sessions.js';
 import { createApprovalsDomain } from './domains/approvals.js';
 import { createCheckpointsDomain } from './domains/checkpoints.js';
 import { createProvidersDomain } from './domains/providers.js';
+import { createOAuthDomain } from './domains/oauth.js';
 import { createQuotaDomain } from './domains/quota.js';
 import { createModelsDomain } from './domains/models.js';
 import { createProfilesDomain } from './domains/profiles.js';
@@ -35,6 +36,7 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
     approvals: createApprovalsDomain(runtime.store, deps),
     checkpoints: createCheckpointsDomain(runtime.store, deps),
     providers: createProvidersDomain(runtime.store, deps),
+    oauth: createOAuthDomain(runtime.store, deps),
     quota: createQuotaDomain(runtime.store, deps),
     models: createModelsDomain(runtime.store, deps),
     profiles: createProfilesDomain(runtime.store, deps),

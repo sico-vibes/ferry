@@ -7,6 +7,8 @@ export const SettingsSchema = z.object({
   homeStyle: z.enum(['auto', 'hero', 'compact']).default('auto'),
   fontScale: z.number().min(0.85).max(1.3),
   restoreTabs: z.boolean(),
+  allowSubscriptionOAuthRouting: z.boolean().default(false),
+  subscriptionOAuthAcknowledged: z.array(z.string()).default([]),
   delegationMode: DelegationModeSchema,
   permissionMode: PermissionModeSchema,
   activeProfileId: ProfileIdSchema,

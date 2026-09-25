@@ -35,6 +35,10 @@ export const FERRY_METHODS = [
   'providers.removeKey',
   'providers.probe',
   'providers.setEnabled',
+  'oauth.list',
+  'oauth.login',
+  'oauth.logout',
+  'oauth.status',
   'quota.capacity',
   'quota.history',
   'quota.handoffs',
@@ -78,6 +82,7 @@ export const FERRY_EVENTS = [
   'workspace.removed',
   'settings.updated',
   'toast',
+  'oauth.progress',
 ] as const;
 export const FERRY_DOMAINS = [
   ...new Set(FERRY_METHODS.map((method) => method.split('.')[0] ?? '')),

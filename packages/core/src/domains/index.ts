@@ -12,6 +12,7 @@ import { register as registerOptimizer } from './optimizer.js';
 import { register as registerDelegation } from './delegation.js';
 import { register as registerSettings } from './settings.js';
 import { register as registerWorkspaces } from './workspaces.js';
+import { register as registerOAuth } from './oauth.js';
 
 export type DomainRegistrar = (host: CoreHost, services: FerryServices) => void;
 export const domainRegistrars: DomainRegistrar[] = [
@@ -19,6 +20,7 @@ export const domainRegistrars: DomainRegistrar[] = [
   registerWorkspaces,
   registerCheckpoints,
   registerProviders,
+  registerOAuth,
   registerModels,
   registerQuota,
   registerSessions,

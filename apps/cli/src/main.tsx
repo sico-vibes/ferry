@@ -151,13 +151,21 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     const command = flags.positionals[0];
     const dataDir = stringFlag(flags.values['data-dir']);
     const cwd = stringFlag(flags.values.cwd) ?? process.cwd();
-    const engine = flags.values.engine ?? 'mock';
+    const engine = flags.values.engine ?? (command === 'oauth' ? 'local' : 'mock');
     if (engine !== 'mock' && engine !== 'local')
       throw new CliError(2, 'Invalid --engine. Use mock or local.');
     if (command === 'run') validateRunArguments(flags);
     if (command === 'resume' && !flags.positionals[1])
       throw new CliError(2, 'Usage: ferry resume <sessionId>');
     if (command && !CLI_COMMANDS.has(command)) throw new CliError(2, `Unknown command: ${command}`);
+    if (
+      command === 'oauth' &&
+      flags.positionals[1] === 'login' &&
+      flags.positionals[2] &&
+      (!process.stdin.isTTY || !process.stdout.isTTY) &&
+      flags.values['i-understand-the-risk'] !== true
+    )
+      throw new CliError(2, 'Non-interactive OAuth login requires --i-understand-the-risk.');
     client = await createClientAsync({
       engine,
       ...(dataDir ? { dataDir } : {}),
@@ -200,6 +208,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     if (command === 'quota')
       return flags.values.watch === true ? quotaWatch(client, json) : await quota(client, json);
     if (command === 'providers') return await providers(client, flags.positionals.slice(1), json);
+    if (command === 'oauth') return await oauth(client, flags.positionals.slice(1), json);
     if (command === 'profiles') return await profiles(client, flags.positionals.slice(1), json);
     if (command === 'skills') return await skills(client, flags.positionals.slice(1), json);
     if (command === 'mcp') return await listDomain(client, 'mcp', json);
@@ -260,6 +269,7 @@ const CLI_COMMANDS = new Set([
   'serve',
   'quota',
   'providers',
+  'oauth',
   'profiles',
   'skills',
   'mcp',
@@ -404,6 +414,66 @@ async function providers(client: FerryClient, args: string[], json = false) {
     rows,
     rows
       .map((p) => `${p.enabled ? good('●') : muted('○')} ${p.id} · ${p.name} · ${p.keyStatus}`)
+      .join('\n') + '\n',
+  );
+  return 0;
+}
+
+async function oauth(client: FerryClient, args: string[], json = false): Promise<number> {
+  const [action, id] = args;
+  if (action === 'login' && id) {
+    const provider = (await client.oauth.list()).find((item) => item.id === id);
+    if (!provider) throw new CliError(2, `Unknown subscription OAuth provider: ${id}`);
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      // The risk flag above is the acknowledgement for headless invocations.
+    } else {
+      process.stderr.write(`Use your ${provider.name} subscription outside its official app?\n`);
+      process.stderr.write(
+        `Logging in uses an unofficial client. ${provider.name} may treat this as a terms violation and suspend or ban your account. Ferry cannot protect you. Use an API key or the provider's official CLI instead.\n`,
+      );
+      const terminal = createInterface({ input: process.stdin, output: process.stderr });
+      let answer: string;
+      try {
+        answer = (await terminal.question('Continue? [y/N] ')).trim().toLowerCase();
+      } finally {
+        terminal.close();
+      }
+      if (answer !== 'y' && answer !== 'yes') return 2;
+    }
+    const off = client.on('oauth.progress', (event) => {
+      if (event.id !== id || event.type === 'success' || event.type === 'error') return;
+      const message =
+        event.type === 'open_url'
+          ? `Open ${event.url}${event.instructions ? `\n${event.instructions}` : ''}`
+          : `Enter ${event.userCode} at ${event.verificationUri}`;
+      if (json)
+        process.stdout.write(`${JSON.stringify({ type: 'oauth.progress', payload: event })}\n`);
+      else process.stderr.write(`${message}\n`);
+    });
+    try {
+      await client.oauth.login(provider.id);
+      writeResult(json, { providerId: id, connected: true }, `Logged in to ${provider.name}.\n`);
+      return 0;
+    } finally {
+      off();
+    }
+  }
+  if (action === 'logout' && id) {
+    await client.oauth.logout(id as import('@ferry/shared').OAuthProviderId);
+    writeResult(json, { providerId: id, connected: false }, `Logged out of ${id}.\n`);
+    return 0;
+  }
+  if (action !== 'list')
+    throw new CliError(2, 'Usage: ferry oauth list | login <id> | logout <id>');
+  const rows = await client.oauth.list();
+  writeResult(
+    json,
+    rows,
+    rows
+      .map(
+        (row) =>
+          `${row.connected ? good('●') : muted('○')} ${row.id} · ${row.name} · unofficial · suspension risk`,
+      )
       .join('\n') + '\n',
   );
   return 0;

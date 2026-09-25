@@ -516,6 +516,18 @@ export function SettingsCanvas() {
               </Pill>
             </SettingRow>
           ))}
+          <SettingRow
+            title="Allow subscription OAuth models in routing"
+            helper="When off, Auto-Free and Best Available never choose subscription logins. OAuth models remain available for manual selection."
+          >
+            <Switch
+              label="Allow subscription OAuth models in routing"
+              checked={settings?.allowSubscriptionOAuthRouting ?? false}
+              onCheckedChange={(allowSubscriptionOAuthRouting) =>
+                void update({ allowSubscriptionOAuthRouting })
+              }
+            />
+          </SettingRow>
           <Pill size="sm" variant="outline" onClick={() => void navigate({ to: '/explore' })}>
             Open in Explore
           </Pill>

@@ -1,6 +1,6 @@
 import { cn } from '../../lib/cn';
 
-export type TagBadgeKind = 'legit' | 'promo' | 'paid' | 'cli' | 'caution';
+export type TagBadgeKind = 'legit' | 'promo' | 'paid' | 'cli' | 'caution' | 'subscription_oauth';
 
 const labels: Record<TagBadgeKind, string> = {
   legit: 'Free',
@@ -8,6 +8,7 @@ const labels: Record<TagBadgeKind, string> = {
   paid: 'Paid',
   cli: 'CLI',
   caution: 'Caution',
+  subscription_oauth: 'Unofficial OAuth',
 };
 
 const styles: Record<TagBadgeKind, string> = {
@@ -16,6 +17,7 @@ const styles: Record<TagBadgeKind, string> = {
   paid: 'bg-[var(--tint-blue)] text-link',
   cli: 'bg-icon-circle text-text-2',
   caution: 'bg-[var(--tint-danger)] text-danger',
+  subscription_oauth: 'bg-[var(--tint-warn)] text-warn',
 };
 
 export function TagBadge({ kind, className }: { kind: TagBadgeKind; className?: string }) {

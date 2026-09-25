@@ -307,3 +307,38 @@ describe('QA-w2 core: test keyring selection', () => {
     }
   }, 30_000);
 });
+
+describe('QA OAuth key safety', () => {
+  it('keeps OAuth tokens out of RPC results, events, SQLite rows, and logs', async () => {
+    const fake = await startServer();
+    const h = await makeHarness(fake);
+    const access = 'oauth-access-fake-9d12';
+    const refresh = 'oauth-refresh-fake-2c83';
+    try {
+      await h.services.secrets.set(
+        'oauth:anthropic',
+        JSON.stringify({
+          type: 'oauth',
+          access,
+          refresh,
+          expires: Date.now() + 60_000,
+        }),
+      );
+      const providers = await h.rpc.oauth.list();
+      expect(await h.rpc.oauth.status('anthropic')).toBe(true);
+      expect(JSON.stringify(providers)).not.toContain(access);
+      expect(JSON.stringify(providers)).not.toContain(refresh);
+      expect(JSON.stringify(h.events)).not.toContain(access);
+      expect(JSON.stringify(h.events)).not.toContain(refresh);
+      await flushLogger(h.services);
+      expect(scanTables(h.services)).not.toContain(access);
+      expect(scanTables(h.services)).not.toContain(refresh);
+      const logs = await readDirectoryFiles(h.services.paths.logs);
+      expect(logs).not.toContain(access);
+      expect(logs).not.toContain(refresh);
+    } finally {
+      await h.close();
+      await fake.stop();
+    }
+  }, 30_000);
+});

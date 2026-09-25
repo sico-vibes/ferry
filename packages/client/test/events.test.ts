@@ -60,6 +60,7 @@ const samples = {
   'workspace.removed': { id: sampleWorkspace.id },
   'settings.updated': sampleSettings,
   toast: { kind: 'info', title: 'Ready', body: null },
+  'oauth.progress': { type: 'success', id: 'anthropic' },
 } as const;
 
 describe('Ferry event schemas', () => {

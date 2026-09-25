@@ -11,6 +11,8 @@ import type {
   ModelInfo,
   ModelRef,
   OptimizerStats,
+  OAuthProvider,
+  OAuthProviderId,
   ProbeResult,
   Profile,
   ProfileId,
@@ -72,6 +74,12 @@ export interface FerryClient {
     removeKey(id: ProviderId): Promise<Provider>;
     probe(id: ProviderId): Promise<ProbeResult>;
     setEnabled(id: ProviderId, v: boolean): Promise<Provider>;
+  };
+  oauth: {
+    list(): Promise<OAuthProvider[]>;
+    login(id: OAuthProviderId): Promise<void>;
+    logout(id: OAuthProviderId): Promise<void>;
+    status(id: OAuthProviderId): Promise<boolean>;
   };
   quota: {
     capacity(): Promise<CapacitySummary>;

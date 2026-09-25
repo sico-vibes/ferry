@@ -3,6 +3,7 @@ export * from './domain/common.js';
 export * from './domain/workspace.js';
 export * from './domain/session.js';
 export * from './domain/provider.js';
+export * from './domain/oauth.js';
 export * from './domain/quota.js';
 export * from './domain/profile.js';
 export * from './domain/integrations.js';
