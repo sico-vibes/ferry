@@ -231,13 +231,21 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
             id: PartIdSchema.parse(newId('part')),
             kind: command ? ('command' as const) : ('edit' as const),
             summary: definition.title,
-            detail: command ?? path ?? definition.title,
+            detail: decision.reason.startsWith('Danger warning:')
+              ? `${decision.reason}\n${command ?? path ?? definition.title}`
+              : (command ?? path ?? definition.title),
             risk: command ? ('high' as const) : ('medium' as const),
             state: 'pending' as const,
           };
           options.onPart(part);
-          const response = await options.requestApproval({ part, signal: context.signal });
-          checkAbort(context.signal);
+          let response: 'allowed_once' | 'allowed_always' | 'denied';
+          try {
+            response = await options.requestApproval({ part, signal: context.signal });
+            checkAbort(context.signal);
+          } catch (error) {
+            if (context.signal.aborted) options.onPart({ ...part, state: 'denied' });
+            throw error;
+          }
           options.onPart({ ...part, state: response });
           if (response === 'denied') throw new Error('User denied this tool call');
         }

@@ -72,7 +72,11 @@ export function evaluatePermission(
     return { decision: 'deny', reason: 'Credential and secret files are protected' };
   if (action.command) {
     const danger = classifyDangerousCommand(action.command, options.workspace);
-    if (danger) return { decision: 'deny', reason: danger };
+    if (danger) {
+      return options.mode === 'full_auto'
+        ? { decision: 'deny', reason: danger }
+        : { decision: 'ask', reason: `Danger warning: ${danger}` };
+    }
   }
   const rules = options.rules ?? [];
   // Project rules override user rules; within a level, the last matching rule wins.

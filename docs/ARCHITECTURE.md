@@ -43,6 +43,10 @@ core: agent loop · router · quota ledger · providers (AI SDK) · workspace to
 7. The step and the task record are persisted.
 8. If the model changes, a handoff briefing and a `handoff_marker` are produced.
 
+## Dangerous command permissions
+
+Commands classified as dangerous require explicit confirmation in `ask` and `auto_edit` modes. The approval request includes a danger warning and the detected reason. `full_auto` denies dangerous commands without executing them.
+
 ## Where to register a new screen / shot / e2e flow / mount / store slice
 
 - **Screen:** add a route fragment in `apps/desktop/src/renderer/app/routes/` and register its factory in `routeRegistry` in `app/routes/index.ts`.

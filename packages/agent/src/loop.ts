@@ -119,7 +119,6 @@ export interface RunResult {
 
 export class AgentLoop {
   private readonly estimates: (text: string) => number;
-  private readonly outputHandles = new Map<string, string>();
   private readonly recoveryStore = new InMemoryBlobStore();
 
   constructor(private readonly options: AgentOptions) {
@@ -162,6 +161,23 @@ export class AgentLoop {
       permissionMode: this.options.permissionMode,
       ...(this.options.permissionRules ? { permissionRules: this.options.permissionRules } : {}),
       onPart: (part) => {
+        if (part.type === 'approval_request') {
+          const current = this.options.store
+            .load(sessionId)
+            ?.messages.flatMap((message) => message.parts)
+            .find((existing) => existing.type === 'approval_request' && existing.id === part.id);
+          if (current) {
+            const message = this.options.store.replacePart(sessionId, part);
+            if (message)
+              this.options.emit({
+                type: 'session.part',
+                sessionId,
+                messageId: message.id,
+                part,
+              });
+          } else this.addPart(sessionId, part);
+          return;
+        }
         this.addPart(sessionId, part);
       },
       onOptimizerEvent: (event) => {
@@ -173,10 +189,14 @@ export class AgentLoop {
           status: 'awaiting_approval',
         });
         this.options.emit({ type: 'session.updated', session: waiting });
-        const response = await approvals(part, toolSignal);
-        const resumed = this.options.store.updateSession(sessionId, { status: 'running' });
-        this.options.emit({ type: 'session.updated', session: resumed });
-        return response;
+        try {
+          return await approvals(part, toolSignal);
+        } finally {
+          if (!toolSignal.aborted) {
+            const resumed = this.options.store.updateSession(sessionId, { status: 'running' });
+            this.options.emit({ type: 'session.updated', session: resumed });
+          }
+        }
       },
       filterOutput: async (name, text, command) => {
         if (this.options.filterOutput) return this.options.filterOutput(name, text, command);
@@ -191,9 +211,9 @@ export class AgentLoop {
         };
       },
       readRecovery: async (handle) =>
-        this.outputHandles.get(handle) ??
-        readOutput(this.recoveryStore, handle) ??
-        this.options.readRecovery?.(handle),
+        this.options.filterOutput
+          ? ((await this.options.readRecovery?.(handle)) ?? readOutput(this.recoveryStore, handle))
+          : (readOutput(this.recoveryStore, handle) ?? this.options.readRecovery?.(handle)),
       ...(this.options.toolSources ? { sources: this.options.toolSources } : {}),
       updateTask: (task) => {
         taskRecord = task;
@@ -238,6 +258,8 @@ export class AgentLoop {
         if (!model) throw new Error('No eligible model is available for this step');
         let contextMessages = contextSummary ? pinnedMessages : messages;
         if (inputTokens > model.contextWindow * 0.7) {
+          if (stepCount >= maxSteps)
+            return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
           const summaryModel =
             this.selectModel(
               'summarize',
@@ -331,6 +353,8 @@ export class AgentLoop {
         const streamedTextPartId = PartIdSchema.parse(newId('part'));
         let streamedText = '';
         const generator = this.options.generator ?? this.createStreamingGenerator(model, sessionId);
+        if (stepCount >= maxSteps)
+          return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
         const generated = await generator({
           model,
           system,
@@ -338,6 +362,7 @@ export class AgentLoop {
           tools,
           signal,
           onDelta: (text) => {
+            if (isSignalAborted(signal)) return;
             streamedText += text;
             const currentParts =
               this.options.store
@@ -351,6 +376,8 @@ export class AgentLoop {
             this.options.emit({ type: 'session.delta', sessionId, messageId: assistant.id, text });
           },
         });
+        if (isSignalAborted(signal))
+          throw signal.reason ?? new DOMException('Aborted', 'AbortError');
         let parts =
           this.options.store
             .load(sessionId)
@@ -376,6 +403,8 @@ export class AgentLoop {
         stepCount++;
         const retryErrors: string[] = [];
         for (const call of generated.toolCalls ?? []) {
+          if (isSignalAborted(signal))
+            throw signal.reason ?? new DOMException('Aborted', 'AbortError');
           if (call.name === 'ask_user') {
             const question =
               typeof call.input === 'string'
@@ -409,7 +438,7 @@ export class AgentLoop {
           const toolPart: Extract<MessagePart, { type: 'tool_call' }> = {
             type: 'tool_call',
             id: PartIdSchema.parse(newId('part')),
-            tool: call.name as Extract<MessagePart, { type: 'tool_call' }>['tool'],
+            tool: call.name,
             title: definition.title,
             args: parsed.value as Record<string, unknown>,
             status: 'running',
@@ -435,7 +464,6 @@ export class AgentLoop {
               filteredTokens: null,
               recoveryHandle: null,
             };
-            if (output.recoveryHandle) this.outputHandles.set(output.recoveryHandle, output.text);
             const value = structured.value ?? result;
             const changes = Array.isArray(value)
               ? value.filter(isFileChange)
@@ -471,6 +499,7 @@ export class AgentLoop {
                   'Tool output was shortened. Use read_output with its recovery handle for the full result.',
               });
           } catch (error) {
+            if (isSignalAborted(signal)) throw error;
             toolPart.status = 'failed';
             toolPart.durationMs = Date.now() - start;
             toolPart.output = {
@@ -483,9 +512,9 @@ export class AgentLoop {
             this.replacePart(sessionId, toolPart);
             retryErrors.push(`Tool ${call.name} failed: ${toolPart.output.text}`);
           }
-          stepCount++;
-          if (stepCount >= maxSteps) break;
         }
+        if (isSignalAborted(signal))
+          throw signal.reason ?? new DOMException('Aborted', 'AbortError');
         if (retryErrors.length)
           this.options.store.appendMessage(
             sessionId,
@@ -625,7 +654,7 @@ export class AgentLoop {
     else this.options.store.appendPart(sessionId, target.id, part);
     this.options.emit({ type: 'session.part', sessionId, messageId: target.id, part });
   }
-  private replacePart(sessionId: string, part: Extract<MessagePart, { type: 'tool_call' }>): void {
+  private replacePart(sessionId: string, part: MessagePart): void {
     this.options.store.replacePart(sessionId, part);
   }
   private replaceMessageParts(message: Message, parts: MessagePart[]): void {
@@ -730,4 +759,7 @@ async function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T
       );
     }),
   ]);
+}
+function isSignalAborted(signal: AbortSignal): boolean {
+  return signal.aborted;
 }
