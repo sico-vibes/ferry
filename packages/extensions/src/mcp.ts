@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { getDataPaths } from '@ferry/config';
 import { McpServerSchema, type McpServer } from '@ferry/shared';
 import { z } from 'zod';
@@ -23,7 +24,7 @@ export const McpServerConfigSchema = z.discriminatedUnion('transport', [
     id: z.string().min(1),
     name: z.string().min(1),
     transport: z.literal('http'),
-    url: z.string().url(),
+    url: z.url(),
     enabled: z.boolean().default(false),
   }),
 ]);
@@ -50,20 +51,25 @@ export interface McpClientOptions {
 interface ServerState {
   config: McpServerConfig;
   source: 'user' | 'project';
-  client?: Client;
-  transport?: StdioClientTransport | StreamableHTTPClientTransport;
+  client: Client | undefined;
+  transport: StdioClientTransport | StreamableHTTPClientTransport | undefined;
   tools: ToolDef[];
   status: McpStatus;
   attempts: number;
-  reconnectTimer?: ReturnType<typeof setTimeout>;
+  reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   generation: number;
 }
 
 const DEFAULT_USER_CONFIG = (): string => join(getDataPaths().home, 'mcp.json');
+const mcpConfigFileSchema = z.union([
+  z.array(z.unknown()),
+  z.object({ servers: z.array(z.unknown()) }),
+]);
 const emptyFile = async (path: string): Promise<unknown[]> => {
   try {
-    const value: unknown = JSON.parse(await readFile(path, 'utf8'));
-    return Array.isArray(value) ? value : ((value as { servers?: unknown[] }).servers ?? []);
+    const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
+    const value = mcpConfigFileSchema.parse(parsed);
+    return Array.isArray(value) ? value : value.servers;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
@@ -75,27 +81,29 @@ export async function loadMcpServerConfigs(
     McpClientOptions,
     'projectPath' | 'userConfigPath' | 'projectConfigPath' | 'approveProjectConfig'
   >,
-): Promise<Array<{ config: McpServerConfig; source: 'user' | 'project' }>> {
+): Promise<{ config: McpServerConfig; source: 'user' | 'project' }[]> {
   const userRaw = await emptyFile(options.userConfigPath ?? DEFAULT_USER_CONFIG());
   const projectRaw = await emptyFile(
     options.projectConfigPath ?? join(options.projectPath, '.ferry', 'mcp.json'),
   );
-  const user = userRaw.map((item) => ({
-    config: McpServerConfigSchema.parse(item),
-    source: 'user' as const,
-  }));
+  const user = userRaw
+    .map((item) => ({
+      config: McpServerConfigSchema.parse(item),
+      source: 'user' as const,
+    }))
+    .filter(({ config }) => config.enabled);
   const project = projectRaw.map((item) => ({
     config: McpServerConfigSchema.parse(item),
     source: 'project' as const,
   }));
-  const approved = new Set<string>();
+  let projectApproved = false;
   if (project.length) {
     const hash = createHash('sha256')
       .update(JSON.stringify(project.map(({ config }) => config)))
       .digest('hex');
-    if (await options.approveProjectConfig?.(hash)) approved.add(hash);
+    projectApproved = (await options.approveProjectConfig?.(hash)) ?? false;
   }
-  return [...user, ...project.filter(({ config }) => config.enabled && approved.size > 0)];
+  return [...user, ...project.filter(({ config }) => config.enabled && projectApproved)];
 }
 
 export class McpManager {
@@ -108,22 +116,35 @@ export class McpManager {
   }
 
   async configure(
-    configs: Array<McpServerConfig | { config: McpServerConfig; source: 'user' | 'project' }>,
+    configs: (McpServerConfig | { config: McpServerConfig; source: 'user' | 'project' })[],
   ): Promise<void> {
     await this.disposeConnections();
     this.disposed = false;
     this.servers.clear();
-    for (const item of configs) {
+    const parsed = configs.map((item) => {
       const wrapped = 'config' in item ? item : { config: item, source: 'user' as const };
-      const config = McpServerConfigSchema.parse(wrapped.config);
+      return { ...wrapped, config: McpServerConfigSchema.parse(wrapped.config) };
+    });
+    const projectConfigs = parsed
+      .filter(({ source }) => source === 'project')
+      .map(({ config }) => config);
+    const projectHash = createHash('sha256').update(JSON.stringify(projectConfigs)).digest('hex');
+    const projectApproved =
+      projectConfigs.length === 0 ||
+      (await this.options.approveProjectConfig?.(projectHash)) === true;
+    for (const { config, source } of parsed) {
       if (!config.enabled) continue;
+      if (source === 'project' && !projectApproved) continue;
       if (this.servers.has(config.id)) throw new Error(`Duplicate MCP server id: ${config.id}`);
       this.servers.set(config.id, {
         config,
-        source: wrapped.source,
+        source,
+        client: undefined,
+        transport: undefined,
         tools: [],
         status: 'disconnected',
         attempts: 0,
+        reconnectTimer: undefined,
         generation: 0,
       });
     }
@@ -149,45 +170,46 @@ export class McpManager {
   }
 
   toolSource(): ToolSource {
-    const manager = this;
+    const listTools = (): ToolDef[] =>
+      [...this.servers.values()].flatMap((state) =>
+        state.status === 'connected'
+          ? state.tools.map((tool) => ({
+              ...tool,
+              name: this.namespacedName(state.config.id, tool.name),
+            }))
+          : [],
+      );
+    const callTool = this.callTool.bind(this);
     return {
       id: 'mcp',
-      listTools: () =>
-        [...manager.servers.values()].flatMap((state) =>
-          state.status === 'connected'
-            ? state.tools.map((tool) => ({
-                ...tool,
-                name: manager.namespacedName(state.config.id, tool.name),
-              }))
-            : [],
-        ),
+      listTools,
       call(name, args, signal) {
-        return manager.callTool(name, args, signal);
+        return callTool(name, args, signal);
       },
     };
   }
 
   async callTool(name: string, args: unknown, signal: AbortSignal): Promise<unknown> {
-    const match = /^mcp__([^_]+(?:_[^_]+)*)__([\s\S]+)$/.exec(name);
-    if (!match) throw new Error(`Invalid MCP tool name: ${name}`);
-    const state = this.requireState(match[1] ?? '');
+    const state = [...this.servers.values()].find((candidate) =>
+      name.startsWith(`mcp__${candidate.config.id}__`),
+    );
+    if (!state) throw new Error(`Invalid MCP tool name: ${name}`);
     if (state.status !== 'connected' || !state.client)
       throw new Error(`MCP server ${state.config.id} is not connected`);
-    const toolName = match[2] ?? '';
+    const toolName = name.slice(`mcp__${state.config.id}__`.length);
     if (!state.tools.some((tool) => tool.name === toolName))
       throw new Error(`Unknown MCP tool: ${name}`);
     if (signal.aborted) throw signal.reason ?? new Error('MCP tool call cancelled');
     const controller = new AbortController();
-    const relayAbort = (): void =>
+    const relayAbort = (): void => {
       controller.abort(signal.reason ?? new Error('MCP tool call cancelled'));
+    };
     signal.addEventListener('abort', relayAbort, { once: true });
-    const timeout = setTimeout(
-      () =>
-        controller.abort(
-          new Error(`MCP tool call timed out after ${String(this.options.timeoutMs ?? 30_000)}ms`),
-        ),
-      this.options.timeoutMs ?? 30_000,
-    );
+    const timeout = setTimeout(() => {
+      controller.abort(
+        new Error(`MCP tool call timed out after ${String(this.options.timeoutMs ?? 30_000)}ms`),
+      );
+    }, this.options.timeoutMs ?? 30_000);
     try {
       return await state.client.callTool(
         { name: toolName, arguments: this.asArguments(args) },
@@ -236,18 +258,23 @@ export class McpManager {
           ? new StdioClientTransport({
               command: state.config.command,
               args: state.config.args,
-              env: { ...process.env, ...state.config.env },
+              ...(Object.keys(state.config.env).length > 0 ? { env: state.config.env } : {}),
               stderr: 'pipe',
             })
           : new StreamableHTTPClientTransport(new URL(state.config.url));
       transport.onclose = () => {
-        if (!this.disposed && state.generation === generation) this.scheduleReconnect(state);
+        if (!this.disposed && state.generation === generation) {
+          state.client = undefined;
+          state.transport = undefined;
+          state.tools = [];
+          this.scheduleReconnect(state);
+        }
       };
       transport.onerror = (error) => {
         this.setStatus(state, 'error', error.message);
       };
-      await client.connect(transport);
-      if (this.disposed || state.generation !== generation) {
+      await client.connect(transport as unknown as Transport);
+      if (state.generation !== generation) {
         await client.close();
         return;
       }
@@ -306,7 +333,7 @@ export class McpManager {
   }
 
   private namespacedName(serverId: string, toolName: string): string {
-    return `mcp__${serverId.replaceAll('-', '_')}__${toolName}`;
+    return `mcp__${serverId}__${toolName}`;
   }
   private asArguments(args: unknown): Record<string, unknown> {
     if (typeof args !== 'object' || args === null || Array.isArray(args))

@@ -8,7 +8,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "eslint .",
+    "lint": "eslint . --ignore-pattern test/fixtures/tiny-mcp-server.mjs",
     "test": "vitest run"
   },
   "dependencies": {

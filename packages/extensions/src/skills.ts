@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { access, readFile, readdir } from 'node:fs/promises';
+import { access, readFile, readdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getDataPaths } from '@ferry/config';
 import { SkillSchema, type Skill } from '@ferry/shared';
 import { parseDocument } from 'yaml';
@@ -19,6 +20,9 @@ export interface SkillManagerOptions {
   userSkillsPath?: string;
   claudeSkillsPath?: string;
   importClaude?: boolean;
+  getEnabled?: (
+    skill: Pick<Skill, 'name' | 'description' | 'source'>,
+  ) => boolean | undefined | Promise<boolean | undefined>;
   onEnabledChange?: (skill: Skill, enabled: boolean) => void | Promise<void>;
 }
 
@@ -40,7 +44,7 @@ export async function parseSkillFile(
   filePath: string,
 ): Promise<Pick<LoadedSkill, 'name' | 'description' | 'body' | 'metadata'>> {
   const raw = await readText(filePath);
-  const match = raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)([\s\S]*)$/);
+  const match = /^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)([\s\S]*)$/.exec(raw);
   if (!match) throw new Error(`Skill file ${filePath} must start with YAML frontmatter`);
   const frontmatter = parseDocument(match[1] ?? '');
   if (frontmatter.errors.length)
@@ -84,10 +88,15 @@ export class SkillManager {
 
   async load(): Promise<Skill[]> {
     this.skills.clear();
-    const sources: Array<{ source: SkillSource; root: string }> = [
+    const sources: { source: SkillSource; root: string }[] = [
       { source: 'project', root: join(this.options.projectPath, '.ferry', 'skills') },
       { source: 'user', root: this.options.userSkillsPath ?? getDataPaths().skills },
-      { source: 'bundled', root: this.options.bundledPath ?? join(process.cwd(), 'skills') },
+      {
+        source: 'bundled',
+        root:
+          this.options.bundledPath ??
+          resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'skills'),
+      },
       ...(this.options.importClaude
         ? [
             {
@@ -108,12 +117,17 @@ export class SkillManager {
         const parsed = await parseSkillFile(file);
         if (this.skills.has(parsed.name)) continue;
         const id = `skill_${createHash('sha256').update(`${source}:${parsed.name}`).digest('hex').slice(0, 20)}`;
+        const savedEnabled = await this.options.getEnabled?.({
+          name: parsed.name,
+          description: parsed.description,
+          source,
+        });
         const skill = SkillSchema.parse({
           id,
           name: parsed.name,
           description: parsed.description,
           source,
-          enabled: this.enabled.get(parsed.name) ?? true,
+          enabled: this.enabled.get(parsed.name) ?? savedEnabled ?? true,
         });
         this.skills.set(skill.name, {
           ...skill,
@@ -159,7 +173,7 @@ export class SkillManager {
   }
 
   toolSource(): ToolSource {
-    const manager = this;
+    const callSkillTool = this.callSkillTool.bind(this);
     const schema = {
       type: 'object',
       properties: { name: { type: 'string' }, path: { type: 'string' } },
@@ -181,7 +195,7 @@ export class SkillManager {
     return {
       id: 'skills',
       listTools: () => tools,
-      call: (name, args) => manager.callSkillTool(name, args),
+      call: (name, args) => callSkillTool(name, args),
     };
   }
 
@@ -192,7 +206,7 @@ export class SkillManager {
     const name = values.name;
     if (typeof name !== 'string') throw new Error('Skill name is required');
     const skill = this.skills.get(name);
-    if (!skill || !skill.enabled) throw new Error(`Skill is unavailable: ${name}`);
+    if (!skill?.enabled) throw new Error(`Skill is unavailable: ${name}`);
     if (toolName === 'load_skill') return skill.body;
     if (toolName !== 'read_skill_file') throw new Error(`Unknown skill tool: ${toolName}`);
     if (typeof values.path !== 'string' || !values.path.trim())
@@ -200,9 +214,13 @@ export class SkillManager {
     const path = resolve(skill.directory, values.path);
     if (!isJailed(skill.directory, path))
       throw new Error('Skill file path escapes the skill directory');
-    const info = await import('node:fs/promises').then(({ stat }) => stat(path));
+    const root = await realpath(skill.directory);
+    const canonicalPath = await realpath(path);
+    if (!isJailed(root, canonicalPath))
+      throw new Error('Skill file path escapes the skill directory');
+    const info = await import('node:fs/promises').then(({ stat }) => stat(canonicalPath));
     if (!info.isFile()) throw new Error('Skill reference path must be a file');
-    return readText(path);
+    return readText(canonicalPath);
   }
 
   private toShared(skill: LoadedSkill): Skill {

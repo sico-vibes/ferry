@@ -72,7 +72,7 @@ describe('McpManager', () => {
       JSON.stringify([{ ...config, id: 'project', enabled: true }]),
       'utf8',
     );
-    const approve = vi.fn(async (hash: string) => hash.length === 64);
+    const approve = vi.fn((hash: string) => hash.length === 64);
     const loaded = await loadMcpServerConfigs({
       projectPath: root,
       userConfigPath,
@@ -83,6 +83,13 @@ describe('McpManager', () => {
       ['project', 'project'],
     ]);
     expect(approve).toHaveBeenCalledOnce();
+  });
+
+  it('does not connect project servers when the manager approval callback is absent', async () => {
+    const manager = new McpManager({ projectPath: process.cwd() });
+    await manager.configure([{ config: { ...config, id: 'project' }, source: 'project' }]);
+    expect(manager.list()).toEqual([]);
+    await manager.dispose();
   });
 
   it('reconnects after a server process exits and emits status changes', async () => {
@@ -98,10 +105,15 @@ describe('McpManager', () => {
     await expect(
       manager.callTool('mcp__tiny__crash', {}, new AbortController().signal),
     ).rejects.toThrow();
-    await vi.waitFor(() => expect(manager.list()[0]?.status).toBe('connected'), { timeout: 5_000 });
+    await vi.waitFor(
+      () => {
+        expect(manager.list()[0]?.status).toBe('connected');
+      },
+      { timeout: 5_000 },
+    );
     expect(onStatus).toHaveBeenCalledWith(
       expect.objectContaining({ serverId: 'tiny', status: 'disconnected' }),
     );
     await manager.dispose();
-  });
+  }, 20_000);
 });

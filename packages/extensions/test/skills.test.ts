@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -77,6 +77,13 @@ describe('SkillManager', () => {
     await writeFile(join(skillDir, 'references', 'guide.md'), 'Reference content', 'utf8');
     const outside = join(root, 'secret.txt');
     await writeFile(outside, 'secret', 'utf8');
+    let symlinkCreated = false;
+    try {
+      await symlink(outside, join(skillDir, 'references', 'outside.txt'));
+      symlinkCreated = true;
+    } catch (_error) {
+      // Windows may disallow symlink creation when Developer Mode is disabled.
+    }
     const manager = new SkillManager({ projectPath: project, bundledPath: bundled });
     await manager.load();
     const source = manager.toolSource();
@@ -93,6 +100,34 @@ describe('SkillManager', () => {
     await expect(
       source.call('read_skill_file', { name: 'docs', path: outside }, new AbortController().signal),
     ).rejects.toThrow('escapes');
+    if (symlinkCreated) {
+      await expect(
+        source.call(
+          'read_skill_file',
+          { name: 'docs', path: 'references/outside.txt' },
+          new AbortController().signal,
+        ),
+      ).rejects.toThrow('escapes');
+    }
     await expect(readFile(outside, 'utf8')).resolves.toBe('secret');
+  });
+
+  it('hydrates the persisted enabled state on each load', async () => {
+    const project = await folder();
+    const bundled = join(project, 'bundled');
+    await putSkill(bundled, 'remembered', 'Saved preference');
+    let savedEnabled = true;
+    const manager = new SkillManager({
+      projectPath: project,
+      bundledPath: bundled,
+      getEnabled: () => savedEnabled,
+      onEnabledChange: (_skill, enabled) => {
+        savedEnabled = enabled;
+      },
+    });
+    await manager.load();
+    await manager.setEnabled('remembered', false);
+    await manager.load();
+    expect(manager.list()[0]?.enabled).toBe(false);
   });
 });

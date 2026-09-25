@@ -1,8 +1,4 @@
-import type { JSONSchema } from '@modelcontextprotocol/sdk';
-
-export interface PromptContext {
-  [key: string]: unknown;
-}
+export type PromptContext = Record<string, unknown>;
 
 export interface PromptSection {
   id: string;
@@ -13,7 +9,7 @@ export interface PromptSection {
 export interface ToolDef {
   name: string;
   description: string;
-  inputSchema: JSONSchema;
+  inputSchema: Record<string, unknown>;
 }
 
 export interface ToolSource {
