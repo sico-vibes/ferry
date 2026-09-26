@@ -46,12 +46,22 @@ export async function startCoreWebSocketServer(
   const token = randomBytes(32).toString('hex');
   const sockets = new Set<Duplex>();
   const server: Server = createServer();
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'ECONNRESET' || error.code === 'EPIPE')
+      console.debug('WebSocket server disconnected');
+    else console.error('WebSocket server error', error);
+  });
   const offEvents = host.onEvent((method, params) => {
     const message = frame(JSON.stringify({ jsonrpc: '2.0', method, params }));
     for (const socket of sockets) if (!socket.destroyed) socket.write(message);
   });
 
   server.on('upgrade', (request, socket) => {
+    socket.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ECONNRESET' || error.code === 'EPIPE')
+        console.debug('WebSocket client disconnected');
+      else console.error('WebSocket socket error', error);
+    });
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     const supplied = Buffer.from(url.searchParams.get('token') ?? '');
     const expected = Buffer.from(token);
