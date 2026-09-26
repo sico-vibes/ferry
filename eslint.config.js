@@ -15,6 +15,7 @@ export default tseslint.config(
       'design/**',
       'scripts/**',
       'packages/ui/src/__lint_fixture__/**',
+      'packages/delegate/test/fixtures/**',
       '**/vendor/**',
     ],
   },

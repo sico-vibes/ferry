@@ -49,6 +49,7 @@ export const FERRY_METHODS = [
   'settings.update',
   'optimizer.stats',
   'delegation.lanes',
+  'delegation.detectAgents',
   'delegation.approveProjectLanes',
   'delegation.runs',
   'delegation.start',

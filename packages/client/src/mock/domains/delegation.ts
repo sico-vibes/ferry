@@ -3,6 +3,40 @@ import type { DelegationRun, RunId } from '@ferry/shared';
 import type { FerryClient } from '../../ferry-client.js';
 import type { MockDeps } from './deps.js';
 import type { MockStore } from '../types.js';
+import type { AcpAgentDetection } from '@ferry/shared';
+
+const mockAgents: AcpAgentDetection[] = [
+  ['gemini', 'Gemini CLI', 'gemini', ['--acp'], 'Install Gemini CLI.'],
+  ['claude-code', 'Claude Code', 'claude-code-acp', [], 'Install the Claude Code ACP adapter.'],
+  ['codex', 'Codex', 'codex-acp', [], 'Install a Codex ACP adapter.'],
+  ['opencode', 'OpenCode', 'opencode', ['acp'], 'Install OpenCode with ACP support.'],
+  ['qwen-code', 'Qwen Code', 'qwen', ['--experimental-acp'], 'Install Qwen Code.'],
+  ['kimi-cli', 'Kimi CLI', 'kimi', ['acp'], 'Install Kimi CLI with ACP support.'],
+  ['mistral-vibe', 'Mistral Vibe', 'vibe', ['--acp'], 'Install Mistral Vibe.'],
+  ['goose', 'Goose', 'goose', ['acp'], 'Install Goose with ACP support.'],
+  ['github-copilot', 'GitHub Copilot CLI', 'copilot', ['--acp'], 'Install GitHub Copilot CLI.'],
+  ['kiro', 'Kiro CLI', 'kiro-cli', ['acp'], 'Install Kiro CLI with ACP support.'],
+  ['cline', 'Cline', 'cline', ['--acp'], 'Install Cline.'],
+  ['pi', 'Pi', 'pi-acp', [], 'Install Pi, pi-free, and pi-acp yourself.'],
+].map(([id, name, command, args, installHint]) => ({
+  id: String(id),
+  name: String(name),
+  command: String(command),
+  args: args as string[],
+  detectArgs: ['--version'],
+  installHint: String(installHint),
+  supportsModel: false,
+  supportsMode: false,
+  launchVerified: false,
+  verified: ['gemini', 'codex', 'opencode'].includes(String(id)),
+  verifiedAt: ['gemini', 'codex', 'opencode'].includes(String(id)) ? '2026-09-25' : null,
+  caution: id === 'kiro',
+  cautionNote:
+    id === 'kiro' ? 'Kiro terms ban third-party harness use; accounts have been banned' : null,
+  available: false,
+  version: null,
+  executable: null,
+}));
 
 export function createDelegationDomain(
   _store: MockStore,
@@ -22,6 +56,10 @@ export function createDelegationDomain(
     stringId,
   } = deps;
   return {
+    async detectAgents() {
+      await before();
+      return structuredClone(mockAgents);
+    },
     async lanes() {
       await before();
       return structuredClone(state.lanes);

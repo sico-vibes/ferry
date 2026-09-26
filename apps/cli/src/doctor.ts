@@ -19,11 +19,24 @@ export interface DoctorProbes {
   resolveCommand(name: string): string | null;
   version(path: string, args: string[], timeoutMs: number): Promise<string>;
   detectCli(name: DoctorCli, path: string, timeoutMs: number): Promise<string>;
+  detectAcpAgents(): Promise<AcpDoctorAgent[]>;
   loadModule(specifier: string): Promise<unknown>;
   openSqlite(): Promise<void>;
   dataDirectory: string;
   nodeVersion: string;
   platform: string;
+}
+interface AcpDoctorAgent {
+  name: string;
+  available: boolean;
+  version: string | null;
+  executable: string | null;
+  installHint: string;
+  verified: boolean;
+  verifiedAt: string | null;
+  caution: boolean;
+  cautionNote: string | null;
+  error?: string;
 }
 
 export function resolveCommand(name: string, env = process.env): string | null {
@@ -74,6 +87,12 @@ const defaultProbes: DoctorProbes = {
       throw new Error(result.error ?? 'Version probe failed');
     return result.version.split(/\r?\n/)[0] ?? result.version;
   },
+  async detectAcpAgents() {
+    const delegateModule = (await import('@ferry/delegate')) as unknown as {
+      detectAcpAgents(): Promise<AcpDoctorAgent[]>;
+    };
+    return await delegateModule.detectAcpAgents();
+  },
   loadModule: (specifier) => import(specifier),
   async openSqlite() {
     const driver = 'better-sqlite3';
@@ -111,11 +130,12 @@ export async function collectDoctor(overrides: Partial<DoctorProbes> = {}): Prom
       }
     }),
   );
-  const [keyring, sqlite, pty, rg] = await Promise.all([
+  const [keyring, sqlite, pty, rg, acpAgents] = await Promise.all([
     moduleCheck('keyring', '@napi-rs/keyring', probes),
     sqliteCheck(probes),
     moduleCheck('pty', 'node-pty', probes),
     rgCheck(probes),
+    probes.detectAcpAgents(),
   ]);
   return [
     { name: 'Node', status: 'ok', reason: probes.nodeVersion },
@@ -125,6 +145,13 @@ export async function collectDoctor(overrides: Partial<DoctorProbes> = {}): Prom
     rg,
     pty,
     ...cliChecks,
+    ...acpAgents.map((agent): DoctorRow => ({
+      name: `ACP: ${agent.name}`,
+      status: agent.available && !agent.caution ? 'ok' : 'warn',
+      reason: agent.available
+        ? `${agent.version ?? 'Detected'} · ${agent.executable ?? 'PATH'}${agent.verified ? ` · Verified ${agent.verifiedAt ?? ''}` : ''}${agent.caution ? ` · Caution: ${agent.cautionNote ?? 'review terms'}` : ''}`
+        : `${agent.installHint}${agent.caution ? ` · Caution: ${agent.cautionNote ?? 'review terms'}` : ''}${agent.error ? ` (${agent.error})` : ''}`,
+    })),
   ];
 }
 

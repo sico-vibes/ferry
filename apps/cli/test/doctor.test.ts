@@ -8,6 +8,31 @@ describe('doctor probes', () => {
       resolveCommand: (name) => (name === 'claude' ? null : `/mock/${name}`),
       version,
       detectCli: (name, path) => Promise.resolve(`${name} detected at ${path}`),
+      detectAcpAgents: () =>
+        Promise.resolve([
+          {
+            name: 'Pi',
+            available: false,
+            version: null,
+            executable: null,
+            installHint: 'Install pi-acp.',
+            verified: false,
+            verifiedAt: null,
+            caution: false,
+            cautionNote: null,
+          },
+          {
+            name: 'OpenCode',
+            available: true,
+            version: '1.2.3',
+            executable: '/mock/opencode',
+            installHint: 'Install OpenCode.',
+            verified: false,
+            verifiedAt: null,
+            caution: false,
+            cautionNote: null,
+          },
+        ]),
       loadModule: (specifier) =>
         Promise.resolve(specifier === '@vscode/ripgrep' ? { rgPath: '/mock/rg' } : {}),
       openSqlite: () => Promise.resolve(),
@@ -22,6 +47,14 @@ describe('doctor probes', () => {
     expect(rows.find((row) => row.name === 'claude')).toMatchObject({ status: 'warn' });
     expect(rows.find((row) => row.name === 'SQLite')).toMatchObject({ status: 'ok' });
     expect(rows.find((row) => row.name === 'ripgrep')).toMatchObject({ status: 'ok' });
+    expect(rows.find((row) => row.name === 'ACP: Pi')).toMatchObject({
+      status: 'warn',
+      reason: 'Install pi-acp.',
+    });
+    expect(rows.find((row) => row.name === 'ACP: OpenCode')).toMatchObject({
+      status: 'ok',
+      reason: '1.2.3 · /mock/opencode',
+    });
     expect(version).toHaveBeenCalledTimes(1);
     expect(version).toHaveBeenCalledWith('/mock/rg', ['--version'], 5000);
   });
