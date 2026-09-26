@@ -9,6 +9,7 @@ data_use: Subject to Together terms.
 verified_at: '2026-09-25'
 source_url: https://docs.together.ai/docs/serverless/rate-limits
 endpoints: [https://api.together.xyz/v1]
+models_endpoint: /models
 probe_models: [meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo]
 windows:
   - { scope: model, metric: requests, kind: rolling, length: 60, limit: null }

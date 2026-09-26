@@ -13,6 +13,7 @@ verified_at: '2026-09-25'
 source_url: https://docs.sambanova.ai/docs/en/models/rate-limits
 endpoints:
   - https://api.sambanova.ai/v1
+models_endpoint: /models
 probe_models: [gpt-oss-120b, Meta-Llama-3.3-70B-Instruct, DeepSeek-V3.1]
 windows:
   - { scope: model, model: gpt-oss-120b, metric: requests, kind: rolling, length: 60, limit: 20 }

@@ -13,6 +13,7 @@ data_use: >-
 verified_at: '2026-09-25'
 source_url: https://vercel.com/docs/ai-gateway/pricing
 endpoints: [https://ai-gateway.vercel.sh/v1]
+models_endpoint: /models
 probe_models: [openai/gpt-oss-120b]
 windows:
   - { scope: provider, metric: usd, kind: monthly_from_anchor, limit: 5 }

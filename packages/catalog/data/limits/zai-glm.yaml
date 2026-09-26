@@ -11,6 +11,7 @@ data_use: unknown
 verified_at: '2026-09-25'
 source_url: https://docs.z.ai/guides/overview/pricing
 endpoints: [https://api.z.ai/api/paas/v4]
+models_endpoint: /models
 probe_models: [glm-4.7-flash, glm-4.5-flash, glm-4.6v-flash]
 windows:
   - { scope: model, model: glm-4.7-flash, metric: requests, kind: rolling, length: 60, limit: null }

@@ -11,6 +11,7 @@ data_use: Zero Data Retention; prompts and responses are not stored.
 verified_at: '2026-09-25'
 source_url: https://www.hyperbolic.ai/docs/inference/performance-limits
 endpoints: [https://api.hyperbolic.xyz/v1]
+models_endpoint: /models
 probe_models: [meta-llama/Meta-Llama-3.1-8B-Instruct]
 windows:
   - { scope: provider, metric: requests, kind: rolling, length: 60, limit: 60 }

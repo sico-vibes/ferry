@@ -1,13 +1,7 @@
 import { cn } from '../../lib/cn';
 
 export type TagBadgeKind =
-  | 'legit'
-  | 'promo'
-  | 'credits'
-  | 'paid'
-  | 'cli'
-  | 'caution'
-  | 'subscription_oauth';
+  'legit' | 'promo' | 'credits' | 'paid' | 'cli' | 'caution' | 'subscription_oauth';
 
 const labels: Record<TagBadgeKind, string> = {
   legit: 'Free',

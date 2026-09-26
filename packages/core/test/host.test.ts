@@ -35,6 +35,8 @@ import { redactSecretText } from '@ferry/config';
 import { redactHeaders } from '@ferry/storage';
 import { createServices } from '../src/services.js';
 import { domainRegistrars } from '../src/domains/index.js';
+import { createSessionDependencies } from '../src/session-deps.js';
+import { BUILTIN_PROFILES } from '@ferry/router';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'ferry-core-test-'));
 vi.setConfig({ testTimeout: 30_000 });
@@ -292,7 +294,7 @@ describe('core host dispatcher and lifecycle', () => {
     }
   });
 
-  it('keeps every active limits provider backed by at least one catalog model', async () => {
+  it('keeps every active limits provider backed by a snapshot or live discovery path', async () => {
     const services = await createServices({
       dataDir: join(dataDir, 'limits-model-coverage'),
       env: { ...process.env, NODE_ENV: 'test', FERRY_TEST_KEYRING_NAMESPACE: 'limits-coverage' },
@@ -302,7 +304,9 @@ describe('core host dispatcher and lifecycle', () => {
         .filter((provider) => !provider.dead)
         .filter(
           (provider) =>
-            !services.catalog.models.some((model) => model.providerId === provider.provider),
+            !services.catalog.models.some((model) => model.providerId === provider.provider) &&
+            provider.models_endpoint !== '/models' &&
+            provider.key_required !== false,
         )
         .map((provider) => provider.provider);
       expect(missing).toEqual([]);
@@ -342,6 +346,56 @@ describe('core host dispatcher and lifecycle', () => {
       await host.stop();
     }
   });
+
+  it('discovers a snapshotless provider for models.list and router candidates', async () => {
+    const fake = await new FakeOpenAIServer().start();
+    const path = join(dataDir, 'snapshotless-live-models');
+    const providerId = ProviderIdSchema.parse('sambanova');
+    const services = await createServices({
+      dataDir: path,
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        FERRY_TEST_KEYRING_NAMESPACE: 'snapshotless-live-models',
+        FERRY_PROVIDER_BASE_URL_SAMBANOVA: `${fake.baseUrl}/v1`,
+      },
+      secrets: new MemorySecretStore('snapshotless-live-models'),
+    });
+    const [coreTransport, clientTransport] = createMemoryTransportPair();
+    const host = new CoreHost({ dataDir: path, transport: coreTransport, services });
+    for (const register of domainRegistrars) register(host, services);
+    await host.start();
+    const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
+    try {
+      expect(services.catalog.models.some((model) => model.providerId === providerId)).toBe(false);
+      await rpc.providers.setKey(providerId, 'snapshotless-fixture-key');
+      const saved = services.providers.get(providerId);
+      if (!saved) throw new Error('Provider was not persisted after setting its key');
+      services.providers.put({
+        ...saved,
+        availableModels: [],
+        modelCount: 0,
+        modelsVerifiedAt: null,
+      });
+
+      const models = await rpc.models.list(providerId);
+      expect(models.map((model) => model.ref)).toContain('sambanova/gpt-4o-mini');
+      expect(
+        fake.requests.some(({ method, url }) => method === 'GET' && url.endsWith('/v1/models')),
+      ).toBe(true);
+
+      const profile = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_best_available');
+      if (!profile) throw new Error('Best Available profile is missing');
+      const gateway = createSessionDependencies(services, () => undefined).gateway;
+      expect(gateway.resolveCandidates(profile, 'plan').map((model) => model.ref)).toContain(
+        'sambanova/gpt-4o-mini',
+      );
+    } finally {
+      rpc.close();
+      await host.stop();
+      await fake.stop();
+    }
+  }, 30_000);
 });
 
 describe('provider, model and quota RPC integration', () => {

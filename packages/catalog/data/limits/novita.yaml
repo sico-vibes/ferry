@@ -9,6 +9,7 @@ data_use: unknown
 verified_at: '2026-09-25'
 source_url: https://novita.ai/docs/guides/llm-rate-limits
 endpoints: [https://api.novita.ai/v3/openai]
+models_endpoint: /models
 probe_models: [meta-llama/Meta-Llama-3.1-8B-Instruct]
 windows:
   - { scope: model, metric: requests, kind: rolling, length: 60, limit: null }

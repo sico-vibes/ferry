@@ -55,14 +55,14 @@ describe('catalog data', () => {
     expect(models[0]?.contextWindow).toBe(10000);
   });
 
-  it('keeps every active provider discoverable through catalog models or probe hints', async () => {
+  it('keeps every active provider backed by a snapshot or live discovery path', async () => {
     const catalog = await loadCatalog();
     for (const provider of catalog.providers) {
       const hasModel = catalog.models.some((model) => model.providerId === provider.provider);
       expect(
         provider.dead === true ||
           hasModel ||
-          Boolean(provider.probe_models?.length) ||
+          provider.models_endpoint === '/models' ||
           provider.key_required === false,
         provider.provider,
       ).toBe(true);

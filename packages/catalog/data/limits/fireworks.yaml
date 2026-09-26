@@ -9,6 +9,7 @@ data_use: Subject to Fireworks terms.
 verified_at: '2026-09-25'
 source_url: https://fireworks.ai/pricing
 endpoints: [https://api.fireworks.ai/inference/v1]
+models_endpoint: /models
 probe_models: [accounts/fireworks/models/llama-v3p1-8b-instruct]
 windows:
   - { scope: provider, metric: usd, kind: monthly_from_anchor, limit: null }

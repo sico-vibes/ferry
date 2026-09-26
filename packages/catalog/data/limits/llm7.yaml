@@ -14,6 +14,7 @@ data_use: >-
 verified_at: '2026-09-25'
 source_url: https://docs.llm7.io/limits
 endpoints: [https://api.llm7.io/v1]
+models_endpoint: /models
 key_required: false
 probe_models: [llm7-default]
 windows:
