@@ -76,6 +76,14 @@ afterAll(() => {
 });
 
 describe('@ferry/cli argument parsing and exit codes', () => {
+  it('requires the explicit risk flag for non-interactive OAuth login', () => {
+    const dataDir = tempDirectory('oauth-risk');
+    const result = runCli(['oauth', 'login', 'anthropic', '--data-dir', dataDir]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('--i-understand-the-risk');
+    expect(result.stderr).not.toContain('access-secret');
+  }, 30_000);
+
   it('rejects an unknown local engine with usage exit code 2', () => {
     const result = runCli(['quota', '--engine', 'typo']);
     expect(result.status).toBe(2);

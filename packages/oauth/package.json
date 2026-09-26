@@ -1,0 +1,23 @@
+{
+  "name": "@ferry/oauth",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.87.1",
+    "@ferry/secrets": "workspace:*",
+    "@ferry/shared": "workspace:*",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@ferry/testkit": "workspace:*"
+  }
+}

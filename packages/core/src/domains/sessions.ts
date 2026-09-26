@@ -23,6 +23,7 @@ import { McpServerConfigSchema } from '@ferry/extensions';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { createSessionDependencies } from '../session-deps.js';
+import { oauthModelCatalog } from '@ferry/oauth';
 import { z } from 'zod';
 
 const CreateSchema = z.object({
@@ -267,6 +268,15 @@ export function register(host: CoreHost, services: FerryServices): void {
           } else host.emit('toast', { kind: event.tone, title: event.message, body: null });
         };
         const runtime = createSessionDependencies(services, emitAgentEvent);
+        const sessionCatalog = {
+          ...services.catalog,
+          models: [
+            ...services.catalog.models,
+            ...oauthModelCatalog.filter(
+              (model) => services.providers.get(model.providerId)?.enabled,
+            ),
+          ],
+        };
         const config = await loadProjectConfig(workspace.path, services.env);
         const skillManager = createSkillManager(services, workspace.path);
         await skillManager.load();
@@ -285,7 +295,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           workspace: workspace.path,
           dataDir: services.paths.home,
           profile,
-          catalog: services.catalog,
+          catalog: sessionCatalog,
           capacity: runtime.capacity,
           apiKeys: runtime.apiKeys,
           permissionMode: config.permissionMode,

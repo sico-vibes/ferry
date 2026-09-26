@@ -305,6 +305,8 @@ export const sampleSettings: Settings = {
   homeStyle: 'auto',
   fontScale: 1,
   restoreTabs: true,
+  allowSubscriptionOAuthRouting: false,
+  subscriptionOAuthAcknowledged: [],
   delegationMode: 'suggest',
   permissionMode: 'ask',
   activeProfileId: profileId,

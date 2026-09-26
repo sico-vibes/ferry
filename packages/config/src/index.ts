@@ -60,6 +60,8 @@ export const DEFAULT_SETTINGS: Settings = SettingsSchema.parse({
   homeStyle: 'auto',
   fontScale: 1,
   restoreTabs: true,
+  allowSubscriptionOAuthRouting: false,
+  subscriptionOAuthAcknowledged: [],
   delegationMode: 'suggest',
   permissionMode: 'ask',
   activeProfileId: 'default',

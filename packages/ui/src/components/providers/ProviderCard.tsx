@@ -65,7 +65,15 @@ export function ProviderCard({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               <h2 className="truncate text-label font-semibold text-text-1">{provider.name}</h2>
-              <TagBadge kind={provider.tag === 'subscription_cli' ? 'cli' : provider.tag} />
+              <TagBadge
+                kind={
+                  provider.tag === 'subscription_cli'
+                    ? 'cli'
+                    : provider.tag === 'subscription_oauth'
+                      ? 'subscription_oauth'
+                      : provider.tag
+                }
+              />
             </div>
             <p className="mt-0.5 flex items-center gap-1.5 text-meta text-text-2">
               <span className={`size-1.5 rounded-full ${statusColor}`} />

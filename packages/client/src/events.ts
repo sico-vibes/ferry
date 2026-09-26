@@ -7,6 +7,7 @@ import {
   MessageSchema,
   PartIdSchema,
   ProviderSchema,
+  OAuthLoginProgressSchema,
   SettingsSchema,
   SessionIdSchema,
   SessionSchema,
@@ -64,6 +65,7 @@ export const FerryEventSchemas = {
     title: z.string(),
     body: z.string().nullable(),
   }),
+  'oauth.progress': OAuthLoginProgressSchema,
 } as const;
 export interface FerryEvents {
   'session.updated': Session;
@@ -99,4 +101,5 @@ export interface FerryEvents {
   'workspace.removed': { id: import('@ferry/shared').WorkspaceId };
   'settings.updated': import('@ferry/shared').Settings;
   toast: { kind: 'info' | 'success' | 'warning' | 'error'; title: string; body: string | null };
+  'oauth.progress': import('@ferry/shared').OAuthLoginProgress;
 }

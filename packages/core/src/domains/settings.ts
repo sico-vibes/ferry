@@ -19,6 +19,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         'sessions',
         'approvals',
         'providers',
+        'oauth',
         'quota',
         'models',
         'profiles',

@@ -16,6 +16,7 @@ let setKeySpy: ReturnType<typeof vi.fn>;
 let removeKeySpy: ReturnType<typeof vi.fn>;
 let probeSpy: ReturnType<typeof vi.fn>;
 let modelListSpy: ReturnType<typeof vi.fn>;
+let oauthLoginSpy: ReturnType<typeof vi.fn>;
 vi.mock('../../state/toasts', () => ({
   useToasts: (selector: (state: { push: typeof pushToast }) => unknown) =>
     selector({ push: pushToast }),
@@ -100,6 +101,7 @@ beforeEach(() => {
       tier: 'T1',
     }),
   ]);
+  oauthLoginSpy = vi.fn().mockResolvedValue(undefined);
   client = {
     providers: {
       list: providerListSpy,
@@ -111,12 +113,56 @@ beforeEach(() => {
     models: {
       list: modelListSpy,
     },
+    oauth: {
+      list: vi.fn().mockResolvedValue([
+        {
+          id: 'anthropic',
+          tag: 'subscription_oauth',
+          name: 'Anthropic Claude Pro/Max',
+          subscriptionRequired: true,
+          models: ['Claude Sonnet 5'],
+          riskLevel: 'high',
+          riskText: 'May suspend account',
+          connected: false,
+        },
+      ]),
+      login: oauthLoginSpy,
+      logout: vi.fn(),
+      status: vi.fn().mockResolvedValue(false),
+    },
+    settings: {
+      get: vi.fn().mockResolvedValue({
+        subscriptionOAuthAcknowledged: [],
+        allowSubscriptionOAuthRouting: false,
+      }),
+      update: vi.fn().mockResolvedValue({
+        subscriptionOAuthAcknowledged: ['anthropic'],
+        allowSubscriptionOAuthRouting: false,
+      }),
+    },
     on: vi.fn(() => () => undefined),
   } as unknown as FerryClient;
 });
 afterEach(cleanup);
 
 describe('Explore providers and models', () => {
+  it('requires explicit suspension risk acknowledgement before login', async () => {
+    const user = userEvent.setup();
+    setup();
+    await user.click(
+      await screen.findByText(/Optional subscription sign-in · account suspension risk/),
+    );
+    await user.click(await screen.findByRole('button', { name: 'Log in' }));
+    const proceed = screen.getByRole('button', { name: 'Log in anyway' });
+    expect(proceed.hasAttribute('disabled')).toBe(true);
+    await user.click(screen.getByLabelText('I understand my account may be suspended'));
+    expect(proceed.hasAttribute('disabled')).toBe(false);
+    expect(oauthLoginSpy).not.toHaveBeenCalled();
+    await user.click(proceed);
+    await waitFor(() => {
+      expect(oauthLoginSpy).toHaveBeenCalledWith('anthropic');
+    });
+  });
   it('filters providers and probes with feedback', async () => {
     const user = userEvent.setup();
     setup();

@@ -53,6 +53,28 @@ const starters: Record<string, string> = {
   'Review my changes': 'Review my current changes for bugs and missing tests.',
   'Plan a feature': 'Help me plan this feature and identify the files it will touch.',
 };
+const warnedOAuthRuns = new Set<string>();
+
+function warnOAuthUseOnce(
+  _runId: string,
+  modelRef: string | null,
+  pushToast: (toast: { kind: 'warning'; title: string; body: string }) => void,
+) {
+  const provider = modelRef?.split('/')[0];
+  if (
+    !modelRef ||
+    !provider ||
+    !['anthropic', 'openai-codex', 'github-copilot'].includes(provider) ||
+    warnedOAuthRuns.has('app-run')
+  )
+    return;
+  warnedOAuthRuns.add('app-run');
+  pushToast({
+    kind: 'warning',
+    title: 'Subscription OAuth account risk',
+    body: 'This model uses an unofficial subscription login. The provider may suspend or ban your account.',
+  });
+}
 
 function shortModel(
   ref: string | null | undefined,
@@ -125,6 +147,7 @@ export function HomeCanvas() {
       ...(settings?.activeProfileId ? { profileId: settings.activeProfileId } : {}),
     });
     openTab({ id: session.id, title: session.title });
+    warnOAuthUseOnce(`app:${session.id}`, session.modelRef, pushToast);
     await client.sessions.send(session.id, { text });
     await cache.invalidateQueries({ queryKey: keys.sessions });
     setPrompt('');
@@ -717,6 +740,20 @@ export function SessionCanvas() {
   useEffect(() => {
     if (data?.session.title) useUI.getState().renameTab(sessionId, data.session.title);
   }, [data?.session.title, sessionId]);
+  useEffect(() => {
+    const offUpdated = client.on('session.updated', (session) => {
+      if (session.id === sessionId)
+        warnOAuthUseOnce(`app:${sessionId}`, session.modelRef, pushToast);
+    });
+    const offStatus = client.on('session.status', (session) => {
+      if (session.id === sessionId)
+        warnOAuthUseOnce(`app:${sessionId}`, session.modelRef, pushToast);
+    });
+    return () => {
+      offUpdated();
+      offStatus();
+    };
+  }, [client, pushToast, sessionId]);
   const running =
     data?.session.status === 'running' || data?.session.status === 'awaiting_approval';
   const currentModel = shortModel(data?.session.modelRef, models);
@@ -780,6 +817,7 @@ export function SessionCanvas() {
       const sentenceCase = first ? first.toLocaleUpperCase() + title.slice(1) : 'New Chat';
       useUI.getState().renameTab(sessionId, sentenceCase);
     }
+    warnOAuthUseOnce(`app:${sessionId}`, data.session.modelRef, pushToast);
     await client.sessions.send(sessionId, { text });
     setPrompt('');
     await cache.invalidateQueries({ queryKey: keys.session(sessionId) });

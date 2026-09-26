@@ -286,9 +286,11 @@ export function createHybridClient(
                             ? 'providers'
                             : event === 'delegation.updated'
                               ? 'delegation'
-                              : event === 'workspace.updated'
-                                ? 'workspaces'
-                                : '';
+                              : event === 'oauth.progress'
+                                ? 'oauth'
+                                : event === 'workspace.updated'
+                                  ? 'workspaces'
+                                  : '';
             return (real.has(domain) ? rpc : mock).on(event, handler);
           };
         if (typeof key !== 'string') return undefined;

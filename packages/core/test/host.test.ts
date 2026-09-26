@@ -183,6 +183,7 @@ describe('core host dispatcher and lifecycle', () => {
         'workspaces',
         'checkpoints',
         'providers',
+        'oauth',
         'models',
         'quota',
         'sessions',
