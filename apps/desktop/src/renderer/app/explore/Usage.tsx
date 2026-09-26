@@ -92,6 +92,19 @@ export function UsageCanvas() {
   }, [capacity, providers]);
   const maxHandoffs = Math.max(1, ...handoffs.map((handoff) => handoff.count));
   const maxSteps = Math.max(1, ...(capacity?.perProvider ?? []).map((item) => item.stepsLeft ?? 0));
+  const usableProviderIds = useMemo(
+    () =>
+      new Set(
+        providers
+          .filter(
+            (provider) =>
+              provider.enabled &&
+              (provider.keyStatus === 'valid' || provider.keyStatus === 'not_applicable'),
+          )
+          .map((provider) => provider.id),
+      ),
+    [providers],
+  );
 
   useEffect(() => {
     const off = client.on('quota.updated', (summary) => {
@@ -133,47 +146,63 @@ export function UsageCanvas() {
         <div className="usage-top-grid grid">
           <Section title="Capacity remaining" ariaLabel="Capacity remaining">
             <div className="usage-capacity-grid min-h-24">
-              <RingGauge
-                label={`${String(capacity?.percentRemaining ?? 0)}% capacity remaining`}
-                size={96}
-                stroke={6}
-                value={capacity?.percentRemaining ?? 0}
-              />
+              {capacity ? (
+                <RingGauge
+                  label={`${String(capacity.percentRemaining)}% capacity remaining`}
+                  size={96}
+                  stroke={6}
+                  value={capacity.percentRemaining}
+                />
+              ) : (
+                <span aria-label="Capacity unavailable" className="capacity-unavailable" role="img">
+                  —
+                </span>
+              )}
               <div className="min-w-0">
                 <p className="text-label text-text-2">Available today</p>
                 <p className="mt-1 text-title font-semibold tabular-nums text-text-1">
-                  ≈ <CountUp to={capacity?.stepsLeftToday ?? 0} /> steps left
+                  {capacity ? (
+                    <>
+                      ≈ <CountUp to={capacity.stepsLeftToday} /> steps left
+                    </>
+                  ) : (
+                    '—'
+                  )}
                 </p>
-                <ul className="usage-provider-grid mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
-                  {(capacity?.perProvider ?? []).map((item) => (
-                    <li className="min-w-0" key={item.providerId}>
-                      <div className="usage-provider-row mb-1 flex justify-between gap-2 text-meta">
-                        <span className="usage-provider-name min-w-[88px] truncate text-text-2">
-                          {names[item.providerId] ?? item.providerId}
-                        </span>
-                        {item.stepsLeft === null ? (
-                          <span
-                            aria-label={`${names[item.providerId] ?? item.providerId} has no daily cap`}
-                            className="text-label text-text-1"
-                            role="img"
-                            title="No daily cap"
-                          >
-                            ∞
+                <ul className="usage-provider-grid mt-3 grid auto-rows-fr grid-cols-2 gap-x-4 gap-y-2">
+                  {(capacity?.perProvider ?? [])
+                    .filter((item) => usableProviderIds.has(item.providerId))
+                    .map((item) => (
+                      <li className="min-w-0" key={item.providerId}>
+                        <div className="usage-provider-row mb-1 flex justify-between gap-2 text-meta">
+                          <span className="usage-provider-name min-w-[88px] truncate text-text-2">
+                            {names[item.providerId] ?? item.providerId}
                           </span>
-                        ) : (
-                          <span className="tabular-nums text-text-1">{format(item.stepsLeft)}</span>
-                        )}
-                      </div>
-                      {item.stepsLeft !== null && (
-                        <div className="h-1 overflow-hidden rounded-pill bg-raised">
-                          <span
-                            className="block h-full rounded-pill bg-blue-500"
-                            style={{ width: `${String((item.stepsLeft / maxSteps) * 100)}%` }}
-                          />
+                          {item.stepsLeft === null ? (
+                            <span
+                              aria-label={`${names[item.providerId] ?? item.providerId}: limit unknown`}
+                              className="text-label text-text-2"
+                              role="img"
+                              title="Limit unknown"
+                            >
+                              —
+                            </span>
+                          ) : (
+                            <span className="tabular-nums text-text-1">
+                              {format(item.stepsLeft)}
+                            </span>
+                          )}
                         </div>
-                      )}
-                    </li>
-                  ))}
+                        {item.stepsLeft !== null && (
+                          <div className="h-1 overflow-hidden rounded-pill bg-raised">
+                            <span
+                              className="block h-full rounded-pill bg-blue-500"
+                              style={{ width: `${String((item.stepsLeft / maxSteps) * 100)}%` }}
+                            />
+                          </div>
+                        )}
+                      </li>
+                    ))}
                 </ul>
               </div>
             </div>

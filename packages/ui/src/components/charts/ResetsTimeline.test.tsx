@@ -50,13 +50,15 @@ describe('ResetsTimeline', () => {
     );
 
     const markers = screen.getAllByRole('button');
-    expect(markers).toHaveLength(4);
+    expect(markers).toHaveLength(3);
     const markerPositions = markers.map((marker) =>
       Number.parseFloat(marker.getAttribute('style')?.match(/left: ([\d.]+)%/)?.[1] ?? '0'),
     );
     expect(markerPositions).toEqual([...markerPositions].sort((a, b) => a - b));
     expect(markers[0]?.getAttribute('style')).not.toBe(markers[1]?.getAttribute('style'));
     expect(markers[0]?.getAttribute('aria-label')).toContain('Alpha · in 2h 7m ·');
+    expect(markers[0]?.getAttribute('aria-label')).toContain('Beta · in 2h 7m ·');
+    expect(markers[0]?.textContent).toBe('2');
     expect(screen.getAllByText(/in 2h 7m · \d{2}:\d{2}/)).toHaveLength(2);
     expect(screen.getByText(/in 23h 0m · \d{2}:\d{2}/)).toBeTruthy();
   });

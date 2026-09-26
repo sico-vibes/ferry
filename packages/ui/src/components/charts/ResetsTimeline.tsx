@@ -33,10 +33,23 @@ export function ResetsTimeline({
     };
   }, []);
   const end = now + 86_400_000;
-  const resets = summary.nextResets
+  const resets = [
+    ...new Map(
+      summary.nextResets.map((reset) => [`${reset.providerId}:${reset.windowId}`, reset]),
+    ).values(),
+  ]
     .filter((reset) => new Date(reset.at).getTime() > now && new Date(reset.at).getTime() < end)
     .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
-  const placedMarkers: { position: number; lane: number }[] = [];
+  const markers: { position: number; resets: typeof resets }[] = [];
+  for (const reset of resets) {
+    const position = Math.max(
+      3.5,
+      Math.min(100, ((new Date(reset.at).getTime() - now) / 86_400_000) * 100),
+    );
+    const cluster = markers.find((marker) => Math.abs(marker.position - position) < 2.5);
+    if (cluster) cluster.resets.push(reset);
+    else markers.push({ position, resets: [reset] });
+  }
   return (
     <section
       aria-label="Upcoming quota resets"
@@ -55,33 +68,29 @@ export function ResetsTimeline({
             left: '0%',
           }}
         />
-        {resets.map((reset) => {
-          const position = Math.max(
-            0,
-            Math.min(100, ((new Date(reset.at).getTime() - now) / 86_400_000) * 100),
+        {markers.map((marker) => {
+          const names = marker.resets.map(
+            (reset) => providerNames[reset.providerId] ?? reset.providerId,
           );
-          const occupiedLanes = new Set(
-            placedMarkers
-              .filter((marker) => Math.abs(marker.position - position) < 4.5)
-              .map((marker) => marker.lane),
-          );
-          let lane = 0;
-          while (occupiedLanes.has(lane)) lane += 1;
-          placedMarkers.push({ position, lane });
-          const providerName = providerNames[reset.providerId] ?? reset.providerId;
-          const label = `${providerName} · ${relativeLabel(reset.at, now)} · ${timeLabel(reset.at)}`;
+          const label = marker.resets
+            .map((reset) => {
+              const providerName = providerNames[reset.providerId] ?? reset.providerId;
+              return `${providerName} · ${relativeLabel(reset.at, now)} · ${timeLabel(reset.at)}`;
+            })
+            .join('; ');
           return (
             <button
-              aria-label={label}
-              className="absolute size-3 -translate-x-1/2 rounded-full border-2 border-blue-500 bg-canvas hover:scale-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
-              key={reset.windowId}
+              aria-label={`${String(marker.resets.length)} reset${marker.resets.length === 1 ? '' : 's'} near ${names.join(', ')}: ${label}`}
+              className="absolute top-1 inline-flex h-5 min-w-5 -translate-x-1/2 items-center justify-center rounded-pill border-2 border-blue-500 bg-canvas px-1 text-meta font-semibold tabular-nums text-text-1 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+              key={marker.resets.map((reset) => `${reset.providerId}:${reset.windowId}`).join('|')}
               style={{
-                left: `${String(position)}%`,
-                top: `${String(Math.max(0, 12 - lane * 4))}px`,
+                left: `${String(marker.position)}%`,
               }}
               title={label}
               type="button"
-            />
+            >
+              {marker.resets.length > 1 ? marker.resets.length : null}
+            </button>
           );
         })}
         <span className="absolute inset-x-0 top-7 flex justify-between text-[11px] leading-4 text-text-3">
@@ -91,7 +100,10 @@ export function ResetsTimeline({
       </div>
       <ul className="mt-2 grid gap-1.5">
         {resets.slice(0, 4).map((reset) => (
-          <li className="flex justify-between gap-2 text-meta" key={reset.windowId}>
+          <li
+            className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 text-meta"
+            key={`${reset.providerId}:${reset.windowId}`}
+          >
             <span className="truncate text-text-2">
               {providerNames[reset.providerId] ?? reset.providerId}
             </span>

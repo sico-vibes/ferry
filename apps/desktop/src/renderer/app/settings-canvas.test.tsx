@@ -96,7 +96,7 @@ describe('SettingsCanvas', () => {
     } as never;
     mount();
     expect((await screen.findByText('connected')).textContent).toBe('connected');
-    expect(screen.getByText('PID 4321 · protocol ferry/1').textContent).toContain('4321');
+    expect(screen.getByText('connected · PID 4321 · ferry/1').textContent).toContain('4321');
     expect(
       (await screen.findByText('better-sqlite3: failed: MODULE_NOT_FOUND')).textContent,
     ).toContain('MODULE_NOT_FOUND');
