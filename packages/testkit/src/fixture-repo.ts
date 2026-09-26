@@ -27,6 +27,7 @@ const templates: Record<string, Record<string, string>> = {
 };
 export async function createFixtureRepo(
   template: keyof typeof templates = 'typescript',
+  options: { initializeGit?: boolean } = {},
 ): Promise<FixtureRepo> {
   const path = await mkdtemp(join(tmpdir(), 'ferry-fixture-'));
   for (const [relative, content] of Object.entries(templates[template] ?? {})) {
@@ -34,7 +35,10 @@ export async function createFixtureRepo(
     await mkdir(join(target, '..'), { recursive: true });
     await writeFile(target, content, 'utf8');
   }
-  await execa('git', ['init', '--quiet'], { cwd: path });
-  return { path, cleanup: () => rm(path, { recursive: true, force: true }) };
+  if (options.initializeGit !== false) await execa('git', ['init', '--quiet'], { cwd: path });
+  return {
+    path,
+    cleanup: () => rm(path, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }),
+  };
 }
 export const FixtureRepo = { create: createFixtureRepo, templates: Object.keys(templates) };

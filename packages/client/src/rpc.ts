@@ -379,6 +379,9 @@ export function createWebSocketRpcTransport(url: string): RpcTransport {
   const connect = () => {
     socket = new WebSocket(endpoint.toString());
     ready = new Promise((resolve, reject) => {
+      socket.addEventListener('error', () => {
+        reject(new Error('Ferry WebSocket connection failed'));
+      });
       socket.addEventListener(
         'open',
         () => {
@@ -387,13 +390,6 @@ export function createWebSocketRpcTransport(url: string): RpcTransport {
             if (payload !== undefined) socket.send(payload);
           }
           resolve();
-        },
-        { once: true },
-      );
-      socket.addEventListener(
-        'error',
-        () => {
-          reject(new Error('Ferry WebSocket connection failed'));
         },
         { once: true },
       );

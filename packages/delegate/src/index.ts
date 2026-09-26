@@ -375,12 +375,23 @@ async function execute(
         windowsHide: true,
       });
       if (!killed.failed) return;
+      console.warn(`Delegate process tree termination failed: ${killed.stderr || killed.stdout}`);
     }
-    command.kill('SIGTERM');
+    try {
+      command.kill('SIGTERM');
+    } catch (error) {
+      console.warn('Delegate process termination failed', error);
+    }
   };
-  let killInFlight: Promise<void> | null = null;
+  let rejectAbort: ((error: Error) => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    rejectAbort = reject;
+  });
   const onAbort = () => {
-    killInFlight = killTree();
+    void killTree().catch((error: unknown) => {
+      console.warn('Delegate process tree termination failed', error);
+    });
+    rejectAbort?.(new Error('Delegate cancelled'));
   };
   request.signal?.addEventListener('abort', onAbort, { once: true });
   if (request.signal?.aborted) onAbort();
@@ -389,6 +400,7 @@ async function execute(
   try {
     const outcome = await Promise.race([
       command,
+      aborted,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           watchdog.timedOut = true;
@@ -406,7 +418,6 @@ async function execute(
   } finally {
     if (timer) clearTimeout(timer);
     request.signal?.removeEventListener('abort', onAbort);
-    await Promise.resolve(killInFlight);
   }
 }
 

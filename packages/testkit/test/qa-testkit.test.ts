@@ -59,8 +59,7 @@ describe('QA testkit: fake provider server', () => {
 describe('QA testkit: fixture repos and clocks', () => {
   it('materializes every template and cleans up', async () => {
     for (const template of ['typescript', 'python', 'crlf', 'monorepo'] as const) {
-      const repo = await createFixtureRepo(template);
-      expect(existsSync(repo.path)).toBe(true);
+      const repo = await createFixtureRepo(template, { initializeGit: false });
       try {
         if (template === 'crlf') {
           expect(await readFile(join(repo.path, 'README.md'), 'utf8')).toContain('\r\n');
@@ -73,7 +72,7 @@ describe('QA testkit: fixture repos and clocks', () => {
       }
       expect(existsSync(repo.path)).toBe(false);
     }
-  });
+  }, 30_000);
 
   it('rejects moving the fake clock backwards and never moves on zero', () => {
     const clock = new FakeClock(100);

@@ -79,6 +79,41 @@ function portOf(endpoint: CoreWebSocketHandle): number {
   return Number(new URL(endpoint.url).port);
 }
 
+async function connectRawWebSocket(endpoint: CoreWebSocketHandle) {
+  const url = new URL(endpoint.url);
+  const socket = connect(portOf(endpoint), '127.0.0.1');
+  socket.on('error', () => undefined);
+  await new Promise<void>((resolve, reject) => {
+    let response = '';
+    socket.once('error', reject);
+    socket.on('data', (chunk: Buffer) => {
+      response += chunk.toString('utf8');
+      if (response.includes('\r\n\r\n')) {
+        socket.off('error', reject);
+        if (!response.startsWith('HTTP/1.1 101')) reject(new Error('WebSocket upgrade failed'));
+        else resolve();
+      }
+    });
+    socket.write(
+      `GET ${url.pathname}?token=${endpoint.token} HTTP/1.1\r\nHost: 127.0.0.1:${url.port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n`,
+    );
+  });
+  return socket;
+}
+
+function maskedFrame(payload: string): Buffer {
+  const body = Buffer.from(payload);
+  const mask = Buffer.from([0x11, 0x22, 0x33, 0x44]);
+  const header =
+    body.length < 126
+      ? Buffer.from([0x81, 0x80 | body.length])
+      : Buffer.from([0x81, 0xfe, body.length >> 8, body.length & 0xff]);
+  const masked = Buffer.from(body);
+  for (let index = 0; index < masked.length; index++)
+    masked[index] = (masked[index] ?? 0) ^ (mask[index % 4] ?? 0);
+  return Buffer.concat([header, mask, masked]);
+}
+
 async function readAllLogs(logsDir: string): Promise<string> {
   let output = '';
   let entries: string[];
@@ -98,6 +133,32 @@ async function readAllLogs(logsDir: string): Promise<string> {
 }
 
 describe('QA WebSocket transport validation', () => {
+  it('handles abrupt client destruction during a request and an event stream', async () => {
+    const { host, endpoint } = await startBareWs('ws-abrupt-close');
+    const uncaught = vi.fn();
+    const unhandled = vi.fn();
+    process.on('uncaughtException', uncaught);
+    process.on('unhandledRejection', unhandled);
+    try {
+      const requestSocket = await connectRawWebSocket(endpoint);
+      requestSocket.write(
+        maskedFrame(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'system.info', params: {} })),
+      );
+      requestSocket.destroy();
+
+      const eventSocket = await connectRawWebSocket(endpoint);
+      host.emit('session.delta', { sessionId: 'abrupt-close-test', delta: 'x'.repeat(2048) });
+      eventSocket.destroy();
+      for (let turn = 0; turn < 8; turn++)
+        await new Promise<void>((resolve) => setImmediate(resolve));
+    } finally {
+      process.off('uncaughtException', uncaught);
+      process.off('unhandledRejection', unhandled);
+    }
+    expect(uncaught).not.toHaveBeenCalled();
+    expect(unhandled).not.toHaveBeenCalled();
+  }, 30_000);
+
   it('rejects non-loopback URLs and URLs without a bearer token', () => {
     expect(() => createWebSocketRpcTransport('ws://127.0.0.1:9999/rpc')).toThrow(/token/i);
     expect(() => createWebSocketRpcTransport('ws://example.com/rpc?token=abc')).toThrow(

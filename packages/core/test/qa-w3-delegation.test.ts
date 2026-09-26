@@ -24,6 +24,7 @@ interface DelegationSetup {
   h: CoreHarness;
   repo: FixtureRepo;
   capture: string;
+  readyMarker: string;
   touched: string;
 }
 
@@ -44,15 +45,17 @@ async function setupDelegation(
   const bin = await mkdtemp(join(tmpdir(), 'qa-w3-deleg-bin-'));
   dirs.push(bin);
   const capture = join(bin, 'args.json');
+  const readyMarker = join(bin, 'cli-ready');
   await installFakeClis(bin, {
     targetDir: repo.path,
     captureArgsPath: capture,
+    readyMarkerPath: readyMarker,
     ...fake,
   });
   process.env.PATH = `${bin}${delimiter}${originalPath ?? ''}`;
   const h = await startHarness({ workspacePath: repo.path });
   await h.rpc.delegation.approveProjectLanes();
-  return { h, repo, capture, touched: join(repo.path, 'FAKE_CLI_TOUCHED.txt') };
+  return { h, repo, capture, readyMarker, touched: join(repo.path, 'FAKE_CLI_TOUCHED.txt') };
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -138,7 +141,7 @@ describe('QA W3 delegation: trust, isolation and lifecycle', () => {
   }, 40_000);
 
   it('cancels a mid-run delegation and marks it cancelled', async () => {
-    const { h, capture } = await setupDelegation({
+    const { h, readyMarker } = await setupDelegation({
       delayBeforeEventsMs: 30_000,
       holdOpenMs: 30_000,
     });
@@ -146,7 +149,7 @@ describe('QA W3 delegation: trust, isolation and lifecycle', () => {
       const sessionId = await createSession(h);
       const run = await h.rpc.delegation.start({ sessionId, lane: 'native', brief: 'long task' });
       expect(run.status).toBe('running');
-      await waitFor(() => fileExists(capture), 30_000);
+      await waitFor(() => fileExists(readyMarker), 30_000);
       await h.rpc.delegation.cancel(run.id);
       await waitFor(
         async () =>
