@@ -16,7 +16,7 @@ import {
   newId,
 } from '@ferry/shared';
 import type { MessagePart, Profile, Session, SessionId } from '@ferry/shared';
-import { BUILTIN_PROFILES, scoreModels } from '@ferry/router';
+import { BUILTIN_PROFILES, explainModelRouting, scoreModels } from '@ferry/router';
 import { createSkillManager } from './skills.js';
 import { createMcpManager } from './mcp.js';
 import { McpServerConfigSchema } from '@ferry/extensions';
@@ -35,6 +35,12 @@ const SendSchema = z.object({ text: z.string().min(1) });
 const RenameSchema = z.string().min(1).max(160);
 const BooleanSchema = z.boolean();
 const noModelMessage = 'No available model — add a provider key or check Explore → Providers';
+const defaultStepTimeoutMs = 120_000;
+
+function stepTimeoutFromEnvironment(value: string | undefined): number {
+  const timeout = Number(value);
+  return Number.isSafeInteger(timeout) && timeout > 0 ? timeout : defaultStepTimeoutMs;
+}
 
 export function register(host: CoreHost, services: FerryServices): void {
   const controllers = new Map<string, AbortController>();
@@ -217,20 +223,31 @@ export function register(host: CoreHost, services: FerryServices): void {
           message: MessageSchema.parse(userMessage),
         });
         const preflight = createSessionDependencies(services, () => undefined);
+        const configuredProviders = services.catalog.providers.filter(
+          ({ provider, key_required }) => {
+            const saved = services.providers.get(provider);
+            const hasKey = Boolean(services.providerKeys.get(provider));
+            return (saved?.enabled ?? hasKey) && (hasKey || key_required === false);
+          },
+        );
+        const configuredOauth = oauthModelCatalog.filter((model) => {
+          const saved = services.providers.get(model.providerId);
+          return saved?.enabled && saved.keyStatus === 'valid';
+        });
         const availableModels = [
           ...(services.env.NODE_ENV === 'test'
             ? services.catalog.models
-            : services.catalog.providers.flatMap(({ provider: id }) => services.models.list(id))),
-          ...oauthModelCatalog.filter((model) => services.providers.get(model.providerId)?.enabled),
+            : configuredProviders.flatMap(({ provider: id }) => services.models.list(id))),
+          ...configuredOauth,
         ];
-        const hasAvailableModel =
-          scoreModels({
-            models: availableModels,
-            capacity: preflight.capacity(),
-            profile,
-            step: 'plan',
-            estimate: { inputTokens: 1, outputTokens: 2048, expectedSteps: 1, requiresTools: true },
-          }).length > 0;
+        const routingInput = {
+          models: availableModels,
+          capacity: preflight.capacity(),
+          profile,
+          step: 'plan',
+          estimate: { inputTokens: 1, outputTokens: 2048, expectedSteps: 1, requiresTools: true },
+        } as const;
+        const hasAvailableModel = scoreModels(routingInput).length > 0;
         if (!hasAvailableModel && services.env.NODE_ENV !== 'test') {
           const errorMessage = store.appendMessage(
             session.id,
@@ -240,6 +257,7 @@ export function register(host: CoreHost, services: FerryServices): void {
                 type: 'error',
                 id: PartIdSchema.parse(newId('part')),
                 message: noModelMessage,
+                details: JSON.stringify(explainModelRouting(routingInput)),
                 kind: 'provider',
               },
             ],
@@ -323,10 +341,8 @@ export function register(host: CoreHost, services: FerryServices): void {
           models: [
             ...(services.env.NODE_ENV === 'test'
               ? services.catalog.models
-              : services.catalog.providers.flatMap(({ provider: id }) => services.models.list(id))),
-            ...oauthModelCatalog.filter(
-              (model) => services.providers.get(model.providerId)?.enabled,
-            ),
+              : configuredProviders.flatMap(({ provider: id }) => services.models.list(id))),
+            ...configuredOauth,
           ],
         };
         const config = await loadProjectConfig(workspace.path, services.env);
@@ -348,6 +364,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           dataDir: services.paths.home,
           profile,
           catalog: sessionCatalog,
+          stepTimeoutMs: stepTimeoutFromEnvironment(services.env.FERRY_STEP_TIMEOUT_MS),
           capacity: runtime.capacity,
           apiKeys: runtime.apiKeys,
           permissionMode: config.permissionMode,
@@ -383,8 +400,8 @@ export function register(host: CoreHost, services: FerryServices): void {
           onHandoff: (reason) => {
             runtime.gateway.recordHandoff(session.id, reason);
           },
-          resolveCandidates: (selectedProfile, stepKind) =>
-            runtime.gateway.resolveCandidates(selectedProfile, stepKind),
+          resolveCandidates: (selectedProfile, stepKind, inputTokens) =>
+            runtime.gateway.resolveCandidates(selectedProfile, stepKind, inputTokens),
           emit: emitAgentEvent,
           requestApproval: (part, signal) =>
             new Promise((resolve) => {
@@ -444,7 +461,10 @@ export function register(host: CoreHost, services: FerryServices): void {
           .run({ sessionId: session.id, signal: controller.signal })
           .catch((error: unknown) => {
             if (!controller.signal.aborted)
-              services.logger.error({ err: error, sessionId: session.id }, 'Agent session failed');
+              services.logger.error(
+                { error: compactAgentError(error), sessionId: session.id },
+                'Agent session failed',
+              );
           })
           .finally(async () => {
             await mcpManager.dispose().catch((error: unknown) => {
@@ -544,6 +564,25 @@ export function register(host: CoreHost, services: FerryServices): void {
       approvals.delete(`${sessionId}:${partId}`);
     },
   });
+}
+
+function compactAgentError(error: unknown): string {
+  if (!error || typeof error !== 'object')
+    return typeof error === 'string' ? error.slice(0, 240) : 'Agent run failed';
+  const candidate = error as {
+    message?: unknown;
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+  };
+  const status = Number(
+    candidate.statusCode ?? candidate.status ?? candidate.response?.status ?? 0,
+  );
+  const message =
+    typeof candidate.message === 'string'
+      ? candidate.message.replace(/[\r\n]+/g, ' ').slice(0, 240)
+      : 'Agent run failed';
+  return status > 0 ? `HTTP ${String(status)} — ${message}` : message;
 }
 
 function adaptExtensionTools(source: ExtensionToolSource): AgentToolSource {

@@ -112,6 +112,13 @@ export async function createServices({
   const handoffs = new HandoffRepository(db.client);
   const quota = new QuotaEngine({
     catalog,
+    eligibleProviders: () =>
+      catalog.providers.flatMap(({ provider, key_required }) => {
+        const hasKey = Boolean(providerKeys.get(provider));
+        const saved = providers.get(provider);
+        const enabled = saved?.enabled ?? hasKey;
+        return enabled && (hasKey || key_required === false) ? [provider] : [];
+      }),
     requestRepository: new RequestRepository(db.client),
     observationRepository: quotaObservations,
     now: () => (clock ?? { now: () => new Date() }).now(),

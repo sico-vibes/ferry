@@ -13,7 +13,10 @@ import {
 import {
   FERRY_PROTOCOL,
   JsonRpcRequestSchema,
+  ModelInfoSchema,
   ProviderIdSchema,
+  ProviderSchema,
+  ProfileIdSchema,
   SessionIdSchema,
   SettingsSchema,
   WorkspaceSchema,
@@ -348,7 +351,7 @@ describe('core host dispatcher and lifecycle', () => {
   });
 
   it('discovers a snapshotless provider for models.list and router candidates', async () => {
-    const fake = await new FakeOpenAIServer().start();
+    const fake = await new FakeOpenAIServer({ models: [{ id: 'gpt-oss-120b' }] }).start();
     const path = join(dataDir, 'snapshotless-live-models');
     const providerId = ProviderIdSchema.parse('sambanova');
     const services = await createServices({
@@ -373,6 +376,7 @@ describe('core host dispatcher and lifecycle', () => {
       if (!saved) throw new Error('Provider was not persisted after setting its key');
       services.providers.put({
         ...saved,
+        enabled: true,
         availableModels: [],
         modelCount: 0,
         modelsVerifiedAt: null,
@@ -380,7 +384,7 @@ describe('core host dispatcher and lifecycle', () => {
       services.models.replace(providerId, []);
 
       const models = await rpc.models.list(providerId);
-      expect(models.map((model) => model.ref)).toContain('sambanova/gpt-4o-mini');
+      expect(models.map((model) => model.ref)).toContain('sambanova/gpt-oss-120b');
       expect(
         fake.requests.some(({ method, url }) => method === 'GET' && url.endsWith('/v1/models')),
       ).toBe(true);
@@ -389,7 +393,7 @@ describe('core host dispatcher and lifecycle', () => {
       if (!profile) throw new Error('Best Available profile is missing');
       const gateway = createSessionDependencies(services, () => undefined).gateway;
       expect(gateway.resolveCandidates(profile, 'plan').map((model) => model.ref)).toContain(
-        'sambanova/gpt-4o-mini',
+        'sambanova/gpt-oss-120b',
       );
     } finally {
       rpc.close();
@@ -400,6 +404,174 @@ describe('core host dispatcher and lifecycle', () => {
 });
 
 describe('provider, model and quota RPC integration', () => {
+  it('recovers stale health and reroutes an Auto-Free tool-capability failure', async () => {
+    const fake = await new FakeOpenAIServer({
+      models: [{ id: 'gpt-oss-120b' }, { id: 'Meta-Llama-3.3-70B-Instruct' }],
+      responses: [
+        {
+          status: 400,
+          body: { error: { message: 'Function calling is not enabled for this model' } },
+        },
+        {
+          chunks: [
+            {
+              id: 'chatcmpl_repro',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'Meta-Llama-3.3-70B-Instruct',
+              choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+            },
+            {
+              id: 'chatcmpl_repro',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'Meta-Llama-3.3-70B-Instruct',
+              choices: [{ index: 0, delta: { content: 'pong' }, finish_reason: null }],
+            },
+            {
+              id: 'chatcmpl_repro',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'Meta-Llama-3.3-70B-Instruct',
+              choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+            },
+          ],
+        },
+      ],
+    }).start();
+    const path = join(dataDir, 'stale-auto-free-discovery');
+    const secrets = new MemorySecretStore('stale-auto-free-discovery');
+    const providerId = ProviderIdSchema.parse('sambanova');
+    await secrets.set(providerId, 'fixture-key');
+    const services = await createServices({
+      dataDir: path,
+      env: {
+        ...process.env,
+        NODE_ENV: 'development',
+        FERRY_DEV_MODE: 'true',
+        FERRY_PROVIDER_BASE_URL_SAMBANOVA: `${fake.baseUrl}/v1`,
+      },
+      secrets,
+    });
+    services.providerKeys.put({
+      id: providerId,
+      providerId,
+      keyringRef: providerId,
+      createdAt: new Date().toISOString(),
+    });
+    const entry = services.catalog.providers.find((item) => item.provider === providerId);
+    if (!entry) throw new Error('SambaNova fixture provider is missing');
+    services.providers.put(
+      ProviderSchema.parse({
+        id: providerId,
+        name: entry.name,
+        tag: entry.tag,
+        kind: 'api',
+        brand: null,
+        enabled: true,
+        keyStatus: 'invalid',
+        health: 'down',
+        cooldownUntil: null,
+        dataUse: entry.data_use,
+        termsNote: entry.terms_note,
+        signupUrl: entry.signup_url,
+        docsUrl: entry.docs_url,
+        verifiedAt: entry.verified_at,
+        availableModels: [],
+        modelCount: 0,
+        modelsVerifiedAt: null,
+        windows: [],
+        stepsLeftToday: null,
+      }),
+    );
+    const [coreTransport, clientTransport] = createMemoryTransportPair();
+    const host = new CoreHost({ dataDir: path, transport: coreTransport, services });
+    for (const register of domainRegistrars) register(host, services);
+    await host.start();
+    const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
+    const workspacePath = join(path, 'workspace');
+    await mkdir(workspacePath, { recursive: true });
+    const sdkErrorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await vi.waitFor(() => {
+        const recovered = services.providers.get(providerId);
+        expect(recovered?.health).toBe('ok');
+        expect(recovered?.keyStatus).toBe('valid');
+        expect(
+          recovered?.availableModels?.find((model) => model.ref === 'sambanova/gpt-oss-120b'),
+        ).toMatchObject({ priceInPerM: null, priceOutPerM: null, toolCalling: true });
+      });
+      const autoFreeId = ProfileIdSchema.parse('profile_builtin_auto_free');
+      await rpc.settings.update({ activeProfileId: autoFreeId });
+      services.models.put(
+        'deepinfra',
+        ModelInfoSchema.parse({
+          ref: 'deepinfra/unconfigured-fixture',
+          providerId: 'deepinfra',
+          name: 'Unconfigured fixture',
+          tier: 'T2',
+          contextWindow: 8192,
+          maxOutput: 4096,
+          toolCalling: true,
+          reasoning: false,
+          free: true,
+          priceInPerM: 0,
+          priceOutPerM: 0,
+        }),
+        new Date().toISOString(),
+      );
+      const autoFree = BUILTIN_PROFILES.find((item) => item.id === autoFreeId);
+      if (!autoFree) throw new Error('Auto-Free profile is missing');
+      const configuredCandidates = createSessionDependencies(services, () => undefined)
+        .gateway.resolveCandidates(autoFree, 'plan')
+        .map((model) => model.providerId);
+      expect(configuredCandidates).toContain('sambanova');
+      expect(configuredCandidates).not.toContain('deepinfra');
+      const workspace = await rpc.workspaces.open(workspacePath);
+      const session = await rpc.sessions.create({
+        workspaceId: workspace.id,
+        profileId: autoFreeId,
+      });
+      await rpc.sessions.send(session.id, { text: 'Reply with exactly one word: pong' });
+      await vi.waitFor(async () => {
+        const detail = await rpc.sessions.get(session.id);
+        expect(
+          detail.session.status,
+          JSON.stringify({
+            messages: detail.messages,
+            requests: fake.requests.map(({ method, url, body }) => ({ method, url, body })),
+          }),
+        ).toBe('idle');
+      });
+      expect(
+        (await rpc.sessions.get(session.id)).messages.flatMap((message) => message.parts),
+      ).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'text', text: 'pong' })]));
+      expect(sdkErrorLog).not.toHaveBeenCalled();
+      expect(services.providers.get(providerId)).toMatchObject({
+        health: 'ok',
+        keyStatus: 'valid',
+      });
+      expect(
+        fake.requests.some(
+          ({ method, url }) => method === 'POST' && url.endsWith('/chat/completions'),
+        ),
+      ).toBe(true);
+      const sentModels = fake.requests
+        .filter(({ method, url }) => method === 'POST' && url.endsWith('/chat/completions'))
+        .map(({ body }) => (body as { model?: unknown }).model);
+      expect(sentModels).toEqual(['gpt-oss-120b', 'Meta-Llama-3.3-70B-Instruct']);
+      expect(
+        services.models.list(providerId).find((model) => model.ref === 'sambanova/gpt-oss-120b'),
+      ).toMatchObject({ toolCalling: false });
+    } finally {
+      sdkErrorLog.mockRestore();
+      rpc.close();
+      await host.stop();
+      await fake.stop();
+      await services.dispose();
+    }
+  }, 30_000);
+
   it('keeps keys out of RPC output, reads fake rate limits, and reports 429 cooldowns', async () => {
     const fake = await new FakeOpenAIServer({
       responseHeaders: {

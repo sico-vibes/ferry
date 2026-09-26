@@ -43,6 +43,8 @@ interface ExtendedWindow {
 }
 export interface QuotaEngineOptions {
   catalog?: Pick<Catalog, 'providers' | 'models'>;
+  /** Provider ids that are enabled and have credentials, or are enabled keyless providers. */
+  eligibleProviders?: () => readonly string[];
   requestRepository?: RequestRepository;
   observationRepository?: QuotaObservationRepository;
   now?: () => Date;
@@ -512,7 +514,10 @@ export class QuotaEngine {
     return this.stepsFor(providerId, modelRef);
   }
   capacitySummary(): CapacitySummary {
-    const providers = [...new Set(this.providers.map((provider) => provider.provider))];
+    const eligibleProviderIds = this.options.eligibleProviders?.();
+    const providers = [...new Set(this.providers.map((provider) => provider.provider))].filter(
+      (providerId) => !eligibleProviderIds || eligibleProviderIds.includes(providerId),
+    );
     const perProvider = providers.map((providerId) => {
       const windows = this.getWindows(providerId);
       const resets = windows

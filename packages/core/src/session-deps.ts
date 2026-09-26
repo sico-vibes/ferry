@@ -48,7 +48,7 @@ function hasProviderKey(services: FerryServices, providerId: string): boolean {
 /** Narrow binding seam: provider execution and durable usage belong to Core services. */
 export interface ModelGateway {
   streamStep(req: StepGeneratorInput, signal: AbortSignal): Promise<GeneratedStep>;
-  resolveCandidates(profile: Profile, stepKind: StepKind): ModelInfo[];
+  resolveCandidates(profile: Profile, stepKind: StepKind, inputTokens?: number): ModelInfo[];
   recordHandoff(sessionId: string, reason: string): void;
 }
 export interface UsageSink {
@@ -77,13 +77,26 @@ export function createSessionDependencies(
   );
   const providers = (): Provider[] => [
     ...services.catalog.providers.map(
-      ({ provider, name, tag, data_use, terms_note, signup_url, docs_url, verified_at }) => {
+      ({
+        provider,
+        name,
+        tag,
+        data_use,
+        terms_note,
+        signup_url,
+        docs_url,
+        verified_at,
+        key_required,
+      }) => {
         const id = ProviderIdSchema.parse(provider);
         const saved = services.providers.get(id);
         const keyPresent = hasProviderKey(services, id);
+        const enabled = saved?.enabled ?? keyPresent;
         const keyStatus: Provider['keyStatus'] = keyPresent
           ? (saved?.keyStatus ?? 'unchecked')
-          : 'missing';
+          : key_required === false && enabled
+            ? 'not_applicable'
+            : 'missing';
         const cooldown = services.cooldowns.get(id);
         const activeCooldown =
           cooldown && Date.parse(cooldown.until) > services.clock.now().getTime();
@@ -94,7 +107,7 @@ export function createSessionDependencies(
           kind: tag === 'subscription_cli' ? 'cli' : 'api',
           brand: null,
           keyStatus,
-          enabled: saved?.enabled ?? keyPresent,
+          enabled,
           health: activeCooldown
             ? 'cooldown'
             : saved?.health === 'cooldown'
@@ -192,7 +205,7 @@ export function createSessionDependencies(
         if (observationRecord.success) services.quota.observe(observationRecord.data);
       }
     }
-    if (observation.statusCode === 429) {
+    if (observation.statusCode === 429 || observation.statusCode === 503) {
       const retryAfter = observation.rateLimitHeaders['retry-after'];
       const retryTimestamp = retryAfter
         ? Number.isFinite(Number(retryAfter))
@@ -217,31 +230,76 @@ export function createSessionDependencies(
         });
     } else if (observation.statusCode !== null && observation.statusCode < 400) {
       services.quota.noteSuccess(providerId, observation.modelRef, providerId);
+      services.cooldowns.delete(providerId);
+      const saved = services.providers.get(providerId);
+      if (saved)
+        services.providers.put({
+          ...saved,
+          keyStatus: 'valid',
+          health: 'ok',
+          cooldownUntil: null,
+        });
     }
   };
   const gateway: ModelGateway = {
-    resolveCandidates(profile, stepKind) {
-      const available = services.catalog.providers.flatMap(({ provider }) =>
+    resolveCandidates(profile, stepKind, inputTokens = 1) {
+      const configuredProviders = services.catalog.providers.filter(
+        ({ provider, key_required }) => {
+          const saved = services.providers.get(provider);
+          const enabled = saved?.enabled ?? hasProviderKey(services, provider);
+          return enabled && (hasProviderKey(services, provider) || key_required === false);
+        },
+      );
+      const available = configuredProviders.flatMap(({ provider }) =>
         services.models.list(provider),
       );
       const oauthRoutingEnabled =
         (services.settings.get('global') as { allowSubscriptionOAuthRouting?: boolean } | undefined)
           ?.allowSubscriptionOAuthRouting === true;
       const oauthModels = oauthRoutingEnabled
-        ? oauthModelCatalog.filter((model) => services.providers.get(model.providerId)?.enabled)
+        ? oauthModelCatalog.filter((model) => {
+            const saved = services.providers.get(model.providerId);
+            return saved?.enabled && saved.keyStatus === 'valid';
+          })
         : [];
       const candidates = [...available, ...oauthModels];
-      const eligible = new Set(
-        scoreModels({
-          models: candidates,
-          providers: providers(),
-          capacity: capacity(),
-          profile,
-          step: stepKind,
-          estimate: { inputTokens: 1, requiresTools: false },
-        }).map((candidate) => candidate.ref),
-      );
-      return candidates.filter((model) => eligible.has(model.ref));
+      const preferredModelRefs = configuredProviders.flatMap(({ provider, probe_models = [] }) => {
+        const providerModels = available.filter((model) => model.providerId === provider);
+        const refsById = new Map(
+          providerModels.map((model) => [model.ref.slice(provider.length + 1), model.ref]),
+        );
+        const exactPreferences = probe_models.flatMap((id) => {
+          const preferredId = provider === 'nvidia' ? id.replace(/^nvidia\//i, '') : id;
+          const ref = refsById.get(preferredId);
+          const model = providerModels.find((candidate) => candidate.ref === ref);
+          return ref && model?.toolCalling && isPreferredToolModel(provider, preferredId)
+            ? [ref]
+            : [];
+        });
+        const providerDefaults = providerModels
+          .filter(
+            (model) =>
+              model.toolCalling &&
+              (isPreferredToolModel(provider, model.ref.slice(provider.length + 1)) ||
+                (provider === 'openrouter' && /:free(?:$|:)/i.test(model.ref))),
+          )
+          .map((model) => model.ref);
+        return [...new Set([...exactPreferences, ...providerDefaults])];
+      });
+      const ranked = scoreModels({
+        models: candidates,
+        providers: providers(),
+        capacity: capacity(),
+        profile,
+        step: stepKind,
+        estimate: { inputTokens, requiresTools: true },
+        preferredModelRefs,
+      });
+      const modelByRef = new Map(candidates.map((model) => [model.ref, model]));
+      return ranked.flatMap(({ ref }) => {
+        const model = modelByRef.get(ref);
+        return model ? [model] : [];
+      });
     },
     recordHandoff(sessionId, reason) {
       services.handoffs.put({ id: newId('handoff'), sessionId, reason });
@@ -266,6 +324,34 @@ export function createSessionDependencies(
       try {
         return await generator({ ...req, signal });
       } catch (error) {
+        if (isProviderCapacityError(error) && ![429, 503].includes(providerErrorStatus(error))) {
+          const cooldown = services.quota.noteFailure(providerId, req.model.ref, providerId, '429');
+          if (cooldown.cooldownUntil)
+            services.cooldowns.put({ id: providerId, until: cooldown.cooldownUntil });
+          const saved = services.providers.get(providerId);
+          if (saved)
+            services.providers.put({
+              ...saved,
+              health: 'cooldown',
+              cooldownUntil: cooldown.cooldownUntil,
+            });
+        }
+        if (isToolCapabilityError(error)) {
+          const updatedModel = { ...req.model, toolCalling: false };
+          const updatedAt = services.clock.now().toISOString();
+          services.models.put(providerId, updatedModel, updatedAt);
+          const provider = services.providers.get(providerId);
+          if (provider?.availableModels) {
+            const availableModels = provider.availableModels.map((model) =>
+              model.ref === req.model.ref ? updatedModel : model,
+            );
+            services.providers.put({
+              ...provider,
+              availableModels,
+              modelCount: availableModels.length,
+            });
+          }
+        }
         if (isUnavailableModelError(error)) {
           const saved = services.providers.get(providerId);
           if (saved?.availableModels) {
@@ -285,6 +371,115 @@ export function createSessionDependencies(
     },
   };
   return { gateway, usage, capacity, providers, apiKeys, providerFetch };
+}
+
+function providerErrorStatus(error: unknown): number {
+  if (!error || typeof error !== 'object') return 0;
+  const candidate = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+  };
+  return Number(candidate.statusCode ?? candidate.status ?? candidate.response?.status ?? 0);
+}
+
+function isProviderCapacityError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as {
+    code?: unknown;
+    name?: unknown;
+    message?: unknown;
+    data?: { error?: { code?: unknown; type?: unknown; message?: unknown } };
+    responseBody?: unknown;
+  };
+  let bodyError: { code?: string; type?: string; message?: string } | undefined;
+  if (typeof candidate.responseBody === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(candidate.responseBody);
+      if (parsed && typeof parsed === 'object' && 'error' in parsed) {
+        const errorBody = parsed.error;
+        if (errorBody && typeof errorBody === 'object') {
+          const errorRecord = errorBody as Record<string, unknown>;
+          bodyError = {
+            ...(typeof errorRecord.code === 'string' ? { code: errorRecord.code } : {}),
+            ...(typeof errorRecord.type === 'string' ? { type: errorRecord.type } : {}),
+            ...(typeof errorRecord.message === 'string' ? { message: errorRecord.message } : {}),
+          };
+        }
+      }
+    } catch {
+      bodyError = undefined;
+    }
+  }
+  const code = [candidate.code, candidate.data?.error?.code, candidate.data?.error?.type]
+    .concat([bodyError?.code, bodyError?.type])
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ');
+  const message = [candidate.message, candidate.data?.error?.message, bodyError?.message]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ');
+  return (
+    providerErrorStatus(error) === 429 ||
+    providerErrorStatus(error) === 503 ||
+    /RESOURCE_EXHAUSTED/i.test(code) ||
+    candidate.name === 'ResourceExhausted' ||
+    /resource_exhausted|capacity|overloaded|worker\b.{0,100}\blimit reached/i.test(message)
+  );
+}
+
+function isToolCapabilityError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+    message?: unknown;
+    responseBody?: unknown;
+    data?: { error?: { message?: unknown } };
+  };
+  const status = Number(
+    candidate.statusCode ?? candidate.status ?? candidate.response?.status ?? 0,
+  );
+  let message =
+    typeof candidate.data?.error?.message === 'string'
+      ? candidate.data.error.message
+      : typeof candidate.message === 'string'
+        ? candidate.message
+        : '';
+  if (typeof candidate.responseBody === 'string') {
+    try {
+      const body: unknown = JSON.parse(candidate.responseBody);
+      if (
+        body &&
+        typeof body === 'object' &&
+        'error' in body &&
+        body.error &&
+        typeof body.error === 'object' &&
+        'message' in body.error &&
+        typeof body.error.message === 'string'
+      )
+        message = body.error.message;
+    } catch {
+      // Keep the short provider message; never surface a raw response payload.
+    }
+  }
+  return (
+    status === 400 &&
+    /function calling.{0,30}(?:not enabled|not supported)|does not support tools|tool use is not supported|tool_choice.{0,30}(?:not supported|unsupported|invalid)/i.test(
+      message,
+    )
+  );
+}
+
+function isPreferredToolModel(providerId: string, modelId: string): boolean {
+  if (providerId === 'gemini') return /^(?:gemini-3\.8-flash|gemini-flash-latest)$/i.test(modelId);
+  if (providerId === 'groq') return /^(?:qwen\/qwen3\.8-27b|openai\/gpt-oss-120b)$/i.test(modelId);
+  if (providerId === 'mistral') return /^(?:codestral-|devstral-|mistral-medium)/i.test(modelId);
+  if (providerId === 'cerebras') return /^(?:gpt-oss-120b|qwen-3\.8-27b)$/i.test(modelId);
+  if (providerId === 'sambanova')
+    return /^(?:gpt-oss-120b|meta-llama-3\.3-70b-instruct)$/i.test(modelId);
+  if (providerId === 'nvidia') return /^(?:nvidia\/)?nemotron-3-super-/i.test(modelId);
+  return false;
 }
 
 function isUnavailableModelError(error: unknown): boolean {

@@ -90,6 +90,7 @@ export const MessagePartSchema = z.discriminatedUnion('type', [
     type: z.literal('error'),
     ...partBase,
     message: z.string(),
+    details: z.string().optional(),
     kind: z.enum(['provider', 'tool', 'permission', 'internal']),
   }),
 ]);

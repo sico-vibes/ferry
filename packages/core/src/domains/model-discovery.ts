@@ -62,6 +62,9 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
         if (!saved) return;
         const updated = {
           ...saved,
+          keyStatus: key ? ('valid' as const) : saved.keyStatus,
+          health: 'ok' as const,
+          cooldownUntil: null,
           availableModels: models,
           modelCount: models.length,
           modelsVerifiedAt: fetchedAt,
@@ -80,7 +83,11 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
   const refreshIfStale = async (id: string): Promise<void> => {
     const saved = services.providers.get(id);
     const fetchedAt = saved?.modelsVerifiedAt ? Date.parse(saved.modelsVerifiedAt) : Number.NaN;
+    const needsHealthRecovery = Boolean(
+      saved && (['auth_invalid', 'down'].includes(saved.health) || saved.keyStatus === 'invalid'),
+    );
     const stale =
+      needsHealthRecovery ||
       services.models.list(id).length === 0 ||
       !Number.isFinite(fetchedAt) ||
       services.clock.now().getTime() - fetchedAt >= modelsMaxAgeMs;

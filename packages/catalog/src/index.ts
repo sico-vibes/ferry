@@ -1,4 +1,4 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parse } from 'yaml';
@@ -115,7 +115,10 @@ export async function loadCatalog(
     now?: Date;
   } = {},
 ): Promise<Catalog & { warnings: string[] }> {
-  const data = join(here, '..', 'data');
+  const bundledData = join(here, 'data');
+  const data = await access(bundledData)
+    .then(() => bundledData)
+    .catch(() => join(here, '..', 'data'));
   const [snapshotText, tierText, files] = await Promise.all([
     readFile(join(data, 'models.snapshot.json'), 'utf8'),
     readFile(join(data, 'tiers.yaml'), 'utf8'),

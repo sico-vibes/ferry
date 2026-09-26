@@ -22,6 +22,71 @@ describe('live probe runner', () => {
       'groq/openai/gpt-oss-20b',
     ]);
     expect(discovered[0]).toMatchObject({ tier: 'T2', contextWindow: 131042, toolCalling: true });
+    expect(discovered.find((model) => model.ref === 'groq/openai/gpt-oss-20b')?.toolCalling).toBe(
+      true,
+    );
+    expect(discovered.find((model) => model.ref === 'groq/whisper-large-v3')).toBeUndefined();
+  });
+
+  it('uses OpenRouter tool metadata and keeps unverified preview models out of tool routing', async () => {
+    const discovered = await discoverProviderModels('openrouter', 'fixture-key', {
+      baseUrl: 'https://example.invalid/api/v1',
+      fetch: () =>
+        Promise.resolve(
+          Response.json({
+            data: [
+              { id: 'vendor/verified:free', supported_parameters: ['tools'] },
+              { id: 'vendor/no-tools:free', supported_parameters: ['temperature'] },
+              { id: 'vendor/antigravity-preview:free' },
+            ],
+          }),
+        ),
+    });
+    expect(discovered.map((model) => [model.ref, model.toolCalling])).toEqual([
+      ['openrouter/vendor/verified:free', true],
+      ['openrouter/vendor/no-tools:free', false],
+      ['openrouter/vendor/antigravity-preview:free', false],
+    ]);
+  });
+
+  it('keeps discovered preview models out of tool routing unless verified', async () => {
+    const discovered = await discoverProviderModels('gemini', 'fixture-key', {
+      baseUrl: 'https://example.invalid/v1',
+      fetch: () =>
+        Promise.resolve(
+          Response.json({
+            data: [
+              { id: 'antigravity-preview-05-2026' },
+              { id: 'experimental-flash' },
+              { id: 'gemini-3.8-flash' },
+            ],
+          }),
+        ),
+    });
+    expect(discovered.map(({ ref, toolCalling }) => [ref, toolCalling])).toEqual([
+      ['gemini/antigravity-preview-05-2026', false],
+      ['gemini/experimental-flash', false],
+      ['gemini/gemini-3.8-flash', true],
+    ]);
+  });
+
+  it('normalizes NVIDIA model ids and does not treat its nano omni probe as tool verified', async () => {
+    const discovered = await discoverProviderModels('nvidia', 'fixture-key', {
+      baseUrl: 'https://example.invalid/v1',
+      fetch: () =>
+        Promise.resolve(
+          Response.json({
+            data: [
+              { id: 'nvidia/nemotron-3-super-120b-a12b' },
+              { id: 'nvidia/nemotron-3-nano-omni-unverified-reasoning' },
+            ],
+          }),
+        ),
+    });
+    expect(discovered.map(({ ref, toolCalling }) => [ref, toolCalling])).toEqual([
+      ['nvidia/nemotron-3-super-120b-a12b', true],
+      ['nvidia/nemotron-3-nano-omni-unverified-reasoning', false],
+    ]);
   });
 
   it('uses Ferry probing, redacts captured data, and reports OpenCode free-tier rejection', async () => {

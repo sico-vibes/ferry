@@ -381,6 +381,162 @@ describe('@ferry/agent', () => {
     }
   });
 
+  it('reroutes an HTTP ResourceExhausted response from the fake OpenAI server', async () => {
+    const state = await setup();
+    const success = {
+      id: 'chatcmpl_fallback',
+      object: 'chat.completion',
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: 'Recovered on fallback.' },
+          finish_reason: 'stop',
+        },
+      ],
+      usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 },
+    };
+    const fake = await new FakeOpenAIServer({
+      responses: [
+        {
+          status: 429,
+          body: {
+            error: {
+              code: 'RESOURCE_EXHAUSTED',
+              message: 'Worker local total request limit reached (16/16)',
+            },
+          },
+        },
+        { body: success },
+      ],
+    }).start();
+    try {
+      const fallback = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/fallback-model',
+        providerId: 'gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: ProviderIdSchema.parse('gemini'),
+        name: 'Gemini',
+      });
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, fallback] },
+        capacity: () => ({ providers: [state.provider, alternateProvider] }),
+        apiKeys: { openai: 'fixture-key', gemini: 'fixture-key' },
+        providerBaseUrls: {
+          openai: `${fake.baseUrl}/v1`,
+          gemini: `${fake.baseUrl}/v1`,
+        },
+        permissionMode: 'full_auto',
+        emit: () => {},
+        resolveCandidates: () => [state.model, fallback],
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.status).toBe('completed');
+      expect(
+        fake.requests
+          .filter(({ method, url }) => method === 'POST' && url.endsWith('/chat/completions'))
+          .map(({ body }) => (body as { model: string }).model),
+      ).toEqual(['test-model', 'fallback-model']);
+      expect(
+        state.store
+          .load(state.session.id)
+          ?.messages.flatMap((message) => message.parts)
+          .some((part) => part.type === 'handoff_marker' && part.reason === 'rate_limit'),
+      ).toBe(true);
+    } finally {
+      await fake.stop();
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('reroutes a step that stalls without stream progress and errors if no candidate remains', async () => {
+    const state = await setup();
+    try {
+      const fallback = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/fallback-model',
+        providerId: 'gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: ProviderIdSchema.parse('gemini'),
+        name: 'Gemini',
+      });
+      let calls = 0;
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, fallback] },
+        capacity: () => ({ providers: [state.provider, alternateProvider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        stepTimeoutMs: 10,
+        resolveCandidates: () => [state.model, fallback],
+        generator: async ({ signal, model: selected }) => {
+          calls++;
+          if (calls === 1)
+            return await new Promise((_resolve, reject) => {
+              signal.addEventListener(
+                'abort',
+                () => {
+                  reject(
+                    signal.reason instanceof Error
+                      ? signal.reason
+                      : new Error('Step watchdog aborted the stalled model'),
+                  );
+                },
+                { once: true },
+              );
+            });
+          expect(selected.ref).toBe(fallback.ref);
+          return { text: 'Completed after the stalled model.', finishReason: 'stop' };
+        },
+      });
+      expect((await loop.run({ sessionId: state.session.id })).status).toBe('completed');
+      expect(calls).toBe(2);
+      expect(
+        state.store
+          .load(state.session.id)
+          ?.messages.flatMap((message) => message.parts)
+          .some((part) => part.type === 'handoff_marker' && part.reason === 'error'),
+      ).toBe(true);
+
+      const failedSession = state.store.create({
+        workspaceId: state.session.workspaceId,
+        profileId: state.session.profileId,
+        prompt: 'This must fail promptly',
+      });
+      const failingLoop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        stepTimeoutMs: 10,
+        generator: async () => await new Promise(() => undefined),
+      });
+      await expect(failingLoop.run({ sessionId: failedSession.id })).rejects.toThrow(
+        /stalled without stream progress/,
+      );
+      expect(state.store.load(failedSession.id)?.session.status).toBe('error');
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
   it('cancels a pending generation and leaves the session resumable', async () => {
     const state = await setup();
     try {

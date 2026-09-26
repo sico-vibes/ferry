@@ -69,6 +69,15 @@ export async function startHarness(options: HarnessOptions = {}): Promise<CoreHa
   });
   const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
   await rpc.hello;
+  await rpc.providers.setEnabled(providerId, true);
+  const fixtureModel = services.catalog.models.find(
+    (model) =>
+      model.providerId === providerId &&
+      model.toolCalling &&
+      (provider !== 'openrouter' || (model.free && /:free(?:$|:)/i.test(model.ref))),
+  );
+  if (!fixtureModel) throw new Error(`No tool-capable fixture model for ${provider}`);
+  services.models.put(providerId, fixtureModel);
   const workspace = await rpc.workspaces.open(workspacePath);
   return {
     root,

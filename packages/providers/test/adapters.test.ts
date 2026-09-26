@@ -53,6 +53,34 @@ describe('provider adapters', () => {
     ).toThrow(/baseUrl/);
   });
 
+  it('maps normalized NVIDIA refs back to the NVIDIA API model id', async () => {
+    const fake = await new FakeOpenAIServer({
+      responses: [
+        {
+          body: {
+            id: 'chatcmpl_nvidia',
+            object: 'chat.completion',
+            choices: [
+              {
+                index: 0,
+                message: { role: 'assistant', content: 'ok' },
+                finish_reason: 'stop',
+              },
+            ],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          },
+        },
+      ],
+    }).start();
+    servers.push(fake);
+    const model = createLanguageModel(ModelRefSchema.parse('nvidia/nemotron-3-super-120b'), {
+      apiKey: 'fixture-key',
+      baseUrl: `${fake.baseUrl}/v1`,
+    });
+    await streamText({ model, prompt: 'hello' }).text;
+    expect(fake.requests[0]?.body).toMatchObject({ model: 'nvidia/nemotron-3-super-120b' });
+  });
+
   it('uses a configured Gemini base URL for API requests', async () => {
     let requestedUrl = '';
     const model = createLanguageModel(ModelRefSchema.parse('gemini/gemini-2.5-flash'), {

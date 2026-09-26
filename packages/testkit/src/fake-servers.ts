@@ -17,6 +17,7 @@ export interface FakeResponse {
 }
 export interface FakeServerOptions {
   responses?: FakeResponse[];
+  models?: { id: string; supported_parameters?: string[] }[];
   responseHeaders?: Record<string, string>;
   slowMs?: number;
 }
@@ -120,7 +121,11 @@ export class FakeOpenAIServer extends FakeProviderServer {
   }
   protected override modelListResponse(method: string, url: string): unknown {
     if (method !== 'GET' || !url.endsWith('/models')) return undefined;
-    if (url.startsWith('/openrouter/')) return { data: [{ id: 'cohere/north-mini-code:free' }] };
+    if (this.options.models) return { data: this.options.models };
+    if (url.startsWith('/openrouter/'))
+      return {
+        data: [{ id: 'cohere/north-mini-code:free', supported_parameters: ['tools'] }],
+      };
     if (url.startsWith('/groq/')) return { data: [{ id: 'allam-2-7b' }] };
     return { data: [{ id: 'gpt-4o-mini' }] };
   }

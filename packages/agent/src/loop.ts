@@ -65,6 +65,7 @@ export interface StepGeneratorInput {
   messages: readonly Message[];
   tools: readonly AgentTool[];
   signal: AbortSignal;
+  onProgress?: () => void;
   onDelta: (text: string) => void;
 }
 export type StepGenerator = (input: StepGeneratorInput) => Promise<GeneratedStep>;
@@ -100,12 +101,22 @@ export interface AgentOptions {
   title?: (prompt: string, signal: AbortSignal) => Promise<string>;
   maxSteps?: number;
   tokenBudget?: number;
+  /** Maximum time without stream progress before this model attempt is abandoned. */
+  stepTimeoutMs?: number;
   pinnedTurns?: number;
   estimateTokens?: (text: string) => number;
   onObservation?: (observation: RawCallObservation) => void;
   onUsage?: (usage: UsageRecord) => void;
-  onHandoff?: (reason: 'quota' | 'rate_limit' | 'error', from: string, to: string) => void;
-  resolveCandidates?: (profile: Profile, step: import('@ferry/shared').StepKind) => ModelInfo[];
+  onHandoff?: (
+    reason: 'quota' | 'rate_limit' | 'error' | 'capability',
+    from: string,
+    to: string,
+  ) => void;
+  resolveCandidates?: (
+    profile: Profile,
+    step: import('@ferry/shared').StepKind,
+    inputTokens?: number,
+  ) => ModelInfo[];
   stats?: ModelStats[];
   terseLevel?: 'off' | 'lite' | 'full' | 'ultra';
 }
@@ -358,17 +369,22 @@ export class AgentLoop {
         this.options.emit({ type: 'session.message', message: assistant });
         const streamedTextPartId = PartIdSchema.parse(newId('part'));
         let streamedText = '';
-        const generator = this.options.generator ?? this.createStreamingGenerator(model, sessionId);
         if (stepCount >= maxSteps)
           return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
-        const stepRequest = (selected: ModelInfo): StepGeneratorInput => ({
+        const stepRequest = (
+          selected: ModelInfo,
+          stepSignal: AbortSignal,
+          onProgress: () => void,
+        ): StepGeneratorInput => ({
           model: selected,
           system,
           messages: contextMessages,
           tools,
-          signal,
+          signal: stepSignal,
+          onProgress,
           onDelta: (text) => {
             if (isSignalAborted(signal)) return;
+            onProgress();
             streamedText += text;
             const currentParts =
               this.options.store
@@ -388,45 +404,81 @@ export class AgentLoop {
             });
           },
         });
-        let generated: GeneratedStep;
-        try {
-          generated = await generator(stepRequest(model));
-        } catch (error) {
-          const rateLimited = isRateLimitError(error);
-          const modelUnavailable = isUnavailableModelError(error);
-          if ((!rateLimited && !modelUnavailable) || isSignalAborted(signal)) throw error;
-          const fallback = this.selectFallback(stepKind, routeEstimate, model.ref);
-          if (!fallback) throw error;
-          const briefing = buildBriefing(
-            taskRecord,
-            messages,
-            fallback,
-            Math.floor(fallback.contextWindow * 0.25),
-            this.estimates,
-          );
-          const marker = createHandoffMarker(
-            model.ref,
-            fallback.ref,
-            rateLimited ? 'rate_limit' : 'error',
-            briefing,
-            rateLimited
-              ? `${model.name} returned HTTP 429; continuing with ${fallback.name}.`
-              : `${model.name} is unavailable; continuing with ${fallback.name}.`,
-          );
-          this.addPart(sessionId, {
-            type: 'handoff_marker',
-            id: PartIdSchema.parse(newId('part')),
-            from: marker.from as ModelRef,
-            to: marker.to as ModelRef,
-            reason: marker.reason,
-            briefingTokens: marker.briefingTokens,
-            explanation: marker.explanation,
-          });
-          this.options.onHandoff?.(rateLimited ? 'rate_limit' : 'error', marker.from, marker.to);
-          model = fallback;
-          system += `\n\nHandoff briefing:\n${briefing.text}`;
-          this.options.store.updateSession(sessionId, { modelRef: fallback.ref });
-          generated = await generator(stepRequest(fallback));
+        let generated!: GeneratedStep;
+        let generationComplete = false;
+        const attemptedModels = new Set<string>([model.ref]);
+        const toolCapabilityFailures: string[] = [];
+        while (!generationComplete) {
+          try {
+            const generator =
+              this.options.generator ?? this.createStreamingGenerator(model, sessionId);
+            generated = await runWithStepWatchdog(
+              generator,
+              stepRequest,
+              model,
+              signal,
+              this.options.stepTimeoutMs ?? 120_000,
+            );
+            generationComplete = true;
+            break;
+          } catch (error) {
+            const rateLimited = isRateLimitError(error);
+            const modelUnavailable = isUnavailableModelError(error);
+            const toolsUnsupported = isToolCapabilityError(error);
+            const timedOut = error instanceof StepWatchdogError;
+            if (
+              (!rateLimited && !modelUnavailable && !toolsUnsupported && !timedOut) ||
+              isSignalAborted(signal)
+            )
+              throw error;
+            if (toolsUnsupported)
+              toolCapabilityFailures.push(formatToolCapabilityFailure(model, error));
+            const fallback = this.selectFallback(stepKind, routeEstimate, attemptedModels);
+            if (!fallback) {
+              if (toolsUnsupported || toolCapabilityFailures.length)
+                throw new Error(
+                  `No tool-capable model remains. ${toolCapabilityFailures.join('; ')}`,
+                  { cause: error },
+                );
+              throw error;
+            }
+            attemptedModels.add(fallback.ref);
+            const briefing = buildBriefing(
+              taskRecord,
+              messages,
+              fallback,
+              Math.floor(fallback.contextWindow * 0.25),
+              this.estimates,
+            );
+            const marker = createHandoffMarker(
+              model.ref,
+              fallback.ref,
+              toolsUnsupported ? 'capability' : rateLimited ? 'rate_limit' : 'error',
+              briefing,
+              toolsUnsupported
+                ? `${model.name} rejected tool calling; continuing with ${fallback.name}.`
+                : rateLimited
+                  ? `${model.name} returned HTTP 429; continuing with ${fallback.name}.`
+                  : `${model.name} is unavailable; continuing with ${fallback.name}.`,
+            );
+            this.addPart(sessionId, {
+              type: 'handoff_marker',
+              id: PartIdSchema.parse(newId('part')),
+              from: marker.from as ModelRef,
+              to: marker.to as ModelRef,
+              reason: marker.reason,
+              briefingTokens: marker.briefingTokens,
+              explanation: marker.explanation,
+            });
+            this.options.onHandoff?.(
+              toolsUnsupported ? 'capability' : rateLimited ? 'rate_limit' : 'error',
+              marker.from,
+              marker.to,
+            );
+            model = fallback;
+            system += `\n\nHandoff briefing:\n${briefing.text}`;
+            this.options.store.updateSession(sessionId, { modelRef: fallback.ref });
+          }
         }
         this.options.onUsage?.({
           id: newId('usage'),
@@ -622,6 +674,8 @@ export class AgentLoop {
     inputTokens: number,
     previous: ModelRef | null,
   ): ModelInfo | undefined {
+    const resolved = this.options.resolveCandidates?.(this.options.profile, step, inputTokens);
+    if (resolved) return resolved[0];
     const candidates = scoreModels({
       models: this.options.catalog.models,
       capacity: this.options.capacity(),
@@ -637,19 +691,20 @@ export class AgentLoop {
   private selectFallback(
     step: import('@ferry/shared').StepKind,
     inputTokens: number,
-    failedRef: ModelRef,
+    attemptedRefs: ReadonlySet<string>,
   ): ModelInfo | undefined {
-    const candidates = this.options.resolveCandidates?.(this.options.profile, step);
-    if (candidates) return candidates.find((candidate) => candidate.ref !== failedRef);
+    const candidates = this.options.resolveCandidates?.(this.options.profile, step, inputTokens);
+    if (candidates) return candidates.find((candidate) => !attemptedRefs.has(candidate.ref));
+    const previousModelRef = [...attemptedRefs].at(-1);
     const ranked = scoreModels({
       models: this.options.catalog.models,
       capacity: this.options.capacity(),
       profile: this.options.profile,
       step,
       estimate: { inputTokens, requiresTools: true },
-      previousModelRef: failedRef,
+      ...(previousModelRef ? { previousModelRef } : {}),
     });
-    const next = ranked.find((candidate) => candidate.ref !== failedRef);
+    const next = ranked.find((candidate) => !attemptedRefs.has(candidate.ref));
     return next
       ? this.options.catalog.models.find((candidate) => candidate.ref === next.ref)
       : undefined;
@@ -745,7 +800,7 @@ export function createStepGenerator(
     { providerId: model.providerId, model: model.ref },
     options.providerFetch ?? globalThis.fetch,
   );
-  return async ({ system, messages, tools, signal, onDelta }) => {
+  return async ({ system, messages, tools, signal, onDelta, onProgress }) => {
     const sdkTools: Record<string, unknown> = Object.fromEntries(
       tools.map((definition) => [
         definition.name,
@@ -771,9 +826,11 @@ export function createStepGenerator(
       tools: sdkTools as unknown as ToolSet,
       abortSignal: signal,
       maxRetries: 0,
+      onError: () => undefined,
     });
     let text = '';
     for await (const part of result.stream) {
+      onProgress?.();
       if (part.type === 'error') throw part.error;
       if (part.type !== 'text-delta') continue;
       text += part.text;
@@ -796,19 +853,121 @@ export function createStepGenerator(
   };
 }
 
+class StepWatchdogError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Model step stalled without stream progress for ${String(timeoutMs)}ms`);
+    this.name = 'StepWatchdogError';
+  }
+}
+
+async function runWithStepWatchdog(
+  generator: StepGenerator,
+  makeRequest: (
+    model: ModelInfo,
+    signal: AbortSignal,
+    onProgress: () => void,
+  ) => StepGeneratorInput,
+  model: ModelInfo,
+  parentSignal: AbortSignal,
+  timeoutMs: number,
+): Promise<GeneratedStep> {
+  if (parentSignal.aborted)
+    throw parentSignal.reason instanceof Error
+      ? parentSignal.reason
+      : new DOMException('Aborted', 'AbortError');
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let rejectTimeout!: (error: Error) => void;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
+  });
+  const abort = () => {
+    const reason =
+      parentSignal.reason instanceof Error
+        ? parentSignal.reason
+        : new DOMException('Aborted', 'AbortError');
+    controller.abort(reason);
+    rejectTimeout(reason);
+  };
+  parentSignal.addEventListener('abort', abort, { once: true });
+  const resetWatchdog = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      const error = new StepWatchdogError(timeoutMs);
+      controller.abort(error);
+      rejectTimeout(error);
+    }, timeoutMs);
+  };
+  resetWatchdog();
+  try {
+    return await Promise.race([
+      generator(makeRequest(model, controller.signal, resetWatchdog)),
+      timeout,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    parentSignal.removeEventListener('abort', abort);
+  }
+}
+
 function isRateLimitError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const candidate = error as {
     status?: unknown;
     statusCode?: unknown;
     response?: { status?: unknown };
+    code?: unknown;
+    name?: unknown;
+    message?: unknown;
+    data?: { error?: { code?: unknown; message?: unknown; type?: unknown } };
+    responseBody?: unknown;
   };
+  const status = Number(
+    candidate.statusCode ?? candidate.status ?? candidate.response?.status ?? 0,
+  );
+  const responseError = parseProviderErrorBody(candidate.responseBody);
+  const code = [
+    candidate.code,
+    candidate.data?.error?.code,
+    candidate.data?.error?.type,
+    responseError?.code,
+    responseError?.type,
+  ]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ');
+  const message = [candidate.message, candidate.data?.error?.message, responseError?.message]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ');
   return (
+    status === 503 ||
     candidate.status === 429 ||
     candidate.statusCode === 429 ||
     candidate.statusCode === '429' ||
-    candidate.response?.status === 429
+    candidate.response?.status === 429 ||
+    /RESOURCE_EXHAUSTED/i.test(code) ||
+    candidate.name === 'ResourceExhausted' ||
+    /resource_exhausted|capacity|overloaded|worker\b.{0,100}\blimit reached/i.test(message)
   );
+}
+
+function parseProviderErrorBody(
+  value: unknown,
+): { code?: string; type?: string; message?: string } | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || !('error' in parsed)) return undefined;
+    const error = parsed.error;
+    if (!error || typeof error !== 'object') return undefined;
+    const errorRecord = error as Record<string, unknown>;
+    return {
+      ...(typeof errorRecord.code === 'string' ? { code: errorRecord.code } : {}),
+      ...(typeof errorRecord.type === 'string' ? { type: errorRecord.type } : {}),
+      ...(typeof errorRecord.message === 'string' ? { message: errorRecord.message } : {}),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function isUnavailableModelError(error: unknown): boolean {
@@ -828,6 +987,62 @@ function isUnavailableModelError(error: unknown): boolean {
     status === 410 ||
     /model_not_found|not found for account|end of life|no longer available/i.test(message)
   );
+}
+
+function errorStatus(error: unknown): number {
+  if (!error || typeof error !== 'object') return 0;
+  const candidate = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+  };
+  return Number(candidate.statusCode ?? candidate.status ?? candidate.response?.status ?? 0);
+}
+
+function providerErrorMessage(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (!error || typeof error !== 'object') return 'Provider request failed';
+  const candidate = error as {
+    message?: unknown;
+    responseBody?: unknown;
+    data?: { error?: { message?: unknown } };
+  };
+  if (typeof candidate.data?.error?.message === 'string') return candidate.data.error.message;
+  if (typeof candidate.responseBody === 'string') {
+    try {
+      const body: unknown = JSON.parse(candidate.responseBody);
+      if (
+        body &&
+        typeof body === 'object' &&
+        'error' in body &&
+        body.error &&
+        typeof body.error === 'object' &&
+        'message' in body.error &&
+        typeof body.error.message === 'string'
+      )
+        return body.error.message;
+    } catch {
+      // Use the provider error's short message when the response is not JSON.
+    }
+  }
+  return typeof candidate.message === 'string' ? candidate.message : 'Provider request failed';
+}
+
+function isToolCapabilityError(error: unknown): boolean {
+  return (
+    errorStatus(error) === 400 &&
+    /function calling.{0,30}(?:not enabled|not supported)|does not support tools|tool use is not supported|tool_choice.{0,30}(?:not supported|unsupported|invalid)/i.test(
+      providerErrorMessage(error),
+    )
+  );
+}
+
+function formatToolCapabilityFailure(model: ModelInfo, error: unknown): string {
+  const status = errorStatus(error) || 400;
+  const message = providerErrorMessage(error)
+    .replace(/[\r\n]+/g, ' ')
+    .slice(0, 240);
+  return `${model.ref}: HTTP ${String(status)} — ${message}`;
 }
 
 function touchFile(task: TaskRecord, path: string, purpose: string): TaskRecord {

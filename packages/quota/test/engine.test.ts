@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, QuotaObservationRepository, RequestRepository } from '@ferry/storage';
 import type { ModelRef, UsageRecord } from '@ferry/shared';
+import type { Catalog } from '@ferry/catalog';
 import { QuotaEngine } from '../src/engine.js';
 
 const provider = {
@@ -56,6 +57,64 @@ describe('QuotaEngine', () => {
     engine.recordUsage(usage('quota-update-failure', '2026-06-01T09:59:00Z'));
     await vi.advanceTimersByTimeAsync(251);
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'schema failure' }));
+    engine.dispose();
+  });
+
+  it('builds capacity summaries and banners only from configured eligible providers', () => {
+    const now = () => new Date('2026-06-01T10:00:00Z');
+    const bounded = {
+      ...provider,
+      windows: [
+        {
+          scope: 'provider' as const,
+          metric: 'requests' as const,
+          kind: 'fixed_daily' as const,
+          limit: 4,
+        },
+      ],
+    };
+    const unconfigured = { ...bounded, provider: 'huggingface' };
+    const engine = new QuotaEngine({
+      now,
+      catalog: {
+        providers: [bounded, unconfigured],
+        models: [{ providerId: 'gemini', ref: 'gemini/gemini-flash' } as Catalog['models'][number]],
+      },
+      eligibleProviders: () => ['gemini'],
+    });
+    const geminiWindow = engine.getWindows('gemini')[0];
+    const window = engine.getWindows('huggingface')[0];
+    if (!geminiWindow) throw new Error('Missing Gemini fixture window');
+    if (!window) throw new Error('Missing Hugging Face fixture window');
+    engine.observe({
+      id: 'configured-capacity',
+      providerId: 'gemini' as UsageRecord['providerId'],
+      windowId: geminiWindow.id,
+      metric: 'requests',
+      limit: 4,
+      remaining: 4,
+      source: 'endpoint',
+      observedAt: now().toISOString(),
+    });
+    engine.observe({
+      id: 'unconfigured-low-capacity',
+      providerId: 'huggingface' as UsageRecord['providerId'],
+      windowId: window.id,
+      metric: 'requests',
+      limit: 4,
+      remaining: 0,
+      resetAt: '2026-06-01T10:05:00Z',
+      source: 'endpoint',
+      observedAt: now().toISOString(),
+    });
+
+    const summary = engine.capacitySummary();
+    expect(summary.perProvider.map((row) => row.providerId)).toEqual(['gemini']);
+    expect(summary.nextResets).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ providerId: 'huggingface' })]),
+    );
+    expect(summary.stepsLeftToday).toBe(4);
+    expect(summary.banner).toBeNull();
     engine.dispose();
   });
 

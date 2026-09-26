@@ -66,6 +66,7 @@ function saveProvider(services: FerryServices, provider: Provider): Provider {
 
 export function register(host: CoreHost, services: FerryServices): void {
   const modelDiscovery = getModelDiscovery(host, services);
+  let healthRecoveryTimer: ReturnType<typeof setInterval> | undefined;
   host.onStart(async () => {
     const testProviderId = services.env.FERRY_E2E_PROVIDER_ID;
     const testProviderKey = services.env.FERRY_E2E_PROVIDER_KEY;
@@ -94,6 +95,27 @@ export function register(host: CoreHost, services: FerryServices): void {
       if (key || (saved?.enabled && limits?.key_required === false))
         void modelDiscovery.refreshIfStale(id);
     });
+    if (!healthRecoveryTimer) {
+      healthRecoveryTimer = setInterval(
+        () => {
+          for (const { provider: id } of services.catalog.providers) {
+            const saved = services.providers.get(id);
+            if (
+              saved &&
+              (saved.health !== 'ok' || saved.keyStatus === 'invalid') &&
+              services.providerKeys.get(id)
+            )
+              void modelDiscovery.refreshIfStale(id);
+          }
+        },
+        60 * 60 * 1000,
+      );
+      healthRecoveryTimer.unref();
+    }
+  });
+  host.onShutdown(() => {
+    if (healthRecoveryTimer) clearInterval(healthRecoveryTimer);
+    healthRecoveryTimer = undefined;
   });
   host.registerDomain('providers', {
     list() {

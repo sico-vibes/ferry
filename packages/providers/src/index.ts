@@ -209,7 +209,7 @@ export function createLanguageModel(ref: ModelRef, opts: ModelFactoryOptions): L
     case 'stepfun':
       return createCompatible(
         providerId,
-        modelId,
+        providerId === 'nvidia' && !modelId.includes('/') ? `nvidia/${modelId}` : modelId,
         opts,
         opts.baseUrl ?? defaultBaseURL(providerId),
         headers,
@@ -850,10 +850,14 @@ async function probeWithSignal(
     );
     const discovered = liveModels.length > 0;
     const models = discovered ? liveModels : catalogModels;
-    const preferred =
+    const preferredModels =
       probeOptions.probeModels ??
       catalog.providers.find((entry) => entry.provider === providerId)?.probe_models ??
       [];
+    const preferred =
+      providerId === 'nvidia'
+        ? preferredModels.map((id) => id.replace(/^nvidia\//i, ''))
+        : preferredModels;
     const candidates = probeOptions.modelRef
       ? [probeOptions.modelRef.slice(String(providerId).length + 1)]
       : [...new Set([...orderProbeCandidates(models, preferred), ...preferred])];
@@ -1103,12 +1107,25 @@ export async function discoverProviderModels(
     if (!item || typeof item !== 'object') return [];
     const id = (item as Record<string, unknown>).id;
     if (typeof id !== 'string') return [];
-    const normalizedId = id.replace(/^models\//, '');
+    const rawId = id.replace(/^models\//, '');
+    const normalizedId = providerId === 'nvidia' ? rawId.replace(/^nvidia\//i, '') : rawId;
     if (!isChatModelId(normalizedId)) return [];
     const known = catalog.models.find(
       (model) => model.providerId === providerId && model.ref.endsWith(`/${normalizedId}`),
     );
-    const free = known?.free ?? /:free(?:$|:)/i.test(normalizedId);
+    const supportedParameters = (item as Record<string, unknown>).supported_parameters;
+    const metadataSupportsTools =
+      Array.isArray(supportedParameters) && supportedParameters.includes('tools');
+    const verifiedToolModel =
+      metadataSupportsTools ||
+      known?.toolCalling === true ||
+      isPreferredToolModel(providerId, normalizedId);
+    const excludedByName =
+      /(?:preview|experimental|image|tts|audio|transcribe|embedding|guard|omni|nano-banana|antigravity)/i.test(
+        normalizedId,
+      );
+    const free =
+      (providerId === 'openrouter' && /:free(?:$|:)/i.test(normalizedId)) || (known?.free ?? false);
     const contextWindow = known?.contextWindow ?? 8192;
     const model = ModelInfoSchema.safeParse({
       ref: `${providerId}/${normalizedId}`,
@@ -1121,14 +1138,27 @@ export async function discoverProviderModels(
       tier: known?.tier ?? 'T2',
       contextWindow,
       maxOutput: known?.maxOutput ?? 4096,
-      toolCalling: known?.toolCalling ?? true,
+      toolCalling:
+        verifiedToolModel &&
+        (!excludedByName || metadataSupportsTools || known?.toolCalling === true),
       reasoning: known?.reasoning ?? false,
       free,
-      priceInPerM: known?.priceInPerM ?? (free ? 0 : null),
-      priceOutPerM: known?.priceOutPerM ?? (free ? 0 : null),
+      priceInPerM: free ? 0 : (known?.priceInPerM ?? null),
+      priceOutPerM: free ? 0 : (known?.priceOutPerM ?? null),
     });
     return model.success ? [model.data] : [];
   });
+}
+
+function isPreferredToolModel(providerId: string, modelId: string): boolean {
+  if (providerId === 'gemini') return /^(?:gemini-3\.8-flash|gemini-flash-latest)$/i.test(modelId);
+  if (providerId === 'groq') return /^(?:qwen\/qwen3\.8-27b|openai\/gpt-oss-120b)$/i.test(modelId);
+  if (providerId === 'mistral') return /^(?:codestral-|devstral-|mistral-medium)/i.test(modelId);
+  if (providerId === 'cerebras') return /^(?:gpt-oss-120b|qwen-3\.8-27b)$/i.test(modelId);
+  if (providerId === 'sambanova')
+    return /^(?:gpt-oss-120b|meta-llama-3\.3-70b-instruct)$/i.test(modelId);
+  if (providerId === 'nvidia') return /^(?:nvidia\/)?nemotron-3-super-/i.test(modelId);
+  return false;
 }
 
 function toQuotaObservations(

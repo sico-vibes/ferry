@@ -229,6 +229,8 @@ export interface ScoreInput {
   spendCaps?: SpendCaps;
   /** Extra context for cache / capability preferences. */
   preferReasoning?: boolean;
+  /** Tool-verified defaults for providers that expose multiple discovered models. */
+  preferredModelRefs?: readonly string[];
 }
 
 /** Remove models that cannot safely execute this step, then rank the remaining models. */
@@ -238,7 +240,15 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
   const nowMs = Number.isFinite(parsedNow) ? parsedNow : 0;
   const providerById = new Map(providers.map((provider) => [provider.id as string, provider]));
   const statByRef = new Map((input.stats ?? []).map((stats) => [stats.modelRef, stats]));
-  const scored: (ModelCandidate & { refKey: string })[] = [];
+  const preferredRanks = new Map(
+    (input.preferredModelRefs ?? []).map((ref, index) => [ref, index]),
+  );
+  const scored: (ModelCandidate & {
+    refKey: string;
+    preferredRank: number;
+    tierRank: number;
+    codingRank: number;
+  })[] = [];
   for (const model of input.models) {
     const provider = providerById.get(model.providerId);
     if (
@@ -305,20 +315,131 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       explanation: `${model.tier} ${stepLabel(input.step)} · ${stepsText} · ${formatContext(model.contextWindow)} context · ${costText}`,
       selected: false,
       refKey: model.ref,
+      preferredRank: preferredRanks.get(model.ref) ?? Number.MAX_SAFE_INTEGER,
+      tierRank: tierFit,
+      codingRank: codingModelRank(model),
     });
   }
-  scored.sort((a, b) => b.score - a.score || a.refKey.localeCompare(b.refKey));
-  return scored.map(({ refKey: _refKey, ...candidate }, index) => ({
-    ...candidate,
-    selected: index === 0,
-  }));
+  scored.sort(
+    (a, b) =>
+      a.preferredRank - b.preferredRank ||
+      b.tierRank - a.tierRank ||
+      a.codingRank - b.codingRank ||
+      b.score - a.score ||
+      a.refKey.localeCompare(b.refKey),
+  );
+  return scored.map(
+    (
+      {
+        refKey: _refKey,
+        preferredRank: _preferredRank,
+        tierRank: _tierRank,
+        codingRank: _codingRank,
+        ...candidate
+      },
+      index,
+    ) => ({
+      ...candidate,
+      selected: index === 0,
+    }),
+  );
+}
+
+function codingModelRank(model: ModelInfo): number {
+  const id = model.ref.slice(model.providerId.length + 1).toLowerCase();
+  if (/(?:^|[-/:])(?:nano|mini)(?:[-/:]|$)|omni|reasoning-only/.test(id)) return 2;
+  if (
+    /(?:flash|codestral|devstral|qwen[^/]*coder|qwen\/[^/]*coder|qwen-?3\.|gpt-oss-120b|deepseek|glm)/.test(
+      id,
+    )
+  )
+    return 0;
+  return 1;
+}
+
+export interface RoutingExclusion {
+  modelRef: string;
+  providerId: string;
+  reasons: string[];
+}
+
+/** Explain every hard filter using the same routing inputs used by scoreModels. */
+export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
+  const providers = input.providers ?? input.capacity.providers;
+  const now = Date.parse(input.capacity.now ?? new Date(0).toISOString());
+  const providerById = new Map(providers.map((provider) => [provider.id as string, provider]));
+  return input.models.flatMap((model) => {
+    const provider = providerById.get(model.providerId);
+    const reasons: string[] = [];
+    if (!provider) reasons.push('provider missing');
+    else {
+      if (!provider.enabled) reasons.push('provider disabled');
+      if (provider.health === 'down') reasons.push('provider health is down');
+      if (provider.keyStatus === 'missing') reasons.push('provider key missing');
+      if (provider.keyStatus === 'invalid') reasons.push('provider key marked invalid');
+      const cooldown = provider.cooldownUntil ? Date.parse(provider.cooldownUntil) : 0;
+      if (provider.health === 'cooldown' && (!Number.isFinite(cooldown) || cooldown > now))
+        reasons.push('provider cooldown active');
+    }
+    if (model.contextWindow < input.estimate.inputTokens * 1.2)
+      reasons.push(`context ${String(model.contextWindow)} below estimate`);
+    if ((input.estimate.requiresTools ?? true) && !model.toolCalling)
+      reasons.push('model tool support unavailable');
+    if (
+      !input.profile.paidAllowed &&
+      !model.free &&
+      !(model.priceInPerM === null && model.priceOutPerM === null)
+    )
+      reasons.push('model not marked free');
+    if (
+      !input.profile.paidAllowed &&
+      model.priceInPerM === null &&
+      model.priceOutPerM === null &&
+      provider &&
+      !['legit', 'promo'].includes(provider.tag)
+    )
+      reasons.push('unknown pricing is not allowed for this provider plan');
+    if (!input.profile.tierByStep[input.step].includes(model.tier))
+      reasons.push(`tier ${model.tier} not allowed for ${input.step}`);
+    const cost = calculateSpend(
+      { inputTokens: input.estimate.inputTokens, outputTokens: input.estimate.outputTokens ?? 0 },
+      model,
+    );
+    if (
+      cost > 0 &&
+      (!input.spend ||
+        !input.spendCaps ||
+        !canSpend(input.profile, input.spend, input.spendCaps, cost))
+    )
+      reasons.push('spend unavailable or over cap');
+    if (provider) {
+      const remaining = capacityRemaining(input.capacity, provider);
+      if (remaining !== null && remaining < (input.estimate.expectedSteps ?? 1))
+        reasons.push('provider step capacity exhausted');
+      const tpm = tpmRemaining(input.capacity, model, provider);
+      if (tpm !== null && tpm < input.estimate.inputTokens + (input.estimate.outputTokens ?? 0))
+        reasons.push('token capacity exhausted');
+      if (
+        !providerAllowed(input.profile, provider, model) &&
+        !reasons.includes('model not marked free')
+      )
+        reasons.push('provider not allowed by profile');
+    }
+    return reasons.length ? [{ modelRef: model.ref, providerId: model.providerId, reasons }] : [];
+  });
 }
 
 function providerAllowed(profile: Profile, provider: Provider, model: ModelInfo): boolean {
-  if (!profile.paidAllowed && provider.tag === 'caution') return false;
-  if (!profile.paidAllowed && !model.free) return false;
+  if (!profile.paidAllowed) {
+    if (['paid', 'credits', 'subscription_cli', 'subscription_oauth'].includes(provider.tag))
+      return false;
+    if (provider.id === 'openrouter' && !/:free(?:$|:)/i.test(model.ref)) return false;
+    const unknownPrice = model.priceInPerM === null && model.priceOutPerM === null;
+    if (!model.free && !(unknownPrice && ['legit', 'promo'].includes(provider.tag))) return false;
+  }
   if (profile.allowedProviders === 'all') return true;
-  if (profile.allowedProviders === 'all_free') return model.free;
+  if (profile.allowedProviders === 'all_free')
+    return model.free || (model.priceInPerM === null && model.priceOutPerM === null);
   return profile.allowedProviders.includes(provider.id);
 }
 function capacityRemaining(capacity: CapacityView, provider: Provider): number | null {

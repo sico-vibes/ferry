@@ -16,7 +16,11 @@ export async function runPrompt(
   json: boolean,
   profileName?: string,
   cwd = process.cwd(),
-  options: { permission?: 'ask' | 'auto_edit' | 'full_auto'; maxSteps?: number } = {},
+  options: {
+    permission?: 'ask' | 'auto_edit' | 'full_auto';
+    maxSteps?: number;
+    verbose?: boolean;
+  } = {},
 ): Promise<number> {
   const settings = await client.settings.get();
   if (options.permission) await client.settings.update({ permissionMode: options.permission });
@@ -70,7 +74,11 @@ export async function runPrompt(
           void client.sessions.cancel(session.id);
         }
       }
-      if (event.part.type === 'error') failed = true;
+      if (event.part.type === 'error') {
+        failed = true;
+        if (options.verbose && event.part.details)
+          process.stderr.write(`Routing exclusions: ${formatRoutingDetails(event.part.details)}\n`);
+      }
       emit(json, { type: 'session.part', ...event }, summarize(event.part));
     }),
     client.on('session.message', (event) => {
@@ -139,6 +147,29 @@ function summarize(part: import('@ferry/shared').MessagePart): string | undefine
   return undefined;
 }
 
+function formatRoutingDetails(details: string): string {
+  try {
+    const parsed: unknown = JSON.parse(details);
+    if (!Array.isArray(parsed)) return 'Routing details unavailable';
+    const entries: unknown[] = parsed;
+    const rows = entries.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+      const row = entry as Record<string, unknown>;
+      if (typeof row.modelRef !== 'string' || !Array.isArray(row.reasons)) return [];
+      const reasons = (row.reasons as unknown[]).filter(
+        (reason): reason is string => typeof reason === 'string',
+      );
+      return [`${row.modelRef}: ${reasons.join(', ')}`];
+    });
+    const shown = rows.slice(0, 12);
+    if (rows.length > shown.length)
+      shown.push(`${String(rows.length - shown.length)} more excluded models`);
+    return shown.join('; ');
+  } catch {
+    return 'Routing details unavailable';
+  }
+}
+
 export async function runCli(argv = process.argv.slice(2)): Promise<number> {
   let json = argv.includes('--json') || argv.some((arg) => arg.startsWith('--json='));
   let verbose = argv.includes('--verbose');
@@ -192,6 +223,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
           Number.isFinite(Number(flags.values['max-steps']))
             ? { maxSteps: Number(flags.values['max-steps']) }
             : {}),
+          ...(verbose ? { verbose: true } : {}),
         },
       );
       return code;

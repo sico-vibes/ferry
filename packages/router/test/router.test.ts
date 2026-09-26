@@ -9,6 +9,7 @@ import {
   classifyStep,
   runSimulationScenarios,
   scoreModels,
+  explainModelRouting,
   shouldSwitchBeforeStep,
   type CapacityView,
 } from '../src/index.js';
@@ -59,6 +60,97 @@ const task: TaskRecord = {
 };
 
 describe('step classification and routing', () => {
+  it('allows discovered unknown-price models through Auto-Free and explains hard exclusions', () => {
+    const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
+    if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
+    const discovered = { ...model, free: false, priceInPerM: null, priceOutPerM: null };
+    const input = {
+      models: [discovered],
+      providers: [provider],
+      capacity,
+      profile: autoFree,
+      step: 'plan' as const,
+      estimate: { inputTokens: 1, requiresTools: true },
+    };
+    expect(scoreModels(input)).toHaveLength(1);
+    expect(explainModelRouting(input)).toEqual([]);
+
+    const paidProvider = { ...provider, tag: 'paid' as const };
+    expect(
+      scoreModels({
+        ...input,
+        providers: [paidProvider],
+        capacity: { providers: [paidProvider], now: '2026-09-24T12:00:00.000Z' },
+      }),
+    ).toHaveLength(0);
+    const cautionProvider = { ...provider, tag: 'caution' as const };
+    expect(
+      scoreModels({
+        ...input,
+        providers: [cautionProvider],
+        capacity: { providers: [cautionProvider], now: '2026-09-24T12:00:00.000Z' },
+      }),
+    ).toHaveLength(0);
+    const openRouterModel = {
+      ...discovered,
+      ref: 'openrouter/meta/paid-model' as ModelInfo['ref'],
+      providerId: 'openrouter' as Provider['id'],
+    };
+    const openRouterProvider = { ...provider, id: 'openrouter' as Provider['id'] };
+    expect(
+      scoreModels({
+        ...input,
+        models: [openRouterModel],
+        providers: [openRouterProvider],
+        capacity: { providers: [openRouterProvider], now: '2026-09-24T12:00:00.000Z' },
+      }),
+    ).toHaveLength(0);
+
+    const excluded = { ...provider, health: 'down' as const, keyStatus: 'invalid' as const };
+    expect(
+      explainModelRouting({
+        ...input,
+        providers: [excluded],
+        capacity: { providers: [excluded], now: '2026-09-24T12:00:00.000Z' },
+      })[0]?.reasons,
+    ).toEqual(expect.arrayContaining(['provider health is down', 'provider key marked invalid']));
+  });
+
+  it('ranks verified coding and tool models ahead of small omni or nano variants', () => {
+    const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
+    if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
+    const preferred = {
+      ...model,
+      ref: 'gemini/gemini-3.8-flash' as ModelInfo['ref'],
+      providerId: 'gemini' as Provider['id'],
+      name: 'Gemini Flash',
+    };
+    const nano = {
+      ...model,
+      ref: 'nvidia/nemotron-3-nano-30b' as ModelInfo['ref'],
+      providerId: 'nvidia' as Provider['id'],
+      name: 'Nemotron Nano',
+    };
+    const omni = {
+      ...model,
+      ref: 'nvidia/nemotron-3-nano-omni-reasoning' as ModelInfo['ref'],
+      providerId: 'nvidia' as Provider['id'],
+      name: 'Nemotron Nano Omni Reasoning',
+    };
+    const gemini = { ...provider, id: 'gemini' as Provider['id'] };
+    const nvidia = { ...provider, id: 'nvidia' as Provider['id'] };
+    const ranked = scoreModels({
+      models: [nano, omni, preferred],
+      providers: [gemini, nvidia],
+      capacity: { providers: [gemini, nvidia], now: '2026-09-24T12:00:00.000Z' },
+      profile: autoFree,
+      step: 'plan',
+      estimate: { inputTokens: 1, requiresTools: true },
+      preferredModelRefs: [preferred.ref],
+    });
+    expect(ranked.map(({ ref }) => ref)).toEqual([preferred.ref, nano.ref, omni.ref]);
+  });
+
   it('applies classification precedence', () => {
     expect(classifyStep({ firstStep: true, afterDelegationResult: true })).toBe('plan');
     expect(classifyStep({ afterDelegationResult: true, compaction: true })).toBe('review');
