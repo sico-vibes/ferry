@@ -54,6 +54,8 @@ export const MessagePartSchema = z.discriminatedUnion('type', [
     type: z.literal('tool_call'),
     ...partBase,
     tool: ToolNameSchema,
+    toolCallId: z.string().optional(),
+    providerOptions: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
     title: z.string(),
     args: z.record(z.string(), z.unknown()),
     status: z.enum(['pending', 'running', 'succeeded', 'failed', 'denied']),

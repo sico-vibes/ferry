@@ -549,12 +549,12 @@ export function parseGeminiQuota(
 }
 
 const CEREBRAS_WINDOWS = [
-  { pattern: /requests?.*(day|daily)|(?:day|daily).*requests?/, id: 'requests-day' },
-  { pattern: /requests?.*(hour|hourly)|(?:hour|hourly).*requests?/, id: 'requests-hour' },
-  { pattern: /requests?.*(minute|min)|(?:minute|min).*requests?/, id: 'requests-minute' },
-  { pattern: /tokens?.*(day|daily)|(?:day|daily).*tokens?/, id: 'tokens-day' },
-  { pattern: /tokens?.*(hour|hourly)|(?:hour|hourly).*tokens?/, id: 'tokens-hour' },
-  { pattern: /tokens?.*(minute|min)|(?:minute|min).*tokens?/, id: 'tokens-minute' },
+  { pattern: /requests?.*(?:day|daily)|(?:day|daily)[-_].*requests?/, id: 'requests-day' },
+  { pattern: /requests?[-_](?:hour|hourly)|(?:hour|hourly)[-_].*requests?/, id: 'requests-hour' },
+  { pattern: /requests?[-_](?:minute|min)|(?:minute|min)[-_].*requests?/, id: 'requests-minute' },
+  { pattern: /tokens?[-_](?:day|daily)|(?:day|daily)[-_].*tokens?/, id: 'tokens-day' },
+  { pattern: /tokens?[-_](?:hour|hourly)|(?:hour|hourly)[-_].*tokens?/, id: 'tokens-hour' },
+  { pattern: /tokens?[-_](?:minute|min)|(?:minute|min)[-_].*tokens?/, id: 'tokens-minute' },
 ] as const;
 
 export function parseCerebrasRateLimits(
@@ -734,20 +734,29 @@ export function mapProviderError(error: unknown): MappedProviderError {
   else if (status === 403 && /freetier|free tier.*only be used from within opencode/i.test(message))
     kind = 'unsupported_free_tier';
   else if (status === 403) kind = 'forbidden';
-  else if (status === 404) kind = 'not_found';
-  else if (status === 410) kind = 'gone';
+  else if (status === 404 || status === 410) kind = 'model_not_found';
   else if (
     status === 401 ||
     status === 403 ||
     /invalid api key|unauthorized|authentication/i.test(message)
   )
     kind = 'auth';
-  else if (status === 429 || /rate.limit/i.test(message))
-    kind = /quota|resource_exhausted|daily limit/i.test(message) ? 'quota_exhausted' : 'rate_limit';
+  else if (
+    /tool.{0,30}(?:not supported|unsupported|not enabled)|function calling.{0,30}(?:not supported|not enabled)/i.test(
+      message,
+    )
+  )
+    kind = 'tools_unsupported';
+  else if (/content_filter|safety.{0,20}blocked|content policy/i.test(message))
+    kind = 'content_filter';
+  else if (status === 429 || /rate.limit|resource_exhausted/i.test(message))
+    kind = /quota|resource_exhausted|daily limit|billing|credits exhausted/i.test(message)
+      ? 'quota_exhausted'
+      : 'rate_limit';
   else if (/context.length|maximum context|too many tokens/i.test(message))
     kind = 'context_overflow';
   else if (status >= 500) kind = 'server';
-  else if (status >= 400) kind = 'bad_request';
+  else if (status >= 400) kind = 'request_scoped_client';
   else kind = 'network';
   return { kind, retryAfterMs, message: safeProviderMessage(message, kind, retryAfterMs) };
 }

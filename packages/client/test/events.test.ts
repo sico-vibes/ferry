@@ -52,6 +52,29 @@ const samples = {
     part: MessagePart;
   },
   'session.delta': { sessionId, messageId, partId, textDelta: 'delta' },
+  'routing.explain': {
+    sessionId,
+    selected: 'google/gemini-3.8-flash',
+    candidates: [
+      {
+        ref: 'google/gemini-3.8-flash',
+        score: 85,
+        explanation: 'T2 edit · free',
+        scoreBreakdown: {
+          tierFit: 40,
+          headroom: 10,
+          success: 16,
+          latency: 5,
+          cost: 6,
+          affinity: 0,
+          coding: 8,
+          preference: 0,
+          reasoning: 0,
+          verification: 8,
+        },
+      },
+    ],
+  },
   'task.updated': sampleTaskRecord satisfies TaskRecord,
   'quota.updated': sampleCapacitySummary satisfies CapacitySummary,
   'provider.updated': sampleProvider satisfies Provider,

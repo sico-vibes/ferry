@@ -18,7 +18,13 @@ import {
   type StepKind,
   type UsageRecord,
 } from '@ferry/shared';
-import { scoreModels, type CapacityView } from '@ferry/router';
+import {
+  chainForProfile,
+  isStrictFallbackNameEligible,
+  resolveFallbackChain,
+  scoreModels,
+  type CapacityView,
+} from '@ferry/router';
 import { oauthModelCatalog, streamOAuthStep } from '@ferry/oauth';
 import type { FerryServices } from './services.js';
 
@@ -232,13 +238,36 @@ export function createSessionDependencies(
       services.quota.noteSuccess(providerId, observation.modelRef, providerId);
       services.cooldowns.delete(providerId);
       const saved = services.providers.get(providerId);
-      if (saved)
+      if (saved) {
+        const verifiedModel =
+          model ??
+          services.models
+            .list(providerId)
+            .find((candidate) => candidate.ref === observation.modelRef);
+        const availableModels = saved.availableModels ?? [];
         services.providers.put({
           ...saved,
           keyStatus: 'valid',
           health: 'ok',
           cooldownUntil: null,
+          ...(verifiedModel
+            ? {
+                availableModels: [
+                  ...availableModels.filter((candidate) => candidate.ref !== verifiedModel.ref),
+                  verifiedModel,
+                ],
+                modelCount: new Set([
+                  ...availableModels.map((candidate) => candidate.ref),
+                  verifiedModel.ref,
+                ]).size,
+                modelsVerifiedAt: now.toISOString(),
+                excludedModelRefs: (saved.excludedModelRefs ?? []).filter(
+                  (ref) => ref !== verifiedModel.ref,
+                ),
+              }
+            : {}),
         });
+      }
     }
   };
   const gateway: ModelGateway = {
@@ -250,9 +279,12 @@ export function createSessionDependencies(
           return enabled && (hasProviderKey(services, provider) || key_required === false);
         },
       );
-      const available = configuredProviders.flatMap(({ provider }) =>
-        services.models.list(provider),
-      );
+      const available = configuredProviders.flatMap(({ provider }) => {
+        const saved = services.providers.get(provider);
+        return services.models
+          .list(provider)
+          .filter((model) => !saved?.excludedModelRefs?.includes(model.ref));
+      });
       const oauthRoutingEnabled =
         (services.settings.get('global') as { allowSubscriptionOAuthRouting?: boolean } | undefined)
           ?.allowSubscriptionOAuthRouting === true;
@@ -263,6 +295,12 @@ export function createSessionDependencies(
           })
         : [];
       const candidates = [...available, ...oauthModels];
+      const verifiedModelRefs = configuredProviders.flatMap(({ provider }) => {
+        const saved = services.providers.get(provider);
+        return saved?.modelsVerifiedAt && saved.availableModels
+          ? saved.availableModels.map((model) => model.ref)
+          : [];
+      });
       const preferredModelRefs = configuredProviders.flatMap(({ provider, probe_models = [] }) => {
         const providerModels = available.filter((model) => model.providerId === provider);
         const refsById = new Map(
@@ -286,20 +324,89 @@ export function createSessionDependencies(
           .map((model) => model.ref);
         return [...new Set([...exactPreferences, ...providerDefaults])];
       });
-      const ranked = scoreModels({
+      const baseCapacity = capacity();
+      const tokensPerMinuteRemaining: Record<string, number | null> = {};
+      const tokensPerMinuteLimit: Record<string, number | null> = {};
+      for (const { provider, windows } of services.catalog.providers) {
+        if (!configuredProviders.some((item) => item.provider === provider)) continue;
+        const observed = services.quota.getWindows(provider);
+        for (const definition of windows) {
+          if (
+            definition.metric !== 'tokens' ||
+            definition.kind !== 'rolling' ||
+            (definition.length ?? 0) > 60
+          )
+            continue;
+          const windowId = `${provider}:${definition.scope}:${definition.model ?? '*'}:tokens:rolling`;
+          const live = observed.find((item) => item.id === windowId);
+          const limit = live?.limit ?? definition.limit;
+          const remaining = live?.remaining ?? limit;
+          const keys =
+            definition.scope === 'model' && definition.model
+              ? services.catalog.models
+                  .filter(
+                    (model) =>
+                      model.providerId === provider &&
+                      model.ref
+                        .slice(provider.length + 1)
+                        .toLowerCase()
+                        .endsWith(definition.model?.toLowerCase() ?? ''),
+                  )
+                  .map((model) => model.ref)
+              : [provider];
+          for (const key of keys) {
+            if (remaining !== null)
+              tokensPerMinuteRemaining[key] = Math.min(
+                tokensPerMinuteRemaining[key] ?? Number.POSITIVE_INFINITY,
+                remaining,
+              );
+            if (limit !== null)
+              tokensPerMinuteLimit[key] = Math.min(
+                tokensPerMinuteLimit[key] ?? Number.POSITIVE_INFINITY,
+                limit,
+              );
+          }
+        }
+      }
+      const routingCapacity: CapacityView = {
+        ...baseCapacity,
+        tokensPerMinuteRemaining,
+        tokensPerMinuteLimit,
+      };
+      const chain = chainForProfile(profile);
+      const chainResult = resolveFallbackChain({
+        chain,
         models: candidates,
+        capacity: routingCapacity,
+        profile,
+        inputTokens,
+        step: stepKind,
+        verifiedModelRefs,
+        now: services.clock.now().getTime(),
+      });
+      const chainRefs = new Set(chainResult.models.map((model) => model.ref));
+      const ranked = scoreModels({
+        models: candidates.filter(
+          (model) =>
+            !chainRefs.has(model.ref) &&
+            (!chain.length || isStrictFallbackNameEligible(model, verifiedModelRefs)),
+        ),
         providers: providers(),
-        capacity: capacity(),
+        capacity: routingCapacity,
         profile,
         step: stepKind,
         estimate: { inputTokens, requiresTools: true },
         preferredModelRefs,
+        verifiedModelRefs,
       });
       const modelByRef = new Map(candidates.map((model) => [model.ref, model]));
-      return ranked.flatMap(({ ref }) => {
-        const model = modelByRef.get(ref);
-        return model ? [model] : [];
-      });
+      return [
+        ...chainResult.models,
+        ...ranked.flatMap(({ ref }) => {
+          const model = modelByRef.get(ref);
+          return model ? [model] : [];
+        }),
+      ];
     },
     recordHandoff(sessionId, reason) {
       services.handoffs.put({ id: newId('handoff'), sessionId, reason });
@@ -324,6 +431,15 @@ export function createSessionDependencies(
       try {
         return await generator({ ...req, signal });
       } catch (error) {
+        const savedProvider = services.providers.get(providerId);
+        const unsupportedFreeTier =
+          providerId === 'opencode' &&
+          providerErrorStatus(error) === 403 &&
+          /free (?:models|tier).{0,60}(?:open.?code|zen)|only work inside open.?code/i.test(
+            providerErrorMessageForRouting(error),
+          );
+        if (unsupportedFreeTier && savedProvider)
+          services.providers.put({ ...savedProvider, freeTierUnsupported: true });
         if (isProviderCapacityError(error) && ![429, 503].includes(providerErrorStatus(error))) {
           const cooldown = services.quota.noteFailure(providerId, req.model.ref, providerId, '429');
           if (cooldown.cooldownUntil)
@@ -349,6 +465,16 @@ export function createSessionDependencies(
               ...provider,
               availableModels,
               modelCount: availableModels.length,
+              excludedModelRefs: [
+                ...new Set([...(provider.excludedModelRefs ?? []), req.model.ref]),
+              ],
+            });
+          } else if (provider) {
+            services.providers.put({
+              ...provider,
+              excludedModelRefs: [
+                ...new Set([...(provider.excludedModelRefs ?? []), req.model.ref]),
+              ],
             });
           }
         }
@@ -363,6 +489,12 @@ export function createSessionDependencies(
               availableModels,
               modelCount: availableModels.length,
               modelsVerifiedAt: services.clock.now().toISOString(),
+              excludedModelRefs: [...new Set([...(saved.excludedModelRefs ?? []), req.model.ref])],
+            });
+          } else if (saved) {
+            services.providers.put({
+              ...saved,
+              excludedModelRefs: [...new Set([...(saved.excludedModelRefs ?? []), req.model.ref])],
             });
           }
         }
@@ -381,6 +513,11 @@ function providerErrorStatus(error: unknown): number {
     response?: { status?: unknown };
   };
   return Number(candidate.statusCode ?? candidate.status ?? candidate.response?.status ?? 0);
+}
+
+function providerErrorMessageForRouting(error: unknown): string {
+  if (!error || typeof error !== 'object' || !('message' in error)) return '';
+  return typeof error.message === 'string' ? error.message : '';
 }
 
 function isProviderCapacityError(error: unknown): boolean {

@@ -50,7 +50,7 @@ export interface FerryClient {
       profileId?: ProfileId;
       title?: string;
     }): Promise<Session>;
-    send(id: SessionId, i: { text: string }): Promise<void>;
+    send(id: SessionId, i: { text: string; maxSteps?: number; verbose?: boolean }): Promise<void>;
     cancel(id: SessionId): Promise<void>;
     rename(id: SessionId, title: string): Promise<Session>;
     setStarred(id: SessionId, v: boolean): Promise<Session>;
@@ -75,6 +75,7 @@ export interface FerryClient {
     removeKey(id: ProviderId): Promise<Provider>;
     probe(id: ProviderId): Promise<ProbeResult>;
     setEnabled(id: ProviderId, v: boolean): Promise<Provider>;
+    setBillingEnabled(id: ProviderId, v: boolean): Promise<Provider>;
   };
   oauth: {
     list(): Promise<OAuthProvider[]>;

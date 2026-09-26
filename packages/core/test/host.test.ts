@@ -406,7 +406,10 @@ describe('core host dispatcher and lifecycle', () => {
 describe('provider, model and quota RPC integration', () => {
   it('recovers stale health and reroutes an Auto-Free tool-capability failure', async () => {
     const fake = await new FakeOpenAIServer({
-      models: [{ id: 'gpt-oss-120b' }, { id: 'Meta-Llama-3.3-70B-Instruct' }],
+      models: [
+        { id: 'gpt-oss-120b' },
+        { id: 'Meta-Llama-3.3-70B-Instruct', supported_parameters: ['tools'] },
+      ],
       responses: [
         {
           status: 400,

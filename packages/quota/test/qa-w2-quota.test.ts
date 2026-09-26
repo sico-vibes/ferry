@@ -217,7 +217,7 @@ describe('QA-w2 quota: OpenRouter polling lifecycle', () => {
     const engine = makeEngine();
     const poll = vi.fn(() => Promise.resolve());
     const stop = engine.startOpenRouterPolling(poll);
-    stop();
+    await stop();
     await vi.advanceTimersByTimeAsync(5 * 60_000 + 10);
     expect(poll).not.toHaveBeenCalled();
   });

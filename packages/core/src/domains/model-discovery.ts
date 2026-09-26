@@ -23,6 +23,7 @@ function isLoopbackUrl(value: string | undefined): boolean {
 export interface ModelDiscovery {
   refresh(id: string): Promise<void>;
   refreshIfStale(id: string): Promise<void>;
+  dispose(): Promise<void>;
 }
 
 const discoveries = new WeakMap<FerryServices, ModelDiscovery>();
@@ -32,11 +33,14 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
   if (existing) return existing;
 
   const inFlight = new Map<string, Promise<void>>();
+  const controllers = new Map<string, AbortController>();
 
   const refresh = (id: string): Promise<void> => {
     const active = inFlight.get(id);
     if (active) return active;
 
+    const controller = new AbortController();
+    controllers.set(id, controller);
     const task = (async () => {
       const limits = services.catalog.providers.find((item) => item.provider === id);
       const current = services.providers.get(id);
@@ -55,6 +59,7 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
         const providerId = ProviderIdSchema.parse(id);
         const models = await discoverProviderModels(providerId, key, {
           ...(baseUrl ? { baseUrl } : {}),
+          signal: controller.signal,
         });
         const fetchedAt = services.clock.now().toISOString();
         services.models.replace(id, models, fetchedAt);
@@ -74,7 +79,10 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
       } catch (error) {
         services.logger.warn({ err: error, providerId: id }, 'Provider model discovery failed');
       }
-    })().finally(() => inFlight.delete(id));
+    })().finally(() => {
+      inFlight.delete(id);
+      controllers.delete(id);
+    });
 
     inFlight.set(id, task);
     return task;
@@ -94,7 +102,16 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
     if (stale) await refresh(id);
   };
 
-  const discovery = { refresh, refreshIfStale };
+  const discovery: ModelDiscovery = {
+    refresh,
+    refreshIfStale,
+    async dispose() {
+      for (const controller of controllers.values()) controller.abort();
+      await Promise.allSettled(inFlight.values());
+      controllers.clear();
+      inFlight.clear();
+    },
+  };
   discoveries.set(services, discovery);
   return discovery;
 }

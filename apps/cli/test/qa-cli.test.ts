@@ -6,18 +6,20 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
   writeFileSync,
 } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
+import { FakeOpenAIServer } from '@ferry/testkit';
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const cliDirectory = resolve(testDirectory, '..');
 const cliEntry = join(cliDirectory, 'dist', 'ferry.js');
 const temporaryRoots: string[] = [];
+const fakeServers: FakeOpenAIServer[] = [];
 const ONE_SPAWN = 20_000;
 const MANY_SPAWNS = 60_000;
 
@@ -71,11 +73,50 @@ function readTree(directory: string): string {
   return text;
 }
 
-afterAll(() => {
-  for (const directory of temporaryRoots) rmSync(directory, { recursive: true, force: true });
+afterAll(async () => {
+  await Promise.all(fakeServers.splice(0).map((server) => server.stop()));
+  await Promise.all(
+    temporaryRoots.map((directory) =>
+      rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }),
+    ),
+  );
 });
 
 describe('@ferry/cli argument parsing and exit codes', () => {
+  it('shows and edits a profile fallback chain from the CLI', () => {
+    const dataDir = tempDirectory('profile-chain');
+    const set = runCli([
+      'profiles',
+      'chain',
+      'set',
+      'Auto-Free',
+      'gemini=gemini-3.8-flash',
+      'groq=qwen/qwen3.8-27b',
+      '--json',
+      '--data-dir',
+      dataDir,
+    ]);
+    expect(set.status).toBe(0);
+    const saved = JSON.parse(set.stdout) as {
+      fallbackChain: { provider: string; patterns: string[] }[];
+    };
+    expect(saved.fallbackChain).toEqual([
+      { provider: 'gemini', patterns: ['gemini-3.8-flash'] },
+      { provider: 'groq', patterns: ['qwen/qwen3.8-27b'] },
+    ]);
+    const shown = runCli([
+      'profiles',
+      'chain',
+      'show',
+      'Auto-Free',
+      '--json',
+      '--data-dir',
+      dataDir,
+    ]);
+    expect(shown.status).toBe(0);
+    expect(JSON.parse(shown.stdout)).toMatchObject(saved);
+  }, 30_000);
+
   it('requires the explicit risk flag for non-interactive OAuth login', () => {
     const dataDir = tempDirectory('oauth-risk');
     const result = runCli(['oauth', 'login', 'anthropic', '--data-dir', dataDir]);
@@ -104,6 +145,153 @@ describe('@ferry/cli argument parsing and exit codes', () => {
     },
     ONE_SPAWN,
   );
+
+  it('exits after the terminal status from the bundled CLI and embedded core', async () => {
+    const dataDir = tempDirectory('embedded-terminal');
+    const workspaceDir = tempDirectory('embedded-workspace');
+    const fake = new FakeOpenAIServer({
+      models: [{ id: 'qwen/qwen3.8-27b:free', supported_parameters: ['tools'] }],
+      responses: [
+        {
+          chunks: [
+            {
+              id: 'chatcmpl_cli',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'fake',
+              choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+            },
+            {
+              id: 'chatcmpl_cli',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'fake',
+              choices: [{ index: 0, delta: { content: 'pong' }, finish_reason: null }],
+            },
+            {
+              id: 'chatcmpl_cli',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'fake',
+              choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+            },
+          ],
+        },
+      ],
+    });
+    await fake.start();
+    fakeServers.push(fake);
+    let finalMessageAt: number | null = null;
+    let terminalStatus = false;
+    let stdout = '';
+    let stderr = '';
+    let activeResources: string[] | null = null;
+    const child = spawn(
+      process.execPath,
+      [
+        cliEntry,
+        'run',
+        'Reply with one word: pong',
+        '--max-steps',
+        '1',
+        '--permission',
+        'full_auto',
+        '--engine',
+        'local',
+        '--data-dir',
+        dataDir,
+        '--cwd',
+        workspaceDir,
+        '--json',
+        '--verbose',
+      ],
+      {
+        cwd: workspaceDir,
+        env: {
+          ...process.env,
+          NODE_ENV: 'test',
+          FERRY_TEST_KEYRING_NAMESPACE: 'embedded-terminal',
+          FERRY_HOME: dataDir,
+          FERRY_E2E_USER_DATA_DIR: dataDir,
+          FERRY_E2E_PROVIDER_ID: 'openrouter',
+          FERRY_E2E_PROVIDER_KEY: 'fixture-key',
+          FERRY_PROVIDER_BASE_URL_OPENROUTER: `${fake.baseUrl}/v1`,
+          FERRY_E2E_HANDLE_DIAGNOSTICS: '1',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
+        const hardTimeout = setTimeout(() => {
+          child.kill();
+          reject(
+            new Error(
+              `CLI did not exit within the test deadline. stdout=${stdout} stderr=${stderr}`,
+            ),
+          );
+        }, 10_000);
+        child.stdout.setEncoding('utf8');
+        child.stderr.setEncoding('utf8');
+        let buffer = '';
+        child.stdout.on('data', (chunk: string) => {
+          stdout += chunk;
+          buffer += chunk;
+          const lines = buffer.split(/\r?\n/);
+          buffer = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const event = JSON.parse(line) as {
+              type?: string;
+              textDelta?: string;
+              part?: { type?: string; text?: string };
+              session?: { status?: string };
+            };
+            if (
+              (event.type === 'session.delta' && event.textDelta?.includes('pong')) ||
+              (event.type === 'session.part' &&
+                event.part?.type === 'text' &&
+                event.part.text?.includes('pong'))
+            ) {
+              finalMessageAt ??= Date.now();
+            }
+            if (
+              event.type === 'session.status' &&
+              ['idle', 'error'].includes(event.session?.status ?? '')
+            )
+              terminalStatus = true;
+          }
+        });
+        child.stderr.on('data', (chunk: string) => {
+          stderr += chunk;
+          const resourceLine = /FERRY_ACTIVE_RESOURCES:(\[[^\r\n]*\])/.exec(stderr);
+          if (resourceLine?.[1]) activeResources = JSON.parse(resourceLine[1]) as string[];
+        });
+        child.once('error', (error) => {
+          clearTimeout(hardTimeout);
+          reject(error);
+        });
+        child.once('exit', (code, signal) => {
+          clearTimeout(hardTimeout);
+          resolve({ code, signal });
+        });
+      },
+    );
+    await fake.stop();
+    fakeServers.splice(fakeServers.indexOf(fake), 1);
+    expect(exit).toMatchObject({ code: 0 });
+    expect(
+      finalMessageAt,
+      `${stdout}\nrequests=${JSON.stringify(fake.requests)}\nlogs=${readTree(join(dataDir, 'logs'))}`,
+    ).not.toBeNull();
+    expect(terminalStatus).toBe(true);
+    expect(Date.now() - Number(finalMessageAt)).toBeLessThanOrEqual(5_000);
+    expect(activeResources, stderr).not.toBeNull();
+    expect(activeResources, stderr).not.toContain('Timeout');
+    expect(activeResources, stderr).not.toContain('TCPWRAP');
+    expect(activeResources, stderr).not.toContain('TCPSocketWrap');
+    expect(stdout).toContain('pong');
+  }, 30_000);
 
   it(
     'keeps emoji and non-latin prompts intact on the JSONL stream',
@@ -143,7 +331,7 @@ describe('@ferry/cli argument parsing and exit codes', () => {
   );
 
   it(
-    'returns 1 and logs to stderr when --max-steps is exceeded',
+    'returns documented limit exit code 4 when --max-steps is reached',
     () => {
       const dataDir = tempDirectory('run-max-steps');
       const result = runCli([
@@ -155,8 +343,8 @@ describe('@ferry/cli argument parsing and exit codes', () => {
         '--data-dir',
         dataDir,
       ]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toMatch(/Maximum step count \(1\) exceeded/);
+      expect(result.status).toBe(4);
+      expect(result.stderr).toMatch(/Maximum step count \(1\) reached; session ended cleanly/);
       expect(() => jsonLines(result.stdout)).not.toThrow();
     },
     ONE_SPAWN,

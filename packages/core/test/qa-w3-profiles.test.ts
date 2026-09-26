@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Profile, ProfileId } from '@ferry/shared';
+import type { Profile, ProfileId, ProviderId } from '@ferry/shared';
 import { startHarness, textTurn, waitFor } from './qa-w3-harness.js';
 
 function customProfile(overrides: Record<string, unknown> = {}): Profile {
@@ -62,6 +62,26 @@ describe('QA W3 profiles: validation and paid-routing guarantees', () => {
       ).rejects.toMatchObject({ kind: 'validation' });
       const builtins = (await h.rpc.profiles.list()).filter((item) => item.builtin);
       expect(builtins.some((item) => item.id === 'profile_builtin_auto_free')).toBe(true);
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
+
+  it('persists editable fallback order for built-in routing profiles', async () => {
+    const h = await startHarness();
+    try {
+      const autoFree = (await h.rpc.profiles.list()).find(
+        (item) => item.id === 'profile_builtin_auto_free',
+      );
+      if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
+      const updated = await h.rpc.profiles.save({
+        ...autoFree,
+        fallbackChain: [{ provider: 'groq' as ProviderId, patterns: ['qwen/qwen3.8-27b'] }],
+      });
+      expect(updated.fallbackChain).toEqual([{ provider: 'groq', patterns: ['qwen/qwen3.8-27b'] }]);
+      expect(
+        (await h.rpc.profiles.list()).find((item) => item.id === autoFree.id)?.fallbackChain,
+      ).toEqual(updated.fallbackChain);
     } finally {
       await h.close();
     }

@@ -11,6 +11,8 @@ import {
   scoreModels,
   explainModelRouting,
   shouldSwitchBeforeStep,
+  resolveFallbackChain,
+  isStrictFallbackNameEligible,
   type CapacityView,
 } from '../src/index.js';
 
@@ -148,7 +150,309 @@ describe('step classification and routing', () => {
       estimate: { inputTokens: 1, requiresTools: true },
       preferredModelRefs: [preferred.ref],
     });
-    expect(ranked.map(({ ref }) => ref)).toEqual([preferred.ref, nano.ref, omni.ref]);
+    expect(ranked.map(({ ref }) => ref)).toEqual([preferred.ref]);
+  });
+
+  it('routes the reported mixed-provider candidate set by score and filters account exclusions', () => {
+    const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
+    if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
+    const refs = [
+      'nvidia/deepseek-ai/deepseek-coder-6.7b-instruct',
+      'nvidia/deepseek-ai/deepseek-v4.1-flash',
+      'opencode/ling-3.0-flash-fin-free',
+      'openrouter/inclusionai/ling-3.0-flash-fin:free',
+      'openrouter/qwen/qwen3.8-27b:free',
+      'gemini/antigravity-preview-05-2026',
+      'gemini/gemini-3.8-flash',
+      'groq/qwen/qwen3.8-27b',
+      'mistral/codestral-2508',
+      'cerebras/gpt-oss-120b',
+    ];
+    const providerIds = [...new Set(refs.map((ref) => ref.slice(0, ref.indexOf('/'))))];
+    const providers = providerIds.map((id) => ({
+      ...provider,
+      id: id as Provider['id'],
+      stepsLeftToday: id === 'nvidia' ? null : 20,
+      ...(id === 'opencode' ? { freeTierUnsupported: true } : {}),
+      ...(id === 'gemini'
+        ? {
+            excludedModelRefs: ['gemini/antigravity-preview-05-2026' as ModelInfo['ref']],
+          }
+        : {}),
+    }));
+    const models = refs.map((ref) => ({
+      ...model,
+      ref: ref as ModelInfo['ref'],
+      providerId: ref.slice(0, ref.indexOf('/')) as Provider['id'],
+      name: ref,
+      contextWindow: 262_144,
+    }));
+    const verifiedModelRefs = [
+      'gemini/gemini-3.8-flash',
+      'groq/qwen/qwen3.8-27b',
+      'mistral/codestral-2508',
+      'cerebras/gpt-oss-120b',
+    ];
+    const candidates = scoreModels({
+      models,
+      providers,
+      capacity: { providers, now: '2026-09-24T12:00:00.000Z' },
+      profile: autoFree,
+      step: 'plan',
+      estimate: { inputTokens: 1_000, requiresTools: true },
+      verifiedModelRefs,
+    });
+    expect(candidates.map(({ ref }) => ref)).not.toContain('opencode/ling-3.0-flash-fin-free');
+    expect(candidates.map(({ ref }) => ref)).not.toContain('gemini/antigravity-preview-05-2026');
+    expect(candidates[0]?.ref).toBe('cerebras/gpt-oss-120b');
+    expect(candidates.map(({ score }) => score)).toEqual(
+      [...candidates.map(({ score }) => score)].sort((a, b) => b - a),
+    );
+    for (const candidate of candidates) {
+      const breakdown = candidate.scoreBreakdown;
+      expect(breakdown).toBeDefined();
+      if (breakdown)
+        expect(
+          breakdown.tierFit +
+            breakdown.headroom +
+            breakdown.success +
+            breakdown.latency +
+            breakdown.cost +
+            breakdown.affinity +
+            breakdown.coding +
+            breakdown.preference +
+            breakdown.reasoning +
+            breakdown.verification,
+        ).toBeCloseTo(candidate.score);
+    }
+  });
+
+  it('selects the first live model from the default chain and excludes the repro domain models', () => {
+    const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
+    if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
+    const refs = [
+      'gemini/antigravity-preview-05-2026',
+      'gemini/antigravity-preview-09-2026',
+      'gemini/antigravity-preview-latest',
+      'gemini/aqa',
+      'gemini/deep-research-pro-preview-12-2025',
+      'gemini/gemini-3.8-live',
+      'gemini/gemini-3.8-live-extended-thinking',
+      'gemini/gemini-pro-latest',
+      'gemini/gemini-robotics-er-2-preview',
+      'gemini/gemini-robotics-er-2-streaming-preview',
+      'gemini/gemma-4-26b-a4b-it',
+      'gemini/gemma-4-31b-it',
+      'gemini/gemini-omni-1.1-flash',
+      'gemini/lyria-3.5',
+      'gemini/lyria-realtime-exp',
+      'gemini/nano-banana-pro-preview',
+      'gemini/gemini-3.8-flash',
+      'openrouter/inclusionai/ling-3.0-flash-fin:free',
+      'openrouter/inclusionai/ling-3.0-flash-sante:free',
+      'openrouter/qwen/qwen3.8-27b:free',
+      'openrouter/dots-studio/dots-3-note-preview:free',
+      'openrouter/google/gemma-4-26b-a4b-it:free',
+      'openrouter/google/gemma-4-31b-it:free',
+      'openrouter/liquid/lfm-2.5-2.6b:free',
+      'openrouter/nvidia/nemotron-3-super-120b-a12b:free',
+      'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free',
+      'openrouter/nvidia/nemotron-3.5-lightning:free',
+      'openrouter/poolside/laguna-s-2.1:free',
+      'openrouter/poolside/laguna-xs-2.1:free',
+      'openrouter/thinkingmachines/inkling-small:free',
+      'openrouter/thinkingmachines/inkling:free',
+      'openrouter/cohere/north-mini-code:free',
+      'openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+    ];
+    const providers = ['gemini', 'openrouter'].map((id) => ({
+      ...provider,
+      id: id as Provider['id'],
+      stepsLeftToday: 20,
+    }));
+    const liveModels = refs.map((ref) => ({
+      ...model,
+      ref: ref as ModelInfo['ref'],
+      providerId: ref.slice(0, ref.indexOf('/')) as Provider['id'],
+      name: ref,
+    }));
+    const result = resolveFallbackChain({
+      chain: autoFree.fallbackChain ?? [],
+      models: liveModels,
+      capacity: { providers, now: '2026-09-26T12:00:00.000Z' },
+      profile: autoFree,
+      inputTokens: 1_000,
+      verifiedModelRefs: [],
+    });
+    expect(result.hit?.modelRef).toBe('gemini/gemini-3.8-flash');
+    expect(result.models[0]?.ref).toBe('gemini/gemini-3.8-flash');
+    const candidates = scoreModels({
+      models: liveModels,
+      providers,
+      capacity: { providers, now: '2026-09-26T12:00:00.000Z' },
+      profile: autoFree,
+      step: 'plan',
+      estimate: { inputTokens: 1_000, requiresTools: true },
+    });
+    expect(candidates.map(({ ref }) => ref)).not.toContain(
+      'openrouter/inclusionai/ling-3.0-flash-fin:free',
+    );
+    expect(candidates.map(({ ref }) => ref)).not.toContain(
+      'openrouter/inclusionai/ling-3.0-flash-sante:free',
+    );
+    expect(candidates.map(({ ref }) => ref)).not.toContain('gemini/aqa');
+    expect(candidates.map(({ ref }) => ref)).not.toContain('gemini/gemini-3.8-live');
+  });
+
+  it('treats paid API list prices as zero cost on free provider plans and honors paid overrides', () => {
+    const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
+    if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
+    const pricedGemini = {
+      ...model,
+      ref: 'gemini/gemini-3.8-flash' as ModelInfo['ref'],
+      providerId: 'gemini' as Provider['id'],
+      name: 'Gemini 3.8 Flash',
+      free: false,
+      priceInPerM: 0.1,
+      priceOutPerM: 0.4,
+    };
+    const freeGemini = { ...provider, id: 'gemini' as Provider['id'], tag: 'legit' as const };
+    const chain = autoFree.fallbackChain ?? [];
+    const result = resolveFallbackChain({
+      chain,
+      models: [pricedGemini],
+      capacity: { providers: [freeGemini], now: '2026-09-26T12:00:00.000Z' },
+      profile: autoFree,
+      inputTokens: 1_000,
+    });
+    expect(result.hit?.modelRef).toBe(pricedGemini.ref);
+    expect(
+      scoreModels({
+        models: [pricedGemini],
+        providers: [freeGemini],
+        capacity: { providers: [freeGemini], now: '2026-09-26T12:00:00.000Z' },
+        profile: autoFree,
+        step: 'plan',
+        estimate: { inputTokens: 1_000, requiresTools: true },
+      })[0]?.explanation,
+    ).toContain('free');
+
+    const paidGemini = { ...freeGemini, tag: 'paid' as const };
+    const paidResult = resolveFallbackChain({
+      chain,
+      models: [pricedGemini],
+      capacity: { providers: [paidGemini], now: '2026-09-26T12:00:00.000Z' },
+      profile: autoFree,
+      inputTokens: 1_000,
+    });
+    expect(paidResult.hit).toBeNull();
+    expect(
+      paidResult.diagnostics.find((entry) => entry.modelRef === pricedGemini.ref)?.detail,
+    ).toContain('model not marked free for this provider plan');
+
+    const billedGemini = { ...freeGemini, billingEnabled: true };
+    expect(
+      scoreModels({
+        models: [pricedGemini],
+        providers: [billedGemini],
+        capacity: { providers: [billedGemini], now: '2026-09-26T12:00:00.000Z' },
+        profile: autoFree,
+        step: 'plan',
+        estimate: { inputTokens: 1_000, requiresTools: true },
+      }),
+    ).toHaveLength(0);
+  });
+
+  it('allows no-key free providers and excludes strict names from fallback scoring with reasons', () => {
+    const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
+    if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
+    const keyless = {
+      ...provider,
+      id: 'gemini' as Provider['id'],
+      keyStatus: 'missing' as const,
+      keyRequired: false,
+    };
+    const eligible = {
+      ...model,
+      ref: 'gemini/gemini-3.8-flash' as ModelInfo['ref'],
+      providerId: keyless.id,
+      free: false,
+      priceInPerM: 0.1,
+      priceOutPerM: 0.4,
+    };
+    const preview = {
+      ...eligible,
+      ref: 'gemini/antigravity-preview-05-2026' as ModelInfo['ref'],
+      name: 'Antigravity Preview',
+    };
+    const input = {
+      models: [eligible, preview],
+      providers: [keyless],
+      capacity: { providers: [keyless], now: '2026-09-26T12:00:00.000Z' },
+      profile: autoFree,
+      step: 'plan' as const,
+      estimate: { inputTokens: 100, requiresTools: true },
+    };
+    expect(scoreModels(input).map(({ ref }) => ref)).toEqual([eligible.ref]);
+    expect(
+      resolveFallbackChain({
+        chain: autoFree.fallbackChain ?? [],
+        models: [eligible],
+        capacity: input.capacity,
+        profile: autoFree,
+        inputTokens: 100,
+      }).hit?.modelRef,
+    ).toBe(eligible.ref);
+    expect(explainModelRouting({ ...input, models: [preview] })[0]?.reasons).toContain(
+      'model name excluded from automatic coding routes',
+    );
+  });
+
+  it('skips a cooling Gemini chain hit and deterministically falls through to Groq', () => {
+    const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
+    if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
+    const providers = [
+      {
+        ...provider,
+        id: 'gemini' as Provider['id'],
+        health: 'cooldown' as const,
+        cooldownUntil: '2026-09-26T12:01:00.000Z',
+      },
+      { ...provider, id: 'groq' as Provider['id'] },
+    ];
+    const models = [
+      {
+        ...model,
+        ref: 'gemini/gemini-3.8-flash' as ModelInfo['ref'],
+        providerId: 'gemini' as Provider['id'],
+      },
+      {
+        ...model,
+        ref: 'groq/qwen/qwen3.8-27b' as ModelInfo['ref'],
+        providerId: 'groq' as Provider['id'],
+      },
+    ];
+    const result = resolveFallbackChain({
+      chain: autoFree.fallbackChain ?? [],
+      models,
+      capacity: { providers, now: '2026-09-26T12:00:00.000Z' },
+      profile: autoFree,
+      inputTokens: 1_000,
+      verifiedModelRefs: [],
+    });
+    expect(result.hit?.modelRef).toBe('groq/qwen/qwen3.8-27b');
+    expect(result.diagnostics.some((entry) => entry.status === 'cooling')).toBe(true);
+  });
+
+  it('only permits excluded names into a coding chain after tool verification', () => {
+    const preview = {
+      ...model,
+      ref: 'gemini/gemini-3.8-live' as ModelInfo['ref'],
+      providerId: 'gemini' as Provider['id'],
+      name: 'Gemini 3.8 Live',
+    };
+    expect(isStrictFallbackNameEligible(preview, [])).toBe(false);
+    expect(isStrictFallbackNameEligible(preview, [preview.ref])).toBe(true);
   });
 
   it('applies classification precedence', () => {
@@ -168,6 +472,36 @@ describe('step classification and routing', () => {
       estimate: { inputTokens: 100, outputTokens: 1 },
     });
     expect(candidates).toHaveLength(0);
+  });
+
+  it('hard-filters a request larger than model TPM and explains the token estimate', () => {
+    const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
+    if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
+    const qwen: ModelInfo = {
+      ...model,
+      ref: 'groq/qwen/qwen3.8-27b' as ModelInfo['ref'],
+      name: 'Qwen 3.8 27B',
+      free: false,
+      priceInPerM: 0.1,
+      priceOutPerM: 0.1,
+    };
+    const input = {
+      models: [qwen],
+      providers: [provider],
+      capacity: {
+        providers: [provider],
+        now: '2026-09-26T12:00:00.000Z',
+        tokensPerMinuteRemaining: { [qwen.ref]: 8_000 },
+        tokensPerMinuteLimit: { [qwen.ref]: 8_000 },
+      },
+      profile: autoFree,
+      step: 'edit' as const,
+      estimate: { inputTokens: 11_000, requiresTools: true },
+    };
+    expect(scoreModels(input)).toHaveLength(0);
+    expect(explainModelRouting(input)[0]?.reasons).toContain(
+      'request ~11,000 tokens > Groq 8,000 TPM',
+    );
   });
 
   it('returns deterministic candidates with an explanation', () => {
@@ -262,11 +596,16 @@ describe('briefing budget properties', () => {
       priceInPerM: 1,
       priceOutPerM: 1,
     };
+    const paidProvider = { ...provider, tag: 'paid' as const };
     fc.assert(
       fc.property(fc.double({ min: 0, max: 10, noNaN: true }), (spent) => {
         const results = scoreModels({
           models: [paid],
-          capacity,
+          capacity: {
+            providers: [paidProvider],
+            now: capacity.now ?? '2026-09-24T12:00:00.000Z',
+          },
+          providers: [paidProvider],
           profile,
           step: 'edit',
           estimate: { inputTokens: 10_000, outputTokens: 1_000 },

@@ -91,7 +91,6 @@ function expectedEligible(flags: {
   if (!flags.enabled) return false;
   if (flags.health === 'down') return false;
   if (flags.keyStatus === 'missing' || flags.keyStatus === 'invalid') return false;
-  if (flags.health === 'cooldown' && flags.cooldownFuture) return false;
   if (flags.contextWindow < flags.inputTokens * 1.2) return false;
   if (flags.requiresTools && !flags.toolCalling) return false;
   if (!['T2', 'T3'].includes(flags.tier)) return false;
@@ -144,13 +143,16 @@ describe('QA router: selection invariants', () => {
         fc.boolean(),
         fc.constantFrom<ModelInfo['tier']>('T1', 'T2', 'T3'),
         (free, tier) => {
-          const provider = makeProvider({
-            enabled: true,
-            health: 'ok',
-            cooldownFuture: false,
-            keyStatus: 'valid',
-            stepsLeftToday: 50,
-          });
+          const provider = {
+            ...makeProvider({
+              enabled: true,
+              health: 'ok',
+              cooldownFuture: false,
+              keyStatus: 'valid',
+              stepsLeftToday: 50,
+            }),
+            tag: 'paid' as const,
+          };
           const model: ModelInfo = {
             ref: 'p/model' as ModelInfo['ref'],
             providerId: provider.id,
@@ -178,7 +180,7 @@ describe('QA router: selection invariants', () => {
     );
   });
 
-  it('never selects a model whose provider is cooling down in the future', () => {
+  it('keeps one candidate available for a half-open probe when all providers are cooling', () => {
     const provider = makeProvider({
       enabled: true,
       health: 'cooldown',
@@ -199,20 +201,18 @@ describe('QA router: selection invariants', () => {
       priceInPerM: 0,
       priceOutPerM: 0,
     };
-    expect(
-      scoreModels({
-        models: [model],
-        capacity: { providers: [provider], now },
-        profile: best,
-        step: 'edit',
-        estimate: { inputTokens: 100 },
-      }),
-    ).toHaveLength(0);
+    const results = scoreModels({
+      models: [model],
+      capacity: { providers: [provider], now },
+      profile: best,
+      step: 'edit',
+      estimate: { inputTokens: 100 },
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.selected).toBe(true);
   });
 
-  it('still skips cooling-down models when capacity.now is malformed', () => {
-    // BUG: with an unparseable capacity.now, Date.parse(now) is NaN, so the
-    // comparison `cooldown > nowMs` is false and the cooldown guard is skipped.
+  it('still surfaces a half-open candidate when capacity.now is malformed', () => {
     const provider = makeProvider({
       enabled: true,
       health: 'cooldown',
@@ -240,11 +240,59 @@ describe('QA router: selection invariants', () => {
       step: 'edit',
       estimate: { inputTokens: 100 },
     });
-    expect(results).toHaveLength(0);
+    expect(results).toHaveLength(1);
   });
 });
 
 describe('QA router: deterministic output', () => {
+  it('ranks preferred direct coding models ahead of preferred OpenRouter free minis', () => {
+    const refs = [
+      'openrouter/cohere/north-mini-code:free',
+      'google/gemini-3.8-flash',
+      'groq/qwen/qwen3.8-27b',
+      'mistral/codestral-2508',
+      'cerebras/gpt-oss-120b',
+    ];
+    const providers: Provider[] = refs.map((ref) => {
+      const providerId = ref.slice(0, ref.indexOf('/')) as Provider['id'];
+      const provider = makeProvider({
+        enabled: true,
+        health: 'ok',
+        cooldownFuture: false,
+        keyStatus: 'valid',
+        stepsLeftToday: 50,
+      });
+      provider.id = providerId;
+      return provider;
+    });
+    const models: ModelInfo[] = refs.map((ref) => {
+      const providerId = ref.slice(0, ref.indexOf('/')) as Provider['id'];
+      return {
+        ref: ref as ModelInfo['ref'],
+        providerId,
+        name: ref,
+        tier: 'T2',
+        contextWindow: 100_000,
+        maxOutput: 4_000,
+        toolCalling: true,
+        reasoning: false,
+        free: true,
+        priceInPerM: 0,
+        priceOutPerM: 0,
+      };
+    });
+    const ranked = scoreModels({
+      models,
+      capacity: { providers, now },
+      profile: best,
+      step: 'edit',
+      estimate: { inputTokens: 1_000, requiresTools: true },
+      preferredModelRefs: ['openrouter/cohere/north-mini-code:free'],
+    });
+    expect(ranked[0]?.ref).not.toBe('openrouter/cohere/north-mini-code:free');
+    expect(ranked.map(({ ref }) => ref)).toEqual(expect.arrayContaining(refs));
+  });
+
   it('is stable and tie-breaks by ref', () => {
     const providers: Provider[] = ['a', 'b'].map(() =>
       makeProvider({

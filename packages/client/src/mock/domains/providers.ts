@@ -77,5 +77,14 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
       persist();
       return structuredClone(p);
     },
+    async setBillingEnabled(id, v) {
+      await before();
+      const p = state.providers.find((p) => p.id === id);
+      if (!p) throw new MockNotFoundError('Provider', id);
+      p.billingEnabled = v;
+      emit('provider.updated', p);
+      persist();
+      return structuredClone(p);
+    },
   };
 }

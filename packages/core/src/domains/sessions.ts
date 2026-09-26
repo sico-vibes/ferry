@@ -16,7 +16,15 @@ import {
   newId,
 } from '@ferry/shared';
 import type { MessagePart, Profile, Session, SessionId } from '@ferry/shared';
-import { BUILTIN_PROFILES, explainModelRouting, scoreModels } from '@ferry/router';
+import {
+  BUILTIN_PROFILES,
+  chainForProfile,
+  explainModelRouting,
+  isStrictFallbackNameEligible,
+  resolveFallbackChain,
+  scoreModels,
+  ResilienceEntrySchema,
+} from '@ferry/router';
 import { createSkillManager } from './skills.js';
 import { createMcpManager } from './mcp.js';
 import { McpServerConfigSchema } from '@ferry/extensions';
@@ -31,7 +39,11 @@ const CreateSchema = z.object({
   profileId: z.string().min(1).optional(),
   title: z.string().optional(),
 });
-const SendSchema = z.object({ text: z.string().min(1) });
+const SendSchema = z.object({
+  text: z.string().min(1),
+  maxSteps: z.number().int().positive().optional(),
+  verbose: z.boolean().optional(),
+});
 const RenameSchema = z.string().min(1).max(160);
 const BooleanSchema = z.boolean();
 const noModelMessage = 'No available model — add a provider key or check Explore → Providers';
@@ -58,7 +70,17 @@ export function register(host: CoreHost, services: FerryServices): void {
   const profileList = (): Profile[] => {
     const saved = services.settings.get('profiles');
     const custom = Array.isArray(saved) ? saved.map((item) => ProfileSchema.parse(item)) : [];
-    return [...BUILTIN_PROFILES.map((item) => ProfileSchema.parse(item)), ...custom];
+    const overrides = services.settings.get('profile-overrides');
+    const builtinOverrides = Array.isArray(overrides)
+      ? overrides.map((item) => ProfileSchema.parse(item))
+      : [];
+    return [
+      ...BUILTIN_PROFILES.map((base) => {
+        const override = builtinOverrides.find((item) => item.id === base.id);
+        return ProfileSchema.parse(override ? { ...base, ...override, builtin: true } : base);
+      }),
+      ...custom,
+    ];
   };
   const requireSession = (rawId: unknown): Session => {
     const id = SessionIdSchema.parse(rawId);
@@ -194,7 +216,7 @@ export function register(host: CoreHost, services: FerryServices): void {
     },
     async send(rawId: unknown, rawInput: unknown) {
       const session = requireSession(rawId);
-      const { text } = SendSchema.parse(rawInput);
+      const { text, maxSteps, verbose } = SendSchema.parse(rawInput);
       if (controllers.has(session.id) || shuttingDown)
         throw rpcDomainError(-32010, 'conflict', 'Session is already running');
       const workspace = services.workspaces.get(session.workspaceId);
@@ -236,18 +258,65 @@ export function register(host: CoreHost, services: FerryServices): void {
         });
         const availableModels = [
           ...(services.env.NODE_ENV === 'test'
-            ? services.catalog.models
+            ? [
+                ...services.catalog.models,
+                ...configuredProviders.flatMap(({ provider: id }) => services.models.list(id)),
+              ]
             : configuredProviders.flatMap(({ provider: id }) => services.models.list(id))),
           ...configuredOauth,
         ];
+        const preflightCapacity = preflight.capacity();
+        const verifiedModelRefs = preflightCapacity.providers.flatMap((provider) =>
+          provider.modelsVerifiedAt && provider.availableModels
+            ? provider.availableModels.map((model) => model.ref)
+            : [],
+        );
         const routingInput = {
           models: availableModels,
-          capacity: preflight.capacity(),
+          capacity: preflightCapacity,
           profile,
           step: 'plan',
           estimate: { inputTokens: 1, outputTokens: 2048, expectedSteps: 1, requiresTools: true },
+          verifiedModelRefs,
         } as const;
-        const hasAvailableModel = scoreModels(routingInput).length > 0;
+        const chain = chainForProfile(profile);
+        const chainResult = resolveFallbackChain({
+          chain,
+          models: availableModels,
+          capacity: preflightCapacity,
+          profile,
+          inputTokens: 1,
+          step: 'plan',
+          verifiedModelRefs,
+          now: services.clock.now().getTime(),
+        });
+        const chainRefs = new Set(chainResult.models.map((model) => model.ref));
+        const routingCandidates = scoreModels({
+          ...routingInput,
+          models: availableModels.filter(
+            (model) =>
+              !chainRefs.has(model.ref) &&
+              (!chain.length || isStrictFallbackNameEligible(model, verifiedModelRefs)),
+          ),
+        });
+        const hasAvailableModel = chainResult.models.length > 0 || routingCandidates.length > 0;
+        if (verbose) {
+          const explainCandidates = scoreModels(routingInput);
+          const selectedRef = chainResult.hit?.modelRef ?? explainCandidates[0]?.ref;
+          if (selectedRef)
+            host.emit('routing.explain', {
+              sessionId: session.id,
+              selected: selectedRef,
+              candidates: explainCandidates.map(({ ref, score, explanation, scoreBreakdown }) => ({
+                ref,
+                score,
+                explanation,
+                scoreBreakdown,
+              })),
+              chain: chainResult.diagnostics,
+              chainHit: chainResult.hit,
+            });
+        }
         if (!hasAvailableModel && services.env.NODE_ENV !== 'test') {
           const errorMessage = store.appendMessage(
             session.id,
@@ -346,6 +415,14 @@ export function register(host: CoreHost, services: FerryServices): void {
           ],
         };
         const config = await loadProjectConfig(workspace.path, services.env);
+        const globalSettings = services.settings.get('global');
+        const savedPermissionMode = z
+          .enum(['ask', 'auto_edit', 'full_auto'])
+          .safeParse(
+            typeof globalSettings === 'object' && globalSettings !== null
+              ? (globalSettings as { permissionMode?: unknown }).permissionMode
+              : undefined,
+          );
         const skillManager = createSkillManager(services, workspace.path);
         await skillManager.load();
         const mcpManager = createMcpManager(services, host, workspace.path);
@@ -367,7 +444,16 @@ export function register(host: CoreHost, services: FerryServices): void {
           stepTimeoutMs: stepTimeoutFromEnvironment(services.env.FERRY_STEP_TIMEOUT_MS),
           capacity: runtime.capacity,
           apiKeys: runtime.apiKeys,
-          permissionMode: config.permissionMode,
+          permissionMode: savedPermissionMode.success
+            ? savedPermissionMode.data
+            : config.permissionMode,
+          ...(maxSteps === undefined ? {} : { maxSteps }),
+          resilienceState:
+            z.array(ResilienceEntrySchema).safeParse(services.settings.get('routing-resilience'))
+              .data ?? [],
+          onResilienceState: (entries) => {
+            services.settings.put('routing-resilience', entries);
+          },
           permissionRules: [
             ...config.permissionRules.map((rule) => ({
               effect: rule.mode,
@@ -475,6 +561,10 @@ export function register(host: CoreHost, services: FerryServices): void {
             if (!shuttingDown) {
               const latest = services.sessions.get(session.id);
               if (latest?.status === 'running') updateSession({ ...latest, status: 'idle' });
+              else if (latest?.status === 'idle') {
+                host.emit('session.updated', latest);
+                host.emit('session.status', latest);
+              }
             }
             resolveRun();
           });

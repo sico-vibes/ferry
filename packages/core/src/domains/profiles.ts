@@ -8,17 +8,48 @@ const savedProfiles = (services: FerryServices) => {
   const value = services.settings.get('profiles');
   return Array.isArray(value) ? value.map((profile) => ProfileSchema.parse(profile)) : [];
 };
+const savedBuiltinOverrides = (services: FerryServices) => {
+  const value = services.settings.get('profile-overrides');
+  return Array.isArray(value) ? value.map((profile) => ProfileSchema.parse(profile)) : [];
+};
 
 export function register(host: CoreHost, services: FerryServices): void {
-  const list = () => [...BUILTIN_PROFILES, ...savedProfiles(services)];
+  const list = () => {
+    const overrides = savedBuiltinOverrides(services);
+    return [
+      ...BUILTIN_PROFILES.map((base) => {
+        const override = overrides.find((item) => item.id === base.id);
+        return override ? ProfileSchema.parse({ ...base, ...override, builtin: true }) : base;
+      }),
+      ...savedProfiles(services),
+    ];
+  };
   host.registerDomain('profiles', {
     list() {
       return list().map((profile) => ProfileSchema.parse(profile));
     },
     save(rawProfile: unknown) {
       const profile = ProfileSchema.parse(rawProfile);
+      const builtin = BUILTIN_PROFILES.find((item) => item.id === profile.id);
+      if (builtin) {
+        const { fallbackChain: _overrideChain, ...candidateSettings } = profile;
+        const { fallbackChain: _baseChain, ...builtinSettings } = builtin;
+        if (
+          !profile.builtin ||
+          JSON.stringify(candidateSettings) !== JSON.stringify(builtinSettings)
+        )
+          throw rpcDomainError(
+            -32010,
+            'validation',
+            'Built-in profiles only allow editing the fallback order',
+          );
+        const current = savedBuiltinOverrides(services).filter((item) => item.id !== profile.id);
+        current.push(ProfileSchema.parse({ ...builtin, fallbackChain: profile.fallbackChain }));
+        services.settings.put('profile-overrides', current);
+        return ProfileSchema.parse({ ...builtin, fallbackChain: profile.fallbackChain });
+      }
       const current = savedProfiles(services);
-      if (profile.builtin || BUILTIN_PROFILES.some((item) => item.id === profile.id))
+      if (profile.builtin)
         throw rpcDomainError(-32010, 'validation', 'Built-in profiles cannot be overwritten');
       const next = current.filter((item) => item.id !== profile.id);
       next.push(profile);

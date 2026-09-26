@@ -192,13 +192,15 @@ export class CoreHost {
         throw error;
       }
     }
-    for (const handler of this.#startHandlers) {
-      void Promise.resolve()
-        .then(handler)
-        .catch((error: unknown) => {
-          this.options.services?.logger.error({ err: error }, 'Core startup task failed');
-        });
-    }
+    await Promise.all(
+      [...this.#startHandlers].map((handler) =>
+        Promise.resolve()
+          .then(handler)
+          .catch((error: unknown) => {
+            this.options.services?.logger.error({ err: error }, 'Core startup task failed');
+          }),
+      ),
+    );
   }
 
   async stop(): Promise<void> {

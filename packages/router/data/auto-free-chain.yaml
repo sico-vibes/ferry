@@ -1,0 +1,33 @@
+# This ordered chain is mirrored by src/auto-free-chain.ts so the chain also
+# works in renderer builds that do not have filesystem access.
+providers:
+  gemini:
+    - gemini-3.8-flash
+    - gemini-3.*-flash
+    - gemini-flash-latest
+  groq:
+    - qwen/qwen3.8-27b
+    - openai/gpt-oss-120b
+  cerebras:
+    - gpt-oss-120b
+    - qwen-3.8-27b
+  mistral:
+    - codestral-*
+    - devstral-*
+    - mistral-medium*
+  sambanova:
+    - gpt-oss-120b
+    - DeepSeek-R1
+    - Qwen3.8-32B
+    - Meta-Llama-3.3-70B-Instruct
+  nvidia:
+    - nvidia/nemotron-3-super-*
+  openrouter:
+    - qwen/qwen3.8-27b:free
+    - deepseek/*:free
+    - z-ai/glm*:free
+    - openai/gpt-oss-120b:free
+  kilo:
+    - qwen/qwen3.8-27b:free
+    - deepseek/*:free
+    - openai/gpt-oss-120b:free

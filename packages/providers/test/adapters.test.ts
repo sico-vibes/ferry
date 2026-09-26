@@ -280,7 +280,7 @@ describe('provider error mapping', () => {
     [{ statusCode: 429, message: 'rate limited' }, 'rate_limit'],
     [{ statusCode: 429, message: 'daily quota exhausted' }, 'quota_exhausted'],
     [{ statusCode: 400, message: 'maximum context length exceeded' }, 'context_overflow'],
-    [{ statusCode: 400, message: 'invalid parameter' }, 'bad_request'],
+    [{ statusCode: 400, message: 'invalid parameter' }, 'request_scoped_client'],
     [{ statusCode: 503, message: 'unavailable' }, 'server'],
     [{ code: 'ECONNRESET', message: 'socket reset' }, 'network'],
     [{ code: 'ETIMEDOUT', message: 'timeout' }, 'timeout'],

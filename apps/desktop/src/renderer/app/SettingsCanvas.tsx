@@ -20,7 +20,7 @@ import {
   TextField,
 } from '@ferry/ui';
 import { FERRY_DOMAINS } from '@ferry/shared';
-import type { Profile, StepKind, Tier } from '@ferry/shared';
+import type { Profile, Provider, StepKind, Tier } from '@ferry/shared';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
 const stepLabels: Record<StepKind, string> = {
@@ -91,6 +91,8 @@ export function SettingsCanvas() {
     queryFn: () => client.system.info(),
   });
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
+  const fallbackChain = profileDraft?.fallbackChain ?? [];
+  const [chainDragIndex, setChainDragIndex] = useState<number | null>(null);
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
   const testProvider = async (provider: (typeof providers)[number]) => {
     setTestingProvider(provider.id);
@@ -328,6 +330,137 @@ export function SettingsCanvas() {
                   }}
                 />
               </div>
+              <h3>Fallback order</h3>
+              <p className="muted">
+                Drag providers to reorder them. Ferry uses the first live, tool-capable model and
+                then tries scored eligible models.
+              </p>
+              {profileDraft.fallbackChain === undefined ? (
+                <Pill
+                  size="sm"
+                  onClick={() => {
+                    mutateProfile('fallbackChain', []);
+                  }}
+                >
+                  Add fallback order
+                </Pill>
+              ) : (
+                <>
+                  <div className="profile-chain-list">
+                    {profileDraft.fallbackChain.map((entry, index) => (
+                      <div
+                        key={`${entry.provider}-${String(index)}`}
+                        className="profile-chain-row"
+                        draggable
+                        onDragStart={() => {
+                          setChainDragIndex(index);
+                        }}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                        }}
+                        onDrop={() => {
+                          if (chainDragIndex === null || chainDragIndex === index) return;
+                          const next = [...fallbackChain];
+                          const [moved] = next.splice(chainDragIndex, 1);
+                          if (moved) next.splice(index, 0, moved);
+                          mutateProfile('fallbackChain', next);
+                          setChainDragIndex(null);
+                        }}
+                        onDragEnd={() => {
+                          setChainDragIndex(null);
+                        }}
+                      >
+                        <Select
+                          label={`Provider ${String(index + 1)}`}
+                          value={entry.provider}
+                          onValueChange={(value) => {
+                            const next = [...fallbackChain];
+                            next[index] = { ...entry, provider: value as Provider['id'] };
+                            mutateProfile('fallbackChain', next);
+                          }}
+                          options={providers.map((provider) => ({
+                            value: provider.id,
+                            label: provider.name,
+                          }))}
+                        />
+                        <div className="profile-chain-patterns">
+                          {entry.patterns.map((pattern, patternIndex) => (
+                            <div className="button-row" key={`${pattern}-${String(patternIndex)}`}>
+                              <TextField
+                                label={`Model pattern ${String(patternIndex + 1)}`}
+                                value={pattern}
+                                onChange={(value) => {
+                                  const next = [...fallbackChain];
+                                  const patterns = [...entry.patterns];
+                                  patterns[patternIndex] = value;
+                                  next[index] = { ...entry, patterns };
+                                  mutateProfile('fallbackChain', next);
+                                }}
+                              />
+                              <Pill
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  const next = [...fallbackChain];
+                                  next[index] = {
+                                    ...entry,
+                                    patterns: entry.patterns.filter((_, i) => i !== patternIndex),
+                                  };
+                                  mutateProfile('fallbackChain', next);
+                                }}
+                              >
+                                Remove
+                              </Pill>
+                            </div>
+                          ))}
+                          <Pill
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              const next = [...fallbackChain];
+                              next[index] = {
+                                ...entry,
+                                patterns: [...entry.patterns, 'new-model-pattern'],
+                              };
+                              mutateProfile('fallbackChain', next);
+                            }}
+                          >
+                            Add model pattern
+                          </Pill>
+                        </div>
+                        <Pill
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            mutateProfile(
+                              'fallbackChain',
+                              fallbackChain.filter((_, i) => i !== index),
+                            );
+                          }}
+                        >
+                          Remove provider
+                        </Pill>
+                      </div>
+                    ))}
+                  </div>
+                  <Pill
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      const provider = providers.find(
+                        (item) => !fallbackChain.some((entry) => entry.provider === item.id),
+                      );
+                      if (!provider) return;
+                      mutateProfile('fallbackChain', [
+                        ...fallbackChain,
+                        { provider: provider.id, patterns: ['new-model-pattern'] },
+                      ]);
+                    }}
+                  >
+                    Add provider
+                  </Pill>
+                </>
+              )}
               <h3>Allowed providers</h3>
               <div className="check-grid">
                 {providers.map((provider) => (
@@ -518,6 +651,17 @@ export function SettingsCanvas() {
               >
                 {testingProvider === provider.id ? 'Testing…' : 'Test'}
               </Pill>
+              {['legit', 'promo'].includes(provider.tag) ? (
+                <Switch
+                  label={`${provider.name} key has billing enabled`}
+                  checked={provider.billingEnabled ?? false}
+                  onCheckedChange={(billingEnabled) => {
+                    void client.providers
+                      .setBillingEnabled(provider.id, billingEnabled)
+                      .then(() => cache.invalidateQueries({ queryKey: ['providers'] }));
+                  }}
+                />
+              ) : null}
             </SettingRow>
           ))}
           <SettingRow
@@ -709,6 +853,7 @@ export function SettingsCanvas() {
     if (section === 'Developer')
       return (
         <DeveloperSettings
+          providerHealth={providers}
           mockLatency={settings?.developer.mockLatency ?? false}
           injectErrors={settings?.developer.injectErrors ?? false}
           realDomains={settings?.developer.realDomains ?? []}
@@ -1094,12 +1239,14 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
 }
 
 function DeveloperSettings({
+  providerHealth,
   mockLatency,
   injectErrors,
   realDomains,
   availableDomains,
   update,
 }: {
+  providerHealth: Provider[];
   mockLatency: boolean;
   injectErrors: boolean;
   realDomains: string[];
@@ -1139,6 +1286,24 @@ function DeveloperSettings({
   }, []);
   return (
     <Group title="Developer">
+      <Section title="Routing health">
+        {providerHealth.length ? (
+          providerHealth.map((provider) => (
+            <SettingRow
+              key={provider.id}
+              title={provider.name}
+              helper={
+                provider.health +
+                (provider.cooldownUntil
+                  ? ` · reset ${new Date(provider.cooldownUntil).toLocaleString()}`
+                  : '')
+              }
+            />
+          ))
+        ) : (
+          <p className="muted">No provider health data is available.</p>
+        )}
+      </Section>
       <SettingRow
         title="Core engine"
         helper={

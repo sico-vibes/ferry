@@ -6,6 +6,7 @@ import { createClientAsync } from './client.js';
 import { good, muted, warn } from './colors.js';
 import { collectDoctor } from './doctor.js';
 import type { FerryClient } from '@ferry/client';
+import type { Profile } from '@ferry/shared';
 
 /* Event handlers intentionally return promises to the event emitter; the parser narrows argv flags. */
 /* eslint-disable @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/return-await, @typescript-eslint/consistent-type-definitions, @typescript-eslint/restrict-template-expressions */
@@ -19,6 +20,7 @@ export async function runPrompt(
   options: {
     permission?: 'ask' | 'auto_edit' | 'full_auto';
     maxSteps?: number;
+    mock?: boolean;
     verbose?: boolean;
   } = {},
 ): Promise<number> {
@@ -35,7 +37,8 @@ export async function runPrompt(
   let approvalNeeded = false;
   let failed = false;
   let stepLimitExceeded = false;
-  let stepCount = 0;
+  let terminalStatusEmitted = false;
+  let observedSteps = 0;
   const seenParts = new Set<string>();
   let finishRun!: () => void;
   const done = new Promise<void>((resolve) => {
@@ -66,23 +69,28 @@ export async function runPrompt(
           void client.sessions.cancel(session.id);
         }
       }
-      if (!seenParts.has(event.part.id)) {
-        seenParts.add(event.part.id);
-        stepCount += 1;
-        if (options.maxSteps !== undefined && stepCount > options.maxSteps && !stepLimitExceeded) {
-          stepLimitExceeded = true;
-          void client.sessions.cancel(session.id);
-        }
-      }
       if (event.part.type === 'error') {
         failed = true;
         if (options.verbose && event.part.details)
           process.stderr.write(`Routing exclusions: ${formatRoutingDetails(event.part.details)}\n`);
       }
+      if (event.part.type === 'tool_call' && !seenParts.has(event.part.id)) {
+        seenParts.add(event.part.id);
+        observedSteps++;
+        // Mock clients do not enforce engine step budgets; preserve CLI behavior without
+        // cancelling through a second RPC. The local engine reports its own clean limit.
+        if (options.mock && options.maxSteps !== undefined && observedSteps > options.maxSteps)
+          stepLimitExceeded = true;
+      }
       emit(json, { type: 'session.part', ...event }, summarize(event.part));
     }),
     client.on('session.message', (event) => {
       if (event.sessionId === session.id) emit(json, { type: 'session.message', ...event });
+    }),
+    client.on('routing.explain', (event) => {
+      if (!options.verbose) return;
+      process.stderr.write(`Router explain: ${JSON.stringify(event)}\n`);
+      emit(json, { type: 'routing.explain', payload: event });
     }),
     client.on('task.updated', (event) => emit(json, { type: 'task.updated', payload: event })),
     client.on('quota.updated', (event) => emit(json, { type: 'quota.updated', payload: event })),
@@ -92,15 +100,36 @@ export async function runPrompt(
     client.on('delegation.updated', (event) =>
       emit(json, { type: 'delegation.updated', payload: event }),
     ),
-    client.on('toast', (event) => emit(json, { type: 'toast', payload: event })),
+    client.on('toast', (event) => {
+      const message = 'title' in event && typeof event.title === 'string' ? event.title : '';
+      if (message.startsWith('FERRY_RUN_LIMIT:max_steps:')) stepLimitExceeded = true;
+      emit(json, { type: 'toast', payload: event });
+    }),
   ];
   disposers.push(
+    client.on('session.status', (value) => {
+      if (value.id !== session.id) return;
+      if (['idle', 'error'].includes(value.status)) {
+        if (!terminalStatusEmitted) emit(json, { type: 'session.status', session: value });
+        terminalStatusEmitted = true;
+        finishRun();
+      } else emit(json, { type: 'session.status', session: value });
+    }),
     client.on('session.updated', (value) => {
-      if (value.id === session.id && ['idle', 'error'].includes(value.status)) finishRun();
+      if (value.id !== session.id || !['idle', 'error'].includes(value.status)) return;
+      if (!terminalStatusEmitted) {
+        emit(json, { type: 'session.status', session: value });
+        terminalStatusEmitted = true;
+      }
+      finishRun();
     }),
   );
   try {
-    await client.sessions.send(session.id, { text: prompt });
+    await client.sessions.send(session.id, {
+      text: prompt,
+      ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
+      ...(options.verbose ? { verbose: true } : {}),
+    });
     await done;
   } finally {
     disposers.forEach((off) => off());
@@ -108,8 +137,10 @@ export async function runPrompt(
       await client.settings.update({ permissionMode: settings.permissionMode });
   }
   if (stepLimitExceeded) {
-    process.stderr.write(`Maximum step count (${options.maxSteps}) exceeded.\n`);
-    return 1;
+    process.stderr.write(
+      `Maximum step count (${options.maxSteps}) reached; session ended cleanly.\n`,
+    );
+    return 4;
   }
   if (approvalNeeded) return 3;
   return failed ? 1 : 0;
@@ -224,6 +255,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
             ? { maxSteps: Number(flags.values['max-steps']) }
             : {}),
           ...(verbose ? { verbose: true } : {}),
+          mock: engine === 'mock',
         },
       );
       return code;
@@ -250,7 +282,10 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       writeResult(json, stats, JSON.stringify(stats, null, 2) + '\n');
       return 0;
     }
-    if (command === 'doctor') return await doctor(dataDir, undefined, json);
+    if (command === 'doctor') {
+      if (flags.values.providers === true) return await doctorProviders(client, json);
+      return await doctor(dataDir, undefined, json);
+    }
     if (command === 'keys') return await keys(client, flags.positionals.slice(1), json);
     if (command === 'init') return await runInit(client, cwd, flags.values.yes === true, json);
     throw new CliError(2, `Unknown command: ${command}`);
@@ -288,7 +323,15 @@ export async function main(): Promise<void> {
   const command = defineCommand({
     meta: { name: 'ferry', version: '0.1.0', description: 'Ferry coding agent CLI' },
     run: async () => {
-      process.exitCode = await runCli();
+      const exitCode = await runCli();
+      if (process.env.FERRY_E2E_HANDLE_DIAGNOSTICS === '1') {
+        process.stderr.write(
+          `FERRY_ACTIVE_RESOURCES:${JSON.stringify(process.getActiveResourcesInfo())}\n`,
+        );
+      }
+      await new Promise<void>((resolve) => process.stdout.write('', () => resolve()));
+      await new Promise<void>((resolve) => process.stderr.write('', () => resolve()));
+      process.exit(exitCode);
     },
   });
   await runMain(command);
@@ -513,6 +556,57 @@ async function oauth(client: FerryClient, args: string[], json = false): Promise
 async function profiles(client: FerryClient, args: string[], json = false) {
   const [action, name] = args;
   const rows = await client.profiles.list();
+  if (action === 'chain') {
+    const chainAction = args[1];
+    const profileName = args[2] ?? 'Auto-Free';
+    const profile = rows.find((item) => item.name.toLowerCase() === profileName.toLowerCase());
+    if (!profile) throw new CliError(2, `Profile not found: ${profileName}`);
+    if (chainAction === 'set') {
+      const assignments = args.slice(3).map((value) => {
+        const separator = value.indexOf('=');
+        if (separator < 1) throw new CliError(2, `Invalid chain entry: ${value}`);
+        const provider = value.slice(0, separator);
+        const patterns = value
+          .slice(separator + 1)
+          .split(',')
+          .map((pattern) => pattern.trim())
+          .filter(Boolean);
+        if (!patterns.length) throw new CliError(2, `No model patterns provided for ${provider}`);
+        return {
+          provider: provider as NonNullable<Profile['fallbackChain']>[number]['provider'],
+          patterns,
+        };
+      });
+      if (!assignments.length)
+        throw new CliError(
+          2,
+          'Usage: ferry profiles chain set <profile> <provider=pattern,pattern> [...entries]',
+        );
+      const saved = await client.profiles.save({ ...profile, fallbackChain: assignments });
+      writeResult(
+        json,
+        { profile: saved.name, fallbackChain: saved.fallbackChain },
+        `Saved fallback order for ${saved.name}.\n`,
+      );
+      return 0;
+    }
+    if (chainAction !== 'show')
+      throw new CliError(
+        2,
+        'Usage: ferry profiles chain show [profile] | set <profile> <provider=pattern,...>',
+      );
+    const chain = profile.fallbackChain ?? [];
+    writeResult(
+      json,
+      { profile: profile.name, fallbackChain: chain },
+      chain
+        .map(
+          (entry, index) => `${String(index + 1)}. ${entry.provider}=${entry.patterns.join(',')}`,
+        )
+        .join('\n') + '\n',
+    );
+    return 0;
+  }
   if (action === 'use' && name) {
     const profile = rows.find((item) => item.name === name);
     if (!profile) throw new Error(`Profile not found: ${name}`);
@@ -647,6 +741,30 @@ export async function doctor(
     for (const row of rows)
       process.stdout.write(`${row.status.toUpperCase().padEnd(4)} ${row.name}: ${row.reason}\n`);
   return rows.some((row) => row.status === 'fail') ? 1 : 0;
+}
+
+async function doctorProviders(client: FerryClient, json: boolean): Promise<number> {
+  const providers = await client.providers.list();
+  const report = providers.map((provider) => ({
+    provider: provider.id,
+    health: provider.health,
+    keyStatus: provider.keyStatus,
+    enabled: provider.enabled,
+    cooldownUntil: provider.cooldownUntil,
+    modelCount: provider.modelCount,
+  }));
+  if (json) process.stdout.write(`${JSON.stringify(report)}\n`);
+  else
+    for (const provider of report)
+      process.stdout.write(
+        `${provider.health.toUpperCase().padEnd(8)} ${provider.provider} · ${provider.keyStatus}${provider.cooldownUntil ? ` · reset ${provider.cooldownUntil}` : ''} · ${provider.modelCount} models\n`,
+      );
+  return report.some(
+    (provider) =>
+      provider.enabled && ['down', 'auth_invalid', 'account_disabled'].includes(provider.health),
+  )
+    ? 1
+    : 0;
 }
 async function runInit(
   client: FerryClient,

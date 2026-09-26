@@ -203,14 +203,9 @@ export async function createServices({
     async dispose() {
       if (disposed) return;
       disposed = true;
-      stopOpenRouterPolling();
+      await stopOpenRouterPolling();
       if (secretStore instanceof MemorySecretStore) secretStore.clear();
-      await new Promise<void>((done, fail) => {
-        logger.flush((error) => {
-          if (error) fail(error);
-          else done();
-        });
-      });
+      await logger.close();
       quota.dispose();
       db.close();
     },

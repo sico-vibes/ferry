@@ -30,6 +30,10 @@ export const ProviderSchema = z.object({
   id: ProviderIdSchema,
   name: z.string(),
   tag: ProviderTagSchema,
+  /** False when the provider endpoint is free without a user key. */
+  keyRequired: z.boolean().optional(),
+  /** User override: this key is billed, even when the provider advertises a free tier. */
+  billingEnabled: z.boolean().optional(),
   kind: z.enum(['api', 'cli']),
   brand: z.string().nullable(),
   keyStatus: z.enum(['missing', 'valid', 'invalid', 'unchecked', 'not_applicable']),
@@ -44,6 +48,8 @@ export const ProviderSchema = z.object({
   modelCount: z.number().int().nonnegative(),
   availableModels: z.array(z.lazy(() => ModelInfoSchema)).optional(),
   modelsVerifiedAt: z.iso.datetime().nullable().optional(),
+  freeTierUnsupported: z.boolean().optional(),
+  excludedModelRefs: z.array(ModelRefSchema).optional(),
   windows: z.array(QuotaWindowSchema),
   stepsLeftToday: z.number().nonnegative().nullable(),
 });
@@ -79,6 +85,20 @@ export const ModelCandidateSchema = z.object({
   score: z.number(),
   stepsLeft: z.number().nonnegative().nullable(),
   explanation: z.string(),
+  scoreBreakdown: z
+    .object({
+      tierFit: z.number(),
+      headroom: z.number(),
+      success: z.number(),
+      latency: z.number(),
+      cost: z.number(),
+      affinity: z.number(),
+      coding: z.number(),
+      preference: z.number(),
+      reasoning: z.number(),
+      verification: z.number(),
+    })
+    .optional(),
   selected: z.boolean(),
 });
 export type ModelCandidate = z.infer<typeof ModelCandidateSchema>;

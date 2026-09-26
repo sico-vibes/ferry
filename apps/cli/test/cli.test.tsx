@@ -46,6 +46,7 @@ describe('@ferry/cli', () => {
     const rows = write.mock.calls.map((call) => String(call[0]).trim()).filter(Boolean);
     const events = rows.map((row) => JSON.parse(row) as { type?: string });
     expect(events.some((event) => event.type === 'session.delta')).toBe(true);
+    expect(events.some((event) => event.type === 'session.status')).toBe(true);
   });
 
   it('returns approval exit code 3 for an approval-required scenario', async () => {
@@ -68,13 +69,13 @@ describe('@ferry/cli', () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const limited = await runPrompt(
       client(),
-      'Explain the request routing',
+      'Fix the flaky tests',
       true,
       undefined,
       process.cwd(),
-      { maxSteps: 0 },
+      { maxSteps: 1, permission: 'full_auto', mock: true },
     );
-    expect(limited).toBe(1);
+    expect(limited).toBe(4);
     expect(stderr).toHaveBeenCalled();
   });
 });

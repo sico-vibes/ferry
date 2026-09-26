@@ -664,6 +664,7 @@ export class QuotaEngine {
         this.reportError(error);
       }
     }, 250);
+    this.emitTimer.unref();
   }
   private reportError(error: unknown): void {
     if (this.options.onError) this.options.onError(error);
@@ -686,28 +687,36 @@ export class QuotaEngine {
         },
         Math.min(soonest - this.now().getTime(), 2_147_000_000),
       );
+      timer.unref();
       this.timers.add(timer);
     }
   }
   startOpenRouterPolling(
     poll: () => Promise<void>,
     active: () => boolean = () => true,
-  ): () => void {
+  ): () => Promise<void> {
     let stopped = false;
+    let polling: Promise<void> | undefined;
     const schedule = () => {
       if (stopped || !active()) return;
       const timer = setTimeout(() => {
-        void poll()
+        this.pollingTimers.delete(timer);
+        polling = poll()
           .catch(() => undefined)
-          .finally(schedule);
+          .finally(() => {
+            polling = undefined;
+            schedule();
+          });
       }, 5 * 60_000);
+      timer.unref();
       this.pollingTimers.add(timer);
     };
     schedule();
-    return () => {
+    return async () => {
       stopped = true;
       for (const timer of this.pollingTimers) clearTimeout(timer);
       this.pollingTimers.clear();
+      await polling;
     };
   }
   dispose(): void {

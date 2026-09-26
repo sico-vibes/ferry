@@ -175,6 +175,74 @@ describe('@ferry/agent', () => {
     }
   }, 30_000);
 
+  it('full_auto writes without creating approval parts and ends a max-step run cleanly', async () => {
+    const state = await setup();
+    try {
+      const parts: string[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        permissionRules: [{ effect: 'ask', tool: '*', level: 'user', pattern: '*' }],
+        maxSteps: 1,
+        emit: (event) => {
+          if (event.type === 'session.part') parts.push(event.part.type);
+        },
+        generator: async () => ({
+          toolCalls: [{ name: 'write_file', input: { path: 'auto.txt', content: 'ok' } }],
+          finishReason: 'tool-calls',
+        }),
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.status).toBe('limit');
+      expect(parts).not.toContain('approval_request');
+      expect(await readFile(path.join(state.root, 'auto.txt'), 'utf8')).toBe('ok');
+      expect(result.session.status).toBe('idle');
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('locks every failed model and caps a failure chain at four handoffs per step', async () => {
+    const state = await setup();
+    try {
+      const candidates = Array.from({ length: 7 }, (_, index) => ({
+        ...state.model,
+        ref: `openai/test-model-${String(index)}` as typeof state.model.ref,
+        name: `Test model ${String(index)}`,
+      }));
+      const attempted: string[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: candidates },
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        resolveCandidates: () => candidates,
+        generator: async ({ model: selected }) => {
+          attempted.push(selected.ref);
+          throw Object.assign(new Error('upstream service unavailable'), { statusCode: 503 });
+        },
+      });
+      await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
+        /Routing stopped after 4 handoffs.*Ranked candidates:/,
+      );
+      expect(attempted).toHaveLength(5);
+      expect(new Set(attempted).size).toBe(attempted.length);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
   it('does not write a denied tool call', async () => {
     const state = await setup();
     try {
@@ -348,7 +416,9 @@ describe('@ferry/agent', () => {
         generator: async ({ model }) => {
           calls++;
           if (calls === 1)
-            throw Object.assign(new Error('scripted rate limit'), { statusCode: 429 });
+            throw Object.assign(new Error('scripted rate limit Bearer top-secret-fixture'), {
+              statusCode: 429,
+            });
           expect(model.ref).toBe(alternate.ref);
           return { text: 'Continued after the rate limit.', finishReason: 'stop' };
         },
@@ -368,6 +438,9 @@ describe('@ferry/agent', () => {
       });
       if (marker?.type !== 'handoff_marker') throw new Error('Rate-limit marker was not saved');
       expect(marker.briefingTokens).toBeGreaterThanOrEqual(0);
+      expect(marker.explanation).toContain('rate_limit (HTTP 429)');
+      expect(marker.explanation).toContain('Bearer [redacted]');
+      expect(marker.explanation).not.toContain('top-secret-fixture');
       expect(
         events.some(
           (event) => event.type === 'session.part' && event.part.type === 'handoff_marker',

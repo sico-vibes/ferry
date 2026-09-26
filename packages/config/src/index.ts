@@ -189,7 +189,7 @@ export function createLogger({
   name = 'ferry',
   pretty = false,
   direct = process.env.FERRY_LOG_DIRECT === 'true',
-}: LoggerFactoryOptions): Logger {
+}: LoggerFactoryOptions): Logger & { close(): Promise<void> } {
   const redact: LoggerOptions['redact'] = {
     paths: [
       'authorization',
@@ -227,9 +227,28 @@ export function createLogger({
     },
   };
   if (direct) {
-    return pino(options, pino.destination({ dest: join(logsDir, `${name}.log`), sync: true }));
+    const logger = pino(
+      options,
+      pino.destination({ dest: join(logsDir, `${name}.log`), sync: true }),
+    );
+    return Object.assign(logger, {
+      close: () =>
+        new Promise<void>((resolve, reject) => {
+          logger.flush((error) => {
+            if (error) reject(error);
+            else resolve();
+          });
+        }),
+    });
   }
-  return pino(options, pino.transport({ targets }));
+  const transport = pino.transport({ targets });
+  const logger = pino(options, transport);
+  return Object.assign(logger, {
+    close: () => {
+      transport.end();
+      return Promise.resolve();
+    },
+  });
 }
 export function redactSecretText(text: string): string {
   return redactKnownSecretText(text)

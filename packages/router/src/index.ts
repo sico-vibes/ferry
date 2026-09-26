@@ -8,6 +8,32 @@ import type {
   Message,
 } from '@ferry/shared';
 import type { Catalog } from '@ferry/catalog';
+import {
+  DEFAULT_AUTO_FREE_CHAIN,
+  chainForProfile,
+  isStrictFallbackNameEligible,
+} from './auto-free-chain.js';
+export {
+  DEFAULT_AUTO_FREE_CHAIN,
+  chainForProfile,
+  isStrictFallbackNameEligible,
+  resolveFallbackChain,
+} from './auto-free-chain.js';
+export type { ChainDiagnostic, ChainSkipReason, ResolvedFallbackChain } from './auto-free-chain.js';
+export {
+  classifyProviderError,
+  parseRetryAfter,
+  ResilienceLedger,
+  ResilienceEntrySchema,
+  reorderByCapabilities,
+} from './resilience.js';
+export type {
+  ClassifiedProviderError,
+  ErrorFamily,
+  ProviderErrorInput,
+  ResilienceEntry,
+  ResilienceScope,
+} from './resilience.js';
 
 /** Plain, immutable-at-call-time capacity snapshot supplied by the quota engine. */
 export interface CapacityView {
@@ -96,6 +122,14 @@ function builtinProfile(
     caps: { dailyUsd, monthlyUsd },
     delegationMode: 'suggest',
     optimizers: { ...optimizerDefaults },
+    ...(name === 'Auto-Free' || name === 'Best Available'
+      ? {
+          fallbackChain: DEFAULT_AUTO_FREE_CHAIN.map((entry) => ({
+            ...entry,
+            patterns: [...entry.patterns],
+          })),
+        }
+      : {}),
   };
 }
 
@@ -231,6 +265,8 @@ export interface ScoreInput {
   preferReasoning?: boolean;
   /** Tool-verified defaults for providers that expose multiple discovered models. */
   preferredModelRefs?: readonly string[];
+  /** Models confirmed available to the current provider key, by probe or successful use. */
+  verifiedModelRefs?: readonly string[];
 }
 
 /** Remove models that cannot safely execute this step, then rank the remaining models. */
@@ -240,14 +276,11 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
   const nowMs = Number.isFinite(parsedNow) ? parsedNow : 0;
   const providerById = new Map(providers.map((provider) => [provider.id as string, provider]));
   const statByRef = new Map((input.stats ?? []).map((stats) => [stats.modelRef, stats]));
-  const preferredRanks = new Map(
-    (input.preferredModelRefs ?? []).map((ref, index) => [ref, index]),
-  );
+  const preferredModelRefs = new Set(input.preferredModelRefs ?? []);
+  const verifiedModelRefs = new Set(input.verifiedModelRefs ?? []);
   const scored: (ModelCandidate & {
     refKey: string;
-    preferredRank: number;
-    tierRank: number;
-    codingRank: number;
+    coolingUntil: number;
   })[] = [];
   for (const model of input.models) {
     const provider = providerById.get(model.providerId);
@@ -255,21 +288,34 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       !provider ||
       !provider.enabled ||
       provider.health === 'down' ||
-      provider.keyStatus === 'missing' ||
+      (provider.keyStatus === 'missing' && provider.keyRequired !== false) ||
       provider.keyStatus === 'invalid'
     )
       continue;
-    const cooldown = provider.cooldownUntil ? Date.parse(provider.cooldownUntil) : 0;
-    if (provider.health === 'cooldown' && (!Number.isFinite(cooldown) || cooldown > nowMs))
+    if (!input.profile.paidAllowed && provider.freeTierUnsupported) continue;
+    if (provider.excludedModelRefs?.includes(model.ref)) continue;
+    if (
+      (chainForProfile(input.profile).length > 0 ||
+        input.profile.name === 'Auto-Free' ||
+        input.profile.name === 'Best Available') &&
+      !isStrictFallbackNameEligible(model, [...verifiedModelRefs])
+    )
       continue;
+    const cooldown = provider.cooldownUntil ? Date.parse(provider.cooldownUntil) : 0;
+    const coolingUntil = provider.health === 'cooldown' && Number.isFinite(cooldown) ? cooldown : 0;
     if (model.contextWindow < input.estimate.inputTokens * 1.2) continue;
     if ((input.estimate.requiresTools ?? true) && !model.toolCalling) continue;
     if (!providerAllowed(input.profile, provider, model)) continue;
     if (!input.profile.tierByStep[input.step].includes(model.tier)) continue;
-    const cost = calculateSpend(
-      { inputTokens: input.estimate.inputTokens, outputTokens: input.estimate.outputTokens ?? 0 },
-      model,
-    );
+    const cost = isFreeForRouting(provider, model)
+      ? 0
+      : calculateSpend(
+          {
+            inputTokens: input.estimate.inputTokens,
+            outputTokens: input.estimate.outputTokens ?? 0,
+          },
+          model,
+        );
     if (
       cost > 0 &&
       (!input.spend ||
@@ -295,6 +341,9 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
     const latency = prior?.averageLatencyMs ?? 2_000;
     const latencyScore = 1 / (1 + latency / 2_000);
     const costScore = cost === 0 ? 1 : 1 / (1 + cost * 100);
+    const codingRank = codingModelRank(model);
+    const coding = codingRank === 0 ? 8 : codingRank === 2 ? -8 : 0;
+    const preference = preferredModelRefs.has(model.ref) ? 4 : 0;
     const affinity =
       (prior?.cacheAffinity ?? 0) * 0.6 + (input.previousModelRef === model.ref ? 0.4 : 0);
     const score =
@@ -304,45 +353,49 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       10 * latencyScore +
       6 * costScore +
       4 * affinity +
-      (input.preferReasoning && model.reasoning ? 2 : 0);
+      coding +
+      preference +
+      (input.preferReasoning && model.reasoning ? 2 : 0) +
+      (verifiedModelRefs.has(model.ref) ? 10 : -10);
+    const scoreBreakdown = {
+      tierFit: 40 * tierFit,
+      headroom: 20 * headroom,
+      success: 20 * success,
+      latency: 10 * latencyScore,
+      cost: 6 * costScore,
+      affinity: 4 * affinity,
+      coding,
+      preference,
+      reasoning: input.preferReasoning && model.reasoning ? 2 : 0,
+      verification: verifiedModelRefs.has(model.ref) ? 10 : -10,
+    };
     const stepsText =
       remaining === null ? 'capacity unknown' : `${Math.floor(remaining).toString()} steps left`;
-    const costText = model.free ? 'free' : `paid · $${cost.toFixed(4)} est.`;
+    const costText = cost === 0 ? 'free' : `paid · $${cost.toFixed(4)} est.`;
     scored.push({
       ref: model.ref,
       score,
       stepsLeft: remaining,
       explanation: `${model.tier} ${stepLabel(input.step)} · ${stepsText} · ${formatContext(model.contextWindow)} context · ${costText}`,
+      scoreBreakdown,
       selected: false,
       refKey: model.ref,
-      preferredRank: preferredRanks.get(model.ref) ?? Number.MAX_SAFE_INTEGER,
-      tierRank: tierFit,
-      codingRank: codingModelRank(model),
+      coolingUntil,
     });
   }
+  const hasReadyCandidate = scored.some((candidate) => candidate.coolingUntil <= nowMs);
   scored.sort(
     (a, b) =>
-      a.preferredRank - b.preferredRank ||
-      b.tierRank - a.tierRank ||
-      a.codingRank - b.codingRank ||
+      (hasReadyCandidate
+        ? Number(a.coolingUntil > nowMs) - Number(b.coolingUntil > nowMs)
+        : a.coolingUntil - b.coolingUntil) ||
       b.score - a.score ||
       a.refKey.localeCompare(b.refKey),
   );
-  return scored.map(
-    (
-      {
-        refKey: _refKey,
-        preferredRank: _preferredRank,
-        tierRank: _tierRank,
-        codingRank: _codingRank,
-        ...candidate
-      },
-      index,
-    ) => ({
-      ...candidate,
-      selected: index === 0,
-    }),
-  );
+  return scored.map(({ refKey: _refKey, coolingUntil: _coolingUntil, ...candidate }, index) => ({
+    ...candidate,
+    selected: index === 0,
+  }));
 }
 
 function codingModelRank(model: ModelInfo): number {
@@ -375,8 +428,13 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
     else {
       if (!provider.enabled) reasons.push('provider disabled');
       if (provider.health === 'down') reasons.push('provider health is down');
-      if (provider.keyStatus === 'missing') reasons.push('provider key missing');
+      if (provider.keyStatus === 'missing' && provider.keyRequired !== false)
+        reasons.push('provider key missing');
       if (provider.keyStatus === 'invalid') reasons.push('provider key marked invalid');
+      if (!input.profile.paidAllowed && provider.freeTierUnsupported)
+        reasons.push('provider free tier unsupported for this account');
+      if (provider.excludedModelRefs?.includes(model.ref))
+        reasons.push('model explicitly excluded for this account');
       const cooldown = provider.cooldownUntil ? Date.parse(provider.cooldownUntil) : 0;
       if (provider.health === 'cooldown' && (!Number.isFinite(cooldown) || cooldown > now))
         reasons.push('provider cooldown active');
@@ -386,25 +444,34 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
     if ((input.estimate.requiresTools ?? true) && !model.toolCalling)
       reasons.push('model tool support unavailable');
     if (
-      !input.profile.paidAllowed &&
-      !model.free &&
-      !(model.priceInPerM === null && model.priceOutPerM === null)
+      (chainForProfile(input.profile).length > 0 ||
+        input.profile.name === 'Auto-Free' ||
+        input.profile.name === 'Best Available') &&
+      !isStrictFallbackNameEligible(model, input.verifiedModelRefs ?? [])
     )
-      reasons.push('model not marked free');
+      reasons.push('model name excluded from automatic coding routes');
+    if (provider && !input.profile.paidAllowed && !isFreeForRouting(provider, model))
+      reasons.push('model not marked free for this provider plan');
     if (
       !input.profile.paidAllowed &&
       model.priceInPerM === null &&
       model.priceOutPerM === null &&
       provider &&
-      !['legit', 'promo'].includes(provider.tag)
+      !isFreeForRouting(provider, model)
     )
       reasons.push('unknown pricing is not allowed for this provider plan');
     if (!input.profile.tierByStep[input.step].includes(model.tier))
       reasons.push(`tier ${model.tier} not allowed for ${input.step}`);
-    const cost = calculateSpend(
-      { inputTokens: input.estimate.inputTokens, outputTokens: input.estimate.outputTokens ?? 0 },
-      model,
-    );
+    const cost =
+      provider && isFreeForRouting(provider, model)
+        ? 0
+        : calculateSpend(
+            {
+              inputTokens: input.estimate.inputTokens,
+              outputTokens: input.estimate.outputTokens ?? 0,
+            },
+            model,
+          );
     if (
       cost > 0 &&
       (!input.spend ||
@@ -417,8 +484,17 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
       if (remaining !== null && remaining < (input.estimate.expectedSteps ?? 1))
         reasons.push('provider step capacity exhausted');
       const tpm = tpmRemaining(input.capacity, model, provider);
-      if (tpm !== null && tpm < input.estimate.inputTokens + (input.estimate.outputTokens ?? 0))
-        reasons.push('token capacity exhausted');
+      const requestTokens = input.estimate.inputTokens + (input.estimate.outputTokens ?? 0);
+      if (tpm !== null && tpm < requestTokens) {
+        const limit = tpmLimit(input.capacity, model, provider);
+        const capacityText =
+          limit === null
+            ? `${tpm.toLocaleString()} TPM remaining`
+            : `${limit.toLocaleString()} TPM${tpm < limit ? ` (${tpm.toLocaleString()} remaining)` : ''}`;
+        reasons.push(
+          `request ~${requestTokens.toLocaleString()} tokens > ${provider.name} ${capacityText}`,
+        );
+      }
       if (
         !providerAllowed(input.profile, provider, model) &&
         !reasons.includes('model not marked free')
@@ -431,16 +507,23 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
 
 function providerAllowed(profile: Profile, provider: Provider, model: ModelInfo): boolean {
   if (!profile.paidAllowed) {
-    if (['paid', 'credits', 'subscription_cli', 'subscription_oauth'].includes(provider.tag))
-      return false;
-    if (provider.id === 'openrouter' && !/:free(?:$|:)/i.test(model.ref)) return false;
-    const unknownPrice = model.priceInPerM === null && model.priceOutPerM === null;
-    if (!model.free && !(unknownPrice && ['legit', 'promo'].includes(provider.tag))) return false;
+    if (provider.freeTierUnsupported) return false;
+    if (!isFreeForRouting(provider, model)) return false;
   }
   if (profile.allowedProviders === 'all') return true;
-  if (profile.allowedProviders === 'all_free')
-    return model.free || (model.priceInPerM === null && model.priceOutPerM === null);
+  if (profile.allowedProviders === 'all_free') return isFreeForRouting(provider, model);
   return profile.allowedProviders.includes(provider.id);
+}
+
+function isFreeForRouting(provider: Provider, model: ModelInfo): boolean {
+  // OpenRouter's free label is model-specific even when the account has credits.
+  if (provider.id === 'openrouter') return /:free(?:$|:)/i.test(model.ref);
+  if (provider.billingEnabled) return false;
+  if (provider.keyRequired === false) return true;
+  if (['paid', 'credits', 'subscription_cli', 'subscription_oauth'].includes(provider.tag))
+    return model.free || (model.priceInPerM === 0 && model.priceOutPerM === 0);
+  if (['legit', 'promo'].includes(provider.tag)) return true;
+  return model.free;
 }
 function capacityRemaining(capacity: CapacityView, provider: Provider): number | null {
   const entry = capacity.providers.find((item) => item.id === provider.id);
@@ -451,6 +534,13 @@ function tpmRemaining(capacity: CapacityView, model: ModelInfo, provider: Provid
   for (const key of keys) {
     const remaining = capacity.tokensPerMinuteRemaining?.[key];
     if (remaining !== undefined && remaining !== null) return remaining;
+  }
+  return null;
+}
+function tpmLimit(capacity: CapacityView, model: ModelInfo, provider: Provider): number | null {
+  for (const key of [model.ref as string, provider.id as string]) {
+    const limit = capacity.tokensPerMinuteLimit?.[key];
+    if (limit !== undefined && limit !== null) return limit;
   }
   return null;
 }
@@ -508,7 +598,20 @@ export function shouldSwitchBeforeStep(
 }
 
 export interface StepError {
-  kind: 'rate_limit' | 'provider' | 'tool' | 'internal';
+  kind:
+    | 'rate_limit'
+    | 'provider'
+    | 'tool'
+    | 'internal'
+    | 'quota_exhausted'
+    | 'auth'
+    | 'model_not_found'
+    | 'tools_unsupported'
+    | 'context_overflow'
+    | 'content_filter'
+    | 'timeout'
+    | 'request_scoped_client'
+    | 'stream_failure';
   retryAfterSeconds?: number | null;
 }
 export type ErrorPolicy =

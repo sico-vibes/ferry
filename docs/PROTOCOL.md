@@ -8,6 +8,8 @@ Requests have `jsonrpc: "2.0"`, an integer or string `id`, a `domain.method` met
 
 `system.hello` takes `{ protocol, capabilities }`. It rejects mismatched protocols and returns `{ protocol, capabilities, realDomains, implementedMethods }`. `realDomains` only includes domains with at least one registered handler. `system.selfTest` reports native module readiness from inside the core process. Domain events are JSON-RPC notifications whose method is the event name (`session.updated`, `quota.updated`, and so on) and whose `params` is the event payload described by `FerryEventSchemas`.
 
+`sessions.send` accepts `{ text, maxSteps? }`. When supplied, `maxSteps` is a positive integer and the agent ends the run at that boundary with an idle, resumable session. The CLI reports this stop with exit code `4`.
+
 ## Errors
 
 | Code | Kind | Meaning |

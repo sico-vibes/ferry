@@ -45,6 +45,7 @@ export interface ApprovalRequest {
 export interface ToolRegistryOptions {
   workspace: string;
   sessionId: string;
+  stepNumber?: () => number;
   dataDir: string;
   permissionMode: PermissionMode;
   permissionRules?: PermissionRule[];
@@ -208,6 +209,7 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
   ];
   const guard = (definition: AgentTool): AgentTool => {
     const original = (args: unknown, context: ToolContext) => definition.execute(args, context);
+    const cachedReads = new Map<string, { value: unknown; step: number }>();
     return {
       ...definition,
       execute: async (raw: unknown, context: ToolContext) => {
@@ -225,7 +227,7 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
           },
         );
         if (decision.decision === 'deny') throw new Error(decision.reason);
-        if (decision.decision === 'ask') {
+        if (decision.decision === 'ask' && options.permissionMode !== 'full_auto') {
           const part = {
             type: 'approval_request' as const,
             id: PartIdSchema.parse(newId('part')),
@@ -248,6 +250,36 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
           }
           options.onPart({ ...part, state: response });
           if (response === 'denied') throw new Error('User denied this tool call');
+        }
+        if (actionTool === 'list_dir' || actionTool === 'read_file') {
+          const key = `${actionTool}:${JSON.stringify(args)}`;
+          const cached = cachedReads.get(key);
+          if (cached)
+            return {
+              value: `Already ${actionTool === 'list_dir' ? 'listed' : 'read'} in step ${String(cached.step)}; see that result above.`,
+              output: {
+                text: `Already ${actionTool === 'list_dir' ? 'listed' : 'read'} in step ${String(cached.step)}; see that result above.`,
+                filtered: false,
+                originalTokens: null,
+                filteredTokens: null,
+                recoveryHandle: null,
+              },
+            };
+          const result = await original(args, context);
+          const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+          cachedReads.set(key, { value: result, step: options.stepNumber?.() ?? 1 });
+          const filtered = (await options.filterOutput?.(actionTool, text)) ?? {
+            text,
+            filtered: false,
+          };
+          const output: ToolOutput = {
+            text: filtered.text,
+            filtered: filtered.filtered,
+            originalTokens: estimateTokens(text),
+            filteredTokens: estimateTokens(filtered.text),
+            recoveryHandle: filtered.recoveryHandle ?? null,
+          };
+          return { value: result, output };
         }
         if (definition.mutates) {
           const id = await checkpoints.snapshot(`Before ${definition.title}`);

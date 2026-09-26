@@ -1,4 +1,4 @@
-import { streamText, tool, type ToolSet } from 'ai';
+import { streamText, tool, type ModelMessage, type ToolSet } from 'ai';
 import { jsonrepair } from 'jsonrepair';
 import { z } from 'zod';
 import { createObservedFetch, createLanguageModel } from '@ferry/providers';
@@ -9,6 +9,10 @@ import {
   buildBriefing,
   createHandoffMarker,
   estimateTextTokens,
+  classifyProviderError,
+  ResilienceLedger,
+  onStepError,
+  type ResilienceEntry,
   type CapacityView,
   type ModelStats,
 } from '@ferry/router';
@@ -48,8 +52,10 @@ export type AgentEvent =
 
 export interface ModelToolCall {
   id?: string;
+  toolCallId?: string;
   name: string;
   input: unknown;
+  providerOptions?: Record<string, Record<string, unknown>>;
 }
 export interface GeneratedStep {
   text?: string;
@@ -100,6 +106,7 @@ export interface AgentOptions {
   readRecovery?: (handle: string) => Promise<string | undefined>;
   title?: (prompt: string, signal: AbortSignal) => Promise<string>;
   maxSteps?: number;
+  maxHandoffsPerStep?: number;
   tokenBudget?: number;
   /** Maximum time without stream progress before this model attempt is abandoned. */
   stepTimeoutMs?: number;
@@ -119,6 +126,8 @@ export interface AgentOptions {
   ) => ModelInfo[];
   stats?: ModelStats[];
   terseLevel?: 'off' | 'lite' | 'full' | 'ultra';
+  resilienceState?: readonly ResilienceEntry[];
+  onResilienceState?: (entries: ResilienceEntry[]) => void;
 }
 
 export interface RunInput {
@@ -136,9 +145,12 @@ export interface RunResult {
 export class AgentLoop {
   private readonly estimates: (text: string) => number;
   private readonly recoveryStore = new InMemoryBlobStore();
+  private readonly resilience: ResilienceLedger;
+  private readonly sessionModelLocks = new Map<string, Set<string>>();
 
   constructor(private readonly options: AgentOptions) {
     this.estimates = options.estimateTokens ?? estimateTextTokens;
+    this.resilience = new ResilienceLedger(options.resilienceState);
   }
 
   async run({ sessionId, signal: outerSignal }: RunInput): Promise<RunResult> {
@@ -173,6 +185,7 @@ export class AgentLoop {
     const registry = createWorkspaceTools({
       workspace: this.options.workspace,
       sessionId,
+      stepNumber: () => stepCount + 1,
       dataDir: this.options.dataDir,
       permissionMode: this.options.permissionMode,
       ...(this.options.permissionRules ? { permissionRules: this.options.permissionRules } : {}),
@@ -257,10 +270,42 @@ export class AgentLoop {
         const keepTurns = this.options.pinnedTurns ?? 8;
         const pinnedMessages = messages.slice(-keepTurns * 2);
         const recentText = renderMessages(pinnedMessages);
-        const inputTokens =
-          this.estimates(recentText) +
-          this.estimates(JSON.stringify(taskRecord)) +
-          this.estimates(contextSummary ?? '');
+        let system = await assembleSystemPrompt({
+          workspace: this.options.workspace,
+          sessionId,
+          task: taskRecord,
+          ...(this.options.terseLevel ? { terseLevel: this.options.terseLevel } : {}),
+          ...(this.options.promptSections ? { sections: this.options.promptSections } : {}),
+        });
+        system +=
+          '\nIf a directory or file was already inspected and the current conversation contains its result, use that result and move to an action or verification instead of repeating the same inspection.';
+        if (contextSummary)
+          system += `\n\nConversation summary from earlier context:\n${contextSummary}`;
+        const toolSchemaTokens = this.estimates(
+          JSON.stringify([
+            ...tools.map((entry) => ({
+              name: entry.name,
+              description: entry.title,
+              parameters: toolSchemaForEstimate(entry.schema),
+            })),
+            ...(this.options.askUser
+              ? [
+                  {
+                    name: 'ask_user',
+                    description: 'Ask the user a question and pause until they answer.',
+                    parameters: z.toJSONSchema(z.object({ question: z.string() })),
+                  },
+                ]
+              : []),
+          ]),
+        );
+        const inputTokens = Math.ceil(
+          (this.estimates(recentText) +
+            this.estimates(JSON.stringify(taskRecord)) +
+            this.estimates(system) +
+            toolSchemaTokens) *
+            1.15,
+        );
         const maxContext = Math.max(
           ...this.options.catalog.models.map((candidate) => candidate.contextWindow),
         );
@@ -270,7 +315,7 @@ export class AgentLoop {
           pendingEdits: taskRecord.touchedFiles.length > 0,
           estimatedInputTokens: routeEstimate,
         });
-        let model = this.selectModel(stepKind, routeEstimate, session.modelRef);
+        let model = this.selectModel(stepKind, routeEstimate, session.modelRef, sessionId);
         if (!model) throw new Error('No eligible model is available for this step');
         let contextMessages = contextSummary ? pinnedMessages : messages;
         if (inputTokens > model.contextWindow * 0.7) {
@@ -281,6 +326,7 @@ export class AgentLoop {
               'summarize',
               Math.min(routeEstimate, Math.floor(model.contextWindow * 0.6)),
               session.modelRef,
+              sessionId,
             ) ?? model;
           const summarize =
             this.options.generator ?? this.createStreamingGenerator(summaryModel, sessionId);
@@ -295,6 +341,7 @@ export class AgentLoop {
           });
           contextSummary = summaryResult.text?.trim() ?? contextSummary ?? '';
           if (contextSummary) {
+            system += `\n\nConversation summary from earlier context:\n${contextSummary}`;
             taskRecord = {
               ...taskRecord,
               decisions: [
@@ -358,13 +405,6 @@ export class AgentLoop {
           status: 'running',
         });
         this.options.emit({ type: 'session.updated', session });
-        let system = await assembleSystemPrompt({
-          workspace: this.options.workspace,
-          sessionId,
-          task: taskRecord,
-          ...(this.options.terseLevel ? { terseLevel: this.options.terseLevel } : {}),
-          ...(this.options.promptSections ? { sections: this.options.promptSections } : {}),
-        });
         const assistant = this.options.store.appendMessage(sessionId, 'assistant', [], selectedRef);
         this.options.emit({ type: 'session.message', message: assistant });
         const streamedTextPartId = PartIdSchema.parse(newId('part'));
@@ -408,6 +448,8 @@ export class AgentLoop {
         let generationComplete = false;
         const attemptedModels = new Set<string>([model.ref]);
         const toolCapabilityFailures: string[] = [];
+        let sameModelRetries = 0;
+        let handoffsThisStep = 0;
         while (!generationComplete) {
           try {
             const generator =
@@ -420,29 +462,92 @@ export class AgentLoop {
               this.options.stepTimeoutMs ?? 120_000,
             );
             generationComplete = true;
+            this.resilience.recordSuccess('provider', model.providerId);
+            this.resilience.recordSuccess('key', model.providerId);
+            this.resilience.recordSuccess('model', model.ref);
+            this.options.onResilienceState?.(this.resilience.snapshot());
             break;
           } catch (error) {
-            const rateLimited = isRateLimitError(error);
-            const modelUnavailable = isUnavailableModelError(error);
-            const toolsUnsupported = isToolCapabilityError(error);
-            const timedOut = error instanceof StepWatchdogError;
+            const classified = classifyProviderError(errorInput(error));
+            if (isSignalAborted(signal)) throw error;
+            const foreignUnsignedGeminiHistory =
+              classified.family === 'request_scoped_client' &&
+              classified.status === 400 &&
+              isGemini3Model(model) &&
+              hasForeignUnsignedToolHistory(messages, model.providerId);
+            const routingFailure = foreignUnsignedGeminiHistory
+              ? { ...classified, scope: 'model' as const }
+              : classified;
+            if (foreignUnsignedGeminiHistory) {
+              const lockedModels = this.sessionModelLocks.get(sessionId) ?? new Set<string>();
+              lockedModels.add(model.ref);
+              this.sessionModelLocks.set(sessionId, lockedModels);
+            }
+            const rateLimited =
+              classified.family === 'rate_limit' || classified.family === 'quota_exhausted';
+            const modelUnavailable = classified.family === 'model_not_found';
+            const toolsUnsupported = classified.family === 'tools_unsupported';
+            const unsupportedFreeTier = classified.family === 'unsupported_free_tier';
+            const timedOut = error instanceof StepWatchdogError || classified.family === 'timeout';
+            const safeToSwitch = streamedText.length === 0;
+            if (routingFailure.scope !== 'none') {
+              this.resilience.recordFailure(routingFailure, model.ref, model.providerId);
+            }
+            if (routingFailure.scope !== 'model')
+              this.resilience.recordFailure(
+                { ...routingFailure, scope: 'model' },
+                model.ref,
+                model.providerId,
+              );
+            this.options.onResilienceState?.(this.resilience.snapshot());
+            const retryPolicy = onStepError({
+              kind:
+                classified.family === 'server' || classified.family === 'unsupported_free_tier'
+                  ? 'provider'
+                  : classified.family === 'quota_exhausted'
+                    ? 'quota_exhausted'
+                    : classified.family,
+              retryAfterSeconds:
+                classified.retryAfterMs === null ? null : classified.retryAfterMs / 1000,
+            });
+            if (retryPolicy.action === 'retry_same' && sameModelRetries < retryPolicy.attempts) {
+              sameModelRetries++;
+              await delayForRetry(classified.retryAfterMs ?? 0, signal);
+              continue;
+            }
             if (
-              (!rateLimited && !modelUnavailable && !toolsUnsupported && !timedOut) ||
+              (!rateLimited &&
+                !modelUnavailable &&
+                !toolsUnsupported &&
+                !unsupportedFreeTier &&
+                !timedOut &&
+                routingFailure.scope === 'none') ||
+              !safeToSwitch ||
               isSignalAborted(signal)
             )
               throw error;
+            const maxHandoffs = this.options.maxHandoffsPerStep ?? 4;
+            if (handoffsThisStep >= maxHandoffs)
+              throw new Error(
+                `Routing stopped after ${String(handoffsThisStep)} handoffs in one ${stepKind} step. ${this.routingSummary(stepKind, routeEstimate, attemptedModels)}`,
+                { cause: error },
+              );
             if (toolsUnsupported)
               toolCapabilityFailures.push(formatToolCapabilityFailure(model, error));
-            const fallback = this.selectFallback(stepKind, routeEstimate, attemptedModels);
+            const fallback = this.selectFallback(
+              stepKind,
+              routeEstimate,
+              attemptedModels,
+              sessionId,
+            );
             if (!fallback) {
-              if (toolsUnsupported || toolCapabilityFailures.length)
-                throw new Error(
-                  `No tool-capable model remains. ${toolCapabilityFailures.join('; ')}`,
-                  { cause: error },
-                );
-              throw error;
+              throw new Error(
+                `No eligible unlocked model remains for ${stepKind}. ${formatClassifiedFailure(classified.family, error)} ${toolCapabilityFailures.join('; ')} ${this.routingSummary(stepKind, routeEstimate, attemptedModels)}`.trim(),
+                { cause: error },
+              );
             }
             attemptedModels.add(fallback.ref);
+            handoffsThisStep++;
             const briefing = buildBriefing(
               taskRecord,
               messages,
@@ -456,10 +561,10 @@ export class AgentLoop {
               toolsUnsupported ? 'capability' : rateLimited ? 'rate_limit' : 'error',
               briefing,
               toolsUnsupported
-                ? `${model.name} rejected tool calling; continuing with ${fallback.name}.`
+                ? `${model.name} rejected tool calling (${formatClassifiedFailure(classified.family, error)}); continuing with ${fallback.name}.`
                 : rateLimited
-                  ? `${model.name} returned HTTP 429; continuing with ${fallback.name}.`
-                  : `${model.name} is unavailable; continuing with ${fallback.name}.`,
+                  ? `${model.name} returned ${formatClassifiedFailure(classified.family, error)}; continuing with ${fallback.name}.`
+                  : `${model.name} failed with ${formatClassifiedFailure(classified.family, error)}; continuing with ${fallback.name}.`,
             );
             this.addPart(sessionId, {
               type: 'handoff_marker',
@@ -553,6 +658,8 @@ export class AgentLoop {
           const toolPart: Extract<MessagePart, { type: 'tool_call' }> = {
             type: 'tool_call',
             id: PartIdSchema.parse(newId('part')),
+            ...(call.toolCallId || call.id ? { toolCallId: call.toolCallId ?? call.id } : {}),
+            ...(call.providerOptions ? { providerOptions: call.providerOptions } : {}),
             tool: call.name,
             title: definition.title,
             args: parsed.value as Record<string, unknown>,
@@ -650,7 +757,12 @@ export class AgentLoop {
     } catch (error) {
       if (signal.aborted)
         return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'cancelled');
-      const message = error instanceof Error ? error.message : String(error);
+      const cause = rootErrorCause(error);
+      const classified = classifyProviderError(errorInput(cause));
+      const providerDetail = formatClassifiedFailure(classified.family, cause);
+      const originalMessage = error instanceof Error ? error.message : String(error);
+      const message =
+        cause === error ? providerDetail : `${originalMessage}\nProvider detail: ${providerDetail}`;
       this.addPart(sessionId, {
         type: 'error',
         id: PartIdSchema.parse(newId('part')),
@@ -658,7 +770,8 @@ export class AgentLoop {
         kind: 'provider',
       });
       this.options.emit({ type: 'toast', tone: 'error', message });
-      this.options.store.updateSession(sessionId, { status: 'error' });
+      const failedSession = this.options.store.updateSession(sessionId, { status: 'error' });
+      this.options.emit({ type: 'session.updated', session: failedSession });
       throw error;
     } finally {
       outerSignal?.removeEventListener('abort', relayAbort);
@@ -673,9 +786,12 @@ export class AgentLoop {
     step: import('@ferry/shared').StepKind,
     inputTokens: number,
     previous: ModelRef | null,
+    sessionId: string,
   ): ModelInfo | undefined {
+    const locked = this.sessionModelLocks.get(sessionId);
     const resolved = this.options.resolveCandidates?.(this.options.profile, step, inputTokens);
-    if (resolved) return resolved[0];
+    if (resolved)
+      return this.selectResilient(resolved.filter((candidate) => !locked?.has(candidate.ref)));
     const candidates = scoreModels({
       models: this.options.catalog.models,
       capacity: this.options.capacity(),
@@ -685,16 +801,30 @@ export class AgentLoop {
       ...(this.options.stats ? { stats: this.options.stats } : {}),
       previousModelRef: previous,
     });
-    return this.options.catalog.models.find((model) => model.ref === candidates[0]?.ref);
+    const selected = this.selectResilient(
+      candidates.flatMap((item) => {
+        if (locked?.has(item.ref)) return [];
+        const model = this.options.catalog.models.find((candidate) => candidate.ref === item.ref);
+        return model ? [model] : [];
+      }),
+    );
+    return selected;
   }
 
   private selectFallback(
     step: import('@ferry/shared').StepKind,
     inputTokens: number,
     attemptedRefs: ReadonlySet<string>,
+    sessionId: string,
   ): ModelInfo | undefined {
+    const locked = this.sessionModelLocks.get(sessionId);
     const candidates = this.options.resolveCandidates?.(this.options.profile, step, inputTokens);
-    if (candidates) return candidates.find((candidate) => !attemptedRefs.has(candidate.ref));
+    if (candidates)
+      return this.selectResilient(
+        candidates.filter(
+          (candidate) => !attemptedRefs.has(candidate.ref) && !locked?.has(candidate.ref),
+        ),
+      );
     const previousModelRef = [...attemptedRefs].at(-1);
     const ranked = scoreModels({
       models: this.options.catalog.models,
@@ -704,10 +834,61 @@ export class AgentLoop {
       estimate: { inputTokens, requiresTools: true },
       ...(previousModelRef ? { previousModelRef } : {}),
     });
-    const next = ranked.find((candidate) => !attemptedRefs.has(candidate.ref));
-    return next
-      ? this.options.catalog.models.find((candidate) => candidate.ref === next.ref)
-      : undefined;
+    const remaining = ranked.flatMap((candidate) => {
+      if (attemptedRefs.has(candidate.ref) || locked?.has(candidate.ref)) return [];
+      const model = this.options.catalog.models.find((entry) => entry.ref === candidate.ref);
+      return model ? [model] : [];
+    });
+    return this.selectResilient(remaining);
+  }
+
+  private selectResilient(models: readonly ModelInfo[]): ModelInfo | undefined {
+    const ranked = models.map((model, index) => {
+      const providerId = model.providerId as string;
+      const active = [
+        this.resilience.active('model', model.ref),
+        this.resilience.active('key', providerId),
+        this.resilience.active('provider', providerId),
+      ].filter((entry): entry is ResilienceEntry => entry !== undefined);
+      return {
+        model,
+        index,
+        reset: active.length ? Math.max(...active.map((entry) => Date.parse(entry.expiresAt))) : 0,
+      };
+    });
+    const availableRefs = new Set(
+      this.resilience.availableModelRefs(ranked.map(({ model }) => model.ref)),
+    );
+    const unlocked = ranked.filter((entry) => availableRefs.has(entry.model.ref));
+    const ready = unlocked.find((entry) => entry.reset === 0);
+    if (ready) return ready.model;
+    return unlocked.sort((a, b) => a.reset - b.reset || a.index - b.index)[0]?.model;
+  }
+
+  private routingSummary(
+    step: import('@ferry/shared').StepKind,
+    inputTokens: number,
+    attemptedRefs: ReadonlySet<string>,
+  ): string {
+    const models =
+      this.options.resolveCandidates?.(this.options.profile, step, inputTokens) ??
+      this.options.catalog.models;
+    const ranked = scoreModels({
+      models,
+      capacity: this.options.capacity(),
+      profile: this.options.profile,
+      step,
+      estimate: { inputTokens, outputTokens: 2048, expectedSteps: 1, requiresTools: true },
+      ...(this.options.stats ? { stats: this.options.stats } : {}),
+    });
+    const summary = ranked
+      .slice(0, 8)
+      .map(
+        ({ ref, score, scoreBreakdown }) =>
+          `${ref}=${score.toFixed(1)} ${JSON.stringify(scoreBreakdown)}`,
+      )
+      .join('; ');
+    return `Attempted: ${[...attemptedRefs].join(', ')}. Ranked candidates: ${summary || 'none'}.`;
   }
 
   private finish(
@@ -717,6 +898,12 @@ export class AgentLoop {
     tokens: number,
     status: RunResult['status'],
   ): RunResult {
+    if (status === 'limit')
+      this.options.emit({
+        type: 'toast',
+        tone: 'warning',
+        message: `FERRY_RUN_LIMIT:${steps >= (this.options.maxSteps ?? 40) ? 'max_steps' : 'token_budget'}:${String(steps)}`,
+      });
     const session = this.options.store.updateSession(sessionId, {
       status: 'idle',
     });
@@ -822,7 +1009,7 @@ export function createStepGenerator(
         sessionId,
       }),
       system,
-      prompt: renderMessages(messages),
+      messages: toModelMessages(messages, model),
       tools: sdkTools as unknown as ToolSet,
       abortSignal: signal,
       maxRetries: 0,
@@ -838,19 +1025,151 @@ export function createStepGenerator(
     }
     const [usage, rawCalls] = await Promise.all([result.usage, result.toolCalls]);
     const calls = z
-      .array(z.object({ toolCallId: z.string(), toolName: z.string(), input: z.unknown() }))
+      .array(
+        z.object({
+          toolCallId: z.string(),
+          toolName: z.string(),
+          input: z.unknown(),
+          providerOptions: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+          providerMetadata: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+        }),
+      )
       .parse(rawCalls);
     return {
       text,
-      toolCalls: calls.map((call) => ({
-        id: call.toolCallId,
-        name: call.toolName,
-        input: call.input,
-      })),
+      toolCalls: calls.map((call) => {
+        const providerOptions = call.providerOptions ?? call.providerMetadata;
+        return {
+          id: call.toolCallId,
+          toolCallId: call.toolCallId,
+          name: call.toolName,
+          input: call.input,
+          ...(providerOptions ? { providerOptions } : {}),
+        };
+      }),
       inputTokens: usage.inputTokens ?? 0,
       outputTokens: usage.outputTokens ?? 0,
     };
   };
+}
+
+function toolSchemaForEstimate(schema: z.ZodType): unknown {
+  try {
+    return z.toJSONSchema(schema);
+  } catch {
+    return { description: schema.description ?? 'Tool input schema' };
+  }
+}
+
+function toModelMessages(messages: readonly Message[], targetModel: ModelInfo): ModelMessage[] {
+  const prompt: ModelMessage[] = [];
+  for (const message of messages) {
+    if (message.role === 'user') {
+      const content = message.parts
+        .filter((part): part is Extract<MessagePart, { type: 'text' }> => part.type === 'text')
+        .map((part) => part.text)
+        .join('\n');
+      if (content) prompt.push({ role: 'user', content });
+      continue;
+    }
+
+    const content: Exclude<Extract<ModelMessage, { role: 'assistant' }>['content'], string> = [];
+    const toolResults: Extract<ModelMessage, { role: 'tool' }>['content'] = [];
+    for (const part of message.parts) {
+      if (part.type === 'text' || part.type === 'reasoning') {
+        if (part.text) content.push({ type: 'text', text: part.text });
+      } else if (part.type === 'tool_call') {
+        const toolCallId = part.toolCallId ?? part.id;
+        const providerOptions = withGemini3ThoughtSignature(part.providerOptions, targetModel);
+        content.push({
+          type: 'tool-call',
+          toolCallId,
+          toolName: part.tool,
+          input: part.args,
+          ...(providerOptions
+            ? { providerOptions: providerOptions as { google?: { thoughtSignature?: string } } }
+            : {}),
+        });
+        toolResults.push({
+          type: 'tool-result',
+          toolCallId,
+          toolName: part.tool,
+          output: {
+            type: 'text',
+            value: part.output?.text ?? `Tool ended with status ${part.status}.`,
+          },
+        });
+      } else {
+        const text = summarizeMessagePart(part);
+        if (text) content.push({ type: 'text', text });
+      }
+    }
+    if (content.length) prompt.push({ role: 'assistant', content });
+    if (toolResults.length) prompt.push({ role: 'tool', content: toolResults });
+  }
+  return prompt;
+}
+
+function isGemini3Model(model: ModelInfo): boolean {
+  return (
+    model.providerId === 'gemini' && /gemini[-/]3(?:[.-]|$)/i.test(`${model.ref} ${model.name}`)
+  );
+}
+
+function hasForeignUnsignedToolHistory(
+  messages: readonly Message[],
+  targetProviderId: string,
+): boolean {
+  return messages.some((message) => {
+    if (message.role !== 'assistant') return false;
+    const sourceProvider = message.modelRef?.split('/', 1)[0];
+    if (!sourceProvider || sourceProvider === targetProviderId) return false;
+    return message.parts.some(
+      (part) => part.type === 'tool_call' && !hasThoughtSignature(part.providerOptions),
+    );
+  });
+}
+
+function hasThoughtSignature(
+  providerOptions: Record<string, Record<string, unknown>> | undefined,
+): boolean {
+  return Object.values(providerOptions ?? {}).some(
+    (options) =>
+      typeof options.thoughtSignature === 'string' && options.thoughtSignature.length > 0,
+  );
+}
+
+function withGemini3ThoughtSignature(
+  providerOptions: Record<string, Record<string, unknown>> | undefined,
+  targetModel: ModelInfo,
+): Record<string, Record<string, unknown>> | undefined {
+  if (!isGemini3Model(targetModel) || hasThoughtSignature(providerOptions)) return providerOptions;
+  return {
+    ...providerOptions,
+    google: {
+      ...providerOptions?.google,
+      thoughtSignature: 'skip_thought_signature_validator',
+    },
+  };
+}
+
+function rootErrorCause(error: unknown): unknown {
+  let current = error;
+  const seen = new Set<unknown>();
+  while (current instanceof Error && current.cause !== undefined && !seen.has(current.cause)) {
+    seen.add(current);
+    current = current.cause;
+  }
+  return current;
+}
+
+function summarizeMessagePart(part: MessagePart): string {
+  if (part.type === 'handoff_marker') return `Model handoff: ${part.explanation}`;
+  if (part.type === 'approval_request') return `Approval ${part.state}: ${part.summary}`;
+  if (part.type === 'error') return `Error (${part.kind}): ${part.message}`;
+  if (part.type === 'checkpoint') return `Checkpoint created: ${part.label}`;
+  if (part.type === 'delegation') return `Delegation ${part.runId}`;
+  return '';
 }
 
 class StepWatchdogError extends Error {
@@ -910,83 +1229,39 @@ async function runWithStepWatchdog(
   }
 }
 
-function isRateLimitError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const candidate = error as {
-    status?: unknown;
-    statusCode?: unknown;
-    response?: { status?: unknown };
-    code?: unknown;
-    name?: unknown;
-    message?: unknown;
-    data?: { error?: { code?: unknown; message?: unknown; type?: unknown } };
-    responseBody?: unknown;
+function errorInput(error: unknown): Parameters<typeof classifyProviderError>[0] {
+  if (!error || typeof error !== 'object') return { message: String(error) };
+  const candidate = error as Record<string, unknown> & {
+    response?: { status?: unknown; headers?: Headers };
+    data?: { error?: { code?: unknown; type?: unknown; message?: unknown } };
   };
-  const status = Number(
-    candidate.statusCode ?? candidate.status ?? candidate.response?.status ?? 0,
-  );
-  const responseError = parseProviderErrorBody(candidate.responseBody);
-  const code = [
-    candidate.code,
-    candidate.data?.error?.code,
-    candidate.data?.error?.type,
-    responseError?.code,
-    responseError?.type,
-  ]
-    .filter((value): value is string => typeof value === 'string')
-    .join(' ');
-  const message = [candidate.message, candidate.data?.error?.message, responseError?.message]
-    .filter((value): value is string => typeof value === 'string')
-    .join(' ');
-  return (
-    status === 503 ||
-    candidate.status === 429 ||
-    candidate.statusCode === 429 ||
-    candidate.statusCode === '429' ||
-    candidate.response?.status === 429 ||
-    /RESOURCE_EXHAUSTED/i.test(code) ||
-    candidate.name === 'ResourceExhausted' ||
-    /resource_exhausted|capacity|overloaded|worker\b.{0,100}\blimit reached/i.test(message)
-  );
+  const headers = candidate.response?.headers;
+  return {
+    status: candidate.status,
+    statusCode: candidate.statusCode ?? candidate.response?.status,
+    code: candidate.code ?? candidate.data?.error?.code,
+    type: candidate.type ?? candidate.data?.error?.type,
+    message: candidate.data?.error?.message ?? candidate.message,
+    responseBody: candidate.data ? JSON.stringify(candidate.data) : candidate.responseBody,
+    ...(headers ? { headers } : {}),
+    retryAfter: candidate.retryAfter,
+  };
 }
 
-function parseProviderErrorBody(
-  value: unknown,
-): { code?: string; type?: string; message?: string } | undefined {
-  if (typeof value !== 'string') return undefined;
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (!parsed || typeof parsed !== 'object' || !('error' in parsed)) return undefined;
-    const error = parsed.error;
-    if (!error || typeof error !== 'object') return undefined;
-    const errorRecord = error as Record<string, unknown>;
-    return {
-      ...(typeof errorRecord.code === 'string' ? { code: errorRecord.code } : {}),
-      ...(typeof errorRecord.type === 'string' ? { type: errorRecord.type } : {}),
-      ...(typeof errorRecord.message === 'string' ? { message: errorRecord.message } : {}),
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function isUnavailableModelError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const candidate = error as {
-    status?: unknown;
-    statusCode?: unknown;
-    response?: { status?: unknown };
-    message?: unknown;
-  };
-  const status = Number(
-    candidate.statusCode ?? candidate.status ?? candidate.response?.status ?? 0,
-  );
-  const message = typeof candidate.message === 'string' ? candidate.message : '';
-  return (
-    status === 404 ||
-    status === 410 ||
-    /model_not_found|not found for account|end of life|no longer available/i.test(message)
-  );
+async function delayForRetry(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, Math.max(0, ms));
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        const reason: unknown = signal.reason;
+        reject(reason instanceof Error ? reason : new Error('Aborted', { cause: reason }));
+      },
+      { once: true },
+    );
+  });
 }
 
 function errorStatus(error: unknown): number {
@@ -1028,21 +1303,27 @@ function providerErrorMessage(error: unknown): string {
   return typeof candidate.message === 'string' ? candidate.message : 'Provider request failed';
 }
 
-function isToolCapabilityError(error: unknown): boolean {
-  return (
-    errorStatus(error) === 400 &&
-    /function calling.{0,30}(?:not enabled|not supported)|does not support tools|tool use is not supported|tool_choice.{0,30}(?:not supported|unsupported|invalid)/i.test(
-      providerErrorMessage(error),
-    )
-  );
-}
-
 function formatToolCapabilityFailure(model: ModelInfo, error: unknown): string {
   const status = errorStatus(error) || 400;
-  const message = providerErrorMessage(error)
-    .replace(/[\r\n]+/g, ' ')
-    .slice(0, 240);
+  const message = redactedProviderMessage(error);
   return `${model.ref}: HTTP ${String(status)} — ${message}`;
+}
+
+function formatClassifiedFailure(family: string, error: unknown): string {
+  const status = errorStatus(error);
+  return `${family}${status ? ` (HTTP ${String(status)})` : ''}: ${redactedProviderMessage(error)}`;
+}
+
+function redactedProviderMessage(error: unknown): string {
+  return providerErrorMessage(error)
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+    .replace(/\b(?:sk|rk|or|AIza)[-_][A-Za-z0-9_-]{12,}/g, '[redacted]')
+    .replace(
+      /((?:api[_-]?key|access[_-]?token|authorization|token)["']?\s*[:=]\s*["']?)[^\s,"';}]+/gi,
+      '$1[redacted]',
+    )
+    .slice(0, 240);
 }
 
 function touchFile(task: TaskRecord, path: string, purpose: string): TaskRecord {

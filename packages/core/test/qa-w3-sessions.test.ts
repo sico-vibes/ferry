@@ -224,6 +224,27 @@ describe('QA W3 sessions: run lifecycle and races', () => {
     }
   }, 30_000);
 
+  it('honors full_auto from settings and emits no safe-tool approvals', async () => {
+    const h = await startHarness({
+      turns: [toolTurn('write_file', { path: 'auto.txt', content: 'automatic' }), textTurn('done')],
+    });
+    try {
+      const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      await h.rpc.settings.update({ permissionMode: 'full_auto' });
+      const approvals: string[] = [];
+      const off = h.rpc.on('approval.request', (event) => {
+        if (event.sessionId === session.id) approvals.push(event.part.id);
+      });
+      await h.rpc.sessions.send(session.id, { text: 'write the file' });
+      await waitFor(async () => (await sessionStatus(h.rpc, session.id)) === 'idle');
+      off();
+      expect(approvals).toEqual([]);
+      expect(await h.rpc.sessions.get(session.id)).toMatchObject({ session: { status: 'idle' } });
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
+
   it('reports a structured error status when the provider fails', async () => {
     const h = await startHarness({
       turns: [{ status: 500, body: { error: { message: 'boom' } } }],

@@ -1,4 +1,7 @@
 This project includes @earendil-works/pi-ai 0.87.1, licensed under the MIT License.
 Copyright (c) Mario Zechner and contributors.
 
+The 429 classification and reset-hint patterns in packages/router/src/resilience.ts are adapted from OmniRoute, MIT License:
+https://github.com/diegosouzapw/OmniRoute/blob/release/v3.8.51/src/shared/utils/classify429.ts
+
 The MIT License is available at https://opensource.org/licenses/MIT.

@@ -36,10 +36,12 @@ function providerRecord(services: FerryServices, id: string): Provider {
     id,
     name: limits.name,
     tag: limits.tag,
+    keyRequired: limits.key_required ?? true,
+    billingEnabled: saved?.billingEnabled ?? false,
     kind: limits.tag === 'subscription_cli' ? 'cli' : 'api',
     brand: null,
     keyStatus,
-    enabled: saved?.enabled ?? Boolean(keyRef),
+    enabled: saved?.enabled ?? (Boolean(keyRef) || limits.key_required === false),
     health: activeCooldown
       ? 'cooldown'
       : saved?.health === 'cooldown'
@@ -54,6 +56,8 @@ function providerRecord(services: FerryServices, id: string): Provider {
     modelCount,
     ...(availableModels ? { availableModels } : {}),
     modelsVerifiedAt: saved?.modelsVerifiedAt ?? null,
+    freeTierUnsupported: saved?.freeTierUnsupported ?? false,
+    excludedModelRefs: saved?.excludedModelRefs ?? [],
     windows: services.quota.getWindows(id),
     stepsLeftToday: services.quota.stepsLeft(id),
   });
@@ -85,8 +89,13 @@ export function register(host: CoreHost, services: FerryServices): void {
         enabled: true,
         availableModels: [],
         modelsVerifiedAt: null,
+        freeTierUnsupported: false,
+        excludedModelRefs: [],
       });
       invalidateSessionProviderKeyCache(services, id);
+      // The bundled CLI integration fixture must be routable before its first request.
+      // The base URL is restricted to loopback while NODE_ENV=test in model discovery.
+      await modelDiscovery.refresh(id);
     }
     services.catalog.providers.forEach(({ provider: id }) => {
       const saved = services.providers.get(id);
@@ -113,9 +122,10 @@ export function register(host: CoreHost, services: FerryServices): void {
       healthRecoveryTimer.unref();
     }
   });
-  host.onShutdown(() => {
+  host.onShutdown(async () => {
     if (healthRecoveryTimer) clearInterval(healthRecoveryTimer);
     healthRecoveryTimer = undefined;
+    await modelDiscovery.dispose();
   });
   host.registerDomain('providers', {
     list() {
@@ -141,6 +151,8 @@ export function register(host: CoreHost, services: FerryServices): void {
         cooldownUntil: null,
         availableModels: [],
         modelsVerifiedAt: null,
+        freeTierUnsupported: false,
+        excludedModelRefs: [],
       });
       services.models.replace(id, []);
       host.emit('provider.updated', provider);
@@ -211,6 +223,17 @@ export function register(host: CoreHost, services: FerryServices): void {
         : (current.availableModels ?? []).filter(
             (model) => !unavailableIds.has(model.ref.slice(id.length + 1)),
           );
+      const excludedModelRefs = new Set([
+        ...(current.excludedModelRefs ?? []),
+        ...(result.skippedModels ?? []).flatMap((item) => {
+          const model = [...services.catalog.models, ...services.models.list(id)].find(
+            (candidate) =>
+              candidate.providerId === id && candidate.ref.slice(id.length + 1) === item.model,
+          );
+          return model ? [model.ref] : [];
+        }),
+      ]);
+      for (const model of persistedModels) excludedModelRefs.delete(model.ref);
       const now = services.clock.now().toISOString();
       const limits = services.catalog.providers.find((item) => item.provider === id);
       const modelRef = services.catalog.models.find((model) => model.providerId === id)?.ref;
@@ -274,6 +297,13 @@ export function register(host: CoreHost, services: FerryServices): void {
               ? 'cooldown'
               : 'down',
         cooldownUntil: services.cooldowns.get(id)?.until ?? null,
+        freeTierUnsupported:
+          result.errorKind === 'unsupported_free_tier'
+            ? true
+            : result.ok
+              ? false
+              : (current.freeTierUnsupported ?? false),
+        excludedModelRefs: [...excludedModelRefs],
         windows: services.quota.getWindows(id),
         stepsLeftToday: services.quota.stepsLeft(id),
         verifiedAt: result.ok
@@ -298,6 +328,14 @@ export function register(host: CoreHost, services: FerryServices): void {
       const enabled = EnabledInput.parse(rawEnabled);
       const current = providerRecord(services, id);
       const provider = saveProvider(services, { ...current, enabled });
+      host.emit('provider.updated', provider);
+      return provider;
+    },
+    setBillingEnabled(rawId: unknown, rawEnabled: unknown) {
+      const id = ProviderIdInput.parse(rawId);
+      const billingEnabled = EnabledInput.parse(rawEnabled);
+      const current = providerRecord(services, id);
+      const provider = saveProvider(services, { ...current, billingEnabled });
       host.emit('provider.updated', provider);
       return provider;
     },

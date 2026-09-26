@@ -14,6 +14,11 @@ export const ProviderErrorKindSchema = z.enum([
   'network',
   'timeout',
   'unsupported_free_tier',
+  'model_not_found',
+  'tools_unsupported',
+  'content_filter',
+  'request_scoped_client',
+  'stream_failure',
 ]);
 export type ProviderErrorKind = z.infer<typeof ProviderErrorKindSchema>;
 

@@ -5,6 +5,7 @@
   @typescript-eslint/unbound-method: off
 */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -547,7 +548,10 @@ describe('QA agent: budgets and compaction', () => {
     try {
       const systems: string[] = [];
       const loop = makeLoop(state, {
-        estimateTokens: (value) => (value.length > 100 ? 7000 : Math.ceil(value.length / 4)),
+        estimateTokens: (value) =>
+          value.startsWith('{') && value.includes('"goal"') && value.includes('README.md')
+            ? 7000
+            : Math.ceil(value.length / 4),
         generator: async ({ system, onDelta }) => {
           systems.push(system);
           if (system.startsWith('Summarize'))
@@ -795,6 +799,388 @@ describe('QA agent: real SDK against a scripted fake server', () => {
       } finally {
         await fake.stop();
       }
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('round-trips Gemini thought signatures across tool execution', async () => {
+    const state = await setup();
+    const geminiModel = ModelInfoSchema.parse({
+      ...state.model,
+      ref: 'gemini/test-model',
+      providerId: 'gemini',
+      name: 'Gemini test model',
+    });
+    const geminiProvider = ProviderSchema.parse({
+      ...state.provider,
+      id: ProviderIdSchema.parse('gemini'),
+      name: 'Gemini',
+    });
+    const chunk = (delta: Record<string, unknown>, finishReason: string | null = null) => ({
+      id: 'chatcmpl_thought_signature',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model: 'test-model',
+      choices: [{ index: 0, delta, finish_reason: finishReason }],
+    });
+    const fake = await FakeOpenAIServer.scriptedTurns([
+      {
+        chunks: [
+          chunk({ role: 'assistant' }),
+          chunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: 'call_read',
+                type: 'function',
+                function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+                extra_content: { google: { thought_signature: 'gemini-signature-fixture' } },
+              },
+            ],
+            extra_content: { google: { thought_signature: 'gemini-signature-fixture' } },
+          }),
+          chunk({}, 'tool_calls'),
+        ],
+      },
+      {
+        chunks: [chunk({ role: 'assistant' }), chunk({ content: 'Done.' }), chunk({}, 'stop')],
+      },
+    ]).start();
+    try {
+      await writeFile(path.join(state.root, 'README.md'), '# Ferry\n', 'utf8');
+      const loop = makeLoop(state, {
+        catalog: { ...state.catalog, models: [geminiModel] },
+        capacity: () => ({ providers: [geminiProvider] }),
+        apiKeys: { gemini: 'fixture-key' },
+        providerBaseUrls: { gemini: `${fake.baseUrl}/v1` },
+        resolveCandidates: () => [geminiModel],
+      });
+      expect((await loop.run({ sessionId: state.session.id })).status).toBe('completed');
+      const savedToolCall = state.store
+        .load(state.session.id)
+        ?.messages.flatMap((message) => message.parts)
+        .find((part) => part.type === 'tool_call');
+      expect(
+        savedToolCall?.type === 'tool_call' ? savedToolCall.providerOptions : undefined,
+      ).toBeDefined();
+      const secondRequest = fake.requests.find(
+        ({ method, url, body }) =>
+          method === 'POST' &&
+          url.endsWith('/chat/completions') &&
+          Array.isArray((body as { messages?: unknown[] }).messages) &&
+          (body as { messages: { tool_calls?: unknown[] }[] }).messages.some(
+            (message) => message.tool_calls?.length,
+          ),
+      );
+      expect(secondRequest).toBeDefined();
+      const requestMessages = (secondRequest?.body as { messages: Record<string, unknown>[] })
+        .messages;
+      const assistantCall = requestMessages.find((message) => message.role === 'assistant');
+      expect(assistantCall).toMatchObject({
+        tool_calls: [
+          {
+            extra_content: { google: { thought_signature: 'gemini-signature-fixture' } },
+          },
+        ],
+      });
+    } finally {
+      await fake.stop();
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('adds the Gemini 3 missing-signature sentinel to foreign tool history', async () => {
+    const state = await setup();
+    const groqModel = ModelInfoSchema.parse({
+      ...state.model,
+      ref: 'groq/qwen/qwen3.8-27b',
+      providerId: 'groq',
+      name: 'Groq Qwen',
+    });
+    const geminiModel = ModelInfoSchema.parse({
+      ...state.model,
+      ref: 'gemini/gemini-3.8-flash',
+      providerId: 'gemini',
+      name: 'Gemini 3.8 Flash',
+    });
+    const groqProvider = ProviderSchema.parse({
+      ...state.provider,
+      id: ProviderIdSchema.parse('groq'),
+      name: 'Groq',
+    });
+    const geminiProvider = ProviderSchema.parse({
+      ...state.provider,
+      id: ProviderIdSchema.parse('gemini'),
+      name: 'Gemini',
+    });
+    const chunk = (delta: Record<string, unknown>, finishReason: string | null = null) => ({
+      id: 'chatcmpl_groq_tool',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model: 'qwen',
+      choices: [{ index: 0, delta, finish_reason: finishReason }],
+    });
+    const groqServer = await FakeOpenAIServer.scriptedTurns([
+      {
+        chunks: [
+          chunk({ role: 'assistant' }),
+          chunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: 'call_read',
+                type: 'function',
+                function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+              },
+            ],
+          }),
+          chunk({}, 'tool_calls'),
+        ],
+      },
+    ]).start();
+    let receivedMessages: Record<string, unknown>[] = [];
+    let missingSignatureRequests = 0;
+    const geminiServer = createServer((request, response) => {
+      void (async () => {
+        const chunks: Uint8Array[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(String(chunk)));
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+          messages?: Record<string, unknown>[];
+        };
+        receivedMessages = body.messages ?? [];
+        const foreignCall = receivedMessages
+          .filter((message) => message.role === 'assistant')
+          .some((message) => {
+            const calls = message.tool_calls;
+            if (!Array.isArray(calls)) return false;
+            return calls.some((call) => {
+              if (!call || typeof call !== 'object') return false;
+              const extra = (
+                call as { extra_content?: { google?: { thought_signature?: string } } }
+              ).extra_content;
+              return extra?.google?.thought_signature !== 'skip_thought_signature_validator';
+            });
+          });
+        if (foreignCall) {
+          missingSignatureRequests++;
+          response.writeHead(400, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({ error: { message: 'Function call missing thought signature' } }),
+          );
+          return;
+        }
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        response.write(
+          `data: ${JSON.stringify({
+            id: 'chatcmpl_gemini_done',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'gemini-3.8-flash',
+            choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+          })}\n\n`,
+        );
+        response.write(
+          `data: ${JSON.stringify({
+            id: 'chatcmpl_gemini_done',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'gemini-3.8-flash',
+            choices: [{ index: 0, delta: { content: 'Done.' }, finish_reason: null }],
+          })}\n\n`,
+        );
+        response.end(
+          `data: ${JSON.stringify({
+            id: 'chatcmpl_gemini_done',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'gemini-3.8-flash',
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          })}\n\ndata: [DONE]\n\n`,
+        );
+      })().catch((error: unknown) => {
+        response.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+    try {
+      await writeFile(path.join(state.root, 'README.md'), '# Ferry\n', 'utf8');
+      await new Promise<void>((resolve, reject) => {
+        geminiServer.once('error', reject);
+        geminiServer.listen(0, '127.0.0.1', resolve);
+      });
+      const address = geminiServer.address();
+      if (!address || typeof address === 'string')
+        throw new Error('Gemini fake server has no TCP port');
+      let candidateCalls = 0;
+      const loop = makeLoop(state, {
+        catalog: { ...state.catalog, models: [groqModel, geminiModel] },
+        capacity: () => ({ providers: [groqProvider, geminiProvider] }),
+        apiKeys: { groq: 'fixture-key', gemini: 'fixture-key' },
+        providerBaseUrls: {
+          groq: `${groqServer.baseUrl}/v1`,
+          gemini: `http://127.0.0.1:${String(address.port)}/v1`,
+        },
+        resolveCandidates: () => (++candidateCalls === 1 ? [groqModel] : [geminiModel]),
+        maxSteps: 4,
+      });
+      expect((await loop.run({ sessionId: state.session.id })).status).toBe('completed');
+      expect(missingSignatureRequests).toBe(0);
+      const assistantCall = receivedMessages.find((message) => message.role === 'assistant');
+      expect(assistantCall).toMatchObject({
+        tool_calls: [
+          {
+            extra_content: {
+              google: { thought_signature: 'skip_thought_signature_validator' },
+            },
+          },
+        ],
+      });
+    } finally {
+      await groqServer.stop();
+      await new Promise<void>((resolve, reject) => {
+        if (!geminiServer.listening) {
+          resolve();
+          return;
+        }
+        geminiServer.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('reroutes and session-locks Gemini after a history-related 400', async () => {
+    const state = await setup();
+    try {
+      await writeFile(path.join(state.root, 'README.md'), '# Ferry\n', 'utf8');
+      const groqModel = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'groq/qwen/qwen3.8-27b',
+        providerId: 'groq',
+        name: 'Groq Qwen',
+      });
+      const geminiModel = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/gemini-3.8-flash',
+        providerId: 'gemini',
+        name: 'Gemini 3.8 Flash',
+      });
+      const fallbackModel = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'openai/fallback',
+        name: 'Fallback',
+      });
+      const groqProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: ProviderIdSchema.parse('groq'),
+        name: 'Groq',
+      });
+      const geminiProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: ProviderIdSchema.parse('gemini'),
+        name: 'Gemini',
+      });
+      let candidateCalls = 0;
+      const calls: string[] = [];
+      let fallbackToolCalls = 0;
+      const loop = makeLoop(state, {
+        catalog: { ...state.catalog, models: [groqModel, geminiModel, fallbackModel] },
+        capacity: () => ({ providers: [groqProvider, geminiProvider, state.provider] }),
+        resolveCandidates: () => {
+          candidateCalls++;
+          return candidateCalls === 1 ? [groqModel] : [geminiModel, fallbackModel];
+        },
+        generator: async ({ model }) => {
+          calls.push(model.ref);
+          if (model.ref === geminiModel.ref) {
+            throw Object.assign(new Error('Bad Request'), {
+              statusCode: 400,
+              responseBody: JSON.stringify({
+                error: {
+                  message:
+                    'Function call is missing thought_signature; Bearer fixture-secret-value-1234567890',
+                },
+              }),
+            });
+          }
+          if (model.ref === groqModel.ref)
+            return { toolCalls: [{ name: 'read_file', input: { path: 'README.md' } }] };
+          if (fallbackToolCalls++ === 0)
+            return { toolCalls: [{ name: 'read_file', input: { path: 'README.md' } }] };
+          return { text: 'Done.' };
+        },
+        maxSteps: 4,
+      });
+      expect((await loop.run({ sessionId: state.session.id })).status).toBe('completed');
+      expect(calls).toEqual([groqModel.ref, geminiModel.ref, fallbackModel.ref, fallbackModel.ref]);
+      const handoff = partsOf(state)
+        .filter(
+          (part): part is Extract<typeof part, { type: 'handoff_marker' }> =>
+            part.type === 'handoff_marker' && part.from === geminiModel.ref,
+        )
+        .at(-1);
+      expect(handoff?.type === 'handoff_marker' ? handoff.explanation : '').toContain(
+        'request_scoped_client (HTTP 400)',
+      );
+      expect(handoff?.type === 'handoff_marker' ? handoff.explanation : '').toContain(
+        'Function call is missing thought_signature',
+      );
+      expect(handoff?.type === 'handoff_marker' ? handoff.explanation : '').not.toContain(
+        'fixture-secret-value',
+      );
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('includes classified HTTP details in terminal provider errors', async () => {
+    const state = await setup();
+    try {
+      const groqModel = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'groq/qwen/qwen3.8-27b',
+        providerId: 'groq',
+        name: 'Groq Qwen',
+      });
+      const geminiModel = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/gemini-3.8-flash',
+        providerId: 'gemini',
+        name: 'Gemini 3.8 Flash',
+      });
+      let candidateCalls = 0;
+      const loop = makeLoop(state, {
+        catalog: { ...state.catalog, models: [groqModel, geminiModel] },
+        resolveCandidates: () => (++candidateCalls === 1 ? [groqModel] : [geminiModel]),
+        generator: async ({ model }) => {
+          if (model.ref === groqModel.ref)
+            return { toolCalls: [{ name: 'read_file', input: { path: 'README.md' } }] };
+          throw Object.assign(new Error('Bad Request'), {
+            statusCode: 400,
+            responseBody: JSON.stringify({
+              error: {
+                message: 'Invalid previous function call; api_key=fixture-secret-value-1234567890',
+              },
+            }),
+          });
+        },
+        maxSteps: 4,
+      });
+      await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
+        /No eligible unlocked model remains for plan/,
+      );
+      const result = state.store.load(state.session.id);
+      expect(result?.session.status).toBe('error');
+      const error = partsOf(state).find((part) => part.type === 'error');
+      expect(error?.type === 'error' ? error.message : '').toContain(
+        'request_scoped_client (HTTP 400)',
+      );
+      expect(error?.type === 'error' ? error.message : '').toContain(
+        'Invalid previous function call',
+      );
+      expect(error?.type === 'error' ? error.message : '').not.toContain('fixture-secret-value');
     } finally {
       state.database.close();
     }

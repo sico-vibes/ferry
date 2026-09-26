@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { DelegationModeSchema, StepKindSchema, TierSchema } from './common.js';
 import { ProviderIdSchema, ProfileIdSchema } from './ids.js';
+export const FallbackChainEntrySchema = z.object({
+  provider: ProviderIdSchema,
+  patterns: z.array(z.string().min(1)),
+});
+export type FallbackChainEntry = z.infer<typeof FallbackChainEntrySchema>;
 export const OptimizerTogglesSchema = z.object({
   terse: z.enum(['off', 'lite', 'full', 'ultra']),
   toolOutputFilters: z.boolean(),
@@ -25,5 +30,6 @@ export const ProfileSchema = z.object({
   }),
   delegationMode: DelegationModeSchema,
   optimizers: OptimizerTogglesSchema,
+  fallbackChain: z.array(FallbackChainEntrySchema).optional(),
 });
 export type Profile = z.infer<typeof ProfileSchema>;

@@ -53,6 +53,53 @@ export const FerryEventSchemas = {
     partId: PartIdSchema,
     textDelta: z.string(),
   }),
+  'routing.explain': z.object({
+    sessionId: SessionIdSchema,
+    selected: z.string(),
+    candidates: z.array(
+      z.object({
+        ref: z.string(),
+        score: z.number(),
+        explanation: z.string(),
+        scoreBreakdown: z.object({
+          tierFit: z.number(),
+          headroom: z.number(),
+          success: z.number(),
+          latency: z.number(),
+          cost: z.number(),
+          affinity: z.number(),
+          coding: z.number(),
+          preference: z.number(),
+          reasoning: z.number(),
+          verification: z.number(),
+        }),
+      }),
+    ),
+    chain: z
+      .array(
+        z.object({
+          provider: z.string(),
+          pattern: z.string(),
+          status: z.enum([
+            'not_live',
+            'cooling',
+            'no_key',
+            'tools_unsupported',
+            'excluded_name',
+            'ineligible',
+            'available',
+            'hit',
+          ]),
+          modelRef: z.string().nullable(),
+          detail: z.string(),
+        }),
+      )
+      .optional(),
+    chainHit: z
+      .object({ provider: z.string(), pattern: z.string(), modelRef: z.string() })
+      .nullable()
+      .optional(),
+  }),
   'task.updated': TaskRecordSchema,
   'quota.updated': CapacitySummarySchema,
   'provider.updated': ProviderSchema,
@@ -92,6 +139,43 @@ export interface FerryEvents {
     messageId: import('@ferry/shared').MessageId;
     partId: import('@ferry/shared').PartId;
     textDelta: string;
+  };
+  'routing.explain': {
+    sessionId: import('@ferry/shared').SessionId;
+    selected: string;
+    candidates: {
+      ref: string;
+      score: number;
+      explanation: string;
+      scoreBreakdown: {
+        tierFit: number;
+        headroom: number;
+        success: number;
+        latency: number;
+        cost: number;
+        affinity: number;
+        coding: number;
+        preference: number;
+        reasoning: number;
+        verification: number;
+      };
+    }[];
+    chain?: {
+      provider: string;
+      pattern: string;
+      status:
+        | 'not_live'
+        | 'cooling'
+        | 'no_key'
+        | 'tools_unsupported'
+        | 'excluded_name'
+        | 'ineligible'
+        | 'available'
+        | 'hit';
+      modelRef: string | null;
+      detail: string;
+    }[];
+    chainHit?: { provider: string; pattern: string; modelRef: string } | null;
   };
   'task.updated': TaskRecord;
   'quota.updated': CapacitySummary;
