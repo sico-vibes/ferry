@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -9,6 +9,7 @@ import { chromium } from '@playwright/test';
 const packageRoot = resolve(import.meta.dirname, '..');
 const executable = join(packageRoot, 'release', 'win-unpacked', 'Ferry.exe');
 const userDataDirectory = await mkdtemp(join(tmpdir(), 'ferry-packaged-smoke-'));
+const coreLogPath = join(userDataDirectory, 'engine', 'logs', 'ferry.log');
 const smokeStartedAt = new Date();
 const portServer = createServer();
 await new Promise((resolveListen, reject) => {
@@ -193,6 +194,12 @@ for (const stream of [child.stdout, child.stderr]) {
       }
       void waitForRendererLoad()
         .then(() => {
+          return readFile(coreLogPath, 'utf8');
+        })
+        .then((log) => {
+          if (!log.includes('Ferry core started'))
+            throw new Error(`Packaged core log is missing startup record: ${coreLogPath}`);
+          console.log('Packaged core log written');
           console.log(`Packaged smoke passed: ${modules.length} modules ok`);
           return finish();
         })

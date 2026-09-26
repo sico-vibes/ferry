@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { invalidateSessionProviderKeyCache } from '../session-deps.js';
+import { getModelDiscovery } from './model-discovery.js';
 
 const ProviderIdInput = ProviderIdSchema;
 const KeyInput = z.string().trim().min(1).max(4096);
@@ -19,16 +20,6 @@ const EnabledInput = z.boolean();
 function baseUrlFor(services: FerryServices, id: string): string | undefined {
   const envName = `FERRY_PROVIDER_BASE_URL_${id.replace(/[^a-z0-9]/gi, '_').toUpperCase()}`;
   return services.env[envName];
-}
-
-function isLoopbackUrl(value: string | undefined): boolean {
-  if (!value) return false;
-  try {
-    const hostname = new URL(value).hostname;
-    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
-  } catch {
-    return false;
-  }
 }
 
 function providerRecord(services: FerryServices, id: string): Provider {
@@ -74,6 +65,36 @@ function saveProvider(services: FerryServices, provider: Provider): Provider {
 }
 
 export function register(host: CoreHost, services: FerryServices): void {
+  const modelDiscovery = getModelDiscovery(host, services);
+  host.onStart(async () => {
+    const testProviderId = services.env.FERRY_E2E_PROVIDER_ID;
+    const testProviderKey = services.env.FERRY_E2E_PROVIDER_KEY;
+    if (services.env.FERRY_E2E_USER_DATA_DIR && testProviderId && testProviderKey) {
+      const id = ProviderIdInput.parse(testProviderId);
+      await services.secrets.set(id, testProviderKey);
+      services.providerKeys.put({
+        id,
+        providerId: id,
+        keyringRef: id,
+        createdAt: services.clock.now().toISOString(),
+      });
+      const current = providerRecord(services, id);
+      saveProvider(services, {
+        ...current,
+        enabled: true,
+        availableModels: [],
+        modelsVerifiedAt: null,
+      });
+      invalidateSessionProviderKeyCache(services, id);
+    }
+    services.catalog.providers.forEach(({ provider: id }) => {
+      const saved = services.providers.get(id);
+      const key = services.providerKeys.get(id);
+      const limits = services.catalog.providers.find((item) => item.provider === id);
+      if (key || (saved?.enabled && limits?.key_required === false))
+        void modelDiscovery.refreshIfStale(id);
+    });
+  });
   host.registerDomain('providers', {
     list() {
       return services.catalog.providers.map((entry) => providerRecord(services, entry.provider));
@@ -90,20 +111,6 @@ export function register(host: CoreHost, services: FerryServices): void {
         createdAt: services.clock.now().toISOString(),
       });
       invalidateSessionProviderKeyCache(services, id);
-      const providerBaseUrl = baseUrlFor(services, id);
-      let discovered: Awaited<ReturnType<typeof discoverProviderModels>> = [];
-      let discoverySucceeded = false;
-      if (services.env.NODE_ENV !== 'test' || isLoopbackUrl(providerBaseUrl)) {
-        try {
-          discovered = await discoverProviderModels(id, key, {
-            ...(providerBaseUrl ? { baseUrl: providerBaseUrl } : {}),
-          });
-          discoverySucceeded = true;
-        } catch {
-          // Keep discovery failures distinct from an empty live model list.
-        }
-      }
-      const now = services.clock.now().toISOString();
       const provider = saveProvider(services, {
         ...current,
         keyStatus: 'unchecked',
@@ -112,11 +119,10 @@ export function register(host: CoreHost, services: FerryServices): void {
         cooldownUntil: null,
         availableModels: [],
         modelsVerifiedAt: null,
-        ...(discoverySucceeded
-          ? { availableModels: discovered, modelsVerifiedAt: now, modelCount: discovered.length }
-          : {}),
       });
+      services.models.replace(id, []);
       host.emit('provider.updated', provider);
+      void modelDiscovery.refresh(id);
       return provider;
     },
     async removeKey(rawId: unknown) {
@@ -133,6 +139,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         health: 'unknown',
         cooldownUntil: null,
       });
+      services.models.replace(id, []);
       host.emit('provider.updated', provider);
       return provider;
     },
@@ -260,6 +267,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             }
           : {}),
       });
+      if (result.ok) services.models.replace(id, persistedModels, now);
       host.emit('provider.updated', provider);
       return result;
     },

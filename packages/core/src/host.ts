@@ -78,6 +78,7 @@ export class CoreHost {
   readonly #registry = new Map<string, Map<string, RpcHandler>>();
   readonly #events = new Set<(method: string, payload: unknown) => void>();
   readonly #shutdownHandlers = new Set<() => void | Promise<void>>();
+  readonly #startHandlers = new Set<() => void | Promise<void>>();
   #releaseLock: (() => Promise<void>) | undefined;
   #unsubscribe: (() => void) | undefined;
   #unsubscribeEvents: (() => void) | undefined;
@@ -113,6 +114,11 @@ export class CoreHost {
   onShutdown(handler: () => void | Promise<void>): () => void {
     this.#shutdownHandlers.add(handler);
     return () => this.#shutdownHandlers.delete(handler);
+  }
+
+  onStart(handler: () => void | Promise<void>): () => void {
+    this.#startHandlers.add(handler);
+    return () => this.#startHandlers.delete(handler);
   }
 
   emit(method: string, payload: unknown): void {
@@ -185,6 +191,13 @@ export class CoreHost {
         await this.stop();
         throw error;
       }
+    }
+    for (const handler of this.#startHandlers) {
+      void Promise.resolve()
+        .then(handler)
+        .catch((error: unknown) => {
+          this.options.services?.logger.error({ err: error }, 'Core startup task failed');
+        });
     }
   }
 

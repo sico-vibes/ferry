@@ -9,6 +9,7 @@ import { QuotaObservationSchema, newId } from '@ferry/shared';
 import {
   CheckpointRepository,
   ProviderRepository,
+  ModelCacheRepository,
   ProviderKeyRepository,
   RequestRepository,
   QuotaObservationRepository,
@@ -54,6 +55,7 @@ export interface FerryServices {
   readonly quota: QuotaEngine;
   readonly secrets: SecretStore;
   readonly providers: ProviderRepository;
+  readonly models: ModelCacheRepository;
   readonly providerKeys: ProviderKeyRepository;
   readonly cooldowns: CooldownRepository;
   readonly quotaObservations: QuotaObservationRepository;
@@ -103,6 +105,7 @@ export async function createServices({
   const delegations = new DelegationRepository(db.client);
   const optimizerEvents = new OptimizerEventRepository(db.client);
   const providers = new ProviderRepository(db.client);
+  const models = new ModelCacheRepository(db.client);
   const providerKeys = new ProviderKeyRepository(db.client);
   const cooldowns = new CooldownRepository(db.client);
   const quotaObservations = new QuotaObservationRepository(db.client);
@@ -183,6 +186,7 @@ export async function createServices({
     quota,
     secrets: secretStore,
     providers,
+    models,
     providerKeys,
     cooldowns,
     quotaObservations,

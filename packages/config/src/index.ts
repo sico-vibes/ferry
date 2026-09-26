@@ -181,12 +181,14 @@ export interface LoggerFactoryOptions {
   level?: string;
   name?: string;
   pretty?: boolean;
+  direct?: boolean;
 }
 export function createLogger({
   logsDir,
   level = process.env.FERRY_LOG_LEVEL ?? 'info',
   name = 'ferry',
   pretty = false,
+  direct = process.env.FERRY_LOG_DIRECT === 'true',
 }: LoggerFactoryOptions): Logger {
   const redact: LoggerOptions['redact'] = {
     paths: [
@@ -211,22 +213,23 @@ export function createLogger({
     },
   ];
   if (pretty) targets.push({ target: 'pino/file', level, options: { destination: 1 } });
-  return pino(
-    {
-      name,
-      level,
-      redact,
-      serializers: { err: pino.stdSerializers.err },
-      formatters: {
-        log(object) {
-          const safe: Record<string, unknown> = {};
-          for (const [key, value] of Object.entries(object)) safe[key] = sanitizeLogValue(value);
-          return safe;
-        },
+  const options: LoggerOptions = {
+    name,
+    level,
+    redact,
+    serializers: { err: pino.stdSerializers.err },
+    formatters: {
+      log(object) {
+        const safe: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(object)) safe[key] = sanitizeLogValue(value);
+        return safe;
       },
     },
-    pino.transport({ targets }),
-  );
+  };
+  if (direct) {
+    return pino(options, pino.destination({ dest: join(logsDir, `${name}.log`), sync: true }));
+  }
+  return pino(options, pino.transport({ targets }));
 }
 export function redactSecretText(text: string): string {
   return redactKnownSecretText(text)
