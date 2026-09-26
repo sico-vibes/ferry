@@ -44,6 +44,10 @@ parentPort.on('message', (event) => {
       });
   void ready
     .then((runningHost) => {
+      runningHost.options.services?.logger.info(
+        { dataDir: runningHost.dataDir },
+        'Ferry core started',
+      );
       port.postMessage({
         jsonrpc: '2.0',
         method: 'system.coreReady',

@@ -148,7 +148,16 @@ export function HomeCanvas() {
     });
     openTab({ id: session.id, title: session.title });
     warnOAuthUseOnce(`app:${session.id}`, session.modelRef, pushToast);
-    await client.sessions.send(session.id, { text });
+    try {
+      await client.sessions.send(session.id, { text });
+    } catch (error) {
+      pushToast({
+        kind: 'error',
+        title: 'Message could not be sent',
+        body: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
     await cache.invalidateQueries({ queryKey: keys.sessions });
     setPrompt('');
     await navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
@@ -347,6 +356,7 @@ function PartView({
 }) {
   const client = useFerryClient();
   const cache = useQueryClient();
+  const navigate = useNavigate();
   switch (part.type) {
     case 'text':
       return <MarkdownPart content={part.text} />;
@@ -426,7 +436,20 @@ function PartView({
         />
       );
     case 'error':
-      return <ErrorPart message={part.message} />;
+      return part.message.startsWith('No available model —') ? (
+        <div className="space-y-2">
+          <ErrorPart message={part.message} />
+          <button
+            className="rounded-md bg-blue-tint px-3 py-1.5 text-label font-medium text-link"
+            onClick={() => void navigate({ to: '/explore' })}
+            type="button"
+          >
+            Explore providers
+          </button>
+        </div>
+      ) : (
+        <ErrorPart message={part.message} />
+      );
   }
 }
 
@@ -818,9 +841,17 @@ export function SessionCanvas() {
       useUI.getState().renameTab(sessionId, sentenceCase);
     }
     warnOAuthUseOnce(`app:${sessionId}`, data.session.modelRef, pushToast);
-    await client.sessions.send(sessionId, { text });
-    setPrompt('');
-    await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+    try {
+      await client.sessions.send(sessionId, { text });
+      setPrompt('');
+      await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+    } catch (error) {
+      pushToast({
+        kind: 'error',
+        title: 'Message could not be sent',
+        body: error instanceof Error ? error.message : String(error),
+      });
+    }
   };
   const planSteps = useMemo(
     () =>

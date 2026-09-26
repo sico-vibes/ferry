@@ -186,6 +186,12 @@ export class ProviderKeyRepository {
 }
 export class ModelCacheRepository {
   constructor(private readonly client: Database.Database) {}
+  replace(providerId: string, models: ModelInfo[], fetchedAt = new Date().toISOString()): void {
+    this.client.transaction(() => {
+      this.client.prepare('DELETE FROM models_cache WHERE provider_id=?').run(providerId);
+      for (const model of models) this.put(providerId, model, fetchedAt);
+    })();
+  }
   put(providerId: string, model: ModelInfo, fetchedAt = new Date().toISOString()): void {
     this.client
       .prepare(

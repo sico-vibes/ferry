@@ -9,7 +9,9 @@ import {
   type UtilityProcess,
 } from 'electron';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { access, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { FERRY_DOMAINS } from '@ferry/shared';
 import {
   WINDOW_BACKGROUND,
   WINDOW_LIGHT_BACKGROUND,
@@ -20,6 +22,7 @@ import {
 // Packaged builds use the icon embedded in the .exe by electron-builder (build/icon.ico).
 const DEV_WINDOW_ICON = join(import.meta.dirname, '../../build/icon.ico');
 
+app.setName('Ferry');
 const e2eUserDataPath = process.env.FERRY_E2E_USER_DATA_DIR;
 if (e2eUserDataPath) app.setPath('userData', e2eUserDataPath);
 
@@ -100,10 +103,9 @@ function launchCore(): void {
     serviceName: 'Ferry Core',
     env: {
       ...process.env,
-      FERRY_REAL_DOMAINS:
-        process.env.FERRY_REAL_DOMAINS ??
-        'settings,workspaces,checkpoints,sessions,approvals,providers,quota,models,profiles,skills,mcp,optimizer,delegation',
+      FERRY_REAL_DOMAINS: process.env.FERRY_REAL_DOMAINS ?? FERRY_DOMAINS.join(','),
       FERRY_CORE_DATA_DIR: process.env.FERRY_HOME ?? join(app.getPath('userData'), 'engine'),
+      FERRY_LOG_DIRECT: 'true',
     },
     stdio: process.env.FERRY_E2E_USER_DATA_DIR ? 'pipe' : 'inherit',
   });
@@ -243,7 +245,25 @@ app.on('second-instance', () => {
 
 app
   .whenReady()
-  .then(() => {
+  .then(async () => {
+    if (app.isPackaged && !e2eUserDataPath) {
+      const oldUserData = join(app.getPath('appData'), '@ferry', 'desktop');
+      const newUserData = app.getPath('userData');
+      const oldEntries = await readdir(oldUserData).catch(() => []);
+      if (oldEntries.length) {
+        await mkdir(newUserData, { recursive: true });
+        for (const entry of oldEntries) {
+          const source = join(oldUserData, entry);
+          const destination = join(newUserData, entry);
+          const destinationExists = await access(destination).then(
+            () => true,
+            () => false,
+          );
+          if (!destinationExists) await rename(source, destination);
+        }
+        await rm(oldUserData, { recursive: false }).catch(() => undefined);
+      }
+    }
     app.setAppUserModelId('dev.ferry.app');
     if (gotLock) {
       launchCore();

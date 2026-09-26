@@ -16,7 +16,7 @@ import {
   newId,
 } from '@ferry/shared';
 import type { MessagePart, Profile, Session, SessionId } from '@ferry/shared';
-import { BUILTIN_PROFILES } from '@ferry/router';
+import { BUILTIN_PROFILES, scoreModels } from '@ferry/router';
 import { createSkillManager } from './skills.js';
 import { createMcpManager } from './mcp.js';
 import { McpServerConfigSchema } from '@ferry/extensions';
@@ -34,6 +34,7 @@ const CreateSchema = z.object({
 const SendSchema = z.object({ text: z.string().min(1) });
 const RenameSchema = z.string().min(1).max(160);
 const BooleanSchema = z.boolean();
+const noModelMessage = 'No available model — add a provider key or check Explore → Providers';
 
 export function register(host: CoreHost, services: FerryServices): void {
   const controllers = new Map<string, AbortController>();
@@ -203,16 +204,6 @@ export function register(host: CoreHost, services: FerryServices): void {
       });
       runPromises.set(session.id, run);
       try {
-        const jail = new WorkspaceJail(workspace.path);
-        const shadow = new ShadowCheckpoints(jail, services.paths.home);
-        const checkpointId = await shadow.snapshot(`Before Ferry session ${session.id}`);
-        services.checkpoints.put({
-          id: CheckpointIdSchema.parse(checkpointId),
-          sessionId: session.id,
-          label: 'Before agent edits',
-          createdAt: services.clock.now().toISOString(),
-          fileCount: 0,
-        });
         const now = services.clock.now();
         const userMessage = store.appendMessage(
           session.id,
@@ -224,6 +215,65 @@ export function register(host: CoreHost, services: FerryServices): void {
         host.emit('session.message', {
           sessionId: session.id,
           message: MessageSchema.parse(userMessage),
+        });
+        const preflight = createSessionDependencies(services, () => undefined);
+        const availableModels = [
+          ...(services.env.NODE_ENV === 'test'
+            ? services.catalog.models
+            : services.catalog.providers.flatMap(({ provider: id }) => services.models.list(id))),
+          ...oauthModelCatalog.filter((model) => services.providers.get(model.providerId)?.enabled),
+        ];
+        const hasAvailableModel =
+          scoreModels({
+            models: availableModels,
+            capacity: preflight.capacity(),
+            profile,
+            step: 'plan',
+            estimate: { inputTokens: 1, outputTokens: 2048, expectedSteps: 1, requiresTools: true },
+          }).length > 0;
+        if (!hasAvailableModel && services.env.NODE_ENV !== 'test') {
+          const errorMessage = store.appendMessage(
+            session.id,
+            'assistant',
+            [
+              {
+                type: 'error',
+                id: PartIdSchema.parse(newId('part')),
+                message: noModelMessage,
+                kind: 'provider',
+              },
+            ],
+            null,
+            services.clock.now(),
+          );
+          host.emit('session.message', {
+            sessionId: session.id,
+            message: MessageSchema.parse(errorMessage),
+          });
+          const latest = services.sessions.get(session.id);
+          if (latest)
+            updateSession({
+              ...latest,
+              title:
+                latest.title === 'New Chat'
+                  ? text.trim().split(/\s+/).slice(0, 6).join(' ').slice(0, 80)
+                  : latest.title,
+              status: 'error',
+            });
+          controllers.delete(session.id);
+          runPromises.delete(session.id);
+          resolveRun();
+          return;
+        }
+        const jail = new WorkspaceJail(workspace.path);
+        const shadow = new ShadowCheckpoints(jail, services.paths.home);
+        const checkpointId = await shadow.snapshot(`Before Ferry session ${session.id}`);
+        services.checkpoints.put({
+          id: CheckpointIdSchema.parse(checkpointId),
+          sessionId: session.id,
+          label: 'Before agent edits',
+          createdAt: services.clock.now().toISOString(),
+          fileCount: 0,
         });
         const current = services.sessions.get(session.id);
         if (!current) throw rpcDomainError(-32044, 'not_found', `Session not found: ${session.id}`);
@@ -271,7 +321,9 @@ export function register(host: CoreHost, services: FerryServices): void {
         const sessionCatalog = {
           ...services.catalog,
           models: [
-            ...services.catalog.models,
+            ...(services.env.NODE_ENV === 'test'
+              ? services.catalog.models
+              : services.catalog.providers.flatMap(({ provider: id }) => services.models.list(id))),
             ...oauthModelCatalog.filter(
               (model) => services.providers.get(model.providerId)?.enabled,
             ),

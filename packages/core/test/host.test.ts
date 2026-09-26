@@ -375,9 +375,11 @@ describe('provider, model and quota RPC integration', () => {
       const connected = await rpc.providers.setKey(providerId, secret);
       expect(connected.keyStatus).toBe('unchecked');
       expect(JSON.stringify(connected)).not.toContain(secret);
-      expect(await rpc.models.list(providerId)).toEqual(
-        expect.arrayContaining([expect.objectContaining({ ref: 'openai/gpt-4o-mini' })]),
-      );
+      await vi.waitFor(async () => {
+        expect(await rpc.models.list(providerId)).toEqual(
+          expect.arrayContaining([expect.objectContaining({ ref: 'openai/gpt-4o-mini' })]),
+        );
+      });
 
       const probeResult = await rpc.providers.probe(providerId).catch((error: unknown) => {
         const requests = fake.requests.map(({ method, url }) => ({ method, url }));

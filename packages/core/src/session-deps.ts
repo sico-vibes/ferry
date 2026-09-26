@@ -221,8 +221,8 @@ export function createSessionDependencies(
   };
   const gateway: ModelGateway = {
     resolveCandidates(profile, stepKind) {
-      const available = services.catalog.providers.flatMap(
-        ({ provider }) => services.providers.get(provider)?.availableModels ?? [],
+      const available = services.catalog.providers.flatMap(({ provider }) =>
+        services.models.list(provider),
       );
       const oauthRoutingEnabled =
         (services.settings.get('global') as { allowSubscriptionOAuthRouting?: boolean } | undefined)

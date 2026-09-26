@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
+import { FERRY_DOMAINS } from '@ferry/shared';
 import {
   BookOpen,
   CircleHelp,
@@ -147,7 +148,10 @@ export function Sidebar({
     <>
       <IconRail
         active={activeNav}
-        showDemo={!window.ferryHybrid || window.ferryHybrid.getRealDomains().length === 0}
+        showDemo={
+          !window.ferryHybrid ||
+          FERRY_DOMAINS.some((domain) => !window.ferryHybrid?.getRealDomains().includes(domain))
+        }
         onNew={() => void createChat()}
         onNavigate={(to) => void navigate({ to: to === 'chats' ? '/' : `/${to}` })}
         onAdd={() => void chooseFolder()}

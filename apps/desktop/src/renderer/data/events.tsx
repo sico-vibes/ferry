@@ -45,6 +45,9 @@ export function useFerryEvents(): void {
         void cache.invalidateQueries({ queryKey: keys.session(task.sessionId) });
       }),
       client.on('provider.updated', (provider) => {
+        void cache.invalidateQueries({ queryKey: ['providers'] });
+        void cache.invalidateQueries({ queryKey: ['models'] });
+        void cache.invalidateQueries({ queryKey: ['model-candidates'] });
         pushToast({ kind: 'info', title: `${provider.name} updated`, body: null });
       }),
       client.on('delegation.updated', (run) => {

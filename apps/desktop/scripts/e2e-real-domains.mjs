@@ -175,9 +175,11 @@ async function startEmbeddedCore() {
         FERRY_E2E_OPEN_FOLDER: fixtureRepo,
         FERRY_HOME: dataDirectory,
         FERRY_REAL_DOMAINS:
-          'settings,workspaces,checkpoints,providers,models,quota,sessions,approvals,profiles,skills,mcp,optimizer,delegation',
+          'settings,workspaces,checkpoints,providers,oauth,models,quota,sessions,approvals,profiles,skills,mcp,optimizer,delegation',
         FERRY_PROVIDER_BASE_URL_OPENROUTER: `${fakeProvider.baseUrl}/openrouter/v1`,
         FERRY_PROVIDER_BASE_URL_GROQ: `${fakeProvider.baseUrl}/groq/v1`,
+        FERRY_E2E_PROVIDER_ID: 'openrouter',
+        FERRY_E2E_PROVIDER_KEY: 'fixture-key',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
@@ -259,6 +261,9 @@ async function startEmbeddedCore() {
     await page.waitForFunction(() => Boolean(window.ferryRpcClient), undefined, {
       timeout: 30_000,
     });
+    await expect
+      .poll(() => page.evaluate(async () => (await window.ferryRpcClient.models.list()).length))
+      .toBeGreaterThan(0);
     return { page, exit, browser };
   } finally {
     clearTimeout(timer);

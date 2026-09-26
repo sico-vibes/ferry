@@ -144,7 +144,7 @@ export function IconRail({
             className="flex w-full flex-col items-center gap-1 rounded-md border border-border-hair px-0.5 py-1 text-meta leading-4 text-text-3"
           >
             <FlaskConical aria-hidden="true" size={13} strokeWidth={1.75} />
-            <span>Demo data</span>
+            <span>Demo</span>
           </span>
         )}
         <span aria-hidden="true" className="h-px w-8 bg-[var(--fade-line)]" />

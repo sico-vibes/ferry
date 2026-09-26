@@ -50,6 +50,17 @@ async function errorOf(promise: Promise<unknown>): Promise<RpcError> {
 }
 
 describe('QA settings domain', () => {
+  it('defaults real domains to every core domain, including OAuth', async () => {
+    const core = await makeCore('settings-real-domains-default');
+    try {
+      const settings = await core.rpc.settings.get();
+      expect(settings.developer.realDomains).toContain('oauth');
+      expect(settings.developer.realDomains).toEqual(expect.arrayContaining(core.host.realDomains));
+    } finally {
+      await core.close();
+    }
+  });
+
   it('rejects invalid values with the validation taxonomy and a Zod-backed message', async () => {
     const core = await makeCore('settings-invalid');
     try {

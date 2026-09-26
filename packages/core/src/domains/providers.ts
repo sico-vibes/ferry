@@ -74,6 +74,66 @@ function saveProvider(services: FerryServices, provider: Provider): Provider {
 }
 
 export function register(host: CoreHost, services: FerryServices): void {
+  const discovering = new Map<string, Promise<void>>();
+  const refreshModels = (id: string): Promise<void> => {
+    const existing = discovering.get(id);
+    if (existing) return existing;
+    const task = (async () => {
+      const baseUrl = baseUrlFor(services, id);
+      if (services.env.NODE_ENV === 'test' && !isLoopbackUrl(baseUrl)) return;
+      const key = (await services.secrets.get(id)) ?? '';
+      const saved = services.providers.get(id);
+      if (!key && !(saved?.enabled && baseUrl)) return;
+      try {
+        const models = await discoverProviderModels(id, key, { ...(baseUrl ? { baseUrl } : {}) });
+        const now = services.clock.now().toISOString();
+        services.models.replace(id, models, now);
+        const current = providerRecord(services, id);
+        const updated = saveProvider(services, {
+          ...current,
+          availableModels: models,
+          modelCount: models.length,
+          modelsVerifiedAt: now,
+        });
+        host.emit('provider.updated', updated);
+      } catch (error) {
+        services.logger.warn({ err: error, providerId: id }, 'Provider model discovery failed');
+      }
+    })().finally(() => discovering.delete(id));
+    discovering.set(id, task);
+    return task;
+  };
+  host.onStart(async () => {
+    const testProviderId = services.env.FERRY_E2E_PROVIDER_ID;
+    const testProviderKey = services.env.FERRY_E2E_PROVIDER_KEY;
+    if (services.env.NODE_ENV === 'test' && testProviderId && testProviderKey) {
+      const id = ProviderIdInput.parse(testProviderId);
+      await services.secrets.set(id, testProviderKey);
+      services.providerKeys.put({
+        id,
+        providerId: id,
+        keyringRef: id,
+        createdAt: services.clock.now().toISOString(),
+      });
+      const current = providerRecord(services, id);
+      saveProvider(services, {
+        ...current,
+        enabled: true,
+        availableModels: [],
+        modelsVerifiedAt: null,
+      });
+      invalidateSessionProviderKeyCache(services, id);
+    }
+    services.catalog.providers.forEach(({ provider: id }) => {
+      const saved = services.providers.get(id);
+      const stale =
+        services.models.list(id).length === 0 ||
+        !saved?.modelsVerifiedAt ||
+        services.clock.now().getTime() - Date.parse(saved.modelsVerifiedAt) > 86_400_000;
+      const key = services.providerKeys.get(id);
+      if (stale && (key || (saved?.enabled && baseUrlFor(services, id)))) void refreshModels(id);
+    });
+  });
   host.registerDomain('providers', {
     list() {
       return services.catalog.providers.map((entry) => providerRecord(services, entry.provider));
@@ -90,20 +150,6 @@ export function register(host: CoreHost, services: FerryServices): void {
         createdAt: services.clock.now().toISOString(),
       });
       invalidateSessionProviderKeyCache(services, id);
-      const providerBaseUrl = baseUrlFor(services, id);
-      let discovered: Awaited<ReturnType<typeof discoverProviderModels>> = [];
-      let discoverySucceeded = false;
-      if (services.env.NODE_ENV !== 'test' || isLoopbackUrl(providerBaseUrl)) {
-        try {
-          discovered = await discoverProviderModels(id, key, {
-            ...(providerBaseUrl ? { baseUrl: providerBaseUrl } : {}),
-          });
-          discoverySucceeded = true;
-        } catch {
-          // Keep discovery failures distinct from an empty live model list.
-        }
-      }
-      const now = services.clock.now().toISOString();
       const provider = saveProvider(services, {
         ...current,
         keyStatus: 'unchecked',
@@ -112,11 +158,10 @@ export function register(host: CoreHost, services: FerryServices): void {
         cooldownUntil: null,
         availableModels: [],
         modelsVerifiedAt: null,
-        ...(discoverySucceeded
-          ? { availableModels: discovered, modelsVerifiedAt: now, modelCount: discovered.length }
-          : {}),
       });
+      services.models.replace(id, []);
       host.emit('provider.updated', provider);
+      void refreshModels(id);
       return provider;
     },
     async removeKey(rawId: unknown) {
@@ -133,6 +178,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         health: 'unknown',
         cooldownUntil: null,
       });
+      services.models.replace(id, []);
       host.emit('provider.updated', provider);
       return provider;
     },
@@ -260,6 +306,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             }
           : {}),
       });
+      if (result.ok) services.models.replace(id, persistedModels, now);
       host.emit('provider.updated', provider);
       return result;
     },

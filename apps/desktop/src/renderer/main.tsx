@@ -10,6 +10,7 @@ import {
   createWebSocketRpcTransport,
 } from '@ferry/client';
 import type { FerryClient } from '@ferry/client';
+import { FERRY_DOMAINS } from '@ferry/shared';
 import { FerryProvider } from './data/client';
 import { AppRouter } from './router';
 import './styles.css';
@@ -88,14 +89,20 @@ const bootstrapClient = async () => {
   window.ferryEngineHello = hello;
   window.ferryRpcClient = rpc;
   const settings = await rpc.settings.get();
-  const domains = [...new Set(settings.developer.realDomains)].filter((domain) =>
-    hello.realDomains.includes(domain),
-  );
+  const configuredDomains = settings.developer.realDomains;
+  const domains = [
+    ...new Set(configuredDomains.length ? configuredDomains : hello.realDomains),
+  ].filter((domain) => hello.realDomains.includes(domain));
+  const demoDomains = FERRY_DOMAINS.filter((domain) => !domains.includes(domain));
+  if (window.ferryHost && demoDomains.length)
+    console.warn(`Ferry is using Demo data for domains: ${demoDomains.join(', ')}`);
   const hybrid = createHybridClient(mock, rpc, domains);
   window.ferryHybrid = hybrid;
   return hybrid;
 };
 const mountApp = (currentClient: FerryClient) => {
+  if (window.ferryHost && currentClient === mock)
+    console.warn('Ferry is using the Demo client because the core connection failed.');
   createRoot(root).render(
     <StrictMode>
       <FerryProvider client={currentClient}>
@@ -109,6 +116,7 @@ const mountApp = (currentClient: FerryClient) => {
 if (new URLSearchParams(location.search).get('demo') === 'long') {
   void import('./perf-demo').then(({ seedLongTranscript }) => {
     seedLongTranscript(mock);
+    if (window.ferryHost) console.warn('Ferry is using the Demo client for the performance demo.');
     mountApp(mock);
   });
 } else
