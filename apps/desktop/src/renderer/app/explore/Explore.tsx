@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Dialog } from 'radix-ui';
 import { ArrowDown, ArrowUp, ArrowUpRight, Check, Search, X } from 'lucide-react';
-import type { Provider } from '@ferry/shared';
+import type { OAuthProvider, Provider } from '@ferry/shared';
 import {
   BrandIcon,
   EmptyState,
@@ -52,6 +52,9 @@ export function ExploreCanvas() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<'add' | 'manage'>('add');
   const [activeProvider, setActiveProvider] = useState<Provider | null>(null);
+  const [activeOAuthProvider, setActiveOAuthProvider] = useState<OAuthProvider | null>(null);
+  const [riskAcknowledged, setRiskAcknowledged] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState(false);
   const [probing, setProbing] = useState<string | null>(null);
   const {
     data: providers = [],
@@ -66,6 +69,14 @@ export function ExploreCanvas() {
     queryKey: ['models'],
     queryFn: () => client.models.list(),
   });
+  const { data: oauthProviders = [] } = useQuery({
+    queryKey: ['oauth-providers'],
+    queryFn: () => client.oauth.list(),
+  });
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => client.settings.get(),
+  });
 
   useEffect(() => {
     const off = client.on('provider.updated', (provider) => {
@@ -75,6 +86,25 @@ export function ExploreCanvas() {
     });
     return off;
   }, [cache, client]);
+
+  useEffect(
+    () =>
+      client.on('oauth.progress', (event) => {
+        if (event.type === 'device_code')
+          pushToast({
+            kind: 'warning',
+            title: 'Complete sign-in in your browser',
+            body: `Enter ${event.userCode} at ${event.verificationUri}`,
+          });
+        else if (event.type === 'open_url')
+          pushToast({
+            kind: 'info',
+            title: 'Sign-in opened in your browser',
+            body: event.instructions ?? null,
+          });
+      }),
+    [client, pushToast],
+  );
 
   const providerNames = useMemo(
     () => Object.fromEntries(providers.map((provider) => [provider.id, provider.name])),
@@ -166,6 +196,34 @@ export function ExploreCanvas() {
       {sort.key === key ? sort.ascending ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : null}
     </button>
   );
+  const loginOAuth = async () => {
+    if (!activeOAuthProvider || !riskAcknowledged) return;
+    setOauthLoading(true);
+    try {
+      const acknowledged = settings?.subscriptionOAuthAcknowledged ?? [];
+      if (!acknowledged.includes(activeOAuthProvider.id))
+        await client.settings.update({
+          subscriptionOAuthAcknowledged: [...acknowledged, activeOAuthProvider.id],
+        });
+      await client.oauth.login(activeOAuthProvider.id);
+      await cache.invalidateQueries({ queryKey: ['oauth-providers'] });
+      pushToast({
+        kind: 'success',
+        title: 'Subscription login complete',
+        body: activeOAuthProvider.name,
+      });
+      setActiveOAuthProvider(null);
+      setRiskAcknowledged(false);
+    } catch (error) {
+      pushToast({
+        kind: 'error',
+        title: 'Subscription login failed',
+        body: error instanceof Error ? error.message : 'Try again.',
+      });
+    } finally {
+      setOauthLoading(false);
+    }
+  };
 
   return (
     <section
@@ -292,6 +350,50 @@ export function ExploreCanvas() {
             }}
           />
         )}
+        <Section
+          title="Subscription logins (unofficial)"
+          className="border border-warn/30 bg-warn/5"
+        >
+          <details>
+            <summary className="cursor-pointer text-label font-medium text-warn">
+              Optional subscription sign-in · account suspension risk
+            </summary>
+            <p className="my-3 text-body text-text-2">
+              Unofficial clients may violate provider terms. Your account could be suspended or
+              banned. Use an API key or the provider’s official CLI for supported access.
+            </p>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,280px),1fr))] gap-2">
+              {oauthProviders.map((provider) => (
+                <article
+                  className="rounded-card border border-warn/20 bg-card p-3"
+                  key={provider.id}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <strong className="text-label text-text-1">{provider.name}</strong>
+                    <span className="rounded-pill bg-warn/10 px-2 py-1 text-meta text-warn">
+                      Unofficial · high risk
+                    </span>
+                  </div>
+                  <p className="my-2 text-meta text-text-3">{provider.models.join(' · ')}</p>
+                  <p className="text-meta text-warn">Account suspension or ban is possible.</p>
+                  <Pill
+                    className="mt-3"
+                    onClick={() => {
+                      setActiveOAuthProvider(provider);
+                      setRiskAcknowledged(
+                        settings?.subscriptionOAuthAcknowledged.includes(provider.id) ?? false,
+                      );
+                    }}
+                    size="sm"
+                    variant="outline"
+                  >
+                    {provider.connected ? 'Manage login' : 'Log in'}
+                  </Pill>
+                </article>
+              ))}
+            </div>
+          </details>
+        </Section>
         <Section title="Models" ariaLabel="Models" className="grid gap-3">
           <header className="flex flex-wrap items-end gap-3">
             <div className="mr-auto">
@@ -358,6 +460,14 @@ export function ExploreCanvas() {
                       title={model.name}
                     >
                       {model.name}
+                      {oauthProviders.some((provider) => model.providerId === provider.id) && (
+                        <span
+                          className="ml-2 rounded-pill bg-warn/10 px-2 py-0.5 text-meta text-warn"
+                          title="Unofficial subscription access may lead to account suspension"
+                        >
+                          Subscription OAuth · risk
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 text-text-2">
                       {providerNames[model.providerId] ?? model.providerId}
@@ -461,6 +571,66 @@ export function ExploreCanvas() {
           if (!open) setActiveProvider(null);
         }}
       />
+      <Dialog.Root
+        open={Boolean(activeOAuthProvider)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setActiveOAuthProvider(null);
+            setRiskAcknowledged(false);
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-app/80 backdrop-blur-[2px]" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-card border border-warn/35 bg-panel p-5 shadow-[var(--highlight-top)] focus:outline-none">
+            <Dialog.Title className="text-title font-semibold text-text-1">
+              Use your {activeOAuthProvider?.name} subscription outside its official app?
+            </Dialog.Title>
+            <Dialog.Description className="mt-3 text-body text-text-2">
+              Logging in here uses your personal subscription through an unofficial client.{' '}
+              {activeOAuthProvider?.name} may treat this as a violation of its terms and{' '}
+              <strong className="text-warn"> suspend or ban your account</strong>. Ferry cannot
+              protect you from that. Official alternatives: use the provider's API key, or delegate
+              to its official CLI.
+            </Dialog.Description>
+            <p className="mt-3 rounded-card border border-warn/25 bg-warn/5 p-3 text-meta text-warn">
+              Subscription use carries account suspension risk. This warning appears at every login.
+            </p>
+            <label className="mt-4 flex cursor-pointer items-start gap-2 text-label text-text-1">
+              <input
+                checked={riskAcknowledged}
+                onChange={(event) => {
+                  setRiskAcknowledged(event.currentTarget.checked);
+                }}
+                type="checkbox"
+              />
+              <span>I understand my account may be suspended</span>
+            </label>
+            <div className="mt-5 flex justify-end gap-2">
+              <Pill
+                autoFocus
+                onClick={() => {
+                  setActiveOAuthProvider(null);
+                }}
+                size="sm"
+                variant="outline"
+              >
+                Cancel
+              </Pill>
+              <Pill
+                disabled={!riskAcknowledged || oauthLoading}
+                onClick={() => {
+                  void loginOAuth();
+                }}
+                size="sm"
+                variant="blue-tint"
+              >
+                {oauthLoading ? 'Opening sign-in…' : 'Log in anyway'}
+              </Pill>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </section>
   );
 }

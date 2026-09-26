@@ -472,6 +472,17 @@ export function ModelPickerPopover({
                           >
                             <strong>
                               {model.name}
+                              {['anthropic', 'openai-codex', 'github-copilot'].includes(
+                                model.providerId,
+                              ) ? (
+                                <span
+                                  className="ml-1 rounded-pill bg-warn/10 px-1.5 py-0.5 text-meta text-warn"
+                                  title="Unofficial subscription access may lead to account suspension"
+                                  aria-label="Unofficial subscription OAuth; account suspension risk"
+                                >
+                                  Risk
+                                </span>
+                              ) : null}
                               {candidate.selected ? <Check size={13} /> : null}
                             </strong>
                             <span>

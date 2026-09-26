@@ -2,6 +2,7 @@ import { ModelInfoSchema, ProviderIdSchema } from '@ferry/shared';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { discoverProviderModels } from '@ferry/providers';
+import { oauthModelCatalog } from '@ferry/oauth';
 
 export function register(host: CoreHost, services: FerryServices): void {
   host.registerDomain('models', {
@@ -13,7 +14,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             .map((provider) => provider.provider)
             .filter((id) => services.providers.get(id)?.enabled ?? false),
         );
-        return Promise.all(
+        const liveModels = Promise.all(
           [...enabled].map(async (id) => {
             const saved = services.providers.get(id);
             const stale =
@@ -41,9 +42,12 @@ export function register(host: CoreHost, services: FerryServices): void {
             }
             return services.providers.get(id)?.availableModels ?? [];
           }),
-        ).then((liveModels) =>
-          liveModels
-            .flat()
+        );
+        const oauthEnabled = oauthModelCatalog
+          .filter((model) => services.providers.get(model.providerId)?.enabled)
+          .map((model) => ModelInfoSchema.parse(model));
+        return liveModels.then((records) =>
+          [...records.flat(), ...oauthEnabled]
             .filter((model) => providerId === undefined || model.providerId === providerId)
             .map((model) => ModelInfoSchema.parse(model)),
         );

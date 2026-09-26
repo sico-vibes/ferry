@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CapacitySummarySchema,
+  AcpAgentDetectionSchema,
   CheckpointSchema,
   McpServerSchema,
   ModelCandidateSchema,
@@ -89,8 +90,10 @@ export function runFerryClientContract(
       if (includes('mcp'))
         for (const x of await client.mcp.list())
           expect(() => McpServerSchema.parse(x)).not.toThrow();
-      if (includes('delegation'))
+      if (includes('delegation')) {
         for (const x of await client.delegation.lanes()) expect(x.name).toBeTruthy();
+        for (const x of await client.delegation.detectAgents()) AcpAgentDetectionSchema.parse(x);
+      }
       if (includes('settings')) SettingsSchema.parse(await client.settings.get());
       if (includes('quota')) {
         CapacitySummarySchema.parse(await client.quota.capacity());

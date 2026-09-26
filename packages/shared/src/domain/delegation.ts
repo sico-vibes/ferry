@@ -3,7 +3,12 @@ import { RunIdSchema, SessionIdSchema } from './ids.js';
 import { FileChangeSchema } from './session.js';
 export const LaneSchema = z.object({
   name: z.string(),
-  implementer: z.enum(['codex', 'opencode', 'claude', 'ferry']),
+  implementer: z.enum(['codex', 'opencode', 'claude', 'acp', 'ferry']),
+  agent: z.string().nullable().optional(),
+  transport: z.enum(['native', 'acp']).optional(),
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
   profile: z.string().nullable().default(null),
   model: z.string().nullable(),
   effort: z.string().nullable(),
@@ -14,6 +19,26 @@ export const LaneSchema = z.object({
   trusted: z.boolean(),
 });
 export type Lane = z.infer<typeof LaneSchema>;
+export const AcpAgentDetectionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  command: z.string(),
+  args: z.array(z.string()),
+  detectArgs: z.array(z.string()),
+  installHint: z.string(),
+  supportsModel: z.boolean(),
+  supportsMode: z.boolean(),
+  launchVerified: z.boolean(),
+  verified: z.boolean(),
+  verifiedAt: z.iso.date().nullable(),
+  caution: z.boolean(),
+  cautionNote: z.string().nullable(),
+  available: z.boolean(),
+  version: z.string().nullable(),
+  executable: z.string().nullable(),
+  error: z.string().optional(),
+});
+export type AcpAgentDetection = z.infer<typeof AcpAgentDetectionSchema>;
 export const GateResultSchema = z.object({
   command: z.string(),
   ok: z.boolean(),

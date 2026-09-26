@@ -1,6 +1,13 @@
-import { decide, readLanes, startDelegation, type DelegationHandle } from '@ferry/delegate';
+import {
+  decide,
+  detectAcpAgents,
+  readLanes,
+  startDelegation,
+  type DelegationHandle,
+} from '@ferry/delegate';
 import {
   DelegationRunSchema,
+  AcpAgentDetectionSchema,
   RunIdSchema,
   SessionIdSchema,
   newId,
@@ -47,6 +54,9 @@ export function register(host: CoreHost, services: FerryServices): void {
     return parsed;
   };
   host.registerDomain('delegation', {
+    async detectAgents() {
+      return (await detectAcpAgents()).map((agent) => AcpAgentDetectionSchema.parse(agent));
+    },
     async lanes() {
       const workspace = services.workspaces.list()[0];
       if (!workspace) return [];

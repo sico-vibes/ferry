@@ -8,6 +8,7 @@ export const ProviderTagSchema = z.enum([
   'credits',
   'paid',
   'subscription_cli',
+  'subscription_oauth',
   'caution',
 ]);
 export type ProviderTag = z.infer<typeof ProviderTagSchema>;

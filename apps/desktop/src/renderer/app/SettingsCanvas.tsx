@@ -73,6 +73,10 @@ export function SettingsCanvas() {
     queryKey: ['lanes'],
     queryFn: () => client.delegation.lanes(),
   });
+  const { data: acpAgents = [] } = useQuery({
+    queryKey: ['delegation', 'detected-agents'],
+    queryFn: () => client.delegation.detectAgents(),
+  });
   const { data: skills = [] } = useQuery({
     queryKey: ['skills'],
     queryFn: () => client.skills.list(),
@@ -516,6 +520,18 @@ export function SettingsCanvas() {
               </Pill>
             </SettingRow>
           ))}
+          <SettingRow
+            title="Allow subscription OAuth models in routing"
+            helper="When off, Auto-Free and Best Available never choose subscription logins. OAuth models remain available for manual selection."
+          >
+            <Switch
+              label="Allow subscription OAuth models in routing"
+              checked={settings?.allowSubscriptionOAuthRouting ?? false}
+              onCheckedChange={(allowSubscriptionOAuthRouting) =>
+                void update({ allowSubscriptionOAuthRouting })
+              }
+            />
+          </SettingRow>
           <Pill size="sm" variant="outline" onClick={() => void navigate({ to: '/explore' })}>
             Open in Explore
           </Pill>
@@ -649,6 +665,36 @@ export function SettingsCanvas() {
                 </span>
               </SettingRow>
             ))}
+          <h3>ACP agent detection</h3>
+          <p className="muted">
+            Ferry checks PATH and the version command. Pi credentials remain managed by Pi.
+          </p>
+          {acpAgents.map((agent) => {
+            const configured = lanes.some(
+              (lane) => lane.implementer === 'acp' && lane.agent === agent.id,
+            );
+            return (
+              <div className="lane-row" key={agent.id}>
+                <strong>{agent.name}</strong>
+                <small>
+                  {agent.available
+                    ? `${agent.version ?? agent.executable ?? agent.command}${configured ? ' · Configured in a lane' : ''}`
+                    : agent.installHint}
+                </small>
+                <span className={`status-pill ${agent.available ? 'ok' : 'pending'}`}>
+                  {agent.available ? 'Installed' : 'Not installed'}
+                </span>
+                {agent.verified && (
+                  <span className="status-pill ok">Verified · {agent.verifiedAt}</span>
+                )}
+                {agent.caution && (
+                  <span className="status-pill pending" title={agent.cautionNote ?? undefined}>
+                    {agent.cautionNote ?? 'Use caution'}
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </Group>
       );
     if (section === 'Permissions')

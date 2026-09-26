@@ -135,18 +135,27 @@ export class CoreHost {
     await mkdir(dirname(lockPath), { recursive: true });
     const lockContents = JSON.stringify({ pid: process.pid, protocol: FERRY_PROTOCOL });
     const temporaryLockPath = `${lockPath}.${String(process.pid)}.${randomUUID()}.tmp`;
-    await writeFile(temporaryLockPath, lockContents, { flag: 'wx' });
-    let acquired: boolean;
+    let acquired = false;
     try {
+      await writeFile(temporaryLockPath, lockContents, { flag: 'wx' });
       try {
         await link(temporaryLockPath, lockPath);
         acquired = true;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        acquired = await recoverStaleLock(lockPath, temporaryLockPath);
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'EEXIST') {
+          acquired = await recoverStaleLock(lockPath, temporaryLockPath);
+        } else if (!isLockContentionError(error)) {
+          throw error;
+        }
       }
+    } catch (error) {
+      if (!isLockContentionError(error)) throw error;
+      acquired = false;
     } finally {
-      await unlink(temporaryLockPath).catch(() => undefined);
+      await rm(temporaryLockPath, { force: true, maxRetries: 5, retryDelay: 50 }).catch(
+        () => undefined,
+      );
     }
     if (!acquired) throw new CoreLockError(this.dataDir);
     this.#releaseLock = async () => {
@@ -452,12 +461,17 @@ async function recoverStaleLock(lockPath: string, temporaryLockPath: string): Pr
       await link(temporaryLockPath, lockPath);
       return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      if (isLockContentionError(error)) return false;
       throw error;
     }
   } finally {
     await rm(recoveryPath, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+function isLockContentionError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return false;
+  return ['EEXIST', 'EACCES', 'EPERM', 'EBUSY'].includes(String(error.code));
 }
 
 async function isStaleLock(lockPath: string): Promise<boolean> {

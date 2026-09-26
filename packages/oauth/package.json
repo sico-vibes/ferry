@@ -1,5 +1,5 @@
 {
-  "name": "@ferry/delegate",
+  "name": "@ferry/oauth",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,10 +12,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.5.0",
-    "@ferry/router": "workspace:*",
+    "@earendil-works/pi-ai": "0.87.1",
+    "@ferry/secrets": "workspace:*",
     "@ferry/shared": "workspace:*",
-    "execa": "10.0.1",
     "zod": "4.6.5"
   },
   "devDependencies": {

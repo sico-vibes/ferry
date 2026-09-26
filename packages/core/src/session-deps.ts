@@ -8,6 +8,7 @@ import type { RawCallObservation } from '@ferry/providers';
 import {
   ProviderIdSchema,
   ProviderSchema,
+  OAuthProviderIdSchema,
   UsageRecordSchema,
   QuotaObservationSchema,
   newId,
@@ -18,6 +19,7 @@ import {
   type UsageRecord,
 } from '@ferry/shared';
 import { scoreModels, type CapacityView } from '@ferry/router';
+import { oauthModelCatalog, streamOAuthStep } from '@ferry/oauth';
 import type { FerryServices } from './services.js';
 
 const providerKeyPresence = new WeakMap<FerryServices, Map<string, boolean>>();
@@ -73,8 +75,8 @@ export function createSessionDependencies(
       return baseUrl ? [[provider, baseUrl]] : [];
     }),
   );
-  const providers = (): Provider[] =>
-    services.catalog.providers.map(
+  const providers = (): Provider[] => [
+    ...services.catalog.providers.map(
       ({ provider, name, tag, data_use, terms_note, signup_url, docs_url, verified_at }) => {
         const id = ProviderIdSchema.parse(provider);
         const saved = services.providers.get(id);
@@ -113,7 +115,35 @@ export function createSessionDependencies(
           stepsLeftToday: services.quota.stepsLeft(id),
         });
       },
-    );
+    ),
+    ...OAuthProviderIdSchema.options.map((id) => {
+      const saved = services.providers.get(id);
+      return ProviderSchema.parse({
+        id,
+        name:
+          id === 'anthropic'
+            ? 'Anthropic Claude Pro/Max'
+            : id === 'openai-codex'
+              ? 'OpenAI ChatGPT'
+              : 'GitHub Copilot',
+        tag: 'subscription_oauth',
+        kind: 'api',
+        brand: null,
+        keyStatus: saved?.keyStatus ?? 'missing',
+        enabled: saved?.enabled ?? false,
+        health: saved?.health ?? 'unknown',
+        cooldownUntil: null,
+        dataUse: null,
+        termsNote: 'Unofficial subscription OAuth · account suspension risk',
+        signupUrl: null,
+        docsUrl: null,
+        verifiedAt: null,
+        modelCount: oauthModelCatalog.filter((model) => model.providerId === id).length,
+        windows: [],
+        stepsLeftToday: null,
+      });
+    }),
+  ];
   const capacity = (): CapacityView => ({
     providers: providers(),
     now: services.clock.now().toISOString(),
@@ -194,9 +224,16 @@ export function createSessionDependencies(
       const available = services.catalog.providers.flatMap(
         ({ provider }) => services.providers.get(provider)?.availableModels ?? [],
       );
+      const oauthRoutingEnabled =
+        (services.settings.get('global') as { allowSubscriptionOAuthRouting?: boolean } | undefined)
+          ?.allowSubscriptionOAuthRouting === true;
+      const oauthModels = oauthRoutingEnabled
+        ? oauthModelCatalog.filter((model) => services.providers.get(model.providerId)?.enabled)
+        : [];
+      const candidates = [...available, ...oauthModels];
       const eligible = new Set(
         scoreModels({
-          models: available,
+          models: candidates,
           providers: providers(),
           capacity: capacity(),
           profile,
@@ -204,13 +241,15 @@ export function createSessionDependencies(
           estimate: { inputTokens: 1, requiresTools: false },
         }).map((candidate) => candidate.ref),
       );
-      return available.filter((model) => eligible.has(model.ref));
+      return candidates.filter((model) => eligible.has(model.ref));
     },
     recordHandoff(sessionId, reason) {
       services.handoffs.put({ id: newId('handoff'), sessionId, reason });
     },
     async streamStep(req, signal) {
       const providerId = req.model.providerId;
+      if (OAuthProviderIdSchema.safeParse(providerId).success)
+        return await streamOAuthStep(services.secrets, { ...req, signal });
       if (!loadedApiKeys.has(providerId)) {
         loadedApiKeys.add(providerId);
         // The key reference is authoritative; look up the secret only for the selected candidate.

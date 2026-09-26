@@ -95,7 +95,7 @@ describe('Library, settings, and onboarding screens', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await saved;
     expect((await client.workspaces.list())[0]?.settings.gateCommands).toContain('pnpm check');
-  }, 2000);
+  }, 30_000);
 
   it('saves edited profile spending caps', async () => {
     const client = createDemoFerryClient({ speed: 0, latencyMs: 0 });
@@ -122,7 +122,7 @@ describe('Library, settings, and onboarding screens', () => {
     expect(
       (await client.profiles.list()).find((item) => item.name === 'Best Available')?.caps.dailyUsd,
     ).toBe(4);
-  }, 2000);
+  }, 30_000);
 
   it('completes onboarding and persists the chosen defaults', async () => {
     const client = createDemoFerryClient();

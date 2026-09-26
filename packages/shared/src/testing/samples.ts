@@ -267,6 +267,8 @@ export const sampleSkill: Skill = {
 export const sampleLane: Lane = {
   name: 'Codex',
   implementer: 'codex',
+  agent: null,
+  transport: 'native',
   profile: null,
   model: null,
   effort: null,
@@ -303,6 +305,8 @@ export const sampleSettings: Settings = {
   homeStyle: 'auto',
   fontScale: 1,
   restoreTabs: true,
+  allowSubscriptionOAuthRouting: false,
+  subscriptionOAuthAcknowledged: [],
   delegationMode: 'suggest',
   permissionMode: 'ask',
   activeProfileId: profileId,

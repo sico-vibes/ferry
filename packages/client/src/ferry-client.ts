@@ -3,6 +3,7 @@ import type {
   Checkpoint,
   CheckpointId,
   DelegationRun,
+  AcpAgentDetection,
   HandoffStat,
   Lane,
   McpServer,
@@ -11,6 +12,8 @@ import type {
   ModelInfo,
   ModelRef,
   OptimizerStats,
+  OAuthProvider,
+  OAuthProviderId,
   ProbeResult,
   Profile,
   ProfileId,
@@ -73,6 +76,12 @@ export interface FerryClient {
     probe(id: ProviderId): Promise<ProbeResult>;
     setEnabled(id: ProviderId, v: boolean): Promise<Provider>;
   };
+  oauth: {
+    list(): Promise<OAuthProvider[]>;
+    login(id: OAuthProviderId): Promise<void>;
+    logout(id: OAuthProviderId): Promise<void>;
+    status(id: OAuthProviderId): Promise<boolean>;
+  };
   quota: {
     capacity(): Promise<CapacitySummary>;
     history(days: number): Promise<UsageHistoryPoint[]>;
@@ -93,6 +102,7 @@ export interface FerryClient {
   optimizer: { stats(): Promise<OptimizerStats> };
   delegation: {
     lanes(): Promise<Lane[]>;
+    detectAgents(): Promise<AcpAgentDetection[]>;
     approveProjectLanes(): Promise<Lane[]>;
     runs(sessionId: SessionId): Promise<DelegationRun[]>;
     start(i: { sessionId: SessionId; lane: string; brief: string }): Promise<DelegationRun>;
