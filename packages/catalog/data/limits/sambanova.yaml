@@ -1,0 +1,20 @@
+provider: sambanova
+name: SambaNova Cloud Free Tier
+tag: legit
+signup_url: https://cloud.sambanova.ai/
+docs_url: https://docs.sambanova.ai/docs/en/models/rate-limits
+terms_note: >-
+  Free Tier while no payment method is linked: 20 RPM and 20 RPD per model plus 200K
+  tokens/day. RPD is the binding request limit.
+data_use: >-
+  Customer Content is processed to provide the service; query logs may be used to improve
+  the service.
+verified_at: '2026-09-25'
+source_url: https://docs.sambanova.ai/docs/en/models/rate-limits
+endpoints:
+  - https://api.sambanova.ai/v1
+probe_models: [gpt-oss-120b, Meta-Llama-3.3-70B-Instruct, DeepSeek-V3.1]
+windows:
+  - { scope: model, model: gpt-oss-120b, metric: requests, kind: rolling, length: 60, limit: 20 }
+  - { scope: model, model: gpt-oss-120b, metric: requests, kind: fixed_daily, tz: UTC, limit: 20 }
+  - { scope: model, model: gpt-oss-120b, metric: tokens, kind: fixed_daily, tz: UTC, limit: 200000 }

@@ -136,4 +136,14 @@ describe('Library, settings, and onboarding screens', () => {
       expect((await client.settings.get()).onboardingComplete).toBe(true);
     });
   }, 15000);
+
+  it('shows researched reasons for unavailable providers in onboarding', async () => {
+    const client = createDemoFerryClient();
+    await client.settings.update({ onboardingComplete: false });
+    await renderRoute('onboarding', client);
+    await userEvent.click(await screen.findByRole('button', { name: /Get started/ }));
+    await userEvent.click(screen.getByText('Unavailable'));
+    expect(screen.getByText('Kiro')).toBeTruthy();
+    expect(screen.getByText('The free API was retired on July 30, 2026.')).toBeTruthy();
+  }, 15000);
 });

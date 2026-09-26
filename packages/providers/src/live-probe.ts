@@ -23,6 +23,7 @@ export interface LiveProbeRow {
 
 export async function runLiveProbe(options: {
   keys: Record<string, string | undefined>;
+  baseUrls?: Record<string, string | undefined>;
   outputDirectory: string;
   fetch?: typeof globalThis.fetch;
   write?: (provider: string, fixture: unknown) => Promise<void>;
@@ -32,8 +33,8 @@ export async function runLiveProbe(options: {
   if (!options.write) await mkdir(options.outputDirectory, { recursive: true });
   const rows: LiveProbeRow[] = [];
   for (const provider of catalog.providers) {
-    const key = options.keys[provider.provider];
-    if (!key) continue;
+    const key = options.keys[provider.provider] ?? '';
+    if (!key && provider.key_required !== false) continue;
     const captures: LiveProbeCapture[] = [];
     const recordingFetch: typeof globalThis.fetch = async (input, init) => {
       const response = await (options.fetch ?? globalThis.fetch)(input, init);
@@ -47,11 +48,12 @@ export async function runLiveProbe(options: {
       return response;
     };
     const baseUrl =
-      provider.provider === 'openrouter'
+      options.baseUrls?.[provider.provider] ??
+      (provider.provider === 'openrouter'
         ? 'https://openrouter.ai/api/v1'
         : provider.provider === 'gemini'
           ? 'https://generativelanguage.googleapis.com/v1beta/openai'
-          : undefined;
+          : undefined);
     const result = await probe(provider.provider, key, {
       fetch: recordingFetch,
       ...(baseUrl ? { baseUrl } : {}),
@@ -66,7 +68,7 @@ export async function runLiveProbe(options: {
       skipped: result.skippedModels ?? [],
       windows,
       errorKind: result.errorKind,
-      message: result.message.replaceAll(key, '[REDACTED]'),
+      message: result.message.replaceAll(key, key ? '[REDACTED]' : ''),
     };
     rows.push(row);
     const fixture = {
@@ -80,15 +82,28 @@ export async function runLiveProbe(options: {
       message: row.message,
       calls: captures,
     };
-    if (options.write) await options.write(provider.provider, fixture);
+    const secrets = Object.values(options.keys).filter((secret): secret is string =>
+      Boolean(secret),
+    );
+    const redact = (value: unknown): unknown =>
+      typeof value === 'string'
+        ? secrets.reduce((safe, secret) => safe.replaceAll(secret, '[REDACTED]'), value)
+        : Array.isArray(value)
+          ? value.map(redact)
+          : value && typeof value === 'object'
+            ? Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, redact(entry)]))
+            : value;
+    const safeFixture = redact(fixture);
+    if (options.write) await options.write(provider.provider, safeFixture);
     else
       await writeFile(
         join(options.outputDirectory, `${provider.provider}.json`),
-        `${JSON.stringify(fixture, null, 2)}\n`,
+        `${JSON.stringify(safeFixture, null, 2)}\n`,
         'utf8',
       );
+    const printed = `${row.provider}\t${row.ok ? 'yes' : 'no'}\t${row.model ?? '-'}\t${JSON.stringify(row.skipped)}\t${JSON.stringify(row.windows)}\t${row.errorKind ?? row.message}`;
     options.print?.(
-      `${row.provider}\t${row.ok ? 'yes' : 'no'}\t${row.model ?? '-'}\t${JSON.stringify(row.skipped)}\t${JSON.stringify(row.windows)}\t${row.errorKind ?? row.message}`,
+      secrets.reduce((safe, secret) => safe.replaceAll(secret, '[REDACTED]'), printed),
     );
   }
   return rows;

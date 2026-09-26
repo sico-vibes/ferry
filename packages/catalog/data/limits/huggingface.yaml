@@ -1,0 +1,16 @@
+provider: huggingface
+name: Hugging Face Inference Providers
+tag: credits
+optional: true
+signup_url: https://huggingface.co/settings/tokens
+docs_url: https://huggingface.co/docs/inference-providers/pricing
+terms_note: >-
+  Free users receive $0.10/month in inference credits, subject to change. Requests are
+  routed to upstream providers.
+data_use: Routed requests are governed by the upstream provider's terms.
+verified_at: '2026-09-25'
+source_url: https://huggingface.co/docs/inference-providers/pricing
+endpoints: [https://router.huggingface.co/v1]
+probe_models: [meta-llama/Llama-3.1-8B-Instruct:fastest]
+windows:
+  - { scope: provider, metric: usd, kind: monthly_from_anchor, limit: 0.1 }

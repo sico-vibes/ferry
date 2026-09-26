@@ -1,0 +1,15 @@
+provider: tokenrouter
+name: TokenRouter Free
+tag: caution
+optional: true
+signup_url: https://www.tokenrouter.io/
+docs_url: https://tokenrouter.io/pricing
+terms_note: >-
+  Free plan: 50,000 routed tokens/month, limited to 2 providers; auto-routing is paid-only.
+data_use: unknown
+verified_at: '2026-09-25'
+source_url: https://tokenrouter.io/pricing
+endpoints: [https://api.tokenrouter.com/v1]
+probe_models: [gpt-4o-mini]
+windows:
+  - { scope: provider, metric: tokens, kind: monthly_from_anchor, limit: 50000 }

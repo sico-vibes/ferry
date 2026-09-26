@@ -1,0 +1,16 @@
+provider: nebius
+name: Nebius Token Factory Builder credits
+tag: credits
+optional: true
+signup_url: https://nebius.com/
+docs_url: https://nebius.com/builders-terms-and-conditions
+terms_note: >-
+  Builder Program credits are one-time, issued in two allocations around 30 days apart, and
+  expire 90 days after issuance.
+data_use: unknown
+verified_at: '2026-09-25'
+source_url: https://nebius.com/builders-terms-and-conditions
+endpoints: [https://api.studio.nebius.com/v1]
+probe_models: [meta-llama/Meta-Llama-3.1-8B-Instruct]
+windows:
+  - { scope: provider, metric: usd, kind: monthly_from_anchor, limit: null }

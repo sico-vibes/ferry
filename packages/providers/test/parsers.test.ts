@@ -76,7 +76,7 @@ describe('quota parsers', () => {
       expect.objectContaining({ windowId: 'requests-hour', limit: 150, remaining: 149 }),
     );
     expect(cerebras).toContainEqual(
-      expect.objectContaining({ windowId: 'tokens-hour', limit: 1000000, remaining: 2999976 }),
+      expect.objectContaining({ windowId: 'tokens-hour', limit: 1000000, remaining: 1000000 }),
     );
     expect(cerebras).toContainEqual(
       expect.objectContaining({ windowId: 'requests-minute', resetAt: '2026-09-24T12:02:59.560Z' }),

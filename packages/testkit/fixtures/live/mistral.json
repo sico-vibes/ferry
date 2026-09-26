@@ -1,6 +1,6 @@
 {
   "provider": "mistral",
-  "capturedAt": "2026-09-25T21:59:57.747Z",
+  "capturedAt": "2026-09-26T09:30:58.716Z",
   "ok": true,
   "model": "codestral-2508",
   "skipped": [],
@@ -25,9 +25,9 @@
       "metric": "tokens",
       "kind": "rolling",
       "periodLabel": "tokens-minute",
-      "used": 10,
+      "used": 20,
       "limit": 625000,
-      "remaining": 624990,
+      "remaining": 624980,
       "resetAt": null,
       "confidence": "exact"
     }
@@ -47,7 +47,7 @@
         "x-ratelimit-limit-req-minute": "125",
         "x-ratelimit-limit-tokens-minute": "625000",
         "x-ratelimit-remaining-req-minute": "124",
-        "x-ratelimit-remaining-tokens-minute": "624990",
+        "x-ratelimit-remaining-tokens-minute": "624980",
         "x-ratelimit-tokens-query-cost": "10"
       }
     }

@@ -1,0 +1,17 @@
+provider: ovhcloud
+name: OVHcloud AI Endpoints anonymous free tier
+tag: legit
+optional: true
+signup_url: https://www.ovhcloud.com/en/public-cloud/ai-endpoints/
+docs_url: https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-endpoints-getting-started
+terms_note: >-
+  Anonymous requests need no API key and are limited to 2 requests/minute per IP per model.
+  Authenticated access requires a Public Cloud project with a payment method.
+data_use: GDPR-compliant, hosted in France.
+verified_at: '2026-09-25'
+source_url: https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-endpoints-getting-started
+endpoints: [https://oai.endpoints.kepler.ai.cloud.ovh.net/v1]
+key_required: false
+probe_models: [Meta-Llama-3_3-70B-Instruct]
+windows:
+  - { scope: provider, metric: requests, kind: rolling, length: 60, limit: 2 }

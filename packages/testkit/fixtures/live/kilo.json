@@ -1,0 +1,22 @@
+{
+  "provider": "kilo",
+  "capturedAt": "2026-09-26T09:30:57.941Z",
+  "ok": true,
+  "model": "openrouter/free",
+  "skipped": [],
+  "windows": [],
+  "errorKind": null,
+  "message": "Key valid",
+  "calls": [
+    {
+      "url": "https://api.kilo.ai/api/gateway/models",
+      "status": 200,
+      "headers": {}
+    },
+    {
+      "url": "https://api.kilo.ai/api/gateway/chat/completions",
+      "status": 200,
+      "headers": {}
+    }
+  ]
+}

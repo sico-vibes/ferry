@@ -16,7 +16,7 @@
     "test": "turbo run test",
     "test:watch": "vitest",
     "check:affected": "node scripts/check-affected.mjs",
-    "probe:live": "node scripts/probe-live.mjs",
+    "probe:live": "tsx scripts/probe-live.mjs",
     "check": "turbo run typecheck lint test && node scripts/check-text.mjs && prettier --check .",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

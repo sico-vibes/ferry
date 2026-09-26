@@ -19,19 +19,29 @@ export function ProviderKeyDialog({
   const toast = useToasts((state) => state.push);
   const realProviders = window.ferryHybrid?.getRealDomains().includes('providers') ?? false;
   const [value, setValue] = useState('');
+  const [accountId, setAccountId] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const save = async () => {
+    if (provider?.id === 'cloudflare-workers-ai' && !accountId.trim()) {
+      setMessage('Enter the Cloudflare account ID.');
+      return;
+    }
     if (!provider || !value.trim()) {
       setMessage('Enter an API key to save.');
       return;
     }
     setBusy(true);
     try {
-      await client.providers.setKey(provider.id, value.trim());
+      const secret =
+        provider.id === 'cloudflare-workers-ai'
+          ? JSON.stringify({ accountId: accountId.trim(), apiKey: value.trim() })
+          : value.trim();
+      await client.providers.setKey(provider.id, secret);
       await cache.invalidateQueries({ queryKey: ['providers'] });
       setValue('');
+      setAccountId('');
       setMessage('Key saved. Test the connection to verify it.');
       toast({ kind: 'success', title: 'Key saved', body: `${provider.name} is ready to test.` });
     } catch (error) {
@@ -107,8 +117,19 @@ export function ProviderKeyDialog({
             Get a key
           </a>
         )}
+        {provider?.id === 'cloudflare-workers-ai' && (
+          <TextField
+            label="Cloudflare account ID"
+            value={accountId}
+            onChange={(next) => {
+              setAccountId(next);
+              setMessage('');
+            }}
+            placeholder="Account ID"
+          />
+        )}
         <TextField
-          label="API key"
+          label={provider?.id === 'cloudflare-workers-ai' ? 'Cloudflare API token' : 'API key'}
           masked
           value={value}
           onChange={(next) => {

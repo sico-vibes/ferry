@@ -1,0 +1,13 @@
+provider: kiro
+name: Kiro (unavailable for third-party harnesses)
+tag: caution
+signup_url: https://kiro.dev/
+docs_url: https://kiro.dev/terms/
+terms_note: >-
+  Kiro's terms prohibit use through third-party proxies or harnesses; accounts have been
+  reported banned for this use. Do not connect Kiro to Ferry.
+data_use: Subject to Kiro terms.
+verified_at: '2026-09-25'
+source_url: https://github.com/diegosouzapw/OmniRoute/discussions/9216
+dead: true
+windows: []

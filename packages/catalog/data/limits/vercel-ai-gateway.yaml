@@ -1,0 +1,18 @@
+provider: vercel-ai-gateway
+name: Vercel AI Gateway free tier
+tag: credits
+optional: true
+signup_url: https://vercel.com/dashboard
+docs_url: https://vercel.com/docs/ai-gateway/pricing
+terms_note: >-
+  Free tier includes $5/month in AI Gateway credits and a subset of free-tier models.
+  Purchasing credits moves the team to paid tier and removes the monthly free credit.
+data_use: >-
+  Zero Data Retention by default; prompts and outputs are deleted after a request and
+  providers are not permitted to train on prompts.
+verified_at: '2026-09-25'
+source_url: https://vercel.com/docs/ai-gateway/pricing
+endpoints: [https://ai-gateway.vercel.sh/v1]
+probe_models: [openai/gpt-oss-120b]
+windows:
+  - { scope: provider, metric: usd, kind: monthly_from_anchor, limit: 5 }

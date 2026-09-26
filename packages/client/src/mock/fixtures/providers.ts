@@ -54,10 +54,28 @@ export function createProviders(now: Date): MockProvider[] {
     ['gemini', 'Gemini API', 'legit', 'googlegemini', 250, 212, 10, 3, 38],
     ['openrouter', 'OpenRouter (free models)', 'legit', 'openrouter', 1000, 388, 20, 4, 312],
     ['nvidia', 'NVIDIA NIM', 'legit', 'nvidia', null, null, 40, 11, null],
-    ['cerebras', 'Cerebras', 'legit', null, null, null, 5, 1, 27],
+    ['cerebras', 'Cerebras', 'caution', null, null, null, 5, 1, 27],
     ['groq', 'Groq', 'legit', null, 1000, 140, 8000, 2100, 43],
     ['mistral', 'Mistral (Experiment)', 'legit', 'mistralai', null, null, 1, 0, null],
     ['opencode-zen', 'OpenCode Zen (free models)', 'promo', null, null, null, null, null, null],
+    ['sambanova', 'SambaNova Cloud', 'legit', null, null, null, null, null, null],
+    ['llm7', 'LLM7.io', 'caution', null, null, null, null, null, null],
+    ['cloudflare-workers-ai', 'Cloudflare Workers AI', 'legit', null, null, null, null, null, null],
+    ['kilo', 'Kilo Gateway', 'caution', null, null, null, null, null, null],
+    ['vercel-ai-gateway', 'Vercel AI Gateway', 'credits', null, null, null, null, null, null],
+    ['huggingface', 'Hugging Face Inference', 'credits', null, null, null, null, null, null],
+    ['ovhcloud', 'OVHcloud AI Endpoints', 'legit', null, null, null, null, null, null],
+    ['tokenrouter', 'TokenRouter', 'caution', null, null, null, null, null, null],
+    ['anyapi', 'AnyAPI', 'caution', null, null, null, null, null, null],
+    ['zai-glm', 'Z.ai GLM', 'legit', null, null, null, null, null, null],
+    ['fireworks', 'Fireworks AI', 'credits', null, null, null, null, null, null],
+    ['nebius', 'Nebius Token Factory', 'credits', null, null, null, null, null, null],
+    ['scaleway', 'Scaleway Generative APIs', 'credits', null, null, null, null, null, null],
+    ['hyperbolic', 'Hyperbolic', 'credits', null, null, null, null, null, null],
+    ['deepinfra', 'DeepInfra', 'credits', null, null, null, null, null, null],
+    ['novita', 'Novita AI', 'credits', null, null, null, null, null, null],
+    ['together', 'Together AI', 'credits', null, null, null, null, null, null],
+    ['stepfun', 'StepFun', 'credits', null, null, null, null, null, null],
     ['opencode-go', 'OpenCode Go', 'paid', null, null, null, null, null, null],
     ['anthropic', 'Anthropic API', 'paid', 'anthropic', null, null, null, null, null],
     ['openai', 'OpenAI API', 'paid', 'openai', null, null, null, null, null],
@@ -75,6 +93,45 @@ export function createProviders(now: Date): MockProvider[] {
     ],
     ['opencode-cli', 'OpenCode CLI', 'subscription_cli', null, null, null, null, null, null],
   ] as const;
+  const optionalProviderIds = new Set([
+    'llm7',
+    'cloudflare-workers-ai',
+    'kilo',
+    'vercel-ai-gateway',
+    'huggingface',
+    'ovhcloud',
+    'tokenrouter',
+    'anyapi',
+    'zai-glm',
+    'fireworks',
+    'nebius',
+    'scaleway',
+    'hyperbolic',
+    'deepinfra',
+    'novita',
+    'together',
+    'stepfun',
+  ]);
+  const providerLinks: Record<string, string> = {
+    sambanova: 'https://cloud.sambanova.ai/',
+    llm7: 'https://dash.llm7.io/',
+    'cloudflare-workers-ai': 'https://dash.cloudflare.com/',
+    kilo: 'https://app.kilo.ai/',
+    'vercel-ai-gateway': 'https://vercel.com/dashboard',
+    huggingface: 'https://huggingface.co/settings/tokens',
+    ovhcloud: 'https://www.ovhcloud.com/en/public-cloud/ai-endpoints/',
+    tokenrouter: 'https://www.tokenrouter.io/',
+    anyapi: 'https://anyapi.ai/',
+    'zai-glm': 'https://z.ai/manage-apikey/apikey-list',
+    fireworks: 'https://fireworks.ai/',
+    nebius: 'https://nebius.com/',
+    scaleway: 'https://console.scaleway.com/',
+    hyperbolic: 'https://app.hyperbolic.ai/',
+    deepinfra: 'https://deepinfra.com/dash',
+    novita: 'https://novita.ai/',
+    together: 'https://api.together.ai/',
+    stepfun: 'https://platform.stepfun.ai/',
+  };
   const providers: MockProvider[] = specs.map(
     ([id, name, tag, brand, dayLimit, dayUsed, minuteLimit, minuteUsed, steps]) => {
       const windows: Provider['windows'] = [];
@@ -138,12 +195,19 @@ export function createProviders(now: Date): MockProvider[] {
               : 'unchecked'
             : id === 'opencode-go'
               ? 'valid'
-              : tag === 'paid'
-                ? 'missing'
-                : id === 'mistral'
-                  ? 'unchecked'
-                  : 'valid',
-        enabled: tag === 'subscription_cli' ? true : tag === 'paid' ? false : true,
+              : id === 'ovhcloud' || id === 'kilo'
+                ? 'not_applicable'
+                : tag === 'paid' || optionalProviderIds.has(id) || id in providerLinks
+                  ? 'missing'
+                  : id === 'mistral'
+                    ? 'unchecked'
+                    : 'valid',
+        enabled:
+          tag === 'subscription_cli'
+            ? true
+            : tag === 'paid' || optionalProviderIds.has(id)
+              ? false
+              : true,
         health: id === 'cerebras' ? 'cooldown' : 'ok',
         cooldownUntil: id === 'cerebras' ? new Date(now.getTime() + 90000).toISOString() : null,
         dataUse:
@@ -151,7 +215,19 @@ export function createProviders(now: Date): MockProvider[] {
             ? 'Free tier prompts may be used to improve Google products.'
             : id === 'mistral'
               ? 'Experiment tier data may be used for training.'
-              : null,
+              : id === 'sambanova'
+                ? 'Customer content is processed to provide the service; query logs may improve the service.'
+                : id === 'cloudflare-workers-ai'
+                  ? 'Customer content is not used to train AI models without explicit consent.'
+                  : id === 'vercel-ai-gateway'
+                    ? 'Zero Data Retention by default; upstream provider terms may apply.'
+                    : id === 'huggingface'
+                      ? 'Routed requests follow the upstream provider terms.'
+                      : id === 'kilo'
+                        ? 'Auto Free may route to providers that log or train on prompts.'
+                        : id === 'ovhcloud'
+                          ? 'GDPR-compliant and hosted in France.'
+                          : null,
         termsNote:
           id === 'openrouter'
             ? '1,000/day after a one-time $10 credit purchase; otherwise 50/day.'
@@ -159,17 +235,38 @@ export function createProviders(now: Date): MockProvider[] {
               ? '8K tokens/min makes it a helper, not a main coder.'
               : id === 'opencode-zen'
                 ? 'Promotional free models; may end without notice.'
-                : id === 'codex-cli'
-                  ? 'Uses your ChatGPT plan via the official CLI (delegation only).'
-                  : null,
+                : id === 'sambanova'
+                  ? 'Free tier has per-model daily request limits; RPD is the binding request cap.'
+                  : id === 'llm7'
+                    ? 'Resale or downstream access requires written approval; no SLA.'
+                    : id === 'kilo'
+                      ? 'Free-model requests are limited by IP; automatic routing may select upstream providers.'
+                      : id === 'vercel-ai-gateway'
+                        ? 'Monthly free credits stop applying after purchasing credits.'
+                        : id === 'huggingface'
+                          ? 'Monthly inference credits are small and subject to change.'
+                          : id === 'ovhcloud'
+                            ? 'Anonymous requests are limited to 2 per minute per IP and model.'
+                            : id === 'tokenrouter'
+                              ? 'Free tier is limited to 2 providers; auto-routing is paid-only.'
+                              : id === 'anyapi'
+                                ? 'anyToken conversion to model tokens is not published.'
+                                : id === 'zai-glm'
+                                  ? 'Free Flash model quotas vary by account.'
+                                  : tag === 'credits'
+                                    ? 'Credits or trial access are finite; not a recurring free tier.'
+                                    : id === 'codex-cli'
+                                      ? 'Uses your ChatGPT plan via the official CLI (delegation only).'
+                                      : null,
         signupUrl:
-          id === 'gemini'
+          providerLinks[id] ??
+          (id === 'gemini'
             ? 'https://aistudio.google.com/apikey'
             : id === 'openrouter'
               ? 'https://openrouter.ai/keys'
               : id === 'nvidia'
                 ? 'https://build.nvidia.com'
-                : null,
+                : null),
         docsUrl: null,
         verifiedAt: '2026-09-23',
         modelCount: 0,

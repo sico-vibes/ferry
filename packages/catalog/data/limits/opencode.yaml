@@ -1,6 +1,6 @@
 provider: opencode
 name: OpenCode Zen
-tag: caution
+tag: promo
 signup_url: https://opencode.ai/zen
 docs_url: https://opencode.ai/docs/zen/
 terms_note: Zen's free models only work inside OpenCode; Zen here needs paid balance.

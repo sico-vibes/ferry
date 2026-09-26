@@ -1,28 +1,19 @@
 provider: cerebras
-name: Cerebras Inference
-tag: legit
+name: Cerebras Inference (Free Trial is credits-only)
+tag: caution
 signup_url: https://cloud.cerebras.ai/
 docs_url: https://inference-docs.cerebras.ai/support/rate-limits
-terms_note: 'Per model: 1M tokens/day, 5 requests/minute, and 30K uncached tokens/minute.'
+terms_note: >-
+  New accounts may be trial-limited: the Free Trial is $5 of credits that expire 30 days
+  after a verified payment method is added. Current live response headers report 1,000,000
+  tokens/day, 2,400 requests/day, 150 requests/hour, and 5 requests/minute; observed
+  headers take precedence over published trial-credit descriptions.
 data_use: Subject to Cerebras terms.
-verified_at: '2026-09-23'
+verified_at: '2026-09-25'
 source_url: https://inference-docs.cerebras.ai/support/rate-limits
 windows:
-  - {
-      scope: model,
-      model: gpt-oss-120b,
-      metric: tokens,
-      kind: fixed_daily,
-      tz: UTC,
-      limit: 1000000,
-    }
-  - {
-      scope: model,
-      model: qwen-3.8-27b,
-      metric: tokens,
-      kind: fixed_daily,
-      tz: UTC,
-      limit: 1000000,
-    }
+  - { scope: provider, metric: tokens, kind: fixed_daily, tz: UTC, limit: 1000000 }
+  - { scope: provider, metric: tokens, kind: rolling, length: 3600, limit: 1000000 }
+  - { scope: provider, metric: requests, kind: fixed_daily, tz: UTC, limit: 2400 }
+  - { scope: provider, metric: requests, kind: rolling, length: 3600, limit: 150 }
   - { scope: provider, metric: requests, kind: rolling, length: 60, limit: 5 }
-  - { scope: provider, metric: tokens, kind: rolling, length: 60, limit: 30000 }

@@ -1,0 +1,15 @@
+provider: stepfun
+name: StepFun Platform paid API
+tag: credits
+optional: true
+signup_url: https://platform.stepfun.ai/
+docs_url: https://platform.stepfun.ai/docs/en/pricing/details
+terms_note: >-
+  No free API tier. The $0 top-up tier still requires account balance to call paid models.
+data_use: unknown
+verified_at: '2026-09-25'
+source_url: https://platform.stepfun.ai/docs/en/pricing/details
+endpoints: [https://api.stepfun.ai/v1]
+probe_models: [step-3.5-flash]
+windows:
+  - { scope: provider, metric: requests, kind: rolling, length: 60, limit: 10 }

@@ -1,0 +1,53 @@
+{
+  "provider": "ovhcloud",
+  "capturedAt": "2026-09-26T09:31:02.037Z",
+  "ok": false,
+  "model": null,
+  "skipped": [],
+  "windows": [
+    {
+      "id": "generic:minute",
+      "scope": "provider",
+      "modelRef": null,
+      "metric": "requests",
+      "kind": "rolling",
+      "periodLabel": "generic:minute",
+      "used": 2,
+      "limit": 2,
+      "remaining": 0,
+      "resetAt": null,
+      "confidence": "exact"
+    },
+    {
+      "id": "retry-after",
+      "scope": "provider",
+      "modelRef": null,
+      "metric": "requests",
+      "kind": "dynamic",
+      "periodLabel": "retry-after",
+      "used": 0,
+      "limit": null,
+      "remaining": null,
+      "resetAt": "2026-09-26T09:31:56.037Z",
+      "confidence": "exact"
+    }
+  ],
+  "errorKind": "rate_limit",
+  "message": "API rate limit exceeded",
+  "calls": [
+    {
+      "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/models",
+      "status": 200,
+      "headers": {}
+    },
+    {
+      "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
+      "status": 429,
+      "headers": {
+        "retry-after": "54",
+        "x-ratelimit-limit-minute": "2",
+        "x-ratelimit-remaining-minute": "0"
+      }
+    }
+  ]
+}

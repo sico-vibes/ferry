@@ -1,0 +1,20 @@
+provider: kilo
+name: Kilo Gateway free models
+tag: caution
+optional: true
+signup_url: https://app.kilo.ai/
+docs_url: https://kilo.ai/docs/gateway/usage-and-billing
+terms_note: >-
+  Free-model requests are limited to 200/hour per IP. Free model IDs include
+  stepfun/step-3.7-flash:free, poolside/laguna-s-2.1:free,
+  nvidia/nemotron-3-ultra-550b-a55b:free, tencent/hy3:free, and openrouter/free.
+data_use: >-
+  Auto Free may route prompts to providers that log or use them to improve services; do not
+  submit confidential data.
+verified_at: '2026-09-25'
+source_url: https://kilo.ai/docs/gateway/usage-and-billing
+endpoints: [https://api.kilo.ai/api/gateway]
+key_required: false
+probe_models: [openrouter/free]
+windows:
+  - { scope: provider, metric: requests, kind: rolling, length: 3600, limit: 200 }

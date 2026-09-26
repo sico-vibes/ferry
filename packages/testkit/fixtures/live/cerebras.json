@@ -1,8 +1,8 @@
 {
   "provider": "cerebras",
-  "capturedAt": "2026-09-25T21:59:53.317Z",
+  "capturedAt": "2026-09-26T09:30:47.712Z",
   "ok": true,
-  "model": "gpt-oss-120b",
+  "model": "qwen-3.8-27b",
   "skipped": [],
   "windows": [
     {
@@ -13,8 +13,8 @@
       "kind": "fixed_daily",
       "periodLabel": "requests-day",
       "used": 1,
-      "limit": 2400,
-      "remaining": 2399,
+      "limit": 648000,
+      "remaining": 647999,
       "resetAt": null,
       "confidence": "exact"
     },
@@ -26,8 +26,8 @@
       "kind": "dynamic",
       "periodLabel": "requests-hour",
       "used": 1,
-      "limit": 150,
-      "remaining": 149,
+      "limit": 27000,
+      "remaining": 26999,
       "resetAt": null,
       "confidence": "exact"
     },
@@ -39,8 +39,8 @@
       "kind": "rolling",
       "periodLabel": "requests-minute",
       "used": 1,
-      "limit": 5,
-      "remaining": 4,
+      "limit": 450,
+      "remaining": 449,
       "resetAt": null,
       "confidence": "exact"
     },
@@ -52,8 +52,8 @@
       "kind": "fixed_daily",
       "periodLabel": "tokens-day",
       "used": 70,
-      "limit": 1000000,
-      "remaining": 999930,
+      "limit": 216000000,
+      "remaining": 215999930,
       "resetAt": null,
       "confidence": "exact"
     },
@@ -65,8 +65,8 @@
       "kind": "dynamic",
       "periodLabel": "tokens-hour",
       "used": 0,
-      "limit": 1000000,
-      "remaining": 2999930,
+      "limit": 9000000,
+      "remaining": 9000000,
       "resetAt": null,
       "confidence": "exact"
     },
@@ -78,8 +78,8 @@
       "kind": "rolling",
       "periodLabel": "tokens-minute",
       "used": 70,
-      "limit": 30000,
-      "remaining": 29930,
+      "limit": 150000,
+      "remaining": 149930,
       "resetAt": null,
       "confidence": "exact"
     }
@@ -96,18 +96,18 @@
       "url": "https://api.cerebras.ai/v1/chat/completions",
       "status": 200,
       "headers": {
-        "x-ratelimit-limit-requests-day": "2400",
-        "x-ratelimit-limit-requests-hour": "150",
-        "x-ratelimit-limit-requests-minute": "5",
-        "x-ratelimit-limit-tokens-day": "1000000",
-        "x-ratelimit-limit-tokens-hour": "1000000",
-        "x-ratelimit-limit-tokens-minute": "30000",
-        "x-ratelimit-remaining-requests-day": "2399",
-        "x-ratelimit-remaining-requests-hour": "149",
-        "x-ratelimit-remaining-requests-minute": "4",
-        "x-ratelimit-remaining-tokens-day": "999930",
-        "x-ratelimit-remaining-tokens-hour": "2999930",
-        "x-ratelimit-remaining-tokens-minute": "29930"
+        "x-ratelimit-limit-requests-day": "648000",
+        "x-ratelimit-limit-requests-hour": "27000",
+        "x-ratelimit-limit-requests-minute": "450",
+        "x-ratelimit-limit-tokens-day": "216000000",
+        "x-ratelimit-limit-tokens-hour": "9000000",
+        "x-ratelimit-limit-tokens-minute": "150000",
+        "x-ratelimit-remaining-requests-day": "647999",
+        "x-ratelimit-remaining-requests-hour": "26999",
+        "x-ratelimit-remaining-requests-minute": "449",
+        "x-ratelimit-remaining-tokens-day": "215999930",
+        "x-ratelimit-remaining-tokens-hour": "44999930",
+        "x-ratelimit-remaining-tokens-minute": "149930"
       }
     }
   ]

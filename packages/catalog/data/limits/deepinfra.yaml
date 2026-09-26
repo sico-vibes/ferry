@@ -1,0 +1,14 @@
+provider: deepinfra
+name: DeepInfra pay-as-you-go
+tag: credits
+optional: true
+signup_url: https://deepinfra.com/dash
+docs_url: https://docs.deepinfra.com/account/rate-limits
+terms_note: No recurring free allowance; a card or prepaid balance is required.
+data_use: unknown
+verified_at: '2026-09-25'
+source_url: https://deepinfra.com/pricing
+endpoints: [https://api.deepinfra.com/v1/openai]
+probe_models: [meta-llama/Meta-Llama-3.1-8B-Instruct]
+windows:
+  - { scope: model, metric: requests, kind: rolling, length: 1, limit: null }

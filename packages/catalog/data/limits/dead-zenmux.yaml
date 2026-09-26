@@ -1,0 +1,14 @@
+provider: zenmux
+name: ZenMux free plan unavailable for API use
+tag: caution
+optional: true
+signup_url: https://zenmux.ai/
+docs_url: https://zenmux.ai/docs/guide/subscription.html
+terms_note: >-
+  Free plan is web chat only and explicitly provides no API access. API use requires a paid
+  subscription.
+data_use: unknown
+verified_at: '2026-09-25'
+source_url: https://zenmux.ai/docs/guide/subscription.html
+dead: true
+windows: []

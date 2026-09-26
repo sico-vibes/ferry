@@ -1,0 +1,16 @@
+provider: anyapi
+name: AnyAPI Free plan
+tag: caution
+optional: true
+signup_url: https://anyapi.ai/
+docs_url: https://anyapi.ai/terms-of-service
+terms_note: >-
+  Free plan grants up to 100,000 anyTokens per calendar day, reset at midnight UTC. The
+  conversion from proprietary anyTokens to model tokens is unpublished.
+data_use: unknown
+verified_at: '2026-09-25'
+source_url: https://anyapi.ai/terms-of-service
+endpoints: [https://api.anyapi.ai/v1]
+probe_models: [gpt-4o-mini]
+windows:
+  - { scope: provider, metric: credits, kind: fixed_daily, tz: UTC, limit: 100000 }

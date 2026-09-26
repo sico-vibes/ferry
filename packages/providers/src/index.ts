@@ -56,6 +56,12 @@ export function providerFromRef(ref: ModelRef | string): string {
   return ref.slice(0, ref.indexOf('/'));
 }
 
+function redactSecrets(value: string, secrets: string[]): string {
+  return secrets
+    .filter((secret) => secret.length > 0)
+    .reduce((safe, secret) => safe.replaceAll(secret, '[REDACTED]'), value);
+}
+
 const compatibleDefaults: Record<string, string> = {
   gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
   groq: 'https://api.groq.com/openai/v1',
@@ -65,6 +71,23 @@ const compatibleDefaults: Record<string, string> = {
   deepseek: 'https://api.deepseek.com/v1',
   opencode: 'https://opencode.ai/zen/v1',
   'opencode-go': 'https://opencode.ai/zen/go/v1',
+  sambanova: 'https://api.sambanova.ai/v1',
+  llm7: 'https://api.llm7.io/v1',
+  'vercel-ai-gateway': 'https://ai-gateway.vercel.sh/v1',
+  huggingface: 'https://router.huggingface.co/v1',
+  kilo: 'https://api.kilo.ai/api/gateway',
+  ovhcloud: 'https://oai.endpoints.kepler.ai.cloud.ovh.net/v1',
+  tokenrouter: 'https://api.tokenrouter.com/v1',
+  anyapi: 'https://api.anyapi.ai/v1',
+  'zai-glm': 'https://api.z.ai/api/paas/v4',
+  fireworks: 'https://api.fireworks.ai/inference/v1',
+  nebius: 'https://api.studio.nebius.com/v1',
+  scaleway: 'https://api.scaleway.ai/v1',
+  hyperbolic: 'https://api.hyperbolic.xyz/v1',
+  deepinfra: 'https://api.deepinfra.com/v1/openai',
+  novita: 'https://api.novita.ai/v3/openai',
+  together: 'https://api.together.xyz/v1',
+  stepfun: 'https://api.stepfun.ai/v1',
 };
 
 function defaultBaseURL(providerId: string): string {
@@ -87,7 +110,7 @@ function createCompatible(
   const provider = createOpenAICompatible({
     name,
     baseURL,
-    apiKey: options.apiKey,
+    ...(options.apiKey ? { apiKey: options.apiKey } : {}),
     headers,
     ...(options.fetch ? { fetch: options.fetch } : {}),
   });
@@ -166,6 +189,24 @@ export function createLanguageModel(ref: ModelRef, opts: ModelFactoryOptions): L
     case 'nvidia':
     case 'mistral':
     case 'deepseek':
+    case 'sambanova':
+    case 'llm7':
+    case 'cloudflare-workers-ai':
+    case 'kilo':
+    case 'vercel-ai-gateway':
+    case 'huggingface':
+    case 'ovhcloud':
+    case 'tokenrouter':
+    case 'anyapi':
+    case 'zai-glm':
+    case 'fireworks':
+    case 'nebius':
+    case 'scaleway':
+    case 'hyperbolic':
+    case 'deepinfra':
+    case 'novita':
+    case 'together':
+    case 'stepfun':
       return createCompatible(
         providerId,
         modelId,
@@ -349,8 +390,12 @@ function headerQuota(
   const lower = Object.fromEntries(
     Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
   );
-  const remaining = num(lower[`x-ratelimit-remaining-${metric}${suffix}`]);
   const limit = num(lower[`x-ratelimit-limit-${metric}${suffix}`]);
+  const reportedRemaining = num(lower[`x-ratelimit-remaining-${metric}${suffix}`]);
+  const remaining =
+    reportedRemaining !== null && limit !== null
+      ? Math.min(reportedRemaining, limit)
+      : reportedRemaining;
   const resetAt = resetTime(lower[`x-ratelimit-reset-${metric}${suffix}`], now);
   if (remaining === null && limit === null && resetAt === null) return null;
   return { windowId, remaining, limit, resetAt, confidence: 'exact' };
@@ -538,6 +583,8 @@ export function parseCerebrasRateLimits(
     if (match[1] === 'limit') entry.limit = num(value);
     if (match[1] === 'remaining') entry.remaining = num(value);
     if (match[1] === 'reset') entry.resetAt = resetTime(value, now);
+    if (entry.limit !== null && entry.remaining !== null)
+      entry.remaining = Math.min(entry.remaining, entry.limit);
     if (!prior) output.push(entry);
   }
   return output;
@@ -769,29 +816,55 @@ async function probeWithSignal(
   options: ProbeOptions = {},
 ): Promise<ProbeResult> {
   const started = performance.now();
+  let apiKey = key;
+  let probeOptions = options;
+  if (providerId === 'cloudflare-workers-ai') {
+    const credentials = (() => {
+      try {
+        return JSON.parse(key) as { accountId?: unknown; apiKey?: unknown };
+      } catch {
+        return null;
+      }
+    })();
+    if (
+      credentials &&
+      typeof credentials.accountId === 'string' &&
+      typeof credentials.apiKey === 'string'
+    ) {
+      apiKey = credentials.apiKey;
+      probeOptions = {
+        ...options,
+        baseUrl:
+          options.baseUrl ??
+          `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(credentials.accountId)}/ai/v1`,
+      };
+    }
+  }
   const observations: RawCallObservation[] = [];
   const skippedModels: { model: string; reason: string }[] = [];
   try {
     const catalog = await providerCatalog();
     const catalogModels = catalog.models.filter((model) => model.providerId === providerId);
-    const liveModels = await discoverProviderModels(providerId, key, options).catch(() => []);
+    const liveModels = await discoverProviderModels(providerId, apiKey, probeOptions).catch(
+      () => [],
+    );
     const discovered = liveModels.length > 0;
     const models = discovered ? liveModels : catalogModels;
     const preferred =
-      options.probeModels ??
+      probeOptions.probeModels ??
       catalog.providers.find((entry) => entry.provider === providerId)?.probe_models ??
       [];
-    const candidates = options.modelRef
-      ? [options.modelRef.slice(String(providerId).length + 1)]
-      : orderProbeCandidates(models, preferred);
+    const candidates = probeOptions.modelRef
+      ? [probeOptions.modelRef.slice(String(providerId).length + 1)]
+      : [...new Set([...orderProbeCandidates(models, preferred), ...preferred])];
     if (!candidates.length) throw new Error(`No chat-capable models available for ${providerId}`);
     let openRouterSnapshot: ParsedQuotaWindow[] = [];
     if (providerId === 'openrouter') {
-      const configured = (options.baseUrl ?? 'https://openrouter.ai').replace(/\/$/, '');
+      const configured = (probeOptions.baseUrl ?? 'https://openrouter.ai').replace(/\/$/, '');
       const origin = configured.endsWith('/api/v1') ? configured.slice(0, -7) : configured;
-      const response = await (options.fetch ?? globalThis.fetch)(`${origin}/api/v1/key`, {
-        headers: { Authorization: `Bearer ${key}` },
-        ...(options.signal ? { signal: options.signal } : {}),
+      const response = await (probeOptions.fetch ?? globalThis.fetch)(`${origin}/api/v1/key`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        ...(probeOptions.signal ? { signal: probeOptions.signal } : {}),
       });
       const payload: unknown = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -808,21 +881,21 @@ async function probeWithSignal(
       const observedFetch = createObservedFetch(
         (observation) => observations.push(observation),
         { providerId, model: modelId },
-        options.fetch ?? globalThis.fetch,
+        probeOptions.fetch ?? globalThis.fetch,
       );
       try {
         const languageModel = createLanguageModel(`${providerId}/${modelId}` as ModelRef, {
-          apiKey: key,
-          ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
+          apiKey,
+          ...(probeOptions.baseUrl ? { baseUrl: probeOptions.baseUrl } : {}),
           fetch: observedFetch,
-          ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+          ...(probeOptions.sessionId ? { sessionId: probeOptions.sessionId } : {}),
         });
         await generateText({
           model: languageModel,
           prompt: 'Reply with one character.',
           maxOutputTokens: 64,
           maxRetries: 0,
-          ...(options.signal ? { abortSignal: options.signal } : {}),
+          ...(probeOptions.signal ? { abortSignal: probeOptions.signal } : {}),
         });
         usedModel = modelId;
         break;
@@ -830,7 +903,7 @@ async function probeWithSignal(
         lastModelError = error;
         if (!isUnavailableModelError(error)) throw error;
         const reason = errorMessage(error);
-        skippedModels.push({ model: modelId, reason: reason.replaceAll(key, '[REDACTED]') });
+        skippedModels.push({ model: modelId, reason: reason.replaceAll(apiKey, '[REDACTED]') });
         if (discovered)
           liveModels.splice(
             liveModels.findIndex((model) => model.ref.endsWith(`/${modelId}`)),
@@ -920,7 +993,7 @@ async function probeWithSignal(
       ok: false,
       keyValid: mapped.kind !== 'auth',
       latencyMs: Math.max(0, performance.now() - started),
-      message: mapped.message.replaceAll(key, '[REDACTED]'),
+      message: redactSecrets(mapped.message, [key, apiKey]),
       windows: quotaWindows(failedObservations),
       models: [],
       errorKind: mapped.kind,
@@ -1016,7 +1089,7 @@ export async function discoverProviderModels(
   const response = await (options.fetch ?? globalThis.fetch)(
     `${baseURL.replace(/\/$/, '')}/models`,
     {
-      headers: { Authorization: `Bearer ${key}` },
+      headers: key ? { Authorization: `Bearer ${key}` } : {},
       ...(options.signal ? { signal: options.signal } : {}),
     },
   );

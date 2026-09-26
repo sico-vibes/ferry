@@ -1,0 +1,14 @@
+provider: together
+name: Together AI pay-as-you-go
+tag: credits
+optional: true
+signup_url: https://api.together.ai/
+docs_url: https://docs.together.ai/docs/serverless/rate-limits
+terms_note: No fixed free pool is published; limits are dynamic and model-specific.
+data_use: Subject to Together terms.
+verified_at: '2026-09-25'
+source_url: https://docs.together.ai/docs/serverless/rate-limits
+endpoints: [https://api.together.xyz/v1]
+probe_models: [meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo]
+windows:
+  - { scope: model, metric: requests, kind: rolling, length: 60, limit: null }

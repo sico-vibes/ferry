@@ -1,0 +1,16 @@
+provider: scaleway
+name: Scaleway Generative APIs one-time credits
+tag: credits
+optional: true
+signup_url: https://console.scaleway.com/
+docs_url: https://www.scaleway.com/en/docs/generative-apis/faq.md
+terms_note: >-
+  New customers receive a one-time allowance of 1,000,000 tokens and 60 minutes of audio
+  transcription; it is not recurring.
+data_use: EU/France hosted.
+verified_at: '2026-09-25'
+source_url: https://www.scaleway.com/en/docs/generative-apis/faq.md
+endpoints: [https://api.scaleway.ai/v1]
+probe_models: [llama-3.1-8b-instruct]
+windows:
+  - { scope: provider, metric: tokens, kind: monthly_from_anchor, limit: null }

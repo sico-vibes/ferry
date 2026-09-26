@@ -2,7 +2,14 @@ import { z } from 'zod';
 import { ModelRefSchema, ProviderIdSchema } from './ids.js';
 import { TierSchema } from './common.js';
 import { ProviderErrorKindSchema } from './quota.js';
-export const ProviderTagSchema = z.enum(['legit', 'promo', 'paid', 'subscription_cli', 'caution']);
+export const ProviderTagSchema = z.enum([
+  'legit',
+  'promo',
+  'credits',
+  'paid',
+  'subscription_cli',
+  'caution',
+]);
 export type ProviderTag = z.infer<typeof ProviderTagSchema>;
 export const QuotaWindowSchema = z.object({
   id: z.string(),

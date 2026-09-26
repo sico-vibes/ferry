@@ -54,4 +54,18 @@ describe('catalog data', () => {
     expect(models[0]?.tier).toBe('T1');
     expect(models[0]?.contextWindow).toBe(10000);
   });
+
+  it('keeps every active provider discoverable through catalog models or probe hints', async () => {
+    const catalog = await loadCatalog();
+    for (const provider of catalog.providers) {
+      const hasModel = catalog.models.some((model) => model.providerId === provider.provider);
+      expect(
+        provider.dead === true ||
+          hasModel ||
+          Boolean(provider.probe_models?.length) ||
+          provider.key_required === false,
+        provider.provider,
+      ).toBe(true);
+    }
+  });
 });

@@ -1,0 +1,23 @@
+provider: llm7
+name: LLM7.io free token
+tag: caution
+optional: true
+signup_url: https://dash.llm7.io/
+docs_url: https://docs.llm7.io/limits
+terms_note: >-
+  Anonymous: 500K tokens/rolling 24h, 1 request/s, 10/minute, 60/hour. Email token:
+  1,000,000 tokens/rolling 24h, 2/s, 40/minute, 100/hour. Resale or downstream use
+  requires written approval; donation-backed with no SLA.
+data_use: >-
+  Stores email and minimal metadata for issuing tokens and enforcing limits; states it
+  does not sell personal data.
+verified_at: '2026-09-25'
+source_url: https://docs.llm7.io/limits
+endpoints: [https://api.llm7.io/v1]
+key_required: false
+probe_models: [llm7-default]
+windows:
+  - { scope: provider, metric: tokens, kind: rolling, length: 86400, limit: 1000000 }
+  - { scope: provider, metric: requests, kind: rolling, length: 1, limit: 2 }
+  - { scope: provider, metric: requests, kind: rolling, length: 60, limit: 40 }
+  - { scope: provider, metric: requests, kind: rolling, length: 3600, limit: 100 }

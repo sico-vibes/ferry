@@ -1,0 +1,14 @@
+provider: fireworks
+name: Fireworks AI starter credits
+tag: credits
+optional: true
+signup_url: https://fireworks.ai/
+docs_url: https://docs.fireworks.ai/guides/quotas_usage/account-quotas
+terms_note: New users receive $1 in starter credits; this is not a permanently free tier.
+data_use: Subject to Fireworks terms.
+verified_at: '2026-09-25'
+source_url: https://fireworks.ai/pricing
+endpoints: [https://api.fireworks.ai/inference/v1]
+probe_models: [accounts/fireworks/models/llama-v3p1-8b-instruct]
+windows:
+  - { scope: provider, metric: usd, kind: monthly_from_anchor, limit: null }

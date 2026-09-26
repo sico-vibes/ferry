@@ -16,7 +16,36 @@ const recommended = [
   'groq',
   'mistral',
   'opencode-zen',
+  'sambanova',
 ];
+const moreFreeProviders = [
+  'llm7',
+  'cloudflare-workers-ai',
+  'kilo',
+  'vercel-ai-gateway',
+  'huggingface',
+  'ovhcloud',
+  'tokenrouter',
+  'anyapi',
+  'zai-glm',
+];
+const creditsProviders = [
+  'fireworks',
+  'nebius',
+  'scaleway',
+  'hyperbolic',
+  'deepinfra',
+  'novita',
+  'together',
+  'stepfun',
+];
+const unavailableProviders = [
+  ['Kiro', 'Its terms prohibit using the service through third-party proxies or harnesses.'],
+  ['GitHub Models', 'The free API was retired on July 30, 2026.'],
+  ['Chutes free', 'Free access ended in March 2026.'],
+  ['Qwen Code OAuth', 'The OAuth free tier was discontinued on April 15, 2026.'],
+  ['ZenMux free', 'The free plan is web chat only and has no API access.'],
+] as const;
 const providerDetails: Record<string, { limit: string; tag: string }> = {
   gemini: { limit: '250 requests/day on the free tier', tag: 'Reliable' },
   openrouter: { limit: 'Access to rotating free models', tag: 'Flexible' },
@@ -25,6 +54,24 @@ const providerDetails: Record<string, { limit: string; tag: string }> = {
   groq: { limit: 'Generous requests, shorter context', tag: 'Fast' },
   mistral: { limit: 'Experimental free access', tag: 'Experimental' },
   'opencode-zen': { limit: 'Promotional free models', tag: 'Free' },
+  sambanova: { limit: '20 requests/model/day and 200K tokens/day', tag: 'Default' },
+  llm7: { limit: 'Anonymous access; email token increases limits', tag: 'Caution' },
+  'cloudflare-workers-ai': { limit: '10,000 Neurons/day', tag: 'Optional' },
+  kilo: { limit: '200 free-model requests/hour/IP', tag: 'Caution' },
+  'vercel-ai-gateway': { limit: '$5 monthly credits', tag: 'Credits' },
+  huggingface: { limit: '$0.10 monthly credits', tag: 'Credits' },
+  ovhcloud: { limit: '2 anonymous requests/minute/IP/model', tag: 'No key' },
+  tokenrouter: { limit: '50K routed tokens/month', tag: 'Caution' },
+  anyapi: { limit: '100K anyTokens/day; conversion unknown', tag: 'Caution' },
+  'zai-glm': { limit: 'Free Flash models; account limits vary', tag: 'Free' },
+  fireworks: { limit: '$1 starter credits', tag: 'Credits' },
+  nebius: { limit: 'One-time builder credits', tag: 'Credits' },
+  scaleway: { limit: 'One-time 1M-token allowance', tag: 'Credits' },
+  hyperbolic: { limit: 'Free basic tier; promo credits', tag: 'Credits' },
+  deepinfra: { limit: 'Paid balance required', tag: 'Credits' },
+  novita: { limit: 'Tier-gated trial credits', tag: 'Credits' },
+  together: { limit: 'Dynamic limits; no fixed free pool', tag: 'Credits' },
+  stepfun: { limit: 'No free API tier', tag: 'Credits' },
 };
 function openFolder() {
   return window.ferryHost
@@ -49,6 +96,7 @@ export function OnboardingCanvas() {
     }
   });
   const [keysByProvider, setKeysByProvider] = useState<Record<string, string>>({});
+  const [cloudflareAccountId, setCloudflareAccountId] = useState('');
   const [tested, setTested] = useState<Record<string, string>>({});
   const [profile, setProfile] = useState('profile_free');
   const [delegation, setDelegation] = useState('suggest');
@@ -85,8 +133,13 @@ export function OnboardingCanvas() {
   };
   const saveKey = async (id: string) => {
     const value = keysByProvider[id]?.trim();
+    if (id === 'cloudflare-workers-ai' && !cloudflareAccountId.trim()) return;
     if (!value) return;
-    await client.providers.setKey(id as ProviderId, value);
+    const secret =
+      id === 'cloudflare-workers-ai'
+        ? JSON.stringify({ accountId: cloudflareAccountId.trim(), apiKey: value })
+        : value;
+    await client.providers.setKey(id as ProviderId, secret);
     await cache.invalidateQueries({ queryKey: ['providers'] });
     toast({ kind: 'success', title: 'Key saved', body: 'Run a test to verify this provider.' });
   };
@@ -180,8 +233,60 @@ export function OnboardingCanvas() {
                 };
               })}
             />
+            <details className="grid gap-3">
+              <summary className="text-label cursor-pointer">More free providers</summary>
+              <RadioCards
+                multi
+                value={selected}
+                onValueChange={(value) => {
+                  setSelected(value as string[]);
+                }}
+                options={moreFreeProviders.map((id) => {
+                  const provider = providers.find((item) => item.id === id);
+                  const info = providerDetails[id];
+                  return {
+                    value: id,
+                    title: provider?.name ?? id,
+                    ...(info?.limit ? { description: info.limit } : {}),
+                    ...(info?.tag ? { badge: info.tag } : {}),
+                  };
+                })}
+              />
+            </details>
+            <details className="grid gap-3">
+              <summary className="text-label cursor-pointer">Credits &amp; trials</summary>
+              <RadioCards
+                multi
+                value={selected}
+                onValueChange={(value) => {
+                  setSelected(value as string[]);
+                }}
+                options={creditsProviders.map((id) => {
+                  const provider = providers.find((item) => item.id === id);
+                  const info = providerDetails[id];
+                  return {
+                    value: id,
+                    title: provider?.name ?? id,
+                    ...(info?.limit ? { description: info.limit } : {}),
+                    ...(info?.tag ? { badge: info.tag } : {}),
+                  };
+                })}
+              />
+            </details>
+            <details className="grid gap-3">
+              <summary className="text-label cursor-pointer">Unavailable</summary>
+              <ul className="grid gap-2">
+                {unavailableProviders.map(([name, reason]) => (
+                  <li className="onboarding-key" key={name}>
+                    <strong>{name}</strong>
+                    <small className="muted">{reason}</small>
+                  </li>
+                ))}
+              </ul>
+            </details>
             {selected.map((id) => {
               const provider = providers.find((item) => item.id === id);
+              const keyless = provider?.keyStatus === 'not_applicable';
               return (
                 <div className="onboarding-key" key={id}>
                   <div>
@@ -197,19 +302,41 @@ export function OnboardingCanvas() {
                       Get key ↗
                     </a>
                   </div>
-                  <TextField
-                    label={`${provider?.name ?? id} API key`}
-                    masked
-                    value={keysByProvider[id] ?? ''}
-                    onChange={(value) => {
-                      setKeysByProvider((old) => ({ ...old, [id]: value }));
-                    }}
-                    placeholder="Paste API key"
-                  />
+                  {id === 'cloudflare-workers-ai' && (
+                    <TextField
+                      label="Cloudflare account ID"
+                      value={cloudflareAccountId}
+                      onChange={(value) => {
+                        setCloudflareAccountId(value);
+                      }}
+                      placeholder="Account ID"
+                    />
+                  )}
+                  {!keyless && (
+                    <TextField
+                      label={`${provider?.name ?? id} API key${id === 'llm7' ? ' (optional)' : ''}`}
+                      masked
+                      value={keysByProvider[id] ?? ''}
+                      onChange={(value) => {
+                        setKeysByProvider((old) => ({ ...old, [id]: value }));
+                      }}
+                      placeholder="Paste API key"
+                    />
+                  )}
+                  {keyless && (
+                    <small className="muted">No key required for anonymous access.</small>
+                  )}
+                  {id === 'llm7' && (
+                    <small className="muted">
+                      Anonymous access works without a key; an email token raises the free limits.
+                    </small>
+                  )}
                   <div className="button-row">
-                    <Pill size="sm" onClick={() => void saveKey(id)}>
-                      Save key
-                    </Pill>
+                    {!keyless && (
+                      <Pill size="sm" onClick={() => void saveKey(id)}>
+                        Save key
+                      </Pill>
+                    )}
                     <Pill
                       size="sm"
                       aria-label={`Test ${provider?.name ?? id} API`}
