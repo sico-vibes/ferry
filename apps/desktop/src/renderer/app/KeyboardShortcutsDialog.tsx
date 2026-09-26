@@ -24,6 +24,10 @@ export function KeyboardShortcutsDialog({
       onOpenChange={onOpenChange}
       title="Keyboard shortcuts"
       description="Use these shortcuts anywhere in Ferry."
+      onOpenAutoFocus={(event) => {
+        event.preventDefault();
+        if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
+      }}
     >
       <div className="grid gap-2">
         {shortcuts.map(([label, keys]) => (

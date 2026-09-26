@@ -3,6 +3,7 @@ import {
   ArrowUpRight,
   AudioLines,
   BookOpenText,
+  Code2,
   ChevronDown,
   FlaskConical,
   GitPullRequest,
@@ -95,16 +96,40 @@ export function CanvasHeaderActions({
   onMore,
   onLink,
   onShare,
+  moreItems,
 }: {
   onMore?: () => void;
   onLink?: () => void;
   onShare?: () => void;
+  moreItems?: {
+    label?: string;
+    separator?: boolean;
+    onSelect?: () => void;
+    shortcut?: string;
+    icon?: ReactNode;
+    danger?: boolean;
+  }[];
 }) {
   return (
     <div className="flex items-center gap-2">
-      <IconButton label="More canvas actions" size="sm" onClick={onMore}>
-        <MoreHorizontal size={17} />
-      </IconButton>
+      {moreItems ? (
+        <DropdownMenu
+          trigger={
+            <button
+              aria-label="More canvas actions"
+              className={`inline-flex size-8 items-center justify-center rounded-full text-text-2 hover:bg-icon-circle ${focusRingClass}`}
+              type="button"
+            >
+              <MoreHorizontal aria-hidden="true" size={17} />
+            </button>
+          }
+          items={moreItems}
+        />
+      ) : (
+        <IconButton label="More canvas actions" size="sm" onClick={onMore}>
+          <MoreHorizontal size={17} />
+        </IconButton>
+      )}
       <IconButton label="Copy link" size="sm" onClick={onLink}>
         <Link size={15} />
       </IconButton>
@@ -183,18 +208,22 @@ export function ChatCard({ language, title, snippet, date, status, repo, onClick
       >
         <span className="flex min-w-0 items-center gap-1.5">
           <span
-            className={`flex size-6 shrink-0 items-center justify-center rounded-lg text-label font-bold ${language === 'ts' ? 'text-white' : 'text-[var(--text-on-send)]'}`}
+            className={`flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-lg text-label font-bold ${language === 'ts' ? 'text-white' : 'text-[var(--text-on-send)]'}`}
             style={{ backgroundColor: `var(${langVar[language]})` }}
           >
-            {language === 'ts'
-              ? 'TS'
-              : language === 'py'
-                ? 'Py'
-                : language === 'go'
-                  ? 'Go'
-                  : language === 'rust'
-                    ? 'R'
-                    : language.toUpperCase()}
+            {language === 'other' ? (
+              <Code2 aria-hidden="true" size={14} />
+            ) : language === 'ts' ? (
+              'TS'
+            ) : language === 'py' ? (
+              'Py'
+            ) : language === 'go' ? (
+              'Go'
+            ) : language === 'rust' ? (
+              'R'
+            ) : (
+              'JS'
+            )}
           </span>
           {status && status !== 'idle' && (
             <span

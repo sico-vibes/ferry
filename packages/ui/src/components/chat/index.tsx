@@ -28,6 +28,7 @@ import { AdaptedStatusMark } from './StatusMark';
 import { ShinyText } from '../../effects/ShinyText';
 import { cn } from '../../lib/cn';
 import { Pill, focusRingClass } from '../primitives';
+import { Tooltip } from '../forms';
 
 const MarkdownContent = lazy(() =>
   import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })),
@@ -437,23 +438,23 @@ export function HandoffMarker({
   briefingTokens: number;
   explanation: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const details = `Switched from ${from} to ${to} because of ${reason}. ${explanation} Briefed ${(briefingTokens / 1000).toFixed(1)}K tokens.`;
   return (
-    <div className="my-2 text-center">
-      <button
-        className={`inline-flex max-w-full flex-wrap items-center justify-center gap-1.5 rounded-pill border border-blue-500/30 bg-blue-500/5 px-3 py-2 text-meta text-text-2 shadow-[0_0_16px_var(--spotlight)] ${focusRingClass}`}
-        onClick={() => {
-          setOpen(!open);
-        }}
-        type="button"
-      >
-        <ArrowLeftRight size={13} />
-        <span>
-          Switched <b className="text-text-1">{from}</b> → <b className="text-text-1">{to}</b> ·{' '}
-          {reason} · task briefed ({(briefingTokens / 1000).toFixed(1)}K tokens)
-        </span>
-      </button>
-      {open && <p className="mx-auto mt-2 max-w-lg text-meta text-text-3">{explanation}</p>}
+    <div className="my-1 text-center">
+      <Tooltip content={details}>
+        <button
+          aria-label={`Model handoff: ${details}`}
+          className={`handoff-chip ${focusRingClass}`}
+          title={details}
+          type="button"
+        >
+          <ArrowLeftRight aria-hidden="true" size={13} />
+          <span>
+            <b>{from}</b> → <b>{to}</b> · {reason}
+          </span>
+          <span className="sr-only">{explanation}</span>
+        </button>
+      </Tooltip>
     </div>
   );
 }
@@ -513,12 +514,70 @@ export function CheckpointMarker({ label, onRestore }: { label: string; onRestor
     </div>
   );
 }
-export function ErrorPart({ message }: { message: string }) {
+export interface ErrorAttempt {
+  model: string;
+  kind: string;
+  status: string;
+  message: string;
+}
+
+export function ErrorPart({
+  message,
+  attempts = [],
+  onRetry,
+  onSwitchToAuto,
+  onPickModel,
+}: {
+  message: string;
+  attempts?: ErrorAttempt[];
+  onRetry?: (() => void) | undefined;
+  onSwitchToAuto?: (() => void) | undefined;
+  onPickModel?: (() => void) | undefined;
+}) {
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-danger/20 bg-danger/5 p-3 text-label text-danger">
-      <CircleHelp size={15} />
-      {message}
-    </div>
+    <section className="session-error-card" role="alert">
+      <div className="session-error-summary">
+        <CircleHelp aria-hidden="true" size={16} />
+        <p>{message}</p>
+      </div>
+      <div className="session-error-actions">
+        {onRetry && (
+          <button type="button" onClick={onRetry}>
+            Retry
+          </button>
+        )}
+        {onSwitchToAuto && (
+          <button type="button" onClick={onSwitchToAuto}>
+            Switch to Auto
+          </button>
+        )}
+        {onPickModel && (
+          <button type="button" onClick={onPickModel}>
+            Pick model
+          </button>
+        )}
+      </div>
+      <details className="session-error-details">
+        <summary>
+          Details{attempts.length > 0 ? ` · ${String(attempts.length)} attempts` : ''}
+        </summary>
+        {attempts.length > 0 ? (
+          <ul>
+            {attempts.map((attempt, index) => (
+              <li key={`${attempt.model}-${String(index)}`}>
+                <strong>{attempt.model}</strong>
+                <span>
+                  {attempt.kind} · {attempt.status}
+                </span>
+                <small>{attempt.message}</small>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No provider attempt details were returned.</p>
+        )}
+      </details>
+    </section>
   );
 }
 export function StreamingCursor() {

@@ -28,9 +28,8 @@ import {
   ToolStepGroup,
   groupParts,
   UserMessage,
-  DropdownMenu,
 } from '@ferry/ui';
-import { GitBranch, MoreHorizontal } from 'lucide-react';
+import { GitBranch } from 'lucide-react';
 import { useFerryClient } from '../data/client';
 import {
   keys,
@@ -346,6 +345,9 @@ function PartView({
   onDiff,
   onReview,
   onCancel,
+  onRetry,
+  onSwitchToAuto,
+  onPickModel,
 }: {
   part: MessagePart;
   sessionId: SessionId;
@@ -353,6 +355,9 @@ function PartView({
   onDiff: () => void;
   onReview: (id: RunId) => void;
   onCancel: (id: RunId) => void;
+  onRetry?: (() => void) | undefined;
+  onSwitchToAuto?: (() => void) | undefined;
+  onPickModel?: (() => void) | undefined;
 }) {
   const client = useFerryClient();
   const cache = useQueryClient();
@@ -436,9 +441,15 @@ function PartView({
         />
       );
     case 'error':
-      return part.message.startsWith('No available model —') ? (
+      return getErrorPresentation(part).summary.startsWith('No available model —') ? (
         <div className="space-y-2">
-          <ErrorPart message={part.message} />
+          <ErrorPart
+            message={getErrorPresentation(part).summary}
+            attempts={getErrorPresentation(part).attempts}
+            onRetry={onRetry}
+            onSwitchToAuto={onSwitchToAuto}
+            onPickModel={onPickModel}
+          />
           <button
             className="rounded-md bg-blue-tint px-3 py-1.5 text-label font-medium text-link"
             onClick={() => void navigate({ to: '/explore' })}
@@ -448,9 +459,59 @@ function PartView({
           </button>
         </div>
       ) : (
-        <ErrorPart message={part.message} />
+        <ErrorPart
+          message={getErrorPresentation(part).summary}
+          attempts={getErrorPresentation(part).attempts}
+          onRetry={onRetry}
+          onSwitchToAuto={onSwitchToAuto}
+          onPickModel={onPickModel}
+        />
       );
   }
+}
+
+function getErrorPresentation(part: MessagePart & { type: 'error' }): {
+  summary: string;
+  attempts: { model: string; kind: string; status: string; message: string }[];
+} {
+  const raw = part as unknown as Record<string, unknown>;
+  const safeText = (value: unknown, fallback: string): string => {
+    const text = typeof value === 'number' ? String(value) : value;
+    if (typeof text !== 'string' || !text.trim()) return fallback;
+    const cleaned = text
+      .replace(/\s+(?:Attempted:|Ranked candidates:|Provider detail:)[\s\S]*$/i, '')
+      .replace(/\s+\{[\s\S]*$/, '')
+      .replace(/\s+\[[\s\S]*$/, '')
+      .trim();
+    if (!cleaned || cleaned.startsWith('{') || cleaned.startsWith('[')) return fallback;
+    return cleaned.length > 240 ? `${cleaned.slice(0, 237).trimEnd()}…` : cleaned;
+  };
+  const summary = safeText(
+    raw.summary,
+    safeText(raw.message, 'The model could not complete this step.'),
+  );
+  const rawDetails = raw.details;
+  const rawAttempts =
+    rawDetails && typeof rawDetails === 'object' && 'attempts' in rawDetails
+      ? (rawDetails as { attempts?: unknown }).attempts
+      : undefined;
+  const attempts = Array.isArray(rawAttempts)
+    ? rawAttempts.flatMap(
+        (attempt): { model: string; kind: string; status: string; message: string }[] => {
+          if (!attempt || typeof attempt !== 'object') return [];
+          const item = attempt as Record<string, unknown>;
+          return [
+            {
+              model: safeText(item.model ?? item.modelRef, 'Unknown model'),
+              kind: safeText(item.kind ?? item.errorKind, 'Error'),
+              status: safeText(item.status ?? item.statusCode, 'Failed'),
+              message: safeText(item.message ?? item.shortMessage, 'No additional detail.'),
+            },
+          ];
+        },
+      )
+    : [];
+  return { summary, attempts };
 }
 
 function DelegationRunView({
@@ -510,6 +571,7 @@ export function SessionCanvas() {
   });
   const { data: profiles = [] } = useProfiles();
   const [prompt, setPrompt] = useState('');
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [fullOutput, setFullOutput] = useState<string | null>(null);
   const outputDialogRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -781,6 +843,33 @@ export function SessionCanvas() {
     data?.session.status === 'running' || data?.session.status === 'awaiting_approval';
   const currentModel = shortModel(data?.session.modelRef, models);
   const workspace = workspaces.find((item) => item.id === data?.session.workspaceId);
+  const retryMessage = (text: string) => {
+    void client.sessions
+      .send(sessionId, { text })
+      .then(() => cache.invalidateQueries({ queryKey: keys.session(sessionId) }))
+      .catch((error: unknown) => {
+        pushToast({
+          kind: 'error',
+          title: 'Retry failed',
+          body: error instanceof Error ? error.message : 'Try again or choose a different model.',
+        });
+      });
+  };
+  const switchToAuto = () => {
+    void client.models
+      .select(sessionId, 'auto')
+      .then(async () => {
+        await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+        await cache.invalidateQueries({ queryKey: ['model-candidates', sessionId] });
+      })
+      .catch((error: unknown) => {
+        pushToast({
+          kind: 'error',
+          title: 'Could not switch to Auto',
+          body: error instanceof Error ? error.message : 'Choose a model from the picker instead.',
+        });
+      });
+  };
   const activateProfile = async (profileId: (typeof profiles)[number]['id']) => {
     await client.profiles.activate(profileId, sessionId);
     await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
@@ -888,6 +977,8 @@ export function SessionCanvas() {
               sessionId={sessionId}
               mode={data?.session.modelRef ? 'manual' : 'auto'}
               modelName={currentModel}
+              open={modelPickerOpen}
+              onOpenChange={setModelPickerOpen}
             />
             {workspace && (
               <button
@@ -905,32 +996,11 @@ export function SessionCanvas() {
             )}
           </div>
           <div className="session-toolbar-actions flex items-center gap-1">
-            <DropdownMenu
-              trigger={
-                <button
-                  aria-label="Session options"
-                  className="inline-flex size-8 items-center justify-center rounded-full text-text-2 hover:bg-icon-circle"
-                  type="button"
-                >
-                  <MoreHorizontal size={17} />
-                </button>
-              }
-              items={[
+            <CanvasHeaderActions
+              moreItems={[
                 {
                   label: 'Copy link',
-                  onSelect: () => {
-                    void navigator.clipboard.writeText(window.location.href);
-                  },
-                },
-                {
-                  label: 'Share',
-                  onSelect: () => {
-                    pushToast({
-                      kind: 'info',
-                      title: 'Share',
-                      body: 'There is nothing to share yet.',
-                    });
-                  },
+                  onSelect: () => void navigator.clipboard.writeText(window.location.href),
                 },
                 { separator: true },
                 {
@@ -940,11 +1010,7 @@ export function SessionCanvas() {
                   },
                 },
               ]}
-            />
-            <CanvasHeaderActions
-              onLink={() => {
-                void navigator.clipboard.writeText(window.location.href);
-              }}
+              onLink={() => void navigator.clipboard.writeText(window.location.href)}
               onShare={() => {
                 pushToast({ kind: 'info', title: 'Share', body: 'There is nothing to share yet.' });
               }}
@@ -1001,6 +1067,11 @@ export function SessionCanvas() {
           {virtualizer.getVirtualItems().map((item) => {
             const message = messages[item.index];
             if (!message) return null;
+            const previousUserText = messages
+              .slice(0, item.index)
+              .reverse()
+              .find((candidate) => candidate.role === 'user')
+              ?.parts.find((part) => part.type === 'text')?.text;
             return (
               <div
                 className="transcript-message"
@@ -1052,6 +1123,17 @@ export function SessionCanvas() {
                             });
                           }}
                           onCancel={(id) => void client.delegation.cancel(id)}
+                          onRetry={
+                            previousUserText
+                              ? () => {
+                                  retryMessage(previousUserText);
+                                }
+                              : undefined
+                          }
+                          onSwitchToAuto={switchToAuto}
+                          onPickModel={() => {
+                            setModelPickerOpen(true);
+                          }}
                         />
                       ),
                     )}

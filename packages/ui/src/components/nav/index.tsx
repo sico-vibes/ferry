@@ -460,10 +460,12 @@ export function TopRightCluster({
   onConfiguration,
   onShare,
   onAccount,
+  showShare = true,
 }: {
   onConfiguration?: () => void;
   onShare?: () => void;
   onAccount?: () => void;
+  showShare?: boolean;
 }) {
   return (
     <div className="flex items-center gap-2.5">
@@ -473,9 +475,11 @@ export function TopRightCluster({
       <Pill variant="dark" size="lg" onClick={onConfiguration}>
         Configuration <Settings aria-hidden="true" size={14} />
       </Pill>
-      <Pill aria-label="Share workspace" variant="warm-outline" size="lg" onClick={onShare}>
-        Share <Share2 aria-hidden="true" size={14} />
-      </Pill>
+      {showShare && (
+        <Pill aria-label="Share workspace" variant="warm-outline" size="lg" onClick={onShare}>
+          Share <Share2 aria-hidden="true" size={14} />
+        </Pill>
+      )}
       <DropdownMenu
         trigger={
           <button
