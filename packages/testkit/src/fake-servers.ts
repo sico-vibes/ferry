@@ -73,6 +73,11 @@ export class FakeProviderServer {
       res.writeHead(404).end();
       return;
     }
+    const modelList = this.modelListResponse(req.method ?? 'GET', url);
+    if (modelList !== undefined) {
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(modelList));
+      return;
+    }
     const scripted =
       this.options.responses?.[this.cursor++ % Math.max(1, this.options.responses.length)] ?? {};
     const streaming = url.includes('stream') || (body as { stream?: boolean } | undefined)?.stream;
@@ -104,11 +109,20 @@ export class FakeProviderServer {
   protected responseFor(_body: unknown, _malformed: boolean): unknown {
     return { ok: true };
   }
+  protected modelListResponse(_method: string, _url: string): unknown {
+    return undefined;
+  }
 }
 
 export class FakeOpenAIServer extends FakeProviderServer {
   protected override matches(url: string): boolean {
-    return url.startsWith('/v1/chat/completions');
+    return url.endsWith('/chat/completions') || url.endsWith('/models');
+  }
+  protected override modelListResponse(method: string, url: string): unknown {
+    if (method !== 'GET' || !url.endsWith('/models')) return undefined;
+    if (url.startsWith('/openrouter/')) return { data: [{ id: 'cohere/north-mini-code:free' }] };
+    if (url.startsWith('/groq/')) return { data: [{ id: 'allam-2-7b' }] };
+    return { data: [{ id: 'gpt-4o-mini' }] };
   }
   protected override responseFor(_body: unknown, malformed: boolean): unknown {
     const call = {

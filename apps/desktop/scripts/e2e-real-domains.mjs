@@ -176,8 +176,8 @@ async function startEmbeddedCore() {
         FERRY_HOME: dataDirectory,
         FERRY_REAL_DOMAINS:
           'settings,workspaces,checkpoints,providers,models,quota,sessions,approvals,profiles,skills,mcp,optimizer,delegation',
-        FERRY_PROVIDER_BASE_URL_OPENROUTER: `${fakeProvider.baseUrl}/v1`,
-        FERRY_PROVIDER_BASE_URL_GROQ: `${fakeProvider.baseUrl}/v1`,
+        FERRY_PROVIDER_BASE_URL_OPENROUTER: `${fakeProvider.baseUrl}/openrouter/v1`,
+        FERRY_PROVIDER_BASE_URL_GROQ: `${fakeProvider.baseUrl}/groq/v1`,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
@@ -422,8 +422,13 @@ try {
     const composer = page.getByRole('textbox', { name: 'Message Ferry' });
     await page.evaluate((sessionId) => {
       window.e2eStreamedText = '';
+      window.e2eHandoffParts = [];
       window.ferryRpcClient.on('session.delta', (event) => {
         if (event.sessionId === sessionId) window.e2eStreamedText += event.textDelta;
+      });
+      window.ferryRpcClient.on('session.part', (event) => {
+        if (event.sessionId === sessionId && event.part.type === 'handoff_marker')
+          window.e2eHandoffParts.push(event.part);
       });
     }, agentSession.id);
     await composer.fill(
@@ -582,6 +587,23 @@ try {
     await expect(handoff).toBeVisible({ timeout: 30_000 });
     await handoff.click();
     await expect(page.getByText(/HTTP 429/)).toBeVisible({ timeout: 30_000 });
+    const handoffEvidence = await page.evaluate(
+      async (sessionId) => ({
+        parts: window.e2eHandoffParts,
+        stats: await window.ferryRpcClient.quota.handoffs(30),
+        session: await window.ferryRpcClient.sessions.get(sessionId),
+      }),
+      agentSession.id,
+    );
+    assert.ok(handoffEvidence.parts.some((part) => part.reason === 'rate_limit'));
+    assert.ok(
+      handoffEvidence.stats.some((handoff) => handoff.reason === 'rate_limit' && handoff.count > 0),
+    );
+    assert.ok(
+      handoffEvidence.session.messages.some((message) =>
+        message.parts.some((part) => part.type === 'handoff_marker' && part.briefingTokens >= 0),
+      ),
+    );
     await expect
       .poll(
         async () =>

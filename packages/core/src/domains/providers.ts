@@ -21,6 +21,16 @@ function baseUrlFor(services: FerryServices, id: string): string | undefined {
   return services.env[envName];
 }
 
+function isLoopbackUrl(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const hostname = new URL(value).hostname;
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
 function providerRecord(services: FerryServices, id: string): Provider {
   const limits = services.catalog.providers.find((item) => item.provider === id);
   if (!limits) throw rpcDomainError(-32044, 'not_found', `Provider not found: ${id}`);
@@ -83,7 +93,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const providerBaseUrl = baseUrlFor(services, id);
       let discovered: Awaited<ReturnType<typeof discoverProviderModels>> = [];
       let discoverySucceeded = false;
-      if (services.env.NODE_ENV !== 'test') {
+      if (services.env.NODE_ENV !== 'test' || isLoopbackUrl(providerBaseUrl)) {
         try {
           discovered = await discoverProviderModels(id, key, {
             ...(providerBaseUrl ? { baseUrl: providerBaseUrl } : {}),

@@ -20,7 +20,7 @@ import { openDatabase, MessageRepository, SessionRepository, TaskRepository } fr
 import { BUILTIN_PROFILES } from '@ferry/router';
 import { createFixtureRepo, FakeOpenAIServer } from '@ferry/testkit';
 import { AGENT_EVALS, runAgentEvals } from '../evals/fixtures.js';
-import { AgentLoop, repairAndValidate } from '../src/loop.js';
+import { AgentLoop, repairAndValidate, type AgentEvent } from '../src/loop.js';
 import { SessionStore } from '../src/session.js';
 
 const tempDirs: string[] = [];
@@ -309,6 +309,73 @@ describe('@ferry/agent', () => {
         ?.messages.flatMap((message) => message.parts)
         .find((part) => part.type === 'handoff_marker');
       expect(handoff?.type).toBe('handoff_marker');
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('emits and records a rate-limit handoff before continuing on another provider', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/test-model',
+        providerId: 'gemini',
+        name: 'Gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: ProviderIdSchema.parse('gemini'),
+        name: 'Gemini',
+      });
+      const catalog = { ...state.catalog, models: [state.model, alternate] };
+      state.store.updateSession(state.session.id, { modelRef: state.model.ref });
+      const events: AgentEvent[] = [];
+      const handoffs: { reason: string; from: string; to: string }[] = [];
+      let calls = 0;
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog,
+        capacity: () => ({ providers: [state.provider, alternateProvider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: (event) => events.push(event),
+        resolveCandidates: () => [state.model, alternate],
+        onHandoff: (reason, from, to) => handoffs.push({ reason, from, to }),
+        generator: async ({ model }) => {
+          calls++;
+          if (calls === 1)
+            throw Object.assign(new Error('scripted rate limit'), { statusCode: 429 });
+          expect(model.ref).toBe(alternate.ref);
+          return { text: 'Continued after the rate limit.', finishReason: 'stop' };
+        },
+      });
+
+      await loop.run({ sessionId: state.session.id });
+
+      const marker = state.store
+        .load(state.session.id)
+        ?.messages.flatMap((message) => message.parts)
+        .find((part) => part.type === 'handoff_marker');
+      expect(marker).toMatchObject({
+        type: 'handoff_marker',
+        from: state.model.ref,
+        to: alternate.ref,
+        reason: 'rate_limit',
+      });
+      if (marker?.type !== 'handoff_marker') throw new Error('Rate-limit marker was not saved');
+      expect(marker.briefingTokens).toBeGreaterThanOrEqual(0);
+      expect(
+        events.some(
+          (event) => event.type === 'session.part' && event.part.type === 'handoff_marker',
+        ),
+      ).toBe(true);
+      expect(handoffs).toEqual([
+        { reason: 'rate_limit', from: state.model.ref, to: alternate.ref },
+      ]);
     } finally {
       state.database.close();
     }
