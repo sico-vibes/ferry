@@ -464,6 +464,14 @@ export function register(host: CoreHost, services: FerryServices): void {
         };
         const config = await loadProjectConfig(workspace.path, services.env);
         const globalSettings = services.settings.get('global');
+        const savedToolCallRepair =
+          z
+            .boolean()
+            .safeParse(
+              typeof globalSettings === 'object' && globalSettings !== null
+                ? (globalSettings as { toolCallRepair?: unknown }).toolCallRepair
+                : undefined,
+            ).data ?? true;
         const savedPermissionMode = z
           .enum(['ask', 'auto_edit', 'full_auto'])
           .safeParse(
@@ -493,6 +501,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           stepTimeoutMs: stepTimeoutFromEnvironment(services.env.FERRY_STEP_TIMEOUT_MS),
           capacity: runtime.capacity,
           apiKeys: runtime.apiKeys,
+          repairToolCalls: savedToolCallRepair,
           permissionMode: savedPermissionMode.success
             ? savedPermissionMode.data
             : config.permissionMode,

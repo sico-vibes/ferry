@@ -4,7 +4,7 @@
   @typescript-eslint/no-empty-function: off,
   @typescript-eslint/unbound-method: off
 */
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -137,6 +137,42 @@ describe('@ferry/agent', () => {
       state.database.close();
     }
   });
+
+  it('completes a weak-model text tool call with a forgiving edit', async () => {
+    const state = await setup();
+    try {
+      await writeFile(path.join(state.root, 'README.md'), "const greeting = 'hello';\n");
+      let calls = 0;
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        modelHints: () => ({ toolProtocol: 'xml', editFormat: 'search_replace' }),
+        generator: async () => {
+          calls++;
+          if (calls === 1)
+            return {
+              text: '```json\n{"name":"edit_file","arguments":{"path":"README.md","edits":[{"search":"const   greeting = \'hello\';","replace":"const greeting = \'hi\';"}]}}\n```',
+              finishReason: 'tool-calls',
+            };
+          return { text: 'Updated the greeting.', finishReason: 'stop' };
+        },
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.status).toBe('completed');
+      expect(await readFile(path.join(state.root, 'README.md'), 'utf8')).toBe(
+        "const greeting = 'hi';\n",
+      );
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
 
   it('asks approval, checkpoints before a write and resumes with a second step', async () => {
     const state = await setup();

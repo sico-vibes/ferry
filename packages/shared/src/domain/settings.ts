@@ -22,6 +22,7 @@ export const SettingsSchema = z.object({
   fontScale: z.number().min(0.85).max(1.3),
   restoreTabs: z.boolean(),
   allowSubscriptionOAuthRouting: z.boolean().default(false),
+  toolCallRepair: z.boolean().default(true),
   subscriptionOAuthAcknowledged: z.array(z.string()).default([]),
   delegationMode: DelegationModeSchema,
   permissionMode: PermissionModeSchema,

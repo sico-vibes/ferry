@@ -26,6 +26,7 @@
     "jsonrepair": "3.15.0"
   },
   "devDependencies": {
-    "@ferry/testkit": "workspace:*"
+    "@ferry/testkit": "workspace:*",
+    "fast-check": "4.10.2"
   }
 }

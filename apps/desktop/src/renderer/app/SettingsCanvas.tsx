@@ -770,109 +770,125 @@ export function SettingsCanvas() {
       );
     if (section === 'Advanced')
       return (
-        <Group title="Routing">
-          <p className="muted">
-            Choose how Ferry balances continuity, reliability, and provider capacity.
-          </p>
-          {routingRows.map((row) => (
-            <SettingRow key={row.key} title={row.title} helper={row.helper}>
-              <div className="inline-control">
-                <span
-                  className="routing-info"
-                  title={row.info}
-                  aria-label={`${row.title} trade-off`}
-                >
-                  <Info size={15} />
-                </span>
-                <Switch
-                  label={row.title}
-                  checked={settings?.routing[row.key] ?? true}
-                  onCheckedChange={(value) => {
-                    if (settings)
-                      void update({ routing: { ...settings.routing, [row.key]: value } });
-                  }}
-                />
-              </div>
-            </SettingRow>
-          ))}
-          <details className="routing-tune">
-            <summary>Tune</summary>
+        <>
+          <Group title="Advanced">
             <SettingRow
-              title="Sticky session TTL"
-              helper="How long a conversation keeps its selected model."
+              title="Tool-call repair for weaker models"
+              helper="Automatically recover tool calls written as text when native tool calling is unreliable."
             >
-              <div className="range-control">
-                <Slider
-                  label="Sticky session TTL in minutes"
-                  min={1}
-                  max={120}
-                  step={1}
-                  value={settings?.routing.stickyTtlMinutes ?? 30}
-                  onValueChange={(value) =>
-                    settings &&
-                    void update({
-                      routing: { ...settings.routing, stickyTtlMinutes: Math.round(value) },
-                    })
-                  }
-                />
-                <span>{settings?.routing.stickyTtlMinutes ?? 30} min</span>
-              </div>
+              <Switch
+                label="Tool-call repair for weaker models"
+                checked={settings?.toolCallRepair ?? true}
+                onCheckedChange={(toolCallRepair) => void update({ toolCallRepair })}
+              />
             </SettingRow>
-            <SettingRow
-              title="Ramp start"
-              helper="Begin gradual demotion below this fraction of quota remaining."
-            >
-              <div className="range-control">
-                <Slider
-                  label="Quota ramp start"
-                  min={0.05}
-                  max={0.5}
-                  step={0.01}
-                  value={settings?.routing.rampStart ?? 0.2}
-                  onValueChange={(value) =>
-                    settings && void update({ routing: { ...settings.routing, rampStart: value } })
-                  }
-                />
-                <span>{Math.round((settings?.routing.rampStart ?? 0.2) * 100)}%</span>
-              </div>
-            </SettingRow>
-            <SettingRow
-              title="Ramp floor"
-              helper="Keep at least this routing score while quota is low."
-            >
-              <div className="range-control">
-                <Slider
-                  label="Quota ramp floor"
-                  min={0}
-                  max={0.5}
-                  step={0.01}
-                  value={settings?.routing.rampFloor ?? 0.1}
-                  onValueChange={(value) =>
-                    settings && void update({ routing: { ...settings.routing, rampFloor: value } })
-                  }
-                />
-                <span>{Math.round((settings?.routing.rampFloor ?? 0.1) * 100)}%</span>
-              </div>
-            </SettingRow>
-            <Pill
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                settings &&
-                void update({
-                  routing: {
-                    ...settings.routing,
-                    stickyTtlMinutes: 30,
-                    rampStart: 0.2,
-                    rampFloor: 0.1,
-                  },
-                })
-              }
-            >
-              Reset tune defaults
-            </Pill>
-          </details>
-        </Group>
+          </Group>
+          <Group title="Routing">
+            <p className="muted">
+              Choose how Ferry balances continuity, reliability, and provider capacity.
+            </p>
+            {routingRows.map((row) => (
+              <SettingRow key={row.key} title={row.title} helper={row.helper}>
+                <div className="inline-control">
+                  <span
+                    className="routing-info"
+                    title={row.info}
+                    aria-label={`${row.title} trade-off`}
+                  >
+                    <Info size={15} />
+                  </span>
+                  <Switch
+                    label={row.title}
+                    checked={settings?.routing[row.key] ?? true}
+                    onCheckedChange={(value) => {
+                      if (settings)
+                        void update({ routing: { ...settings.routing, [row.key]: value } });
+                    }}
+                  />
+                </div>
+              </SettingRow>
+            ))}
+            <details className="routing-tune">
+              <summary>Tune</summary>
+              <SettingRow
+                title="Sticky session TTL"
+                helper="How long a conversation keeps its selected model."
+              >
+                <div className="range-control">
+                  <Slider
+                    label="Sticky session TTL in minutes"
+                    min={1}
+                    max={120}
+                    step={1}
+                    value={settings?.routing.stickyTtlMinutes ?? 30}
+                    onValueChange={(value) =>
+                      settings &&
+                      void update({
+                        routing: { ...settings.routing, stickyTtlMinutes: Math.round(value) },
+                      })
+                    }
+                  />
+                  <span>{settings?.routing.stickyTtlMinutes ?? 30} min</span>
+                </div>
+              </SettingRow>
+              <SettingRow
+                title="Ramp start"
+                helper="Begin gradual demotion below this fraction of quota remaining."
+              >
+                <div className="range-control">
+                  <Slider
+                    label="Quota ramp start"
+                    min={0.05}
+                    max={0.5}
+                    step={0.01}
+                    value={settings?.routing.rampStart ?? 0.2}
+                    onValueChange={(value) =>
+                      settings &&
+                      void update({ routing: { ...settings.routing, rampStart: value } })
+                    }
+                  />
+                  <span>{Math.round((settings?.routing.rampStart ?? 0.2) * 100)}%</span>
+                </div>
+              </SettingRow>
+              <SettingRow
+                title="Ramp floor"
+                helper="Keep at least this routing score while quota is low."
+              >
+                <div className="range-control">
+                  <Slider
+                    label="Quota ramp floor"
+                    min={0}
+                    max={0.5}
+                    step={0.01}
+                    value={settings?.routing.rampFloor ?? 0.1}
+                    onValueChange={(value) =>
+                      settings &&
+                      void update({ routing: { ...settings.routing, rampFloor: value } })
+                    }
+                  />
+                  <span>{Math.round((settings?.routing.rampFloor ?? 0.1) * 100)}%</span>
+                </div>
+              </SettingRow>
+              <Pill
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  settings &&
+                  void update({
+                    routing: {
+                      ...settings.routing,
+                      stickyTtlMinutes: 30,
+                      rampStart: 0.2,
+                      rampFloor: 0.1,
+                    },
+                  })
+                }
+              >
+                Reset tune defaults
+              </Pill>
+            </details>
+          </Group>
+        </>
       );
     if (section === 'Optimizers') {
       const terse = settings?.optimizers.terse ?? 'lite';

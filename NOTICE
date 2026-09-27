@@ -8,3 +8,9 @@ Routing techniques in packages/router/src/techniques.ts and quota leases in pack
 https://github.com/tashfeenahmed/freellmapi
 
 The MIT License is available at https://opensource.org/licenses/MIT.
+
+Weak-model recovery patterns in packages/workspace/src/forgiving-edit.ts are independently implemented from ideas documented by OpenCode (MIT), Cline (Apache-2.0), Gemini CLI (Apache-2.0), and Aider (Apache-2.0). No source code was copied.
+
+Text tool-call parsing and bounded recovery patterns in packages/agent/src/weak-model.ts are independently implemented from ideas documented by Goose (Apache-2.0), OpenHands (MIT), and Aider (Apache-2.0). No source code was copied.
+
+Provider normalization patterns in packages/providers/src/normalization.ts and context compaction patterns in packages/optimizer/src/compaction.ts are independently implemented from ideas documented by OpenCode (MIT) and Goose (Apache-2.0). No source code was copied.

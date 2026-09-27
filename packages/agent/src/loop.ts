@@ -1,8 +1,21 @@
-import { streamText, tool, type ModelMessage, type ToolSet } from 'ai';
+import {
+  jsonSchema,
+  streamText,
+  tool,
+  type JSONSchema7,
+  type ModelMessage,
+  type ToolSet,
+} from 'ai';
 import { jsonrepair } from 'jsonrepair';
 import { z } from 'zod';
-import { createObservedFetch, createLanguageModel } from '@ferry/providers';
-import { optimizeOutput, InMemoryBlobStore, readOutput } from '@ferry/optimizer';
+import {
+  createObservedFetch,
+  createLanguageModel,
+  sanitizeProviderMessages,
+  promptCacheOptions,
+  normalizeToolSchema,
+} from '@ferry/providers';
+import { optimizeOutput, InMemoryBlobStore, readOutput, compactContext } from '@ferry/optimizer';
 import {
   classifyStep,
   scoreModels,
@@ -42,6 +55,13 @@ import type { RawCallObservation } from '@ferry/providers';
 import { assembleSystemPrompt, type PromptSection } from './prompt.js';
 import { SessionStore } from './session.js';
 import { createWorkspaceTools, type AgentTool, type ToolSource } from './tool-registry.js';
+import {
+  containsOmissionPlaceholder,
+  parseTextToolCalls,
+  ReflectionBudget,
+  ToolRepetitionDetector,
+  type ModelHints,
+} from './weak-model.js';
 
 export type AgentEvent =
   | { type: 'session.message'; message: Message }
@@ -82,6 +102,7 @@ export interface StepGeneratorInput {
   signal: AbortSignal;
   onProgress?: () => void;
   onDelta: (text: string) => void;
+  modelHints: ModelHints;
 }
 export type StepGenerator = (input: StepGeneratorInput) => Promise<GeneratedStep>;
 const discardDelta = (_text: string): void => undefined;
@@ -112,6 +133,9 @@ export interface AgentOptions {
   ) => Promise<'allowed_once' | 'allowed_always' | 'denied'>;
   askUser?: (question: string, signal: AbortSignal) => Promise<string>;
   generator?: StepGenerator;
+  modelHints?: (model: ModelInfo) => ModelHints;
+  repairToolCalls?: boolean;
+  promptCaching?: (model: ModelInfo) => boolean;
   providerBaseUrls?: Readonly<Record<string, string>>;
   providerFetch?: typeof globalThis.fetch;
   toolSources?: readonly ToolSource[];
@@ -238,6 +262,9 @@ export class AgentLoop {
     const attemptFailures: AttemptFailure[] = [];
     let contextSummary: string | undefined;
     const routingRequestId = newId('routing_request');
+    const reflectionBudget = new ReflectionBudget(3);
+    const repetitionDetector = new ToolRepetitionDetector();
+    let nativeFormatFailures = 0;
     const maxSteps = this.options.maxSteps ?? 40;
     const budget = this.options.tokenBudget ?? 100_000;
     const approvals = this.options.requestApproval;
@@ -326,6 +353,32 @@ export class AgentLoop {
         session = loaded.session;
         messages = loaded.messages;
         taskRecord = loaded.taskRecord;
+        const contextWindow =
+          this.options.catalog.models.find((candidate) => candidate.ref === session.modelRef)
+            ?.contextWindow ??
+          Math.max(...this.options.catalog.models.map((candidate) => candidate.contextWindow));
+        const compactedContext = compactConversationMessages(
+          messages,
+          contextWindow,
+          this.estimates,
+        );
+        messages = compactedContext.messages;
+        if (compactedContext.summary) {
+          taskRecord = {
+            ...taskRecord,
+            decisions: [
+              ...taskRecord.decisions.filter(
+                (decision) => !decision.text.startsWith('Context compacted:'),
+              ),
+              {
+                text: compactedContext.summary,
+                why: 'Keep the compacted context summary in the task record.',
+                at: new Date().toISOString(),
+              },
+            ].slice(-12),
+          };
+          this.persistTask(taskRecord);
+        }
         attemptFailures.length = 0;
         const keepTurns = this.options.pinnedTurns ?? 4;
         const pinnedMessages = messages.slice(-keepTurns * 2);
@@ -373,7 +426,7 @@ export class AgentLoop {
         let model = this.selectModel(stepKind, routeEstimate, session.modelRef, sessionId);
         if (!model) throw new Error('No eligible model is available for this step');
         let contextMessages = pinnedMessages;
-        if (inputTokens > model.contextWindow * 0.7) {
+        if (inputTokens > model.contextWindow * 0.9) {
           if (stepCount >= maxSteps)
             return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
           const summaryModel =
@@ -391,6 +444,10 @@ export class AgentLoop {
               'Summarize the conversation for continued coding work. Preserve user requirements, completed actions, key discoveries, file names, constraints, and unresolved next steps. Return only the concise summary.',
             messages: pinnedMessages,
             tools: [],
+            modelHints: this.options.modelHints?.(summaryModel) ?? {
+              toolProtocol: 'native',
+              editFormat: 'search_replace',
+            },
             signal,
             onDelta: discardDelta,
           });
@@ -475,6 +532,10 @@ export class AgentLoop {
           system,
           messages: contextMessages,
           tools,
+          modelHints: this.options.modelHints?.(selected) ?? {
+            toolProtocol: 'native',
+            editFormat: 'search_replace',
+          },
           signal: stepSignal,
           onProgress,
           onDelta: (text) => {
@@ -769,7 +830,39 @@ export class AgentLoop {
           (generated.outputTokens ?? this.estimates(generated.text ?? ''));
         stepCount++;
         const retryErrors: string[] = [];
-        for (const call of generated.toolCalls ?? []) {
+        const calls = [...(generated.toolCalls ?? [])];
+        const hints = this.options.modelHints?.(model) ?? {
+          toolProtocol: 'native' as const,
+          editFormat: 'search_replace',
+        };
+        let repeatedCallDetected = false;
+        if (!calls.length && generated.text && (this.options.repairToolCalls ?? true)) {
+          const parsedCalls = parseTextToolCalls(
+            generated.text,
+            tools.map((entry) => entry.name),
+          );
+          if (hints.toolProtocol !== 'native') calls.push(...parsedCalls);
+          else if (parsedCalls.length) {
+            nativeFormatFailures++;
+            if (nativeFormatFailures >= 2) calls.push(...parsedCalls);
+            else {
+              this.options.store.appendMessage(
+                sessionId,
+                'user',
+                [
+                  {
+                    type: 'text',
+                    id: PartIdSchema.parse(newId('part')),
+                    text: 'A tool call was written as text, but this model is configured for native calls. Retry once using a native tool call; if that fails again, Ferry will repair the text call.',
+                  },
+                ],
+                null,
+              );
+              continue;
+            }
+          }
+        }
+        for (const call of calls) {
           if (isSignalAborted(signal))
             throw signal.reason ?? new DOMException('Aborted', 'AbortError');
           if (call.name === 'ask_user') {
@@ -790,6 +883,26 @@ export class AgentLoop {
               null,
             );
             break;
+          }
+          if (repetitionDetector.observe(call.name, call.input)) {
+            repeatedCallDetected = true;
+            retryErrors.push(
+              'Repeated ' +
+                call.name +
+                ' call with identical arguments detected three times; stop repeating and choose a different action.',
+            );
+            continue;
+          }
+          if (
+            /^(write_file|create_file)$/i.test(call.name) &&
+            containsOmissionPlaceholder(call.input)
+          ) {
+            retryErrors.push(
+              'Rejected ' +
+                call.name +
+                ': content contains an omission placeholder. Provide the complete file contents instead.',
+            );
+            continue;
           }
           const definition = tools.find((candidate) => candidate.name === call.name);
           if (!definition) {
@@ -884,7 +997,7 @@ export class AgentLoop {
         }
         if (isSignalAborted(signal))
           throw signal.reason ?? new DOMException('Aborted', 'AbortError');
-        if (retryErrors.length)
+        if (retryErrors.length && reflectionBudget.consume())
           this.options.store.appendMessage(
             sessionId,
             'user',
@@ -892,12 +1005,35 @@ export class AgentLoop {
               {
                 type: 'text',
                 id: PartIdSchema.parse(newId('part')),
-                text: `Tool validation/errors; retry once with corrected arguments:\n${retryErrors.join('\n')}`,
+                text:
+                  'Tool validation/errors; retry once (reflection ' +
+                  String(4 - reflectionBudget.remaining) +
+                  '/3) with corrected arguments. Correct the exact failures below:\n' +
+                  retryErrors.join('\n'),
               },
             ],
             null,
           );
-        if (!generated.toolCalls?.length || generated.finishReason === 'stop')
+        else if (retryErrors.length) {
+          this.options.store.appendMessage(
+            sessionId,
+            'user',
+            [
+              {
+                type: 'text',
+                id: PartIdSchema.parse(newId('part')),
+                text:
+                  'Stopped after the three-reflection repair limit. Failures: ' +
+                  retryErrors.join('\n'),
+              },
+            ],
+            null,
+          );
+          return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
+        }
+        if (repeatedCallDetected)
+          return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
+        if (!calls.length || generated.finishReason === 'stop')
           return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'completed');
       }
       return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
@@ -1199,7 +1335,13 @@ export function repairAndValidate<T>(
 export function createStepGenerator(
   options: Pick<
     AgentOptions,
-    'apiKeys' | 'providerBaseUrls' | 'providerFetch' | 'emit' | 'onObservation' | 'askUser'
+    | 'apiKeys'
+    | 'providerBaseUrls'
+    | 'providerFetch'
+    | 'emit'
+    | 'onObservation'
+    | 'askUser'
+    | 'promptCaching'
   >,
   model: ModelInfo,
   sessionId: string,
@@ -1216,7 +1358,15 @@ export function createStepGenerator(
     const sdkTools: Record<string, unknown> = Object.fromEntries(
       tools.map((definition) => [
         definition.name,
-        tool({ description: definition.title, inputSchema: definition.schema }),
+        tool({
+          description: definition.title,
+          inputSchema: jsonSchema(
+            normalizeToolSchema(
+              toolSchemaForEstimate(definition.schema),
+              model.providerId,
+            ) as JSONSchema7,
+          ),
+        }),
       ]),
     );
     if (options.askUser)
@@ -1234,7 +1384,23 @@ export function createStepGenerator(
         sessionId,
       }),
       system,
-      messages: toModelMessages(messages, model),
+      ...(Object.keys(
+        promptCacheOptions(model.providerId, options.promptCaching?.(model) ?? true, sessionId),
+      ).length
+        ? {
+            providerOptions: {
+              [model.providerId]: promptCacheOptions(
+                model.providerId,
+                options.promptCaching?.(model) ?? true,
+                sessionId,
+              ),
+            },
+          }
+        : {}),
+      messages: sanitizeProviderMessages(
+        toModelMessages(messages, model),
+        model.providerId as import('@ferry/providers').MessageNormalizationProvider,
+      ),
       tools: sdkTools as unknown as ToolSet,
       abortSignal: signal,
       maxRetries: 0,
@@ -1332,9 +1498,13 @@ function toModelMessages(
           toolName: part.tool,
           output: {
             type: 'text',
-            value: compactToolHistoryText(
-              part.output?.text ?? `Tool ended with status ${part.status}.`,
-            ),
+            value:
+              compactToolHistoryText(
+                part.output?.text ?? `Tool ended with status ${part.status}.`,
+              ) +
+              (part.output?.recoveryHandle
+                ? `\n[Recovery handle: ${part.output.recoveryHandle}]`
+                : ''),
           },
         });
       } else {
@@ -1352,6 +1522,59 @@ function isGemini3Model(model: ModelInfo | undefined): boolean {
   return (
     model?.providerId === 'gemini' && /gemini[-/]3(?:[.-]|$)/i.test(`${model.ref} ${model.name}`)
   );
+}
+
+function compactConversationMessages(
+  messages: readonly Message[],
+  contextWindow: number,
+  estimate: (text: string) => number,
+): { messages: Message[]; summary: string } {
+  const outputs: {
+    key: string;
+    role: string;
+    content: string;
+    toolOutput: true;
+    protected: boolean;
+    recoveryHandle?: string;
+  }[] = [];
+  for (const [messageIndex, message] of messages.entries())
+    for (const part of message.parts)
+      if (part.type === 'tool_call' && part.output)
+        outputs.push({
+          key: `${message.id}:${part.id}`,
+          role: message.role,
+          content: part.output.text,
+          toolOutput: true,
+          protected: messageIndex >= messages.length - 8,
+          ...(part.output.recoveryHandle ? { recoveryHandle: part.output.recoveryHandle } : {}),
+        });
+  if (!outputs.length) return { messages: [...messages], summary: '' };
+  const compacted = compactContext(outputs, contextWindow, estimate, {
+    threshold: 0.9,
+    protectedTail: 4,
+    maxToolLines: 2000,
+    maxToolBytes: 10_000,
+  });
+  const replacements = new Map(compacted.messages.map((entry) => [entry.key, entry.content]));
+  return {
+    messages: messages.map((message) => ({
+      ...message,
+      parts: message.parts.map((part) =>
+        part.type === 'tool_call' && part.output && replacements.has(`${message.id}:${part.id}`)
+          ? {
+              ...part,
+              output: {
+                ...part.output,
+                text: replacements.get(`${message.id}:${part.id}`) ?? part.output.text,
+              },
+            }
+          : part,
+      ),
+    })),
+    summary: compacted.pruned
+      ? `Context compacted: ${String(compacted.pruned)} older tool output(s) were pruned; recovery handles remain available.`
+      : '',
+  };
 }
 
 function hasForeignUnsignedToolHistory(

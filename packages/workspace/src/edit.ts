@@ -1,9 +1,9 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import DiffMatchPatch from 'diff-match-patch';
 import { z } from 'zod';
 import { decodeText, encodeText, isBinary } from './fs.js';
 import { unifiedDiff, type FileChange, WorkspaceTools } from './tools.js';
+import { findForgivingEdit, editRepairHint } from './forgiving-edit.js';
 
 export const EditFileInput = z.object({
   path: z.string(),
@@ -12,7 +12,6 @@ export const EditFileInput = z.object({
 export const PathPairInput = z.object({ from: z.string(), to: z.string() });
 export const DeleteInput = z.object({ path: z.string() });
 export const PatchInput = z.object({ patch: z.string() });
-const dmp = new DiffMatchPatch();
 
 export async function editFile(tools: WorkspaceTools, raw: unknown): Promise<FileChange> {
   const input = EditFileInput.parse(raw);
@@ -23,29 +22,16 @@ export async function editFile(tools: WorkspaceTools, raw: unknown): Promise<Fil
   const decoded = decodeText(buffer);
   let after = decoded.text;
   for (const edit of input.edits) {
-    const occurrences = count(after, edit.search);
-    if (occurrences === 1) {
-      after = after.replace(edit.search, () => edit.replace);
-      continue;
-    }
-    if (occurrences > 1)
-      throw new Error('Exact edit is ambiguous; search block occurs more than once');
-    const needle = normalizeWhitespace(edit.search);
-    const normalized = normalizeWhitespace(after);
-    if (needle && count(normalized, needle) === 1) {
-      const index = normalized.indexOf(needle);
-      const bounds = mapNormalizedBounds(after, index, needle.length);
-      after = after.slice(0, bounds.start) + edit.replace + after.slice(bounds.end);
-      continue;
-    }
-    const patches = dmp.patch_make(edit.search, edit.replace);
-    const [result, applied] = dmp.patch_apply(patches, after);
-    if (applied.every(Boolean) && similarity(result, after) >= 0.55) {
-      after = result;
-      continue;
-    }
-    throw new Error('Edit block could not be matched with sufficient confidence');
+    const match = findForgivingEdit(after, edit.search);
+    if (!match) throw new Error(editRepairHint(after, edit.search));
+    if (match.count > 1)
+      throw new Error(
+        'Exact edit is ambiguous; refusing a multi-occurrence match. ' +
+          editRepairHint(after, edit.search),
+      );
+    after = after.slice(0, match.start) + edit.replace + after.slice(match.end);
   }
+
   const output = preserveExistingLineEndings(decoded.text, after, decoded.lineEnding);
   await fs.writeFile(file, encodeText(output, decoded.encoding));
   return {
@@ -60,38 +46,6 @@ function preserveExistingLineEndings(before: string, after: string, fallback: st
   let index = 0;
   return after.replace(/\r\n|\r|\n/g, () => endings[index++] ?? fallback);
 }
-function count(haystack: string, needle: string): number {
-  if (!needle) return 0;
-  return haystack.split(needle).length - 1;
-}
-function normalizeWhitespace(value: string): string {
-  return value.trim().replace(/\s+/g, ' ');
-}
-function mapNormalizedBounds(
-  text: string,
-  start: number,
-  length: number,
-): { start: number; end: number } {
-  const positions: number[] = [];
-  let wasSpace = false;
-  for (let i = 0; i < text.length; i++) {
-    const character = text[i] ?? '';
-    const space = /\s/.test(character);
-    if (space && wasSpace) continue;
-    positions.push(i);
-    wasSpace = space;
-  }
-  const begin = positions[start] ?? 0;
-  const last = positions[start + length - 1] ?? begin;
-  return { start: begin, end: last + 1 };
-}
-function similarity(a: string, b: string): number {
-  const diff = dmp.diff_main(a, b);
-  dmp.diff_cleanupEfficiency(diff);
-  const distance = diff.reduce((n, entry) => n + (entry[0] === 0 ? 0 : entry[1].length), 0);
-  return 1 - distance / Math.max(a.length, b.length, 1);
-}
-
 export async function deleteFile(tools: WorkspaceTools, raw: unknown): Promise<FileChange> {
   const input = DeleteInput.parse(raw);
   const file = await tools.jail.resolve(input.path);

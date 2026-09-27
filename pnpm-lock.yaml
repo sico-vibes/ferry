@@ -317,6 +317,9 @@ importers:
       '@ferry/testkit':
         specifier: workspace:*
         version: link:../testkit
+      fast-check:
+        specifier: 4.10.2
+        version: 4.10.2
 
   packages/catalog:
     dependencies:
