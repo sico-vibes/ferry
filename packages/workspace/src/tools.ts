@@ -5,6 +5,7 @@ import { glob as tinyGlob } from 'tinyglobby';
 import { rgPath } from '@vscode/ripgrep';
 import { z } from 'zod';
 import { DEFAULT_MAX_FILE_BYTES, decodeText, encodeText, isBinary, WorkspaceJail } from './fs.js';
+import { isProtectedWorkspacePath } from './permissions.js';
 
 const writeLocks = new Map<string, Promise<void>>();
 const renameRetryDelaysMs = [10, 20, 40, 80] as const;
@@ -107,6 +108,7 @@ export class WorkspaceTools {
       for (const entry of entries) {
         if (entry.name === '.git' || entry.name === 'node_modules') continue;
         const target = path.join(dir, entry.name);
+        if (isProtectedWorkspacePath(this.jail.relative(target))) continue;
         if (await this.jail.isIgnored(target)) continue;
         result.push(this.jail.relative(target));
         if (entry.isDirectory() && depth < input.depth) await visit(target, depth + 1);
@@ -127,7 +129,8 @@ export class WorkspaceTools {
     const visible: string[] = [];
     for (const item of files) {
       const file = await this.jail.resolve(item);
-      if (!(await this.jail.isIgnored(file))) visible.push(item.split(path.sep).join('/'));
+      if (!isProtectedWorkspacePath(this.jail.relative(file)) && !(await this.jail.isIgnored(file)))
+        visible.push(item.split(path.sep).join('/'));
     }
     return visible.sort().slice(0, 5000);
   }
@@ -147,7 +150,7 @@ export class WorkspaceTools {
       '--max-count',
       '200',
       '--max-filesize',
-      `${String(this.maxBytes)}b`,
+      String(this.maxBytes),
     ];
     if (input.glob) args.push('--glob', input.glob);
     args.push('--', input.pattern, base);
@@ -172,6 +175,11 @@ export class WorkspaceTools {
       if (event.type !== 'match' || !event.data?.path?.text) continue;
       const full = path.resolve(this.jail.root, event.data.path.text);
       if (!(await this.jail.resolve(this.jail.relative(full)))) continue;
+      try {
+        await this.assertVisible(await this.jail.resolve(this.jail.relative(full)));
+      } catch {
+        continue;
+      }
       matches.push({
         path: this.jail.relative(full),
         line: event.data.line_number ?? 0,
@@ -231,6 +239,8 @@ export class WorkspaceTools {
     };
   }
   async assertVisible(file: string): Promise<void> {
+    if (isProtectedWorkspacePath(this.jail.relative(file)))
+      throw new Error('Credential and secret files are protected');
     if (await this.jail.isIgnored(file)) throw new Error('Path is ignored');
   }
   private assertSize(buffer: Buffer): void {

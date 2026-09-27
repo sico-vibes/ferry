@@ -28,11 +28,11 @@ const mock = createDemoFerryClient({
     ? { speed: configuredSpeed }
     : {}),
 });
-let nextCorePortToken = 0;
 const connectCorePort = async (
   host: NonNullable<typeof window.ferryHost>,
 ): Promise<MessagePort> => {
-  const token = `ferry-core-port-${String(nextCorePortToken++)}`;
+  const tokenBytes = crypto.getRandomValues(new Uint8Array(32));
+  const token = Array.from(tokenBytes, (value) => value.toString(16).padStart(2, '0')).join('');
   const portPromise = new Promise<MessagePort>((resolve, reject) => {
     const timeout = window.setTimeout(() => {
       window.removeEventListener('message', onMessage);
@@ -41,6 +41,10 @@ const connectCorePort = async (
     const onMessage = (event: MessageEvent<unknown>) => {
       if (
         event.source !== window ||
+        event.origin !==
+          (location.origin === 'null' || location.protocol === 'file:'
+            ? 'null'
+            : location.origin) ||
         typeof event.data !== 'object' ||
         event.data === null ||
         !('type' in event.data) ||

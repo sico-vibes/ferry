@@ -353,7 +353,26 @@ try {
     await openRenderer(page);
     await expect(page.getByText('Demo data', { exact: true })).toHaveCount(0);
 
+    const selectedFolder = await page.evaluate(() => window.ferryHost?.openFolder());
+    assert.equal(selectedFolder?.toLowerCase(), fixtureRepo.toLowerCase());
+    const openedWorkspace = await page.evaluate(
+      (folder) => window.ferryRpcClient.workspaces.open(folder),
+      selectedFolder,
+    );
+    assert.equal(openedWorkspace.path.toLowerCase(), fixtureRepo.toLowerCase());
+
     await page.getByRole('button', { name: 'Open folder', exact: true }).first().click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          async (path) =>
+            (await window.ferryRpcClient.workspaces.list()).some(
+              (workspace) => workspace.path.toLowerCase() === path.toLowerCase(),
+            ),
+          fixtureRepo,
+        ),
+      )
+      .toBe(true);
     await page.getByRole('button', { name: `Open ${fixtureRepoName} in Library` }).click();
     await expect(page.getByRole('heading', { name: fixtureRepoName }).last()).toBeVisible();
     await expect(page.getByText('fixture/restore', { exact: true })).toBeVisible();
@@ -395,10 +414,21 @@ try {
       await window.ferryRpcClient.providers.setKey('groq', 'fixture-key');
     });
     await expect
-      .poll(() =>
-        page.evaluate(async () => (await window.ferryRpcClient.models.list('groq')).length),
+      .poll(
+        () =>
+          page.evaluate(async () => {
+            const providers = await window.ferryRpcClient.providers.list();
+            const groqModels = await window.ferryRpcClient.models.list('groq');
+            return (
+              ['openrouter', 'groq'].every((id) => {
+                const provider = providers.find((entry) => entry.id === id);
+                return Boolean(provider?.modelsVerifiedAt && provider.availableModels?.length);
+              }) && groqModels.length > 0
+            );
+          }),
+        { timeout: 30_000 },
       )
-      .toBeGreaterThan(0);
+      .toBe(true);
     const agentSession = await page.evaluate(async () => {
       const workspace = (await window.ferryRpcClient.workspaces.list())[0];
       if (!workspace) throw new Error('Real FixtureRepo workspace is unavailable');

@@ -182,6 +182,14 @@ describe('QA WebSocket transport validation', () => {
     expect(status).toContain('101');
   });
 
+  it('rotates the bearer token on each server launch', async () => {
+    const first = await startBareWs('ws-token-rotation-a');
+    const second = await startBareWs('ws-token-rotation-b');
+    expect(first.endpoint.token).toHaveLength(64);
+    expect(second.endpoint.token).toHaveLength(64);
+    expect(second.endpoint.token).not.toBe(first.endpoint.token);
+  });
+
   it('rejects a missing, wrong, or malformed token with 401', async () => {
     const { endpoint } = await startBareWs('ws-token');
     const url = new URL(endpoint.url);
@@ -195,6 +203,23 @@ describe('QA WebSocket transport validation', () => {
       }),
     ).toContain('401');
   });
+
+  it('locks out an address after five bad bearer tokens for the server lifetime', async () => {
+    const { endpoint } = await startBareWs('ws-token-lockout');
+    const url = new URL(endpoint.url);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      expect(
+        await upgradeStatus(portOf(endpoint), `${url.pathname}?token=wrong-${String(attempt)}`, {
+          key: 'a2V5',
+        }),
+      ).toContain('401');
+    }
+    expect(
+      await upgradeStatus(portOf(endpoint), `${url.pathname}?token=${endpoint.token}`, {
+        key: 'a2V5',
+      }),
+    ).toContain('401');
+  }, 30_000);
 
   it('rejects the wrong path and a missing Sec-WebSocket-Key', async () => {
     const { endpoint } = await startBareWs('ws-path');

@@ -30,6 +30,7 @@ files:
   - '!node_modules/**/__tests__/**'
   - '!node_modules/**/*.test.*'
   - '!node_modules/**/*.spec.*'
+  - out/data/vendor/SOURCES.md
   - '!node_modules/better-sqlite3/prebuilds/darwin-*.node'
   - '!node_modules/better-sqlite3/prebuilds/linux-*.node'
   - '!node_modules/better-sqlite3/prebuilds/linuxmusl-*.node'

@@ -73,3 +73,4 @@ parentPort.on('message', (event) => {
       process.exit(1);
     });
 });
+parentPort.postMessage({ type: 'ferry:core-listening' });

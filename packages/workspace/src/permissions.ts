@@ -22,27 +22,46 @@ export const ActionSchema = z.object({
 export type Action = z.infer<typeof ActionSchema>;
 const credentialPattern =
   /(^|[\\/])(?:\.env(?:\.[^\\/]+)?|[^\\/]+\.(?:pem|key|p12|pfx|jks)|id_rsa[^\\/]*|id_ed25519[^\\/]*|credentials(?:\.[^\\/]*)?|secrets?\.[^\\/]*|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.aws[\\/]credentials|\.azure[\\/][^\\/]+|\.kube[\\/]config|\.docker[\\/]config\.json|\.config[\\/]gh[\\/]hosts\.yml|\.config[\\/]gcloud[\\/]application_default_credentials\.json|\.ssh[\\/]known_hosts)(?:$|[\\/])/i;
+export function isProtectedWorkspacePath(value: string): boolean {
+  return credentialPattern.test(value);
+}
 const destructiveCommand = [
   /\bremove-item\b(?=.*-recurse)(?=.*(?:[a-z]:\\(?:$|\s)|\\\\|\/))/i,
+  /\bremove-item\b(?=.*-recurse)(?=.*-force)/i,
   /\bformat(?:\.com)?\s+[a-z]:/i,
   /\bdel\b(?=.*\/s)(?=.*\/q)(?:\s+\/\w+)*\s+(?:[a-z]:\\windows|[a-z]:\\|\\\\)/i,
+  /\bdel\b(?=.*\/s)(?=.*\/q)/i,
   /\bgit\s+push\b(?=.*(?:--force|-f\b))/i,
   /\b(?:iex|invoke-expression)\s*\(?\s*(?:iwr|invoke-webrequest)\b/i,
   /\breg(?:\.exe)?\s+(?:add|delete|import)\b/i,
   /\b(?:set-itemproperty|new-itemproperty|remove-itemproperty)\b.*\b(hklm|hkcu|registry::)/i,
   /\b(?:powershell|pwsh)(?:\.exe)?\b.*\s-encodedcommand\b/i,
+  /\b(?:powershell|pwsh)(?:\.exe)?\b.*\s-(?:e|enc|encodedcommand)\b/i,
+  /\bstart-process\b.*(?:-verb\s+runas|-verb:runas)/i,
+  /\b(?:format(?:\.com)?|diskpart)(?:\s|$)/i,
+  /\breg(?:\.exe)?\s+delete\b/i,
+  /\bschtasks(?:\.exe)?\s+\/create\b/i,
+  /\b(?:iex|invoke-expression)\b.*\b(?:iwr|invoke-webrequest)\b/i,
+  /\bcurl\b[^\n]*\|\s*(?:sh|bash)\b/i,
+  /\b(?:cmd(?:\.exe)?\s+\/c|command\.com\s+\/c)\b/i,
+  /(?:^|\s)(?:\$env:[\w]+|%[\w]+%|\$\{?[\w]+\}?)(?:\s|$)/i,
+  /`/,
+  /\\\\\?\\/,
+  /\brm\b(?=[^\n]*(?:-[^\s]*r|\s-r\b))(?=[^\n]*(?:-[^\s]*f|\s-f\b))/i,
 ];
 export function classifyDangerousCommand(command: string, workspace: string): string | undefined {
+  // Shell indirection and expansion make static target analysis unreliable. Require
+  // an explicit approval in interactive modes and deny in full-auto.
+  if (/&&|\|\||[;|`]|\\\\\?\\|(?:\$env:|%[\w]+%|\$\{?[\w]+\}?)/i.test(command))
+    return `Shell chaining or expansion requires review: ${command}`;
   const segments = command
     .split(/&&|\|\||[;|\n]/)
     .map((part) => part.trim())
     .filter(Boolean);
-  for (let index = 0; index < segments.length; index++) {
-    const segment = segments[index];
-    if (!segment) continue;
+  for (const segment of segments) {
     for (const rule of destructiveCommand)
       if (rule.test(segment)) return `Dangerous command segment: ${segment}`;
-    if (/\bcurl\b/i.test(segment) && /\b(sh|bash)\b/i.test(segments[index + 1] ?? ''))
+    if (/\bcurl\b[^\n]*\|\s*(?:sh|bash)\b/i.test(segment))
       return `Download piped to shell: ${segment}`;
     if (/\bremove-item\b/i.test(segment) && /-recurse/i.test(segment)) {
       const target =
@@ -68,7 +87,7 @@ export function evaluatePermission(
   action: Action,
   options: { mode: PermissionMode; rules?: PermissionRule[]; workspace: string },
 ): PermissionDecision {
-  if (action.path && credentialPattern.test(action.path))
+  if (action.path && isProtectedWorkspacePath(action.path))
     return { decision: 'deny', reason: 'Credential and secret files are protected' };
   if (action.command) {
     const danger = classifyDangerousCommand(action.command, options.workspace);

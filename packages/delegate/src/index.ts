@@ -1336,13 +1336,13 @@ export const delegatePaths = {
   },
 };
 
-async function assertAcpWorkspacePath(
+export async function assertAcpWorkspacePath(
   workspace: string,
   target: string,
   writing: boolean,
 ): Promise<string> {
   const root = await realpath(resolve(workspace));
-  const absolute = resolve(target);
+  const absolute = isAbsolute(target) ? resolve(target) : resolve(root, target);
   if (!delegatePaths.isWithin(root, absolute))
     throw new Error('ACP file path escapes the delegation workspace');
   let probe = absolute;

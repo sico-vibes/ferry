@@ -5,19 +5,28 @@ import {
   ipcMain,
   MessageChannelMain,
   shell,
+  session,
   utilityProcess,
   type UtilityProcess,
 } from 'electron';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { access, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { FERRY_DOMAINS } from '@ferry/shared';
+import { pathToFileURL } from 'node:url';
+import {
+  CoreHandoffTokenSchema,
+  DesktopThemeSchema,
+  EmptyIpcArgsSchema,
+  FERRY_DOMAINS,
+  OpenFolderResultSchema,
+} from '@ferry/shared';
 import {
   WINDOW_BACKGROUND,
   WINDOW_LIGHT_BACKGROUND,
   WINDOW_LIGHT_SYMBOL,
   WINDOW_SYMBOL,
 } from './window-theme.js';
+import { buildCoreEnvironment } from './core-environment.js';
 
 // Packaged builds use the icon embedded in the .exe by electron-builder (build/icon.ico).
 const DEV_WINDOW_ICON = join(import.meta.dirname, '../../build/icon.ico');
@@ -41,6 +50,7 @@ let saveTimer: NodeJS.Timeout | undefined;
 let coreProcess: UtilityProcess | null = null;
 let corePid: number | null = null;
 let coreReady = false;
+let coreListening = false;
 let restartCount = 0;
 let coreRestartTimer: NodeJS.Timeout | undefined;
 let shuttingDown = false;
@@ -72,7 +82,90 @@ function saveBounds(window: BrowserWindow): void {
 }
 
 function isExternalHttp(url: string): boolean {
-  return url.startsWith('https://') || url.startsWith('http://');
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === 'https:' || protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+const externalDomainAllowlist = new Set([
+  'docs.ferry.dev',
+  'github.com',
+  'docs.github.com',
+  'openai.com',
+  'platform.openai.com',
+  'anthropic.com',
+  'console.anthropic.com',
+  'ai.google.dev',
+  'console.groq.com',
+  'openrouter.ai',
+  'docs.mistral.ai',
+  'huggingface.co',
+  'docs.deepseek.com',
+]);
+function isAllowlistedExternal(url: string): boolean {
+  if (!isExternalHttp(url)) return false;
+  const hostname = new URL(url).hostname.toLowerCase();
+  return [...externalDomainAllowlist].some(
+    (domain) => hostname === domain || hostname.endsWith(`.${domain}`),
+  );
+}
+function isTrustedRendererUrl(url: string): boolean {
+  try {
+    const actual = new URL(url);
+    const devUrl = process.env.ELECTRON_RENDERER_URL;
+    if (devUrl) {
+      const expected = new URL(devUrl);
+      return actual.origin === expected.origin && actual.pathname === expected.pathname;
+    }
+    const rendererFile = pathToFileURL(join(import.meta.dirname, '../renderer/index.html'));
+    return actual.protocol === 'file:' && actual.pathname === rendererFile.pathname;
+  } catch {
+    return false;
+  }
+}
+function isTrustedRendererOrigin(url: string): boolean {
+  try {
+    const actual = new URL(url);
+    const devUrl = process.env.ELECTRON_RENDERER_URL;
+    if (devUrl) return actual.origin === new URL(devUrl).origin;
+    // File URLs have opaque origins and the router may change their pathname with pushState.
+    // Trust is additionally bound to this window's main frame in isTrustedSender.
+    return actual.protocol === 'file:' && actual.host === '';
+  } catch {
+    return false;
+  }
+}
+function isTrustedSender(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean {
+  const frame = event.senderFrame;
+  return Boolean(
+    mainWindow &&
+    !event.sender.isDestroyed() &&
+    event.sender === mainWindow.webContents &&
+    frame &&
+    frame === event.sender.mainFrame &&
+    isTrustedRendererOrigin(frame.url),
+  );
+}
+async function openExternalSafely(url: string): Promise<void> {
+  if (!isExternalHttp(url)) return;
+  if (!isAllowlistedExternal(url)) {
+    const options: Electron.MessageBoxOptions = {
+      type: 'question',
+      buttons: ['Open link', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      message: 'Open this link in your browser?',
+      detail: new URL(url).hostname,
+    };
+    const choice = mainWindow
+      ? await dialog.showMessageBox(mainWindow, options)
+      : await dialog.showMessageBox(options);
+    if (choice.response !== 0) return;
+  }
+  await shell.openExternal(url);
 }
 
 function broadcastEngineRestarting(): void {
@@ -87,26 +180,27 @@ function broadcastEngineConnected(): void {
 
 function transferCorePort(sender: Electron.WebContents): void {
   if (sender.isDestroyed()) return;
-  if (!coreProcess) {
+  if (!coreProcess || !coreListening) {
     coreConnectors.push(sender);
     return;
   }
   const channel = new MessageChannelMain();
   coreProcess.postMessage({ type: 'ferry:attach' }, [channel.port1]);
-  sender.postMessage('ferry:core-port', undefined, [channel.port2]);
+  sender.postMessage('ferry:core-port', { type: 'ferry:core-port' }, [channel.port2]);
 }
 
 function launchCore(): void {
   if (shuttingDown) return;
   const coreEntry = join(import.meta.dirname, 'core-entry.js');
+  const coreEnvironment = buildCoreEnvironment(process.env, app.isPackaged);
+  coreEnvironment.FERRY_REAL_DOMAINS ??= FERRY_DOMAINS.join(',');
+  coreEnvironment.FERRY_CORE_DATA_DIR =
+    coreEnvironment.FERRY_HOME ?? join(app.getPath('userData'), 'engine');
+  delete coreEnvironment.FERRY_HOME;
+  coreEnvironment.FERRY_LOG_DIRECT = 'true';
   const child = utilityProcess.fork(coreEntry, [], {
     serviceName: 'Ferry Core',
-    env: {
-      ...process.env,
-      FERRY_REAL_DOMAINS: process.env.FERRY_REAL_DOMAINS ?? FERRY_DOMAINS.join(','),
-      FERRY_CORE_DATA_DIR: process.env.FERRY_HOME ?? join(app.getPath('userData'), 'engine'),
-      FERRY_LOG_DIRECT: 'true',
-    },
+    env: coreEnvironment,
     stdio: process.env.FERRY_E2E_USER_DATA_DIR ? 'pipe' : 'inherit',
   });
   if (process.env.FERRY_E2E_USER_DATA_DIR)
@@ -116,15 +210,30 @@ function launchCore(): void {
   coreProcess = child;
   corePid = child.pid ?? null;
   coreReady = false;
+  coreListening = false;
   child.on('message', (message: unknown) => {
     if (
       coreProcess !== child ||
       typeof message !== 'object' ||
       message === null ||
-      !('type' in message) ||
-      message.type !== 'ferry:core-ready'
+      !('type' in message)
     )
       return;
+    if (message.type === 'ferry:core-listening') {
+      coreListening = true;
+      for (const sender of coreConnectors.splice(0)) transferCorePort(sender);
+      if (process.env.FERRY_E2E_CORE_ONLY) {
+        const channel = new MessageChannelMain();
+        child.postMessage({ type: 'ferry:attach' }, [channel.port1]);
+        channel.port2.on('message', (event) => {
+          if (process.env.FERRY_E2E_USER_DATA_DIR)
+            console.error('FERRY_CORE_MESSAGE ' + JSON.stringify(event.data));
+        });
+        channel.port2.start();
+      }
+      return;
+    }
+    if (message.type !== 'ferry:core-ready') return;
     coreReady = true;
     restartCount = 0;
     broadcastEngineConnected();
@@ -137,6 +246,7 @@ function launchCore(): void {
     coreProcess = null;
     corePid = null;
     coreReady = false;
+    coreListening = false;
     restartCount += 1;
     broadcastEngineRestarting();
     const delay = Math.min(500 * 2 ** Math.min(restartCount - 1, 5), 15_000);
@@ -144,16 +254,6 @@ function launchCore(): void {
   });
   child.on('spawn', () => {
     if (process.env.FERRY_E2E_USER_DATA_DIR) console.log('FERRY_UTILITY_SPAWN');
-    if (process.env.FERRY_E2E_CORE_ONLY) {
-      const channel = new MessageChannelMain();
-      child.postMessage({ type: 'ferry:attach' }, [channel.port1]);
-      channel.port2.on('message', (event) => {
-        if (process.env.FERRY_E2E_USER_DATA_DIR)
-          console.error('FERRY_CORE_MESSAGE ' + JSON.stringify(event.data));
-      });
-      channel.port2.start();
-    }
-    for (const sender of coreConnectors.splice(0)) transferCorePort(sender);
   });
 }
 
@@ -170,7 +270,14 @@ async function createWindow(): Promise<void> {
     backgroundColor: WINDOW_BACKGROUND,
     ...(app.isPackaged ? {} : { icon: DEV_WINDOW_ICON }),
     show: false,
-    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, preload },
+    webPreferences: {
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      webviewTag: false,
+      devTools: !app.isPackaged || process.env.FERRY_DEBUG_TOOLS === '1',
+      preload,
+    },
   });
 
   mainWindow.once('ready-to-show', () => mainWindow?.show());
@@ -181,19 +288,18 @@ async function createWindow(): Promise<void> {
     if (mainWindow) saveBounds(mainWindow);
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (isExternalHttp(url)) {
-      void shell.openExternal(url);
-    }
+    void openExternalSafely(url);
     return { action: 'deny' };
   });
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    const ownUrl = process.env.ELECTRON_RENDERER_URL;
-    if (ownUrl && url.startsWith(ownUrl)) return;
-    if (!ownUrl && url.startsWith('file://')) return;
+    if (isTrustedRendererUrl(url)) return;
     event.preventDefault();
-    if (isExternalHttp(url)) {
-      void shell.openExternal(url);
-    }
+    void openExternalSafely(url);
+  });
+  mainWindow.webContents.on('will-redirect', (event, url) => {
+    if (isTrustedRendererUrl(url)) return;
+    event.preventDefault();
+    void openExternalSafely(url);
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -210,26 +316,37 @@ function openMainWindow(): void {
   });
 }
 
-ipcMain.handle('ferry:open-folder', async () => {
-  if (process.env.NODE_ENV === 'test' && process.env.FERRY_E2E_OPEN_FOLDER)
-    return process.env.FERRY_E2E_OPEN_FOLDER;
+ipcMain.handle('ferry:open-folder', async (event, ...args: unknown[]) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  EmptyIpcArgsSchema.parse(args);
+  if (!app.isPackaged && process.env.FERRY_E2E_USER_DATA_DIR && process.env.FERRY_E2E_OPEN_FOLDER)
+    return OpenFolderResultSchema.parse(process.env.FERRY_E2E_OPEN_FOLDER);
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
   });
-  return result.canceled ? null : (result.filePaths[0] ?? null);
+  return OpenFolderResultSchema.parse(result.canceled ? null : (result.filePaths[0] ?? null));
 });
 
-ipcMain.on('ferry:connect-core', (event) => {
+const consumedHandoffTokens = new Set<string>();
+ipcMain.on('ferry:connect-core', (event, rawToken: unknown) => {
+  if (!isTrustedSender(event)) return;
+  const token = CoreHandoffTokenSchema.safeParse(rawToken);
+  if (!token.success || consumedHandoffTokens.has(token.data)) return;
+  consumedHandoffTokens.add(token.data);
   transferCorePort(event.sender);
 });
-ipcMain.handle('ferry:engine-status', () => ({
-  status: coreReady ? 'connected' : 'restarting',
-  pid: corePid,
-}));
+ipcMain.handle('ferry:engine-status', (event, ...args: unknown[]) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  EmptyIpcArgsSchema.parse(args);
+  return { status: coreReady ? 'connected' : 'restarting', pid: corePid };
+});
 
-ipcMain.on('ferry:theme', (_event, theme: unknown) => {
-  if (!mainWindow || (theme !== 'dark' && theme !== 'light')) return;
+ipcMain.on('ferry:theme', (event, rawTheme: unknown) => {
+  if (!isTrustedSender(event)) return;
+  const parsed = DesktopThemeSchema.safeParse(rawTheme);
+  if (!mainWindow || !parsed.success) return;
+  const theme = parsed.data;
   mainWindow.setTitleBarOverlay({
     color: theme === 'light' ? WINDOW_LIGHT_BACKGROUND : WINDOW_BACKGROUND,
     symbolColor: theme === 'light' ? WINDOW_LIGHT_SYMBOL : WINDOW_SYMBOL,
@@ -246,6 +363,9 @@ app.on('second-instance', () => {
 app
   .whenReady()
   .then(async () => {
+    session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
+      callback(false);
+    });
     if (app.isPackaged && !e2eUserDataPath) {
       const oldUserData = join(app.getPath('appData'), '@ferry', 'desktop');
       const newUserData = app.getPath('userData');

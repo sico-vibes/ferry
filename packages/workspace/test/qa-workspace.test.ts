@@ -234,10 +234,22 @@ describe('QA workspace: permission classifier', () => {
     expect(Boolean(classifyDangerousCommand(command, ws)), command).toBe(true);
   });
 
-  it.each(['git status', 'pnpm test', 'rm -rf ./build', 'echo hello | sort', 'del temp.txt'])(
-    'allows benign command %s',
+  it.each(['git status', 'pnpm test', 'del temp.txt'])('allows benign command %s', (command) => {
+    expect(Boolean(classifyDangerousCommand(command, ws)), command).toBe(false);
+  });
+
+  it.each(['rm -rf ./build', 'echo hello | sort'])(
+    'requires approval for destructive commands and shell chaining: %s',
     (command) => {
-      expect(Boolean(classifyDangerousCommand(command, ws)), command).toBe(false);
+      expect(classifyDangerousCommand(command, ws), command).toBeDefined();
+      expect(
+        evaluatePermission({ tool: 'run_command', command }, { mode: 'ask', workspace: ws })
+          .decision,
+      ).toBe('ask');
+      expect(
+        evaluatePermission({ tool: 'run_command', command }, { mode: 'full_auto', workspace: ws })
+          .decision,
+      ).toBe('deny');
     },
   );
 
