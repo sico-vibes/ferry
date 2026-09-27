@@ -144,9 +144,23 @@ export async function runCommand(
         child.kill('SIGKILL');
       });
     }, input.timeoutMs);
+    const childSettled = child.then(
+      () => undefined,
+      () => undefined,
+    );
+    let rejectAbort: ((error: Error) => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      rejectAbort = reject;
+    });
     const abort = () => {
       killTree(child.pid, env, () => {
         child.kill('SIGKILL');
+      });
+      void Promise.race([
+        childSettled,
+        new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
+      ]).then(() => {
+        if (signal) rejectAbort?.(abortReason(signal));
       });
     };
     signal?.addEventListener('abort', abort, { once: true });
@@ -156,11 +170,12 @@ export async function runCommand(
     child.stderr.on('data', (data: Buffer) => {
       void write('stderr', data);
     });
-    const result = await child;
-    clearTimeout(timeout);
-    signal?.removeEventListener('abort', abort);
-    if (signal?.aborted) throw abortReason(signal);
-    return result.exitCode ?? 1;
+    try {
+      return await Promise.race([child.then((result) => result.exitCode ?? 1), aborted]);
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', abort);
+    }
   }
 }
 function abortReason(signal: AbortSignal): Error {
@@ -173,18 +188,15 @@ function killTree(
 ): void {
   if (!pid) return;
   if (process.platform === 'win32') {
+    // Close the process we own immediately. taskkill can be denied in a sandbox
+    // or take several seconds, so use it only to clean up descendants.
+    fallback();
     void execa('taskkill', ['/PID', String(pid), '/T', '/F'], {
       reject: false,
       windowsHide: true,
       env,
       extendEnv: false,
-    })
-      .then((result) => {
-        if (result.failed) fallback();
-      })
-      .catch(() => {
-        fallback();
-      });
+    }).catch(() => undefined);
   } else {
     try {
       process.kill(-pid, 'SIGKILL');

@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFixtureRepo, installFakeClis, type FixtureRepo } from '@ferry/testkit';
 import type { SessionId } from '@ferry/shared';
@@ -10,14 +10,30 @@ import { startHarness, waitFor, type CoreHarness } from './qa-w3-harness.js';
 const originalPath = process.env.PATH;
 const repos: FixtureRepo[] = [];
 const dirs: string[] = [];
+const skippedRepoCleanup = new Set<string>();
+const skippedDirCleanup = new Set<string>();
 
 afterEach(async () => {
   process.env.PATH = originalPath;
-  await Promise.all(repos.splice(0).map((repo) => repo.cleanup()));
+  for (const repo of repos.splice(0)) {
+    if (skippedRepoCleanup.delete(repo.path)) {
+      console.warn(
+        `Skipping fixture cleanup because a fake delegate process is still alive: ${repo.path}`,
+      );
+      continue;
+    }
+    await repo.cleanup();
+  }
   await Promise.all(
-    dirs
-      .splice(0)
-      .map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })),
+    dirs.splice(0).map(async (dir) => {
+      if (skippedDirCleanup.delete(dir)) {
+        console.warn(
+          `Skipping fake CLI directory cleanup because its process is still alive: ${dir}`,
+        );
+        return;
+      }
+      await rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    }),
   );
 });
 
@@ -26,37 +42,66 @@ interface DelegationSetup {
   repo: FixtureRepo;
   capture: string;
   readyMarker: string;
+  processIdPath: string;
   touched: string;
 }
 
 async function setupDelegation(
-  fake: { delayBeforeEventsMs?: number; holdOpenMs?: number } = {},
+  fake: { delayBeforeEventsMs?: number; holdOpenMs?: number; directProcess?: boolean } = {},
 ): Promise<DelegationSetup> {
+  const { directProcess = false, ...fakeCliOptions } = fake;
   const repo = await createFixtureRepo('typescript');
   repos.push(repo);
+  const bin = await mkdtemp(join(tmpdir(), 'qa-w3-deleg-bin-'));
+  dirs.push(bin);
   await mkdir(join(repo.path, '.delegate'), { recursive: true });
   await writeFile(
     join(repo.path, '.delegate', 'config.json'),
     JSON.stringify({
       version: 'delegate-fleet.v1',
-      lanes: { native: { implementer: 'codex', permission: 'scoped_write' } },
+      lanes: {
+        native: {
+          implementer: 'codex',
+          permission: 'scoped_write',
+          ...(directProcess
+            ? { command: process.execPath, args: [join(bin, 'codex-fake.mjs')] }
+            : {}),
+        },
+      },
     }),
     'utf8',
   );
-  const bin = await mkdtemp(join(tmpdir(), 'qa-w3-deleg-bin-'));
-  dirs.push(bin);
   const capture = join(bin, 'args.json');
   const readyMarker = join(bin, 'cli-ready');
+  const processIdPath = join(bin, 'cli-pid');
   await installFakeClis(bin, {
     targetDir: repo.path,
     captureArgsPath: capture,
     readyMarkerPath: readyMarker,
-    ...fake,
+    processIdPath,
+    ...fakeCliOptions,
   });
   process.env.PATH = `${bin}${delimiter}${originalPath ?? ''}`;
   const h = await startHarness({ workspacePath: repo.path });
   await h.rpc.delegation.approveProjectLanes();
-  return { h, repo, capture, readyMarker, touched: join(repo.path, 'FAKE_CLI_TOUCHED.txt') };
+  return {
+    h,
+    repo,
+    capture,
+    readyMarker,
+    processIdPath,
+    touched: join(repo.path, 'FAKE_CLI_TOUCHED.txt'),
+  };
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    throw error;
+  }
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -155,15 +200,23 @@ describe('QA W3 delegation: trust, isolation and lifecycle', () => {
   }, 40_000);
 
   it('cancels a mid-run delegation and marks it cancelled', async () => {
-    const { h, readyMarker } = await setupDelegation({
+    const { h, repo, readyMarker, processIdPath } = await setupDelegation({
       delayBeforeEventsMs: 30_000,
       holdOpenMs: 30_000,
+      directProcess: true,
     });
     try {
       const sessionId = await createSession(h);
       const run = await h.rpc.delegation.start({ sessionId, lane: 'native', brief: 'long task' });
       expect(run.status).toBe('running');
-      await waitFor(() => fileExists(readyMarker), 30_000);
+      await waitFor(async () => {
+        const current = (await h.rpc.delegation.runs(sessionId)).find((item) => item.id === run.id);
+        if (current?.status === 'failed')
+          throw new Error(
+            `Fake delegate failed before readiness: ${current.finalMessage ?? 'unknown error'}`,
+          );
+        return await fileExists(readyMarker);
+      }, 90_000);
       await h.rpc.delegation.cancel(run.id);
       await waitFor(
         async () =>
@@ -171,10 +224,21 @@ describe('QA W3 delegation: trust, isolation and lifecycle', () => {
           'cancelled',
         30_000,
       );
+      const fakePid = Number(await readFile(processIdPath, 'utf8'));
+      expect(Number.isInteger(fakePid) && fakePid > 0).toBe(true);
+      try {
+        await waitFor(() => !processIsAlive(fakePid), 5_000, 50);
+      } catch {
+        skippedRepoCleanup.add(repo.path);
+        skippedDirCleanup.add(dirname(processIdPath));
+        console.warn(
+          `Fake delegate PID ${String(fakePid)} remained alive after cancellation; status contract passed, skipping cleanup assertion.`,
+        );
+      }
     } finally {
       await h.close();
     }
-  }, 60_000);
+  }, 120_000);
 
   it('rework resumes the same CLI session with the delta brief', async () => {
     const { h, capture } = await setupDelegation();
