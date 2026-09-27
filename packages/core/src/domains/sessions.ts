@@ -8,6 +8,7 @@ import {
   MessageSchema,
   PartIdSchema,
   ProfileSchema,
+  RoutingSettingsSchema,
   SessionDetailSchema,
   SessionIdSchema,
   SessionSchema,
@@ -272,6 +273,26 @@ export function register(host: CoreHost, services: FerryServices): void {
             ? provider.availableModels.map((model) => model.ref)
             : [],
         );
+        const settingsValue = services.settings.get('global');
+        const routingValue =
+          typeof settingsValue === 'object' && settingsValue !== null && 'routing' in settingsValue
+            ? settingsValue.routing
+            : undefined;
+        const routing = RoutingSettingsSchema.parse(routingValue ?? {});
+        const reliability =
+          z
+            .array(
+              z.object({
+                modelRef: z.string(),
+                outcome: z.enum(['success', 'failure']),
+                at: z.number(),
+              }),
+            )
+            .safeParse(services.settings.get('routing-reliability')).data ?? [];
+        const stickyState =
+          z
+            .record(z.string(), z.object({ modelRef: z.string(), expiresAt: z.number() }))
+            .safeParse(services.settings.get('routing-sticky-sessions')).data ?? {};
         const routingInput = {
           models: availableModels,
           capacity: preflightCapacity,
@@ -279,6 +300,8 @@ export function register(host: CoreHost, services: FerryServices): void {
           step: 'plan',
           estimate: { inputTokens: 1, outputTokens: 2048, expectedSteps: 1, requiresTools: true },
           verifiedModelRefs,
+          routing,
+          reliability,
         } as const;
         const chain = chainForProfile(profile);
         const chainResult = resolveFallbackChain({
@@ -316,6 +339,31 @@ export function register(host: CoreHost, services: FerryServices): void {
               })),
               chain: chainResult.diagnostics,
               chainHit: chainResult.hit,
+              influences: {
+                sticky:
+                  routing.stickySessions &&
+                  (stickyState[session.id]?.expiresAt ?? 0) > services.clock.now().getTime()
+                    ? `sticky: kept ${String(stickyState[session.id]?.modelRef)}`
+                    : null,
+                smartReliability: routing.smartReliability
+                  ? 'smart reliability: Thompson-sampled recent outcomes'
+                  : null,
+                quotaReservations: routing.quotaReservations
+                  ? 'quota reservations: enabled for provider requests'
+                  : null,
+                cooldownReasons: routing.cooldownReasons
+                  ? 'cooldown reasons: provenance-aware probes enabled'
+                  : null,
+                gentleQuotaRamp: routing.gentleQuotaRamp
+                  ? 'gentle quota ramp: live quota headroom applied'
+                  : null,
+                toolRejectionMemory: routing.toolRejectionMemory
+                  ? 'tool-rejection memory: recent tool failures affect ordering'
+                  : null,
+                carefulModelRetirement: routing.carefulModelRetirement
+                  ? 'careful model retirement: corroborated lifecycle signals applied'
+                  : null,
+              },
             });
         }
         if (!hasAvailableModel && services.env.NODE_ENV !== 'test') {
@@ -455,6 +503,58 @@ export function register(host: CoreHost, services: FerryServices): void {
           onResilienceState: (entries) => {
             services.settings.put('routing-resilience', entries);
           },
+          routingSettings: () => {
+            const stored = services.settings.get('global');
+            const routing =
+              typeof stored === 'object' && stored !== null && 'routing' in stored
+                ? stored.routing
+                : undefined;
+            return RoutingSettingsSchema.parse(routing ?? {});
+          },
+          reliabilityState:
+            z
+              .array(
+                z.object({
+                  modelRef: z.string(),
+                  outcome: z.enum(['success', 'failure']),
+                  at: z.number(),
+                }),
+              )
+              .safeParse(services.settings.get('routing-reliability')).data ?? [],
+          onReliabilityState: (entries) => {
+            services.settings.put('routing-reliability', entries);
+          },
+          routingNow: () => services.clock.now().getTime(),
+          stickyState:
+            z
+              .record(z.string(), z.object({ modelRef: z.string(), expiresAt: z.number() }))
+              .safeParse(services.settings.get('routing-sticky-sessions')).data ?? {},
+          onStickyState: (state) => {
+            services.settings.put('routing-sticky-sessions', state);
+          },
+          toolRejectionState:
+            z
+              .array(z.object({ modelRef: z.string(), requestId: z.string(), at: z.number() }))
+              .safeParse(services.settings.get('routing-tool-rejections')).data ?? [],
+          onToolRejectionState: (entries) => {
+            services.settings.put('routing-tool-rejections', entries);
+          },
+          retirementFailureState:
+            z
+              .array(z.object({ modelRef: z.string(), requestId: z.string(), at: z.number() }))
+              .safeParse(services.settings.get('routing-retirement-failures')).data ?? [],
+          onRetirementFailureState: (entries) => {
+            services.settings.put('routing-retirement-failures', entries);
+          },
+          retiredModelRefs:
+            z.array(z.string()).safeParse(services.settings.get('routing-retired-models')).data ??
+            [],
+          onRetiredModelRefs: (entries) => {
+            services.settings.put('routing-retired-models', entries);
+          },
+          acquireQuotaLease: (model, tokens) =>
+            services.quota.acquireLease(model.providerId, model.ref, tokens) ?? null,
+          probeHeuristicCooldowns: () => runtime.gateway.probeHeuristicCooldowns(),
           permissionRules: [
             ...config.permissionRules.map((rule) => ({
               effect: rule.mode,

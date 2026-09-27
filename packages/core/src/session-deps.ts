@@ -5,9 +5,11 @@ import {
   type StepGeneratorInput,
 } from '@ferry/agent';
 import type { RawCallObservation } from '@ferry/providers';
+import { probe as probeProvider } from '@ferry/providers';
 import {
   ProviderIdSchema,
   ProviderSchema,
+  RoutingSettingsSchema,
   OAuthProviderIdSchema,
   UsageRecordSchema,
   QuotaObservationSchema,
@@ -23,10 +25,13 @@ import {
   isStrictFallbackNameEligible,
   resolveFallbackChain,
   scoreModels,
+  type ReliabilityObservation,
   type CapacityView,
+  canProbeCooldown,
 } from '@ferry/router';
 import { oauthModelCatalog, streamOAuthStep } from '@ferry/oauth';
 import type { FerryServices } from './services.js';
+import { z } from 'zod';
 
 const providerKeyPresence = new WeakMap<FerryServices, Map<string, boolean>>();
 
@@ -56,6 +61,7 @@ export interface ModelGateway {
   streamStep(req: StepGeneratorInput, signal: AbortSignal): Promise<GeneratedStep>;
   resolveCandidates(profile: Profile, stepKind: StepKind, inputTokens?: number): ModelInfo[];
   recordHandoff(sessionId: string, reason: string): void;
+  probeHeuristicCooldowns(): Promise<void>;
 }
 export interface UsageSink {
   record(record: UsageRecord): void;
@@ -120,6 +126,10 @@ export function createSessionDependencies(
               ? 'ok'
               : (saved?.health ?? 'unknown'),
           cooldownUntil: activeCooldown ? cooldown.until : null,
+          cooldownProvenance:
+            activeCooldown && routingSettings().cooldownReasons
+              ? (cooldown.provenance ?? null)
+              : null,
           dataUse: data_use,
           termsNote: terms_note,
           signupUrl: signup_url,
@@ -167,6 +177,20 @@ export function createSessionDependencies(
     providers: providers(),
     now: services.clock.now().toISOString(),
   });
+  const routingSettings = () => {
+    const stored = services.settings.get('global');
+    const routing =
+      typeof stored === 'object' && stored !== null && 'routing' in stored
+        ? stored.routing
+        : undefined;
+    return RoutingSettingsSchema.parse(routing ?? {});
+  };
+  const reliability = (): ReliabilityObservation[] =>
+    z
+      .array(
+        z.object({ modelRef: z.string(), outcome: z.enum(['success', 'failure']), at: z.number() }),
+      )
+      .safeParse(services.settings.get('routing-reliability')).data ?? [];
   const usage: UsageSink = {
     record(raw) {
       services.quota.recordUsage(UsageRecordSchema.parse(raw));
@@ -226,7 +250,17 @@ export function createSessionDependencies(
         retryTimestamp,
       );
       if (cooldown.cooldownUntil)
-        services.cooldowns.put({ id: providerId, until: cooldown.cooldownUntil });
+        services.cooldowns.put({
+          id: providerId,
+          until: cooldown.cooldownUntil,
+          ...(routingSettings().cooldownReasons
+            ? {
+                provenance: observation.rateLimitHeaders['retry-after']
+                  ? 'authoritative'
+                  : 'heuristic',
+              }
+            : {}),
+        });
       const saved = services.providers.get(providerId);
       if (saved)
         services.providers.put({
@@ -271,6 +305,42 @@ export function createSessionDependencies(
     }
   };
   const gateway: ModelGateway = {
+    async probeHeuristicCooldowns() {
+      if (!routingSettings().cooldownReasons) return;
+      const now = services.clock.now().getTime();
+      for (const cooldown of services.cooldowns.list()) {
+        if (
+          !canProbeCooldown(
+            {
+              until: Date.parse(cooldown.until),
+              provenance: cooldown.provenance ?? 'authoritative',
+            },
+            now,
+          )
+        )
+          continue;
+        const providerId = ProviderIdSchema.safeParse(cooldown.id);
+        if (!providerId.success) continue;
+        const key = await services.secrets.get(providerId.data);
+        if (!key) continue;
+        const baseUrl = providerBaseUrls[providerId.data];
+        const result = await probeProvider(
+          providerId.data,
+          key,
+          ...(baseUrl ? [{ baseUrl }] : []),
+        ).catch(() => null);
+        if (!result?.ok) continue;
+        services.cooldowns.delete(providerId.data);
+        const saved = services.providers.get(providerId.data);
+        if (saved)
+          services.providers.put({
+            ...saved,
+            health: 'ok',
+            cooldownUntil: null,
+            cooldownProvenance: null,
+          });
+      }
+    },
     resolveCandidates(profile, stepKind, inputTokens = 1) {
       const configuredProviders = services.catalog.providers.filter(
         ({ provider, key_required }) => {
@@ -398,6 +468,8 @@ export function createSessionDependencies(
         estimate: { inputTokens, requiresTools: true },
         preferredModelRefs,
         verifiedModelRefs,
+        routing: routingSettings(),
+        reliability: reliability(),
       });
       const modelByRef = new Map(candidates.map((model) => [model.ref, model]));
       return [
@@ -443,7 +515,11 @@ export function createSessionDependencies(
         if (isProviderCapacityError(error) && ![429, 503].includes(providerErrorStatus(error))) {
           const cooldown = services.quota.noteFailure(providerId, req.model.ref, providerId, '429');
           if (cooldown.cooldownUntil)
-            services.cooldowns.put({ id: providerId, until: cooldown.cooldownUntil });
+            services.cooldowns.put({
+              id: providerId,
+              until: cooldown.cooldownUntil,
+              ...(routingSettings().cooldownReasons ? { provenance: 'heuristic' } : {}),
+            });
           const saved = services.providers.get(providerId);
           if (saved)
             services.providers.put({

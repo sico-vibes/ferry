@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMockFerryClient } from '@ferry/client';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FerryProvider } from '../data/client';
 import { useUI } from '../state/ui';
@@ -49,6 +50,26 @@ describe('SettingsCanvas', () => {
       bottomOpen: false,
       bottomHeight: 260,
     });
+  });
+
+  it('shows user-toggleable routing techniques and persists changes through settings', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const user = userEvent.setup();
+    useUI.setState({ settingsSection: 'Advanced' });
+    mount(client);
+    const toggle = await screen.findByRole('switch', { name: 'Sticky sessions' });
+    expect(toggle.getAttribute('data-state')).toBe('checked');
+    await user.click(toggle);
+    await waitFor(async () => {
+      expect((await client.settings.get()).routing.stickySessions).toBe(false);
+    });
+    expect(
+      screen.getByText(
+        "Reserve capacity before sending so parallel tasks don't overshoot a provider's limits.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByText('Tune'));
+    expect(screen.getByRole('slider', { name: 'Quota ramp start' })).toBeTruthy();
   });
 
   // BUG (P2): `PermissionsContent` JSON-parses `ferry.permissionRules` but never asserts the

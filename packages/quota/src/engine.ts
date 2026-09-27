@@ -17,6 +17,7 @@ import { newId } from '@ferry/shared';
 import { ProviderLimitsSchema, type Catalog, type ProviderLimits } from '@ferry/catalog';
 import { QuotaObservationRepository, RequestRepository } from '@ferry/storage';
 import { nextReset, remaining, usageIn, windowStart, type WindowSpec } from './windows.js';
+import { QuotaLeaseLedger } from './leases.js';
 
 type EventListener = (event: { type: 'quota.updated'; summary: CapacitySummary }) => void;
 type Source = QuotaObservation['source'];
@@ -117,6 +118,7 @@ export class QuotaEngine {
   private readonly cooldowns = new Map<string, Cooldown>();
   private readonly breakers = new Map<string, CircuitBreakerPolicy>();
   private readonly averages = new Map<string, { tokens: number; cost: number; samples: number }>();
+  private readonly leases = new QuotaLeaseLedger();
   private readonly listeners = new Set<EventListener>();
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   private readonly pollingTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -440,6 +442,30 @@ export class QuotaEngine {
     return this.windowDefinitions(providerId).map((window) =>
       this.currentWindow(providerId, window),
     );
+  }
+
+  acquireLease(providerId: string, modelRef: string, tokens: number): (() => void) | undefined {
+    const windows = this.getWindows(providerId).filter(
+      (window) => window.scope === 'provider' || window.modelRef === modelRef,
+    );
+    const requestLimits = windows
+      .filter((window) => window.metric === 'requests')
+      .map((window) => window.remaining)
+      .filter((remaining): remaining is number => remaining !== null);
+    const tokenLimits = windows
+      .filter((window) => window.metric === 'tokens')
+      .map((window) => window.remaining)
+      .filter((remaining): remaining is number => remaining !== null);
+    const capacity = {
+      requests: requestLimits.length ? Math.min(...requestLimits) : null,
+      tokens: tokenLimits.length ? Math.min(...tokenLimits) : null,
+    };
+    const now = this.now().getTime();
+    const lease = this.leases.acquire(providerId, { requests: 1, tokens }, capacity, now);
+    if (!lease) return undefined;
+    return () => {
+      this.leases.release(lease.id);
+    };
   }
 
   private updateAverage(record: UsageRecord): void {

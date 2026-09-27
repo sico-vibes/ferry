@@ -214,7 +214,11 @@ export class QuotaObservationRepository extends JsonRepository<
     super(client, 'quota_observations');
   }
 }
-export class CooldownRepository extends JsonRepository<{ id: string; until: string }> {
+export class CooldownRepository extends JsonRepository<{
+  id: string;
+  until: string;
+  provenance?: 'heuristic' | 'authoritative' | 'credit' | 'tier';
+}> {
   constructor(client: Database.Database) {
     super(client, 'cooldowns');
   }

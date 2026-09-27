@@ -6,6 +6,7 @@ import type {
   StepKind,
   TaskRecord,
   Message,
+  RoutingSettings,
 } from '@ferry/shared';
 import type { Catalog } from '@ferry/catalog';
 import {
@@ -20,6 +21,25 @@ export {
   resolveFallbackChain,
 } from './auto-free-chain.js';
 export type { ChainDiagnostic, ChainSkipReason, ResolvedFallbackChain } from './auto-free-chain.js';
+export {
+  StickySessionLedger,
+  decayedBetaPosterior,
+  sampleBeta,
+  headroomFactor,
+  canProbeCooldown,
+  isToolDeferred,
+  shouldRetireModel,
+} from './techniques.js';
+export type {
+  ReliabilityObservation,
+  BetaPosterior,
+  StickyRoute,
+  CooldownProvenance,
+  ProvenancedCooldown,
+  ToolRejection,
+  RetirementFailure,
+} from './techniques.js';
+import { decayedBetaPosterior, sampleBeta, headroomFactor } from './techniques.js';
 export {
   classifyProviderError,
   parseRetryAfter,
@@ -269,6 +289,9 @@ export interface ScoreInput {
   preferredModelRefs?: readonly string[];
   /** Models confirmed available to the current provider key, by probe or successful use. */
   verifiedModelRefs?: readonly string[];
+  routing?: RoutingSettings;
+  reliability?: readonly import('./techniques.js').ReliabilityObservation[];
+  random?: () => number;
 }
 
 /** Remove models that cannot safely execute this step, then rank the remaining models. */
@@ -332,8 +355,9 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
     if (tpm !== null && tpm < input.estimate.inputTokens + (input.estimate.outputTokens ?? 0))
       continue;
     const prior = statByRef.get(model.ref);
-    const success =
-      prior && prior.toolCalls > 0
+    const success = input.routing?.smartReliability
+      ? sampleBeta(decayedBetaPosterior(input.reliability ?? [], model.ref, nowMs), input.random)
+      : prior && prior.toolCalls > 0
         ? (prior.toolCalls - prior.toolCallValidationFailures + 2 * 0.8) / (prior.toolCalls + 2)
         : 0.8;
     const tierFit = tierFitScore(input.step, model.tier);
@@ -349,17 +373,31 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
     const preference = preferredModelRefs.has(model.ref) ? 4 : 0;
     const affinity =
       (prior?.cacheAffinity ?? 0) * 0.6 + (input.previousModelRef === model.ref ? 0.4 : 0);
+    const quotaHeadroom = input.routing?.gentleQuotaRamp
+      ? provider.windows
+          .filter((window) => window.limit !== null && window.remaining !== null)
+          .map((window) =>
+            headroomFactor(
+              window.remaining,
+              window.limit,
+              input.routing?.rampStart,
+              input.routing?.rampFloor,
+            ),
+          )
+          .reduce((minimum, factor) => Math.min(minimum, factor), 1)
+      : 1;
     const score =
-      40 * tierFit +
-      20 * headroom +
-      20 * success +
-      10 * latencyScore +
-      6 * costScore +
-      4 * affinity +
-      coding +
-      preference +
-      (input.preferReasoning && model.reasoning ? 2 : 0) +
-      (verifiedModelRefs.has(model.ref) ? 10 : -10);
+      quotaHeadroom *
+      (40 * tierFit +
+        20 * headroom +
+        20 * success +
+        10 * latencyScore +
+        6 * costScore +
+        4 * affinity +
+        coding +
+        preference +
+        (input.preferReasoning && model.reasoning ? 2 : 0) +
+        (verifiedModelRefs.has(model.ref) ? 10 : -10));
     const scoreBreakdown = {
       tierFit: 40 * tierFit,
       headroom: 20 * headroom,
@@ -371,6 +409,7 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       preference,
       reasoning: input.preferReasoning && model.reasoning ? 2 : 0,
       verification: verifiedModelRefs.has(model.ref) ? 10 : -10,
+      ...(input.routing?.gentleQuotaRamp ? { quotaHeadroomFactor: quotaHeadroom } : {}),
     };
     const stepsText =
       remaining === null ? 'capacity unknown' : `${Math.floor(remaining).toString()} steps left`;

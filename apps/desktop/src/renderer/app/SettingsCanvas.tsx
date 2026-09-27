@@ -21,6 +21,8 @@ import {
 } from '@ferry/ui';
 import { FERRY_DOMAINS } from '@ferry/shared';
 import type { Profile, Provider, StepKind, Tier } from '@ferry/shared';
+import type { RoutingSettings } from '@ferry/shared';
+import { Info } from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
 const stepLabels: Record<StepKind, string> = {
@@ -31,6 +33,66 @@ const stepLabels: Record<StepKind, string> = {
   review: 'Review',
   long_context: 'Long context',
 };
+const routingRows: {
+  key: keyof Pick<
+    RoutingSettings,
+    | 'stickySessions'
+    | 'smartReliability'
+    | 'quotaReservations'
+    | 'cooldownReasons'
+    | 'gentleQuotaRamp'
+    | 'toolRejectionMemory'
+    | 'carefulModelRetirement'
+  >;
+  title: string;
+  helper: string;
+  info: string;
+}[] = [
+  {
+    key: 'stickySessions',
+    title: 'Sticky sessions',
+    helper: 'Keep a chat on the same model for 30 minutes so answers stay consistent.',
+    info: 'Trade-off: conversations may stay on a model that is no longer the top-scoring choice. Ferry switches when it fails, cools down, or cannot fit the request.',
+  },
+  {
+    key: 'smartReliability',
+    title: 'Smart reliability',
+    helper: 'Prefer models that have been working lately; old failures fade over time.',
+    info: 'Trade-off: Thompson sampling explores uncertain models, so a less-proven model may occasionally be chosen.',
+  },
+  {
+    key: 'quotaReservations',
+    title: 'Quota reservations',
+    helper:
+      "Reserve capacity before sending so parallel tasks don't overshoot a provider's limits.",
+    info: 'Trade-off: estimated tokens are reserved briefly while a request is in flight.',
+  },
+  {
+    key: 'cooldownReasons',
+    title: 'Cooldown reasons',
+    helper: 'Remember why a provider paused and re-check early only when the pause was a guess.',
+    info: 'Trade-off: early probes can use a request; authoritative limits are never probed early.',
+  },
+  {
+    key: 'gentleQuotaRamp',
+    title: 'Gentle quota ramp',
+    helper:
+      'Gradually use a provider less as its free quota runs low, instead of stopping suddenly.',
+    info: 'Trade-off: capacity is spread across the remaining quota window.',
+  },
+  {
+    key: 'toolRejectionMemory',
+    title: 'Tool-rejection memory',
+    helper: 'Temporarily avoid models that keep rejecting tool calls.',
+    info: 'Trade-off: a model that later recovers may be used less for up to six hours.',
+  },
+  {
+    key: 'carefulModelRetirement',
+    title: 'Careful model retirement',
+    helper: "Only retire a model after it fails twice, unless the provider says it's gone.",
+    info: 'Trade-off: a genuinely removed model may take a second independent failure to retire.',
+  },
+];
 
 function isPermissionRule(
   value: unknown,
@@ -706,6 +768,112 @@ export function SettingsCanvas() {
           </Pill>
         </Group>
       );
+    if (section === 'Advanced')
+      return (
+        <Group title="Routing">
+          <p className="muted">
+            Choose how Ferry balances continuity, reliability, and provider capacity.
+          </p>
+          {routingRows.map((row) => (
+            <SettingRow key={row.key} title={row.title} helper={row.helper}>
+              <div className="inline-control">
+                <span
+                  className="routing-info"
+                  title={row.info}
+                  aria-label={`${row.title} trade-off`}
+                >
+                  <Info size={15} />
+                </span>
+                <Switch
+                  label={row.title}
+                  checked={settings?.routing[row.key] ?? true}
+                  onCheckedChange={(value) => {
+                    if (settings)
+                      void update({ routing: { ...settings.routing, [row.key]: value } });
+                  }}
+                />
+              </div>
+            </SettingRow>
+          ))}
+          <details className="routing-tune">
+            <summary>Tune</summary>
+            <SettingRow
+              title="Sticky session TTL"
+              helper="How long a conversation keeps its selected model."
+            >
+              <div className="range-control">
+                <Slider
+                  label="Sticky session TTL in minutes"
+                  min={1}
+                  max={120}
+                  step={1}
+                  value={settings?.routing.stickyTtlMinutes ?? 30}
+                  onValueChange={(value) =>
+                    settings &&
+                    void update({
+                      routing: { ...settings.routing, stickyTtlMinutes: Math.round(value) },
+                    })
+                  }
+                />
+                <span>{settings?.routing.stickyTtlMinutes ?? 30} min</span>
+              </div>
+            </SettingRow>
+            <SettingRow
+              title="Ramp start"
+              helper="Begin gradual demotion below this fraction of quota remaining."
+            >
+              <div className="range-control">
+                <Slider
+                  label="Quota ramp start"
+                  min={0.05}
+                  max={0.5}
+                  step={0.01}
+                  value={settings?.routing.rampStart ?? 0.2}
+                  onValueChange={(value) =>
+                    settings && void update({ routing: { ...settings.routing, rampStart: value } })
+                  }
+                />
+                <span>{Math.round((settings?.routing.rampStart ?? 0.2) * 100)}%</span>
+              </div>
+            </SettingRow>
+            <SettingRow
+              title="Ramp floor"
+              helper="Keep at least this routing score while quota is low."
+            >
+              <div className="range-control">
+                <Slider
+                  label="Quota ramp floor"
+                  min={0}
+                  max={0.5}
+                  step={0.01}
+                  value={settings?.routing.rampFloor ?? 0.1}
+                  onValueChange={(value) =>
+                    settings && void update({ routing: { ...settings.routing, rampFloor: value } })
+                  }
+                />
+                <span>{Math.round((settings?.routing.rampFloor ?? 0.1) * 100)}%</span>
+              </div>
+            </SettingRow>
+            <Pill
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                settings &&
+                void update({
+                  routing: {
+                    ...settings.routing,
+                    stickyTtlMinutes: 30,
+                    rampStart: 0.2,
+                    rampFloor: 0.1,
+                  },
+                })
+              }
+            >
+              Reset tune defaults
+            </Pill>
+          </details>
+        </Group>
+      );
     if (section === 'Optimizers') {
       const terse = settings?.optimizers.terse ?? 'lite';
       const preview = {
@@ -1331,7 +1499,7 @@ function DeveloperSettings({
               helper={
                 provider.health +
                 (provider.cooldownUntil
-                  ? ` · reset ${new Date(provider.cooldownUntil).toLocaleString()}`
+                  ? ` · ${provider.cooldownProvenance ?? 'unknown reason'} · reset ${new Date(provider.cooldownUntil).toLocaleString()}`
                   : '')
               }
             />

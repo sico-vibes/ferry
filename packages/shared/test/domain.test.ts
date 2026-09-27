@@ -55,6 +55,21 @@ const cases: [string, { safeParse(value: unknown): { success: boolean } }, unkno
   ['SystemInfo', domain.SystemInfoSchema, samples.sampleSystemInfo],
 ];
 describe('domain schemas', () => {
+  it('defaults routing techniques on and validates their tuning bounds', () => {
+    expect(domain.RoutingSettingsSchema.parse({})).toMatchObject({
+      stickySessions: true,
+      smartReliability: true,
+      quotaReservations: true,
+      cooldownReasons: true,
+      gentleQuotaRamp: true,
+      toolRejectionMemory: true,
+      carefulModelRetirement: true,
+      stickyTtlMinutes: 30,
+      rampStart: 0.2,
+      rampFloor: 0.1,
+    });
+    expect(() => domain.RoutingSettingsSchema.parse({ stickyTtlMinutes: 0 })).toThrow();
+  });
   for (const [name, schema, sample] of cases) {
     it(`${name} accepts its sample and rejects invalid input`, () => {
       expect(schema.safeParse(sample).success).toBe(true);

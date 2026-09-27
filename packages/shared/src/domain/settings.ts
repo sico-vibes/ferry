@@ -2,6 +2,20 @@ import { z } from 'zod';
 import { DelegationModeSchema, PermissionModeSchema, ThemeSchema } from './common.js';
 import { ProfileIdSchema } from './ids.js';
 import { OptimizerTogglesSchema } from './profile.js';
+export const RoutingSettingsSchema = z.object({
+  stickySessions: z.boolean().default(true),
+  smartReliability: z.boolean().default(true),
+  quotaReservations: z.boolean().default(true),
+  cooldownReasons: z.boolean().default(true),
+  gentleQuotaRamp: z.boolean().default(true),
+  toolRejectionMemory: z.boolean().default(true),
+  carefulModelRetirement: z.boolean().default(true),
+  stickyTtlMinutes: z.number().int().min(1).max(1440).default(30),
+  rampStart: z.number().min(0.01).max(1).default(0.2),
+  rampFloor: z.number().min(0).max(1).default(0.1),
+});
+export const DEFAULT_ROUTING_SETTINGS = RoutingSettingsSchema.parse({});
+export type RoutingSettings = z.infer<typeof RoutingSettingsSchema>;
 export const SettingsSchema = z.object({
   theme: ThemeSchema,
   homeStyle: z.enum(['auto', 'hero', 'compact']).default('auto'),
@@ -14,6 +28,7 @@ export const SettingsSchema = z.object({
   activeProfileId: ProfileIdSchema,
   onboardingComplete: z.boolean(),
   optimizers: OptimizerTogglesSchema,
+  routing: RoutingSettingsSchema.default(DEFAULT_ROUTING_SETTINGS),
   developer: z.object({
     showReferenceOverlay: z.boolean(),
     mockLatency: z.boolean(),

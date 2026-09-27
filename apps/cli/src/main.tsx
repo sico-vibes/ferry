@@ -6,7 +6,7 @@ import { createClientAsync } from './client.js';
 import { good, muted, warn } from './colors.js';
 import { collectDoctor } from './doctor.js';
 import type { FerryClient } from '@ferry/client';
-import type { MessagePart, Profile } from '@ferry/shared';
+import { RoutingSettingsSchema, type MessagePart, type Profile } from '@ferry/shared';
 
 /* Event handlers intentionally return promises to the event emitter; the parser narrows argv flags. */
 /* eslint-disable @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/return-await, @typescript-eslint/consistent-type-definitions, @typescript-eslint/restrict-template-expressions */
@@ -203,7 +203,8 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     const command = flags.positionals[0];
     const dataDir = stringFlag(flags.values['data-dir']);
     const cwd = stringFlag(flags.values.cwd) ?? process.cwd();
-    const engine = flags.values.engine ?? (command === 'oauth' ? 'local' : 'mock');
+    const engine =
+      flags.values.engine ?? (command === 'oauth' || command === 'settings' ? 'local' : 'mock');
     if (engine !== 'mock' && engine !== 'local')
       throw new CliError(2, 'Invalid --engine. Use mock or local.');
     if (command === 'run') validateRunArguments(flags);
@@ -277,6 +278,8 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       return await doctor(dataDir, undefined, json);
     }
     if (command === 'keys') return await keys(client, flags.positionals.slice(1), json);
+    if (command === 'settings')
+      return await routingSettings(client, flags.positionals.slice(1), json);
     if (command === 'init') return await runInit(client, cwd, flags.values.yes === true, json);
     throw new CliError(2, `Unknown command: ${command}`);
   } catch (error) {
@@ -342,6 +345,7 @@ const CLI_COMMANDS = new Set([
   'optimize',
   'doctor',
   'keys',
+  'settings',
   'init',
 ]);
 const VALUE_FLAGS = new Set([
@@ -371,6 +375,60 @@ function readFlags(argv: string[]): Flags {
     else values[key] = true;
   }
   return { positionals, values };
+}
+
+const routingToggleKeys = {
+  'sticky-sessions': 'stickySessions',
+  'smart-reliability': 'smartReliability',
+  'quota-reservations': 'quotaReservations',
+  'cooldown-reasons': 'cooldownReasons',
+  'gentle-quota-ramp': 'gentleQuotaRamp',
+  'tool-rejection-memory': 'toolRejectionMemory',
+  'careful-model-retirement': 'carefulModelRetirement',
+} as const;
+
+export async function routingSettings(
+  client: FerryClient,
+  args: string[],
+  json: boolean,
+): Promise<number> {
+  const [area, action, key, value] = args;
+  if (area !== 'routing')
+    throw new CliError(2, 'Usage: ferry settings routing list|set <key> on|off');
+  const settings = await client.settings.get();
+  const routing = RoutingSettingsSchema.parse(settings.routing);
+  if (action === 'list' && key === undefined) {
+    const rows = Object.fromEntries(
+      Object.entries(routing).map(([name, value]) => [
+        name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`),
+        value,
+      ]),
+    );
+    writeResult(
+      json,
+      rows,
+      Object.entries(rows)
+        .map(([name, enabled]) => `${name}: ${String(enabled)}`)
+        .join('\n') + '\n',
+    );
+    return 0;
+  }
+  if (
+    action === 'set' &&
+    key &&
+    value &&
+    key in routingToggleKeys &&
+    (value === 'on' || value === 'off')
+  ) {
+    const settingKey = routingToggleKeys[key as keyof typeof routingToggleKeys];
+    const updated = await client.settings.update({
+      routing: { ...routing, [settingKey]: value === 'on' },
+    });
+    const result = { key, enabled: updated.routing[settingKey] };
+    writeResult(json, result, `${key}: ${value}\n`);
+    return 0;
+  }
+  throw new CliError(2, 'Usage: ferry settings routing list|set <key> on|off');
 }
 function validateFlags(values: Record<string, string | boolean>): void {
   for (const key of VALUE_FLAGS) {

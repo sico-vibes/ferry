@@ -17,6 +17,7 @@ export function createSettingsDomain(_store: MockStore, deps: MockDeps): FerryCl
         ...patch,
         optimizers: { ...state.settings.optimizers, ...patch.optimizers },
         developer: { ...state.settings.developer, ...patch.developer },
+        routing: { ...state.settings.routing, ...patch.routing },
       });
       persist();
       syncStore();

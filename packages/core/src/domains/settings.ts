@@ -54,6 +54,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           ...patch,
           optimizers: { ...current.optimizers, ...patch.optimizers },
           developer: { ...current.developer, ...patch.developer },
+          routing: { ...current.routing, ...patch.routing },
         });
         services.settings.put('global', settings);
         host.emit('settings.updated', settings);

@@ -15,6 +15,13 @@ import {
   type ResilienceEntry,
   type CapacityView,
   type ModelStats,
+  StickySessionLedger,
+  isToolDeferred,
+  shouldRetireModel,
+  type ReliabilityObservation,
+  type RetirementFailure,
+  type ToolRejection,
+  type StickyRoute,
 } from '@ferry/router';
 import {
   newId,
@@ -28,6 +35,7 @@ import {
   type Session,
   type TaskRecord,
   type UsageRecord,
+  type RoutingSettings,
 } from '@ferry/shared';
 import type { Catalog } from '@ferry/catalog';
 import type { RawCallObservation } from '@ferry/providers';
@@ -77,6 +85,15 @@ export interface StepGeneratorInput {
 }
 export type StepGenerator = (input: StepGeneratorInput) => Promise<GeneratedStep>;
 const discardDelta = (_text: string): void => undefined;
+
+class QuotaReservationError extends Error {
+  readonly statusCode = 429;
+
+  constructor() {
+    super('Quota reservation unavailable for this provider pool.');
+    this.name = 'QuotaReservationError';
+  }
+}
 
 export interface AgentOptions {
   store: SessionStore;
@@ -130,6 +147,20 @@ export interface AgentOptions {
   terseLevel?: 'off' | 'lite' | 'full' | 'ultra';
   resilienceState?: readonly ResilienceEntry[];
   onResilienceState?: (entries: ResilienceEntry[]) => void;
+  routingSettings?: () => RoutingSettings;
+  reliabilityState?: readonly ReliabilityObservation[];
+  onReliabilityState?: (entries: ReliabilityObservation[]) => void;
+  routingNow?: () => number;
+  acquireQuotaLease?: (model: ModelInfo, tokens: number) => (() => void) | null;
+  stickyState?: Readonly<Record<string, StickyRoute>>;
+  onStickyState?: (state: Record<string, StickyRoute>) => void;
+  probeHeuristicCooldowns?: () => Promise<void>;
+  toolRejectionState?: readonly ToolRejection[];
+  onToolRejectionState?: (entries: ToolRejection[]) => void;
+  retirementFailureState?: readonly RetirementFailure[];
+  onRetirementFailureState?: (entries: RetirementFailure[]) => void;
+  retiredModelRefs?: readonly string[];
+  onRetiredModelRefs?: (entries: string[]) => void;
 }
 
 interface AttemptFailure {
@@ -157,13 +188,29 @@ export class AgentLoop {
   private readonly resilience: ResilienceLedger;
   private readonly sessionModelLocks = new Map<string, Set<string>>();
   private readonly requestTooLargeAt = new Map<ModelRef, number>();
+  private readonly sticky: StickySessionLedger;
+  private readonly reliability: ReliabilityObservation[];
+  private readonly toolRejections: ToolRejection[];
+  private readonly retirementFailures: RetirementFailure[];
+  private readonly retiredModels: Set<string>;
 
   constructor(private readonly options: AgentOptions) {
     this.estimates = options.estimateTokens ?? estimateTextTokens;
     this.resilience = new ResilienceLedger(options.resilienceState);
+    this.reliability = [...(options.reliabilityState ?? [])];
+    this.sticky = new StickySessionLedger(options.stickyState);
+    this.toolRejections = [...(options.toolRejectionState ?? [])];
+    this.retirementFailures = [...(options.retirementFailureState ?? [])];
+    this.retiredModels = new Set(options.retiredModelRefs ?? []);
+  }
+
+  private now(): number {
+    return this.options.routingNow?.() ?? Date.now();
   }
 
   async run({ sessionId, signal: outerSignal }: RunInput): Promise<RunResult> {
+    if (this.options.routingSettings?.().cooldownReasons)
+      await this.options.probeHeuristicCooldowns?.();
     const controller = new AbortController();
     const relayAbort = () => {
       controller.abort(outerSignal?.reason);
@@ -190,6 +237,7 @@ export class AgentLoop {
     let stepCount = 0;
     const attemptFailures: AttemptFailure[] = [];
     let contextSummary: string | undefined;
+    const routingRequestId = newId('routing_request');
     const maxSteps = this.options.maxSteps ?? 40;
     const budget = this.options.tokenBudget ?? 100_000;
     const approvals = this.options.requestApproval;
@@ -462,13 +510,47 @@ export class AgentLoop {
             const generator =
               this.options.generator ?? this.createStreamingGenerator(model, sessionId);
             generated = await runWithStepWatchdog(
-              generator,
+              async (input) => {
+                if (
+                  this.options.routingSettings?.().quotaReservations &&
+                  this.options.acquireQuotaLease
+                ) {
+                  const release = this.options.acquireQuotaLease(input.model, inputTokens + 2048);
+                  if (!release) throw new QuotaReservationError();
+                  try {
+                    return await generator(input);
+                  } finally {
+                    release();
+                  }
+                }
+                return generator(input);
+              },
               stepRequest,
               model,
               signal,
               this.options.stepTimeoutMs ?? 120_000,
             );
             generationComplete = true;
+            const successRouting = this.options.routingSettings?.();
+            if (successRouting?.smartReliability) {
+              this.reliability.push({ modelRef: model.ref, outcome: 'success', at: this.now() });
+              this.pruneReliability();
+              this.options.onReliabilityState?.([...this.reliability]);
+            }
+            if (successRouting?.stickySessions)
+              this.sticky.set(
+                sessionId,
+                model.ref,
+                this.now(),
+                successRouting.stickyTtlMinutes * 60_000,
+              );
+            this.options.onStickyState?.(this.sticky.snapshot());
+            this.toolRejections.splice(
+              0,
+              this.toolRejections.length,
+              ...this.toolRejections.filter((item) => item.modelRef !== model?.ref),
+            );
+            this.options.onToolRejectionState?.([...this.toolRejections]);
             this.resilience.recordSuccess('provider', model.providerId);
             this.resilience.recordSuccess('key', model.providerId);
             this.resilience.recordSuccess('model', model.ref);
@@ -476,6 +558,43 @@ export class AgentLoop {
             break;
           } catch (error) {
             const classified = classifyProviderError(errorInput(error));
+            const routing = this.options.routingSettings?.();
+            const localQuotaReservation = error instanceof QuotaReservationError;
+            if (routing?.smartReliability && !localQuotaReservation) {
+              this.reliability.push({ modelRef: model.ref, outcome: 'failure', at: this.now() });
+              this.pruneReliability();
+              this.options.onReliabilityState?.([...this.reliability]);
+            }
+            if (routing?.stickySessions) {
+              this.sticky.clear(sessionId);
+              this.options.onStickyState?.(this.sticky.snapshot());
+            }
+            if (classified.family === 'tools_unsupported' && routing?.toolRejectionMemory) {
+              this.toolRejections.push({
+                modelRef: model.ref,
+                requestId: `${routingRequestId}:${String(stepCount)}`,
+                at: this.now(),
+              });
+              this.options.onToolRejectionState?.([...this.toolRejections]);
+            }
+            if (classified.family === 'model_not_found' && routing?.carefulModelRetirement) {
+              const requestId = `${routingRequestId}:${String(stepCount)}`;
+              if (
+                shouldRetireModel(
+                  classified.status,
+                  redactedProviderMessage(error),
+                  this.retirementFailures,
+                  model.ref,
+                  requestId,
+                  this.now(),
+                )
+              ) {
+                this.retiredModels.add(model.ref);
+                this.options.onRetiredModelRefs?.([...this.retiredModels]);
+              }
+              this.retirementFailures.push({ modelRef: model.ref, requestId, at: this.now() });
+              this.options.onRetirementFailureState?.([...this.retirementFailures]);
+            }
             attemptFailures.push({
               model: model.ref,
               kind: classified.family,
@@ -506,10 +625,14 @@ export class AgentLoop {
             const requestTooLarge = classified.family === 'request_too_large';
             const timedOut = error instanceof StepWatchdogError || classified.family === 'timeout';
             const safeToSwitch = streamedText.length === 0;
-            if (routingFailure.scope !== 'none') {
+            if (!localQuotaReservation && routingFailure.scope !== 'none') {
               this.resilience.recordFailure(routingFailure, model.ref, model.providerId);
             }
-            if (routingFailure.scope !== 'model' && classified.family !== 'request_too_large')
+            if (
+              !localQuotaReservation &&
+              routingFailure.scope !== 'model' &&
+              classified.family !== 'request_too_large'
+            )
               this.resilience.recordFailure(
                 { ...routingFailure, scope: 'model' },
                 model.ref,
@@ -805,6 +928,15 @@ export class AgentLoop {
     return createStepGenerator(this.options, model, sessionId);
   }
 
+  private pruneReliability(): void {
+    const oldest = this.now() - 7 * 24 * 60 * 60_000;
+    this.reliability.splice(
+      0,
+      this.reliability.length,
+      ...this.reliability.filter((item) => item.at >= oldest),
+    );
+  }
+
   private selectModel(
     step: import('@ferry/shared').StepKind,
     inputTokens: number,
@@ -816,10 +948,18 @@ export class AgentLoop {
     const locked = this.sessionModelLocks.get(sessionId);
     const withinFailedSize = (model: ModelInfo) =>
       (this.requestTooLargeAt.get(model.ref) ?? Number.POSITIVE_INFINITY) <= inputTokens;
+    const routing = this.options.routingSettings?.();
+    const stickyRef = routing?.stickySessions ? this.sticky.get(sessionId, this.now()) : undefined;
+    const eligible = (model: ModelInfo) =>
+      !locked?.has(model.ref) &&
+      !(routing?.carefulModelRetirement && this.retiredModels.has(model.ref)) &&
+      !withinFailedSize(model);
     const resolved = this.options.resolveCandidates?.(this.options.profile, step, inputTokens);
     if (resolved)
       return this.selectResilient(
-        resolved.filter((candidate) => !locked?.has(candidate.ref) && !withinFailedSize(candidate)),
+        resolved
+          .filter(eligible)
+          .sort((a, b) => Number(b.ref === stickyRef) - Number(a.ref === stickyRef)),
       );
     const candidates = scoreModels({
       models: this.options.catalog.models,
@@ -834,12 +974,15 @@ export class AgentLoop {
         requiresTools: true,
       },
       ...(this.options.stats ? { stats: this.options.stats } : {}),
-      previousModelRef: previous,
+      ...(routing ? { routing } : {}),
+      ...(this.reliability.length ? { reliability: this.reliability } : {}),
+      previousModelRef: stickyRef ?? previous,
     });
     const selected = this.selectResilient(
       candidates.flatMap((item) => {
         if (
           locked?.has(item.ref) ||
+          (routing?.carefulModelRetirement && this.retiredModels.has(item.ref)) ||
           (this.requestTooLargeAt.get(item.ref) ?? Infinity) <= inputTokens
         )
           return [];
@@ -859,12 +1002,14 @@ export class AgentLoop {
     if (this.options.pinnedModelRef) return undefined;
     const locked = this.sessionModelLocks.get(sessionId);
     const candidates = this.options.resolveCandidates?.(this.options.profile, step, inputTokens);
+    const retirementEnabled = this.options.routingSettings?.().carefulModelRetirement;
     if (candidates)
       return this.selectResilient(
         candidates.filter(
           (candidate) =>
             !attemptedRefs.has(candidate.ref) &&
             !locked?.has(candidate.ref) &&
+            !(retirementEnabled && this.retiredModels.has(candidate.ref)) &&
             (this.requestTooLargeAt.get(candidate.ref) ?? Number.POSITIVE_INFINITY) > inputTokens,
         ),
       );
@@ -880,6 +1025,8 @@ export class AgentLoop {
         requiresTools: true,
       },
       ...(previousModelRef ? { previousModelRef } : {}),
+      ...(this.options.routingSettings ? { routing: this.options.routingSettings() } : {}),
+      ...(this.reliability.length ? { reliability: this.reliability } : {}),
     });
     const remaining = ranked.flatMap((candidate) => {
       if (
@@ -895,7 +1042,19 @@ export class AgentLoop {
   }
 
   private selectResilient(models: readonly ModelInfo[]): ModelInfo | undefined {
-    const ranked = models.map((model, index) => {
+    const now = this.now();
+    const routing = this.options.routingSettings?.();
+    const eligibleModels = routing?.carefulModelRetirement
+      ? models.filter((model) => !this.retiredModels.has(model.ref))
+      : models;
+    const deferred = routing?.toolRejectionMemory
+      ? new Set(
+          eligibleModels
+            .filter((model) => isToolDeferred(this.toolRejections, model.ref, now))
+            .map((model) => model.ref),
+        )
+      : new Set<string>();
+    const ranked = eligibleModels.map((model, index) => {
       const providerId = model.providerId as string;
       const active = [
         this.resilience.active('model', model.ref),
@@ -905,6 +1064,7 @@ export class AgentLoop {
       return {
         model,
         index,
+        deferred: deferred.has(model.ref),
         reset: active.length ? Math.max(...active.map((entry) => Date.parse(entry.expiresAt))) : 0,
       };
     });
@@ -912,9 +1072,11 @@ export class AgentLoop {
       this.resilience.availableModelRefs(ranked.map(({ model }) => model.ref)),
     );
     const unlocked = ranked.filter((entry) => availableRefs.has(entry.model.ref));
-    const ready = unlocked.find((entry) => entry.reset === 0);
+    const ready = unlocked.find((entry) => entry.reset === 0 && !entry.deferred);
     if (ready) return ready.model;
-    return unlocked.sort((a, b) => a.reset - b.reset || a.index - b.index)[0]?.model;
+    return unlocked.sort(
+      (a, b) => Number(a.deferred) - Number(b.deferred) || a.reset - b.reset || a.index - b.index,
+    )[0]?.model;
   }
 
   private routingSummary(

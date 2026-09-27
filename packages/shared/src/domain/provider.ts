@@ -40,6 +40,10 @@ export const ProviderSchema = z.object({
   enabled: z.boolean(),
   health: z.enum(['ok', 'cooldown', 'down', 'unknown', 'auth_invalid', 'account_disabled']),
   cooldownUntil: z.iso.datetime().nullable(),
+  cooldownProvenance: z
+    .enum(['heuristic', 'authoritative', 'credit', 'tier'])
+    .nullable()
+    .optional(),
   dataUse: z.string().nullable(),
   termsNote: z.string().nullable(),
   signupUrl: z.string().nullable(),
@@ -97,6 +101,7 @@ export const ModelCandidateSchema = z.object({
       preference: z.number(),
       reasoning: z.number(),
       verification: z.number(),
+      quotaHeadroomFactor: z.number().min(0).max(1).optional(),
     })
     .optional(),
   selected: z.boolean(),

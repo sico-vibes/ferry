@@ -2,7 +2,7 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createMockFerryClient, createPlaybackRunner } from '@ferry/client';
-import { runPrompt } from '../src/main.js';
+import { routingSettings, runPrompt } from '../src/main.js';
 import { ApprovalPrompt, Chat } from '../src/tui.js';
 import { formatCapacity, statusLine } from '../src/format.js';
 
@@ -20,6 +20,17 @@ describe('@ferry/cli', () => {
   it('formats quota as a capacity bar with a percentage', async () => {
     const text = formatCapacity(await client().quota.capacity());
     expect(text).toContain('64%');
+  });
+
+  it('lists routing settings and persists a per-technique toggle', async () => {
+    const api = client();
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    expect(await routingSettings(api, ['routing', 'list'], false)).toBe(0);
+    expect(write.mock.calls.map((call) => String(call[0])).join('')).toContain(
+      'sticky-sessions: true',
+    );
+    expect(await routingSettings(api, ['routing', 'set', 'sticky-sessions', 'off'], false)).toBe(0);
+    expect((await api.settings.get()).routing.stickySessions).toBe(false);
   });
 
   it('renders the profile prompt and status line', async () => {

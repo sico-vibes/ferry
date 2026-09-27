@@ -2,6 +2,7 @@ import {
   ProbeResultSchema,
   ProviderIdSchema,
   ProviderSchema,
+  RoutingSettingsSchema,
   QuotaObservationSchema,
   newId,
   type Provider,
@@ -20,6 +21,15 @@ const EnabledInput = z.boolean();
 function baseUrlFor(services: FerryServices, id: string): string | undefined {
   const envName = `FERRY_PROVIDER_BASE_URL_${id.replace(/[^a-z0-9]/gi, '_').toUpperCase()}`;
   return services.env[envName];
+}
+
+function cooldownReasonsEnabled(services: FerryServices): boolean {
+  const stored = services.settings.get('global');
+  const routing =
+    typeof stored === 'object' && stored !== null && 'routing' in stored
+      ? stored.routing
+      : undefined;
+  return RoutingSettingsSchema.parse(routing ?? {}).cooldownReasons;
 }
 
 function providerRecord(services: FerryServices, id: string): Provider {
@@ -48,6 +58,8 @@ function providerRecord(services: FerryServices, id: string): Provider {
         ? 'ok'
         : (saved?.health ?? (keyStatus === 'invalid' ? 'auth_invalid' : 'unknown')),
     cooldownUntil: activeCooldown ? cooldown.until : null,
+    cooldownProvenance:
+      activeCooldown && cooldownReasonsEnabled(services) ? (cooldown.provenance ?? null) : null,
     dataUse: limits.data_use,
     termsNote: limits.terms_note,
     signupUrl: limits.signup_url,
@@ -281,7 +293,18 @@ export function register(host: CoreHost, services: FerryServices): void {
           '429',
           result.windows.find((window) => window.resetAt)?.resetAt ?? undefined,
         );
-        if (cooldown.cooldownUntil) services.cooldowns.put({ id, until: cooldown.cooldownUntil });
+        if (cooldown.cooldownUntil)
+          services.cooldowns.put({
+            id,
+            until: cooldown.cooldownUntil,
+            ...(cooldownReasonsEnabled(services)
+              ? {
+                  provenance: result.windows.some((window) => window.resetAt)
+                    ? 'authoritative'
+                    : 'heuristic',
+                }
+              : {}),
+          });
       } else if (result.ok) {
         services.quota.noteSuccess(id, cooldownModel, id);
         services.cooldowns.delete(id);

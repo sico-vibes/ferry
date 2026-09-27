@@ -313,6 +313,18 @@ export const sampleSettings: Settings = {
   activeProfileId: profileId,
   onboardingComplete: true,
   optimizers: sampleOptimizerToggles,
+  routing: {
+    stickySessions: true,
+    smartReliability: true,
+    quotaReservations: true,
+    cooldownReasons: true,
+    gentleQuotaRamp: true,
+    toolRejectionMemory: true,
+    carefulModelRetirement: true,
+    stickyTtlMinutes: 30,
+    rampStart: 0.2,
+    rampFloor: 0.1,
+  },
   developer: {
     showReferenceOverlay: false,
     mockLatency: false,
