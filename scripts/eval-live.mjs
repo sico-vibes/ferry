@@ -6,7 +6,9 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createServices } from '../packages/core/src/services.ts';
 import { CoreHost } from '../packages/core/src/host.ts';
+import { createMemoryTransportPair } from '../packages/core/src/index.ts';
 import { domainRegistrars } from '../packages/core/src/domains/index.ts';
+import { createRpcFerryClient } from '../packages/client/src/index.ts';
 import { KeyringSecretStore, MemorySecretStore } from '../packages/secrets/src/index.ts';
 import { AGENT_EVALS } from '../packages/agent/evals/fixtures.ts';
 import { createFixtureRepo } from '../packages/testkit/src/fixture-repo.ts';
@@ -22,12 +24,13 @@ import {
   runHarness,
   selectEvalProviders,
 } from './eval-live-lib.mjs';
+import { driveEvalSession } from './eval-live-runner.mjs';
 
 const execFileAsync = promisify(execFile);
 const usage = `Usage: pnpm eval:live [--data-dir PATH] [--profile auto-free|best-available]
   [--only id,id] [--repeat N] [--model provider/model] [--max-steps N]
   [--timeout SECONDS] [--include provider,id] [--exclude provider,id]
-  [--allow-paid] [--yes] [--json]`;
+  [--allow-paid] [--yes] [--json] [--verbose]`;
 let activeSecrets = [];
 
 export async function runEvalLive(args = process.argv.slice(2)) {
@@ -81,6 +84,7 @@ export async function runEvalLive(args = process.argv.slice(2)) {
   }
   const services = await createServices({ dataDir, env: serviceEnv, secrets: secretsStore });
   let host;
+  let rpc;
   try {
     for (const [name] of secrets) {
       const providerId = name
@@ -96,7 +100,8 @@ export async function runEvalLive(args = process.argv.slice(2)) {
         createdAt: new Date().toISOString(),
       });
     }
-    host = new CoreHost({ dataDir: services.paths.home, services });
+    const [coreTransport, clientTransport] = createMemoryTransportPair();
+    host = new CoreHost({ dataDir: services.paths.home, services, transport: coreTransport });
     for (const register of domainRegistrars) register(host, services);
     const invokeCore = (method, ...params) =>
       host.dispatch({ jsonrpc: '2.0', id: `${Date.now()}-${Math.random()}`, method, params });
@@ -114,6 +119,8 @@ export async function runEvalLive(args = process.argv.slice(2)) {
         await invokeCore('providers.setEnabled', limits.provider, true);
     }
     await host.start();
+    rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
+    await rpc.hello;
     await invokeCore('models.list');
 
     const providerPolicies = await Promise.all(
@@ -185,11 +192,19 @@ export async function runEvalLive(args = process.argv.slice(2)) {
       if (!answer) return 2;
     }
 
+    if (options.verbose)
+      process.stderr.write(
+        redactText(
+          `Starting ${scenarios.length * options.repeat} task(s); max steps ${options.maxSteps}.\n`,
+          secretValues,
+        ),
+      );
+
     const report = await runHarness({
       scenarios,
       repeat: options.repeat,
       runScenario: (scenario) =>
-        runScenario({ scenario, services, host, options, secrets: secretValues }),
+        runScenario({ scenario, services, client: rpc, options, secrets: secretValues }),
     });
     const timestamp = new Date().toISOString();
     const outDir = join(process.cwd(), 'evals', 'results');
@@ -215,6 +230,7 @@ export async function runEvalLive(args = process.argv.slice(2)) {
     console.log(`Results: ${jsonPath}`);
     return report.passed === report.total ? 0 : 1;
   } finally {
+    rpc?.close();
     await host?.stop();
     if (!host) await services.dispose();
     memorySecrets.clear();
@@ -223,15 +239,9 @@ export async function runEvalLive(args = process.argv.slice(2)) {
   }
 }
 
-async function runScenario({ scenario, services, host, options, secrets }) {
+async function runScenario({ scenario, services, client, options, secrets }) {
   const fixture = await createFixtureRepo(scenario.template);
   const before = await snapshot(fixture.path);
-  const profileId =
-    options.profile === 'auto-free'
-      ? 'profile_builtin_auto_free'
-      : 'profile_builtin_best_available';
-  const invoke = (method, ...params) =>
-    host.dispatch({ jsonrpc: '2.0', id: `${Date.now()}-${Math.random()}`, method, params });
   try {
     await mkdir(join(fixture.path, '.ferry'), { recursive: true });
     await writeFile(
@@ -239,46 +249,35 @@ async function runScenario({ scenario, services, host, options, secrets }) {
       JSON.stringify({ permissionMode: 'full_auto' }),
       'utf8',
     );
-    const workspace = await invoke('workspaces.open', fixture.path);
-    const session = await invoke('sessions.create', {
-      workspaceId: workspace.id,
-      profileId,
-      title: scenario.title,
-    });
     if (options.model) {
       const model = services.models
         .list(options.model.slice(0, options.model.indexOf('/')))
         .find(({ ref }) => ref === options.model);
       if (!model)
         throw new Error(`Pinned model is not present in the copied model cache: ${options.model}`);
-      services.sessions.put({ ...session, pinnedModelRef: model.ref });
     }
-    await invoke('sessions.send', session.id, {
-      text: scenario.prompt,
+    const driven = await driveEvalSession({
+      client,
+      prompt: scenario.prompt,
+      cwd: fixture.path,
+      profileName: options.profile === 'auto-free' ? 'Auto-Free' : 'Best Available',
+      modelRef: options.model,
       maxSteps: options.maxSteps,
+      timeoutMs: options.timeoutMs,
+      verbose: options.verbose,
+      logDirectory: services.paths.logs,
+      secrets,
+      onProgress: ({ kind, text, session }) => {
+        if (!options.verbose) return;
+        const message =
+          kind === 'session'
+            ? `[${scenario.id}] session ${session.id}`
+            : `[${scenario.id}] ${text}`;
+        process.stderr.write(`${redactText(message, secrets)}\n`);
+      },
     });
-    const end = Date.now() + options.timeoutMs;
-    let detail;
-    let observedRunning = false;
-    while (Date.now() < end) {
-      detail = await invoke('sessions.get', session.id);
-      if (detail.session.status === 'running') observedRunning = true;
-      const hasAssistantReply = detail.messages.some(({ role }) => role === 'assistant');
-      if (
-        !['running', 'awaiting_approval'].includes(detail.session.status) &&
-        (observedRunning || hasAssistantReply)
-      )
-        break;
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-    if (
-      !detail ||
-      detail.session.status === 'running' ||
-      detail.session.status === 'awaiting_approval'
-    ) {
-      await invoke('sessions.cancel', session.id).catch(() => {});
-      throw new Error(`Task timed out after ${options.timeoutMs}ms`);
-    }
+    const { exitCode, detail } = driven;
+    const session = detail.session;
     const messages = detail.messages ?? [];
     const assistantText = messages
       .filter(({ role }) => role === 'assistant')
@@ -302,7 +301,7 @@ async function runScenario({ scenario, services, host, options, secrets }) {
       return acc;
     }, {});
     return {
-      passed: passed && detail.session.status !== 'error',
+      passed: passed && session.status !== 'error' && exitCode === 0,
       steps: new Set(taskRows.map(({ step_id }, index) => step_id ?? `row-${index}`)).size,
       models: [
         ...new Set([
