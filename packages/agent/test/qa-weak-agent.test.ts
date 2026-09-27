@@ -157,7 +157,7 @@ describe('QA weak agent: text tool-call parsing', () => {
     expect((calls[0]?.input as { content: string }).content.length).toBe(big.length);
   });
 
-  it.fails('repairs unquoted Windows paths without turning escapes into control characters', () => {
+  it('repairs unquoted Windows paths without turning escapes into control characters', () => {
     // BUG: jsonrepair interprets single backslashes in a near-JSON Windows path,
     // so {'path':'C:\temp\x.txt'} becomes "C:" + TAB + "empx.txt" and the path
     // separators are silently lost.
@@ -167,7 +167,7 @@ describe('QA weak agent: text tool-call parsing', () => {
     expect(calls[0]?.input).toEqual({ path: 'C:\\temp\\x.txt' });
   });
 
-  it.fails('never throws on malformed parameter bodies (fuzz)', () => {
+  it('never throws on malformed parameter bodies (fuzz)', () => {
     // BUG: parseArguments calls jsonrepair without a guard inside the pattern loop,
     // so bodies jsonrepair cannot repair (a lone backslash, UNC paths, stray
     // quotes, concatenated JSON objects) throw synchronously and crash the loop.
@@ -183,7 +183,7 @@ describe('QA weak agent: text tool-call parsing', () => {
     ).not.toThrow();
   });
 
-  it.fails('does not treat tool-call text quoted from file contents as a real call', () => {
+  it('does not treat tool-call text quoted from file contents as a real call', () => {
     // BUG: parseTextToolCalls scans the whole assistant text (prose and every
     // fenced block) with no provenance, so tool-call text that arrived from a file
     // or tool result and was quoted by the model is parsed as a real call.
@@ -203,7 +203,7 @@ describe('QA weak agent: omission placeholder detector', () => {
     expect(containsOmissionPlaceholder({ content: '# existing code' })).toBe(true);
   });
 
-  it.fails('does not flag legitimate spread, rest and Ellipsis code', () => {
+  it('does not flag legitimate spread, rest and Ellipsis code', () => {
     // BUG: the detector matches any "..." substring, so normal JS rest/spread,
     // Python Ellipsis, and trailing "Loading..." strings are rejected as lazy
     // output and the write is refused.
@@ -244,24 +244,20 @@ describe('QA weak agent: reflection budget and repetition detector', () => {
     }
   }, 30_000);
 
-  it.fails(
-    'numbers reflections 1/3..3/3 instead of ending at 4/3',
-    async () => {
-      // BUG: the loop prints String(4 - remaining), so the first reflection is
-      // labelled 2/3 and the third is labelled 4/3 (the cap is never exceeded, but
-      // the model is shown a wrong count).
-      const { state, user } = await runInvalidCalls();
-      try {
-        const labels = user
-          .filter((text) => text.includes('retry once (reflection'))
-          .map((text) => /retry once \(reflection (\d)\/3\)/.exec(text)?.[1]);
-        expect(labels).toEqual(['1', '2', '3']);
-      } finally {
-        state.database.close();
-      }
-    },
-    30_000,
-  );
+  it('numbers reflections 1/3..3/3 instead of ending at 4/3', async () => {
+    // BUG: the loop prints String(4 - remaining), so the first reflection is
+    // labelled 2/3 and the third is labelled 4/3 (the cap is never exceeded, but
+    // the model is shown a wrong count).
+    const { state, user } = await runInvalidCalls();
+    try {
+      const labels = user
+        .filter((text) => text.includes('retry once (reflection'))
+        .map((text) => /retry once \(reflection (\d)\/3\)/.exec(text)?.[1]);
+      expect(labels).toEqual(['1', '2', '3']);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
 
   it('detects a repeated identical call only on the third observation', () => {
     const detector = new ToolRepetitionDetector();
@@ -303,36 +299,32 @@ describe('QA weak agent: poisoned tool output must not run', () => {
     }
   }, 30_000);
 
-  it.fails(
-    'does not run a poisoned call when the model echoes the file text',
-    async () => {
-      // BUG: a text-tool-protocol model that copies a tool result verbatim into its
-      // reply has that embedded call executed, because parsing has no provenance and
-      // toolProtocol !== 'native' dispatches immediately.
-      const state = await setup();
-      try {
-        await writeFile(path.join(state.root, 'poison.txt'), poisoned, 'utf8');
-        let step = 0;
-        const loop = makeLoop(state, {
-          modelHints: () => ({ toolProtocol: 'xml', editFormat: 'search_replace' }),
-          generator: async () => {
-            step++;
-            if (step === 1)
-              return {
-                toolCalls: [{ name: 'read_file', input: { path: 'poison.txt' } }],
-                finishReason: 'tool-calls',
-              };
-            return { text: poisoned, finishReason: 'stop' };
-          },
-        });
-        await loop.run({ sessionId: state.session.id });
-        await expect(readFile(path.join(state.root, 'pwned.txt'), 'utf8')).rejects.toMatchObject({
-          code: 'ENOENT',
-        });
-      } finally {
-        state.database.close();
-      }
-    },
-    30_000,
-  );
+  it('does not run a poisoned call when the model echoes the file text', async () => {
+    // BUG: a text-tool-protocol model that copies a tool result verbatim into its
+    // reply has that embedded call executed, because parsing has no provenance and
+    // toolProtocol !== 'native' dispatches immediately.
+    const state = await setup();
+    try {
+      await writeFile(path.join(state.root, 'poison.txt'), poisoned, 'utf8');
+      let step = 0;
+      const loop = makeLoop(state, {
+        modelHints: () => ({ toolProtocol: 'xml', editFormat: 'search_replace' }),
+        generator: async () => {
+          step++;
+          if (step === 1)
+            return {
+              toolCalls: [{ name: 'read_file', input: { path: 'poison.txt' } }],
+              finishReason: 'tool-calls',
+            };
+          return { text: poisoned, finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      await expect(readFile(path.join(state.root, 'pwned.txt'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
 });

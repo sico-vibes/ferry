@@ -181,7 +181,7 @@ describe('QA weak providers: tool schema normalization', () => {
     expect(promptCacheOptions('openai', false, 'session')).toEqual({});
   });
 
-  it.fails('does not leave dangling $refs after dropping $defs', () => {
+  it('does not leave dangling $refs after dropping $defs', () => {
     // BUG: normalizeToolSchema deletes $defs/definitions unconditionally but keeps
     // $ref pointers, so a referenced schema becomes invalid for strict validators.
     const normalized = normalizeToolSchema(
@@ -198,7 +198,7 @@ describe('QA weak providers: tool schema normalization', () => {
     expect(ref === undefined || normalized.$defs !== undefined).toBe(true);
   });
 
-  it.fails('sanitizes lone surrogates inside tool-result output values', () => {
+  it('sanitizes lone surrogates inside tool-result output values', () => {
     // BUG: only part.text and part.toolCallId are cleaned; nested tool-result
     // output.value strings keep lone surrogates and still reach the provider.
     const bad = 'a' + String.fromCharCode(0xd800) + 'b';
@@ -221,7 +221,7 @@ describe('QA weak providers: tool schema normalization', () => {
     expect(firstToolOutput(result)).not.toContain('\ud800');
   });
 
-  it.fails('keeps distinct long Mistral tool ids distinct', () => {
+  it('keeps distinct long Mistral tool ids distinct', () => {
     // BUG: Mistral ids are truncated to nine characters, so two ids sharing a
     // nine-character prefix collide and tool results can be matched to the wrong
     // call.

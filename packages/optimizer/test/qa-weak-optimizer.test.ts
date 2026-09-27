@@ -104,7 +104,7 @@ describe('QA weak optimizer: recovery stays byte-exact after compaction', () => 
     );
   });
 
-  it.fails('returns the byte-exact original for content containing U+2028/U+2029', () => {
+  it('returns the byte-exact original for content containing U+2028/U+2029', () => {
     // BUG: readOutput splits with /.*(?:\r\n|\n|\r|$)/g, and JavaScript "." does
     // not match U+2028/U+2029. Any line/paragraph separator makes match() bail out
     // of the whole string, so the recovered output silently loses content.

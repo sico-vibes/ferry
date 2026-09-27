@@ -3,7 +3,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { decodeText, encodeText, isBinary } from './fs.js';
 import { unifiedDiff, type FileChange, WorkspaceTools } from './tools.js';
-import { findForgivingEdit, editRepairHint } from './forgiving-edit.js';
+import { findForgivingEditResult, editRepairHint } from './forgiving-edit.js';
 
 export const EditFileInput = z.object({
   path: z.string(),
@@ -22,11 +22,22 @@ export async function editFile(tools: WorkspaceTools, raw: unknown): Promise<Fil
   const decoded = decodeText(buffer);
   let after = decoded.text;
   for (const edit of input.edits) {
-    const match = findForgivingEdit(after, edit.search);
-    if (!match) throw new Error(editRepairHint(after, edit.search));
+    const result = findForgivingEditResult(after, edit.search);
+    const match = result.match;
+    if (!match)
+      throw new Error(
+        (result.disproportionate ? 'Refusing a disproportionate normalized edit. ' : '') +
+          editRepairHint(after, edit.search),
+      );
     if (match.count > 1)
       throw new Error(
         'Exact edit is ambiguous; refusing a multi-occurrence match. ' +
+          editRepairHint(after, edit.search),
+      );
+    const removedLength = match.end - match.start;
+    if (removedLength > after.length * 0.5 && edit.replace.length < removedLength * 0.5)
+      throw new Error(
+        'Edit would remove more than half the file without a comparably large replacement. ' +
           editRepairHint(after, edit.search),
       );
     after = after.slice(0, match.start) + edit.replace + after.slice(match.end);

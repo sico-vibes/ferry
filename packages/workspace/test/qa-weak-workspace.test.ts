@@ -59,7 +59,7 @@ describe('QA weak workspace: ambiguous matches must never edit silently', () => 
     expect(await readFile(file, 'utf8')).toBe(content);
   });
 
-  it.fails('rejects a disproportionate fuzzy match instead of deleting a huge region', async () => {
+  it('rejects a disproportionate fuzzy match instead of deleting a huge region', async () => {
     // BUG: findForgivingEdit's whitespace-normalizing fallbacks (normalizers[1..])
     // have no equivalent of the block-anchor disproportion guard, so a 7-character
     // search matches a whitespace run of any length; editFile then replaces the
@@ -67,17 +67,23 @@ describe('QA weak workspace: ambiguous matches must never edit silently', () => 
     const root = await workspace();
     const tools = new WorkspaceTools(root);
     const original = 'foo' + ' '.repeat(2000) + 'bar';
-    await writeFile(path.join(root, 'big.txt'), original, 'utf8');
+    const file = path.join(root, 'big.txt');
+    const originalBytes = Buffer.from(original, 'utf8');
+    await writeFile(file, originalBytes);
     const match = findForgivingEdit(original, 'foo bar');
     expect(match === undefined || match.end - match.start <= 10).toBe(true);
-    const change = await editFile(tools, {
-      path: 'big.txt',
-      edits: [{ search: 'foo bar', replace: 'X' }],
-    });
-    expect(change.after).toBe(original);
+    const error = await rejectionOf(
+      editFile(tools, {
+        path: 'big.txt',
+        edits: [{ search: 'foo bar', replace: 'X' }],
+      }),
+    );
+    expect(error.message).toMatch(/disproportionate/i);
+    expect(error.message).toContain('Re-read this region and retry');
+    expect(await readFile(file)).toEqual(originalBytes);
   });
 
-  it.fails('treats overlapping occurrences as ambiguous', () => {
+  it('treats overlapping occurrences as ambiguous', () => {
     // BUG: occurrences() advances by needle.length, so overlapping matches are
     // invisible; "aa" inside "aaa" is reported as a single unambiguous match.
     expect(findForgivingEdit('aaa', 'aa')?.count).toBeGreaterThan(1);

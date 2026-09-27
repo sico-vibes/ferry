@@ -6,6 +6,10 @@ export interface ForgivingEditMatch {
   count: number;
   snippet: string;
 }
+export interface ForgivingEditResult {
+  match?: ForgivingEditMatch;
+  disproportionate: boolean;
+}
 type Normalizer = (value: string) => string;
 const normalizers: Normalizer[] = [
   (value) =>
@@ -33,11 +37,23 @@ const normalizers: Normalizer[] = [
 ];
 
 export function findForgivingEdit(text: string, search: string): ForgivingEditMatch | undefined {
-  if (!search) return undefined;
+  return findForgivingEditResult(text, search).match;
+}
+
+export function findForgivingEditResult(text: string, search: string): ForgivingEditResult {
+  if (!search) return { disproportionate: false };
   const exactPositions = occurrences(text, search);
-  if (exactPositions.length === 1) return makeMatch(text, exactPositions[0] ?? 0, search.length, 1);
+  if (exactPositions.length === 1)
+    return {
+      match: makeMatch(text, exactPositions[0] ?? 0, search.length, 1),
+      disproportionate: false,
+    };
   if (exactPositions.length > 1)
-    return makeMatch(text, exactPositions[0] ?? 0, search.length, exactPositions.length);
+    return {
+      match: makeMatch(text, exactPositions[0] ?? 0, search.length, exactPositions.length),
+      disproportionate: false,
+    };
+  let disproportionate = false;
   const lineTrimmed = normalizers[0];
   if (lineTrimmed) {
     const needle = lineTrimmed(search);
@@ -47,11 +63,14 @@ export function findForgivingEdit(text: string, search: string): ForgivingEditMa
       const another = mapped.value.indexOf(needle, startIndex + needle.length);
       const start = mapped.offsets[startIndex] ?? 0;
       const last = mapped.offsets[startIndex + needle.length - 1] ?? start;
-      return makeMatch(text, start, last + 1 - start, another < 0 ? 1 : 2);
+      const match = makeMatch(text, start, last + 1 - start, another < 0 ? 1 : 2);
+      if (!isDisproportionate(match, search)) return { match, disproportionate };
+      disproportionate = true;
     }
   }
-  const anchorMatch = findBlockAnchor(text, search);
-  if (anchorMatch) return anchorMatch;
+  const anchorResult = findBlockAnchor(text, search);
+  if (anchorResult.match) return { ...anchorResult, disproportionate };
+  disproportionate ||= anchorResult.disproportionate;
   for (const normalize of normalizers.slice(1)) {
     const needle = normalize(search);
     if (!needle) continue;
@@ -61,7 +80,9 @@ export function findForgivingEdit(text: string, search: string): ForgivingEditMa
     const another = mapped.value.indexOf(needle, startIndex + needle.length);
     const start = mapped.offsets[startIndex] ?? 0;
     const last = mapped.offsets[startIndex + needle.length - 1] ?? start;
-    return makeMatch(text, start, last + 1 - start, another < 0 ? 1 : 2);
+    const match = makeMatch(text, start, last + 1 - start, another < 0 ? 1 : 2);
+    if (!isDisproportionate(match, search)) return { match, disproportionate };
+    disproportionate = true;
   }
   const matcher = new DiffMatchPatch();
   matcher.Match_Threshold = 0.4;
@@ -69,29 +90,28 @@ export function findForgivingEdit(text: string, search: string): ForgivingEditMa
   const location = matcher.match_main(text, search, 0);
   if (location >= 0) {
     const snippet = text.slice(location, location + search.length);
-    if (textSimilarity(search, snippet) >= 0.55)
-      return makeMatch(text, location, snippet.length, 1);
+    const match = makeMatch(text, location, snippet.length, 1);
+    if (textSimilarity(search, snippet) >= 0.55 && !isDisproportionate(match, search))
+      return { match, disproportionate };
   }
-  return undefined;
+  return { disproportionate };
 }
 
-function findBlockAnchor(text: string, search: string): ForgivingEditMatch | undefined {
+function findBlockAnchor(text: string, search: string): ForgivingEditResult {
   const lines = search
     .split(/\r\n|\r|\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  if (lines.length < 2) return undefined;
+  if (lines.length < 2) return { disproportionate: false };
   const first = escapeRegExp(lines[0] ?? '');
   const last = escapeRegExp(lines.at(-1) ?? '');
   const matches = [...text.matchAll(new RegExp(first + '[\\s\\S]*?' + last, 'g'))];
   const match = matches[0];
-  if (
-    match?.index === undefined ||
-    matches.length !== 1 ||
-    match[0].length > Math.max(search.length * 2.5, search.length + 80)
-  )
-    return undefined;
-  return makeMatch(text, match.index, match[0].length, 1);
+  if (match?.index === undefined || matches.length !== 1) return { disproportionate: false };
+  const result = makeMatch(text, match.index, match[0].length, 1);
+  return isDisproportionate(result, search)
+    ? { disproportionate: true }
+    : { match: result, disproportionate: false };
 }
 
 function occurrences(text: string, needle: string): number[] {
@@ -99,9 +119,13 @@ function occurrences(text: string, needle: string): number[] {
   let from = 0;
   while ((from = text.indexOf(needle, from)) !== -1) {
     result.push(from);
-    from += needle.length;
+    from += 1;
   }
   return result;
+}
+function isDisproportionate(match: ForgivingEditMatch, search: string): boolean {
+  const length = match.end - match.start;
+  return length > Math.max(search.length * 2.5, search.length + 80);
 }
 function makeMatch(text: string, start: number, length: number, count: number): ForgivingEditMatch {
   return { start, end: start + length, count, snippet: text.slice(start, start + length) };

@@ -57,7 +57,7 @@ import { SessionStore } from './session.js';
 import { createWorkspaceTools, type AgentTool, type ToolSource } from './tool-registry.js';
 import {
   containsOmissionPlaceholder,
-  parseTextToolCalls,
+  parseTextToolCallsDetailed,
   ReflectionBudget,
   ToolRepetitionDetector,
   type ModelHints,
@@ -837,10 +837,13 @@ export class AgentLoop {
         };
         let repeatedCallDetected = false;
         if (!calls.length && generated.text && (this.options.repairToolCalls ?? true)) {
-          const parsedCalls = parseTextToolCalls(
+          const parsed = parseTextToolCallsDetailed(
             generated.text,
             tools.map((entry) => entry.name),
+            collectUntrustedPromptText(contextMessages),
           );
+          const parsedCalls = parsed.calls;
+          retryErrors.push(...parsed.hints);
           if (hints.toolProtocol !== 'native') calls.push(...parsedCalls);
           else if (parsedCalls.length) {
             nativeFormatFailures++;
@@ -1007,7 +1010,7 @@ export class AgentLoop {
                 id: PartIdSchema.parse(newId('part')),
                 text:
                   'Tool validation/errors; retry once (reflection ' +
-                  String(4 - reflectionBudget.remaining) +
+                  String(reflectionBudget.maximum - reflectionBudget.remaining) +
                   '/3) with corrected arguments. Correct the exact failures below:\n' +
                   retryErrors.join('\n'),
               },
@@ -1354,7 +1357,7 @@ export function createStepGenerator(
     { providerId: model.providerId, model: model.ref },
     options.providerFetch ?? globalThis.fetch,
   );
-  return async ({ system, messages, tools, signal, onDelta, onProgress }) => {
+  return async ({ system, messages, tools, signal, onDelta, onProgress, modelHints }) => {
     const sdkTools: Record<string, unknown> = Object.fromEntries(
       tools.map((definition) => [
         definition.name,
@@ -1398,7 +1401,7 @@ export function createStepGenerator(
           }
         : {}),
       messages: sanitizeProviderMessages(
-        toModelMessages(messages, model),
+        toModelMessages(messages, model, modelHints.toolProtocol !== 'native'),
         model.providerId as import('@ferry/providers').MessageNormalizationProvider,
       ),
       tools: sdkTools as unknown as ToolSet,
@@ -1455,6 +1458,7 @@ function toolSchemaForEstimate(schema: z.ZodType): unknown {
 function toModelMessages(
   messages: readonly Message[],
   targetModel: ModelInfo | undefined,
+  escapeToolResults = false,
 ): ModelMessage[] {
   const prompt: ModelMessage[] = [];
   for (const message of messages) {
@@ -1498,13 +1502,21 @@ function toModelMessages(
           toolName: part.tool,
           output: {
             type: 'text',
-            value:
-              compactToolHistoryText(
-                part.output?.text ?? `Tool ended with status ${part.status}.`,
-              ) +
-              (part.output?.recoveryHandle
-                ? `\n[Recovery handle: ${part.output.recoveryHandle}]`
-                : ''),
+            value: escapeToolResults
+              ? wrapUntrustedToolResult(
+                  compactToolHistoryText(
+                    part.output?.text ?? `Tool ended with status ${part.status}.`,
+                  ) +
+                    (part.output?.recoveryHandle
+                      ? `\n[Recovery handle: ${part.output.recoveryHandle}]`
+                      : ''),
+                )
+              : compactToolHistoryText(
+                  part.output?.text ?? `Tool ended with status ${part.status}.`,
+                ) +
+                (part.output?.recoveryHandle
+                  ? `\n[Recovery handle: ${part.output.recoveryHandle}]`
+                  : ''),
           },
         });
       } else {
@@ -1516,6 +1528,27 @@ function toModelMessages(
     if (toolResults.length) prompt.push({ role: 'tool', content: toolResults });
   }
   return prompt;
+}
+
+function wrapUntrustedToolResult(text: string): string {
+  const escaped = text
+    .replace(/<function\s*=/gi, '&lt;function=')
+    .replace(/<\|([^|]+)\|>/g, '‹|$1|›')
+    .replace(/<tool_call>/gi, '&lt;tool_call&gt;')
+    .replace(/\[\[?tool_call\]?\]/gi, '［［tool_call］］')
+    .replace(/\btool_call\s*:/gi, 'tool_call：')
+    .replace(/`{3,}/g, (fence) => 'ˋ'.repeat(fence.length));
+  return `--- BEGIN UNTRUSTED TOOL RESULT ---\n${escaped}\n--- END UNTRUSTED TOOL RESULT ---`;
+}
+
+function collectUntrustedPromptText(messages: readonly Message[]): string[] {
+  return messages.flatMap((message) =>
+    message.parts.flatMap((part) => {
+      if (message.role === 'user' && part.type === 'text') return [part.text];
+      if (part.type === 'tool_call' && part.output) return [part.output.text];
+      return [];
+    }),
+  );
 }
 
 function isGemini3Model(model: ModelInfo | undefined): boolean {
