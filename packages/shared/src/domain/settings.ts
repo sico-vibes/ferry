@@ -2,7 +2,19 @@ import { z } from 'zod';
 import { DelegationModeSchema, PermissionModeSchema, ThemeSchema } from './common.js';
 import { ProfileIdSchema } from './ids.js';
 import { OptimizerTogglesSchema } from './profile.js';
-export const RoutingSettingsSchema = z.object({
+const RoutingSettingsFieldsSchema = z.object({
+  stickySessions: z.boolean(),
+  smartReliability: z.boolean(),
+  quotaReservations: z.boolean(),
+  cooldownReasons: z.boolean(),
+  gentleQuotaRamp: z.boolean(),
+  toolRejectionMemory: z.boolean(),
+  carefulModelRetirement: z.boolean(),
+  stickyTtlMinutes: z.number().int().min(1).max(1440),
+  rampStart: z.number().min(0.01).max(1),
+  rampFloor: z.number().min(0).max(1),
+});
+export const RoutingSettingsSchema = RoutingSettingsFieldsSchema.extend({
   stickySessions: z.boolean().default(true),
   smartReliability: z.boolean().default(true),
   quotaReservations: z.boolean().default(true),
@@ -36,6 +48,19 @@ export const SettingsSchema = z.object({
     injectErrors: z.boolean(),
     realDomains: z.array(z.string()).default([]),
   }),
+});
+export const SettingsPatchSchema = SettingsSchema.partial().extend({
+  optimizers: OptimizerTogglesSchema.partial().optional(),
+  routing: RoutingSettingsFieldsSchema.partial().optional(),
+  developer: z
+    .object({
+      showReferenceOverlay: z.boolean(),
+      mockLatency: z.boolean(),
+      injectErrors: z.boolean(),
+      realDomains: z.array(z.string()),
+    })
+    .partial()
+    .optional(),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 export const SystemInfoSchema = z.object({

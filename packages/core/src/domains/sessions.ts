@@ -498,9 +498,16 @@ export function register(host: CoreHost, services: FerryServices): void {
             ? savedPermissionMode.data
             : config.permissionMode,
           ...(maxSteps === undefined ? {} : { maxSteps }),
-          resilienceState:
-            z.array(ResilienceEntrySchema).safeParse(services.settings.get('routing-resilience'))
-              .data ?? [],
+          resilienceState: (() => {
+            const parsed = z
+              .array(ResilienceEntrySchema)
+              .safeParse(services.settings.get('routing-resilience')).data;
+            return (
+              parsed?.map(({ cooldownActive, ...entry }) =>
+                cooldownActive === undefined ? entry : { ...entry, cooldownActive },
+              ) ?? []
+            );
+          })(),
           onResilienceState: (entries) => {
             services.settings.put('routing-resilience', entries);
           },

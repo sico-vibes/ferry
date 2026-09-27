@@ -539,18 +539,24 @@ export class AgentLoop {
           try {
             const generator =
               this.options.generator ?? this.createStreamingGenerator(model, sessionId);
+            let releaseLease: (() => void) | null | undefined;
+            const releaseOnce = () => {
+              const release = releaseLease;
+              releaseLease = undefined;
+              release?.();
+            };
             generated = await runWithStepWatchdog(
               async (input) => {
                 if (
                   this.options.routingSettings?.().quotaReservations &&
                   this.options.acquireQuotaLease
                 ) {
-                  const release = this.options.acquireQuotaLease(input.model, inputTokens + 2048);
-                  if (!release) throw new QuotaReservationError();
+                  releaseLease = this.options.acquireQuotaLease(input.model, inputTokens + 2048);
+                  if (!releaseLease) throw new QuotaReservationError();
                   try {
                     return await generator(input);
                   } finally {
-                    release();
+                    releaseOnce();
                   }
                 }
                 return generator(input);
@@ -559,6 +565,7 @@ export class AgentLoop {
               model,
               signal,
               this.options.stepTimeoutMs ?? 120_000,
+              releaseOnce,
             );
             generationComplete = true;
             modelAttempts.push({
@@ -1541,6 +1548,7 @@ async function runWithStepWatchdog(
   model: ModelInfo,
   parentSignal: AbortSignal,
   timeoutMs: number,
+  onAbort: () => void = () => undefined,
 ): Promise<GeneratedStep> {
   if (parentSignal.aborted)
     throw parentSignal.reason instanceof Error
@@ -1558,6 +1566,7 @@ async function runWithStepWatchdog(
         ? parentSignal.reason
         : new DOMException('Aborted', 'AbortError');
     controller.abort(reason);
+    onAbort();
     rejectTimeout(reason);
   };
   parentSignal.addEventListener('abort', abort, { once: true });
@@ -1566,6 +1575,7 @@ async function runWithStepWatchdog(
     timer = setTimeout(() => {
       const error = new StepWatchdogError(timeoutMs);
       controller.abort(error);
+      onAbort();
       rejectTimeout(error);
     }, timeoutMs);
   };

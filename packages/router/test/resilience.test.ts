@@ -58,6 +58,7 @@ describe('routing resilience primitives', () => {
       'quota_exhausted',
     );
     expect(parseRetryAfter('2h')).toBe(7_200_000);
+    expect(parseRetryAfter('0')).toBe(0);
     expect(parseRetryAfter('Thu, 01 Jan 1970 00:00:10 GMT', 0)).toBe(10_000);
     expect(
       classifyProviderError({
