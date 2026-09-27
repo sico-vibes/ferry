@@ -112,7 +112,7 @@ try {
       .getByRole('list')
       .locator('li')
       .filter({ hasText: 'NVIDIA NIM' });
-    await expect(nvidiaUsage.getByLabel('NVIDIA NIM daily capacity unknown')).toHaveText('—');
+    await expect(nvidiaUsage.getByLabel('NVIDIA NIM: limit unknown')).toHaveText('—');
     await expect(nvidiaUsage.locator('.h-1')).toHaveCount(0);
     await page.getByRole('button', { name: 'tokens', exact: true }).click();
     await expect(

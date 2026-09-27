@@ -626,44 +626,69 @@ export function SettingsCanvas() {
             Keys are stored by the local client. Free tier data use depends on each provider's
             terms.
           </p>
-          {providers.map((provider) => (
-            <SettingRow
-              key={provider.id}
-              title={provider.name}
-              helper={provider.termsNote ?? provider.dataUse ?? 'No data use note provided.'}
-            >
-              <span className={`status-pill ${provider.keyStatus === 'valid' ? 'ok' : 'pending'}`}>
-                {provider.keyStatus.replace('_', ' ')}
-              </span>
-              <Pill
-                size="sm"
-                onClick={() => {
-                  setKeyProvider(provider);
-                }}
-              >
-                Manage key
-              </Pill>
-              <Pill
-                size="sm"
-                disabled={testingProvider === provider.id}
-                variant="outline"
-                onClick={() => void testProvider(provider)}
-              >
-                {testingProvider === provider.id ? 'Testing…' : 'Test'}
-              </Pill>
-              {['legit', 'promo'].includes(provider.tag) ? (
-                <Switch
-                  label={`${provider.name} key has billing enabled`}
-                  checked={provider.billingEnabled ?? false}
-                  onCheckedChange={(billingEnabled) => {
-                    void client.providers
-                      .setBillingEnabled(provider.id, billingEnabled)
-                      .then(() => cache.invalidateQueries({ queryKey: ['providers'] }));
-                  }}
-                />
-              ) : null}
-            </SettingRow>
-          ))}
+          <div aria-label="Provider keys" className="provider-key-table">
+            <div aria-hidden="true" className="provider-key-columns text-meta text-text-3">
+              <span>Provider</span>
+              <span>Status</span>
+              <span>Manage key</span>
+              <span>Test</span>
+              <span>Enabled</span>
+            </div>
+            {providers.map((provider) => {
+              const status = provider.keyStatus.replace('_', ' ');
+              const statusTone =
+                provider.keyStatus === 'valid'
+                  ? 'ok'
+                  : provider.keyStatus === 'invalid'
+                    ? 'bad'
+                    : provider.keyStatus === 'missing'
+                      ? 'pending'
+                      : 'neutral';
+              const toggleApplicable = provider.tag !== 'subscription_oauth';
+              return (
+                <div className="provider-key-row" key={provider.id}>
+                  <div className="provider-key-description">
+                    <strong title={provider.name}>{provider.name}</strong>
+                    <small title={provider.termsNote ?? provider.dataUse ?? undefined}>
+                      {provider.termsNote ?? provider.dataUse ?? 'No data use note provided.'}
+                    </small>
+                  </div>
+                  <span className={`status-pill ${statusTone}`}>{status}</span>
+                  <Pill
+                    size="sm"
+                    onClick={() => {
+                      setKeyProvider(provider);
+                    }}
+                  >
+                    Manage key
+                  </Pill>
+                  <Pill
+                    size="sm"
+                    disabled={testingProvider === provider.id || !provider.enabled}
+                    variant="outline"
+                    onClick={() => void testProvider(provider)}
+                  >
+                    {testingProvider === provider.id ? 'Testing…' : 'Test'}
+                  </Pill>
+                  <span
+                    className="provider-key-toggle"
+                    title={toggleApplicable ? undefined : 'Manage subscription access in Explore.'}
+                  >
+                    <Switch
+                      label={`${provider.enabled ? 'Disable' : 'Enable'} ${provider.name}`}
+                      checked={provider.enabled}
+                      disabled={!toggleApplicable}
+                      onCheckedChange={(enabled) =>
+                        void client.providers
+                          .setEnabled(provider.id, enabled)
+                          .then(() => cache.invalidateQueries({ queryKey: ['providers'] }))
+                      }
+                    />
+                  </span>
+                </div>
+              );
+            })}
+          </div>
           <SettingRow
             title="Allow subscription OAuth models in routing"
             helper="When off, Auto-Free and Best Available never choose subscription logins. OAuth models remain available for manual selection."
@@ -1157,7 +1182,7 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
     try {
       const parsed: unknown = JSON.parse(
         localStorage.getItem('ferry.permissionRules') ??
-          '[{"effect":"ask","pattern":"run_command","tool":"run_command"}]',
+          '[{"effect":"ask","pattern":"npm test*","tool":"run_command"}]',
       );
       if (!Array.isArray(parsed)) return [];
       return parsed.filter(isPermissionRule);
@@ -1184,6 +1209,16 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
         />
       </SettingRow>
       <h3>Rules</h3>
+      <p className="permission-rules-help">
+        Choose when Ferry may use a tool. Patterns match command text, for example{' '}
+        <code>npm test*</code>.
+      </p>
+      <div aria-hidden="true" className="rule-columns text-meta text-text-3">
+        <span>Decision</span>
+        <span>Tool</span>
+        <span>Pattern</span>
+        <span />
+      </div>
       {rules.map((rule, index) => (
         <div className="rule-row" key={index}>
           <Select
@@ -1194,17 +1229,6 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
             }}
             options={['allow', 'ask', 'deny'].map((value) => ({ value, label: value }))}
           />
-          <input
-            aria-label="Rule pattern"
-            value={rule.pattern}
-            onChange={(event) => {
-              persist(
-                rules.map((item, i) =>
-                  i === index ? { ...item, pattern: event.target.value } : item,
-                ),
-              );
-            }}
-          />
           <Select
             label="Rule tool"
             value={rule.tool}
@@ -1214,6 +1238,18 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
             options={['run_command', 'read_file', 'edit_file', 'write_file', 'delegate', 'mcp'].map(
               (value) => ({ value, label: value }),
             )}
+          />
+          <input
+            aria-label="Rule pattern"
+            placeholder="npm test*"
+            value={rule.pattern}
+            onChange={(event) => {
+              persist(
+                rules.map((item, i) =>
+                  i === index ? { ...item, pattern: event.target.value } : item,
+                ),
+              );
+            }}
           />
           <button
             className="quiet-icon"
@@ -1229,7 +1265,7 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
       <Pill
         size="sm"
         onClick={() => {
-          persist([...rules, { effect: 'ask', pattern: '*', tool: 'run_command' }]);
+          persist([...rules, { effect: 'ask', pattern: 'npm test*', tool: 'run_command' }]);
         }}
       >
         Add rule
@@ -1308,7 +1344,7 @@ function DeveloperSettings({
         title="Core engine"
         helper={
           engine
-            ? `PID ${String(engine.pid ?? 'restarting')} · protocol ${window.ferryEngineHello?.protocol ?? 'ferry/1'}`
+            ? `${engine.status} · PID ${String(engine.pid ?? 'unavailable')} · ${window.ferryEngineHello?.protocol ?? 'ferry/1'}`
             : 'Connecting to the local core process…'
         }
       >
@@ -1320,7 +1356,7 @@ function DeveloperSettings({
         title="Domain routing"
         helper="Domains stay on mock until the core reports an implementation."
       >
-        <div className="setting-inline-stack">
+        <div className="setting-inline-stack domain-routing-grid">
           {FERRY_DOMAINS.map((domain) => {
             const selectable = availableDomains.includes(domain);
             const route = realDomains.includes(domain) && selectable ? 'real' : 'mock';

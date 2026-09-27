@@ -640,6 +640,7 @@ export function SessionCanvas() {
   const virtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => viewport.current,
+    paddingStart: 40,
     estimateSize: (index) => (messages[index]?.parts.length ?? 0) * 76 + 96,
     measureElement: (element) => element.getBoundingClientRect().height,
     overscan: 5,

@@ -33,7 +33,7 @@ export interface UIState extends PersistedLayout {
   density: Density;
   settingsSection: SettingsSection;
   selectedWorkspaceId: string | null;
-  exploreFilter: 'All' | 'Free' | 'Paid' | 'CLI';
+  exploreFilter: 'All' | 'Free' | 'Credits' | 'Paid' | 'CLI';
   openTab: (tab: OpenTab) => void;
   setActive: (id: SessionId) => void;
   renameTab: (id: SessionId, title: string) => void;

@@ -40,7 +40,9 @@ export function ProviderCard({
       ? 'bg-danger'
       : provider.health === 'cooldown'
         ? 'bg-warn'
-        : 'bg-success';
+        : provider.health === 'unknown'
+          ? 'bg-text-3'
+          : 'bg-success';
   const keyText = terminalHealth
     ? 'Needs attention: re-enter key'
     : provider.keyStatus === 'valid'
@@ -52,11 +54,15 @@ export function ProviderCard({
           : provider.keyStatus === 'not_applicable'
             ? 'No key needed (CLI)'
             : 'Key: unchecked';
+  const displayName = provider.name.replace(/ Inference \(Free Trial.*\)$/i, '');
+  const trialNote = /free trial/i.test(provider.name)
+    ? 'Free trial uses provider credits; availability depends on the account.'
+    : null;
   return (
     <Spotlight
-      className={`rounded-card border border-border-hair bg-card p-4 shadow-[inset_0_1px_0_var(--highlight-top)] ${provider.enabled ? '' : 'opacity-60'}`}
+      className={`h-full rounded-card border border-border-hair bg-card p-4 shadow-[inset_0_1px_0_var(--highlight-top)] ${provider.enabled ? '' : 'opacity-60'}`}
     >
-      <article className="grid gap-3">
+      <article className="provider-card-content flex h-full min-w-0 flex-col gap-3">
         <header className="flex min-w-0 items-center gap-2.5">
           <BrandIcon
             slug={provider.brand ?? provider.name}
@@ -64,8 +70,10 @@ export function ProviderCard({
             className="size-8 rounded-lg"
           />
           <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <h2 className="truncate text-label font-semibold text-text-1">{provider.name}</h2>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <h2 className="truncate text-label font-semibold text-text-1" title={provider.name}>
+                {displayName}
+              </h2>
               <TagBadge
                 kind={
                   provider.tag === 'subscription_cli'
@@ -87,6 +95,7 @@ export function ProviderCard({
             onCheckedChange={(enabled) => onToggle?.(enabled)}
           />
         </header>
+        {trialNote && <p className="text-meta text-text-2">{trialNote}</p>}
         <p
           className={`flex items-center gap-1.5 text-meta ${provider.keyStatus === 'invalid' ? 'text-danger' : provider.keyStatus === 'valid' ? 'text-success' : 'text-text-2'}`}
         >
@@ -105,8 +114,8 @@ export function ProviderCard({
             {provider.dataUse}
           </p>
         )}
-        <footer className="flex flex-wrap items-center gap-2 border-t border-border-hair pt-2.5">
-          <span className="mr-auto text-meta text-text-2">
+        <footer className="provider-card-footer mt-auto grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 border-t border-border-hair pt-2.5">
+          <span className="truncate text-meta text-text-2" title="Rate-limited · no daily cap">
             {provider.stepsLeftToday === null ? (
               'Rate-limited · no daily cap'
             ) : (

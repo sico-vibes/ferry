@@ -51,32 +51,32 @@ export function QuotaWindowBar({ window }: { window: QuotaWindow }) {
             · {window.periodLabel}
           </span>
         </span>
-        <span className="shrink-0 font-medium tabular-nums text-text-1">
+        <span
+          className="shrink-0 font-medium tabular-nums text-text-1"
+          title={window.limit === null ? 'Limit unknown' : undefined}
+        >
           {window.limit === null
-            ? `${formatCompact(window.used, window.metric)} · no cap`
+            ? '—'
             : `${formatCompact(window.used, window.metric)} / ${formatCompact(window.limit, window.metric)}`}
         </span>
       </div>
       <div
-        aria-label={window.limit === null ? 'No cap' : `${String(Math.round(percent ?? 0))}% used`}
+        aria-label={
+          window.limit === null ? 'Limit unknown' : `${String(Math.round(percent ?? 0))}% used`
+        }
+        title={window.limit === null ? 'Limit unknown' : undefined}
         className="h-1.5 overflow-hidden rounded-pill bg-raised"
         role={percent === null ? 'img' : 'meter'}
         {...(percent === null
           ? {}
           : { 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': percent })}
       >
-        <span
-          className={
-            window.limit === null
-              ? 'block h-full w-2/5 animate-pulse rounded-pill bg-blue-500/60 motion-reduce:animate-none'
-              : 'block h-full rounded-pill transition-[width] duration-160 motion-reduce:transition-none'
-          }
-          style={
-            window.limit === null
-              ? undefined
-              : { width: `${String(percent)}%`, backgroundColor: color }
-          }
-        />
+        {window.limit !== null && (
+          <span
+            className="block h-full rounded-pill transition-[width] duration-160 motion-reduce:transition-none"
+            style={{ width: `${String(percent)}%`, backgroundColor: color }}
+          />
+        )}
       </div>
       {reset && <span className="text-[10px] leading-3 text-text-3">Resets in {reset}</span>}
     </div>

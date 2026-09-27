@@ -32,7 +32,13 @@ type ModelSort =
 const modelFilters = ['All tiers', 'T1', 'T2', 'T3'] as const;
 const freeFilters = ['All', 'Free', 'Paid'] as const;
 const providerKinds = (provider: Provider) =>
-  provider.tag === 'subscription_cli' ? 'CLI' : provider.tag === 'paid' ? 'Paid' : 'Free';
+  provider.tag === 'subscription_cli' || provider.kind === 'cli'
+    ? 'CLI'
+    : provider.tag === 'credits'
+      ? 'Credits'
+      : provider.tag === 'paid' || provider.tag === 'subscription_oauth'
+        ? 'Paid'
+        : 'Free';
 const compact = (value: number | null) =>
   value === null ? '—' : value === 0 ? 'Free' : `$${value.toFixed(2)}`;
 
@@ -113,6 +119,7 @@ export function ExploreCanvas() {
   const visibleProviders = providers.filter((provider) => {
     const query = search.trim().toLowerCase();
     return (
+      provider.tag !== 'subscription_oauth' &&
       (filter === 'All' || providerKinds(provider) === filter) &&
       (!query || provider.name.toLowerCase().includes(query) || provider.id.includes(query))
     );
@@ -290,7 +297,7 @@ export function ExploreCanvas() {
           }
         />
         <section aria-label="Provider filter" className="flex flex-wrap items-center gap-2">
-          {(['All', 'Free', 'Paid', 'CLI'] as const).map((item) => (
+          {(['All', 'Free', 'Credits', 'Paid', 'CLI'] as const).map((item) => (
             <button
               aria-pressed={filter === item}
               className={`rounded-pill border px-3 py-1.5 text-label transition ${filter === item ? 'border-border-strong bg-raised text-text-1' : 'border-border-hair text-text-2 hover:bg-icon-circle'}`}
@@ -314,9 +321,9 @@ export function ExploreCanvas() {
             onAction={() => void refetchProviders()}
           />
         ) : visibleProviders.length > 0 ? (
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))] gap-3">
+          <div className="provider-card-grid grid grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))] gap-3">
             {visibleProviders.map((provider) => (
-              <div id={`provider-${provider.id}`} key={provider.id}>
+              <div className="h-full min-w-0" id={`provider-${provider.id}`} key={provider.id}>
                 <ProviderCard
                   onManageKey={() => {
                     openManage(provider);
@@ -350,10 +357,7 @@ export function ExploreCanvas() {
             }}
           />
         )}
-        <Section
-          title="Subscription logins (unofficial)"
-          className="border border-warn/30 bg-warn/5"
-        >
+        <Section title="Subscription (unofficial)" className="border border-warn/30 bg-warn/5">
           <details>
             <summary className="cursor-pointer text-label font-medium text-warn">
               Optional subscription sign-in · account suspension risk

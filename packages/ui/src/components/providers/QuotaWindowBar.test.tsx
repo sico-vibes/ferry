@@ -17,9 +17,9 @@ const base: QuotaWindow = {
   confidence: 'unknown',
 };
 describe('QuotaWindowBar', () => {
-  it('renders uncapped usage and confidence', () => {
+  it('renders unknown limits without implying a cap', () => {
     render(<QuotaWindowBar window={base} />);
-    expect(screen.getByText('820K · no cap')).toBeTruthy();
-    expect(screen.getByRole('img', { name: 'No cap' })).toBeTruthy();
+    expect(screen.getByText('—')).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Limit unknown' })).toBeTruthy();
   });
 });
