@@ -7,6 +7,7 @@ import {
   parseEvalArgs,
   redactText,
   runHarness,
+  selectEvalProviders,
 } from './eval-live-lib.mjs';
 
 const servers: FakeOpenAIServer[] = [];
@@ -17,12 +18,27 @@ afterEach(async () => {
 describe('live eval harness helpers', () => {
   it('parses CLI options and dotenv values without emitting credentials', () => {
     expect(
-      parseEvalArgs(['--profile', 'best-available', '--only', 'one,two', '--repeat', '2', '--yes']),
+      parseEvalArgs([
+        '--',
+        '--profile',
+        'best-available',
+        '--only',
+        'one,two',
+        '--repeat',
+        '2',
+        '--yes',
+      ]),
     ).toMatchObject({
       profile: 'best-available',
       only: ['one', 'two'],
+      include: [],
+      exclude: [],
       repeat: 2,
       yes: true,
+    });
+    expect(parseEvalArgs(['--include', 'groq,trial-a', '--exclude', 'credits-a'])).toMatchObject({
+      include: ['groq', 'trial-a'],
+      exclude: ['credits-a'],
     });
     const env = parseDotEnv("GROQ_API_KEY='secret-key'\nexport GEMINI_API_KEY=another-secret");
     expect(env).toEqual({ GROQ_API_KEY: 'secret-key', GEMINI_API_KEY: 'another-secret' });
@@ -37,6 +53,69 @@ describe('live eval harness helpers', () => {
     ];
     expect(budgetGuard(providers)).toEqual({ allowed: false, paid: ['openrouter'] });
     expect(budgetGuard(providers, { allowPaid: true }).allowed).toBe(true);
+  });
+
+  it('filters Auto-Free providers by enabled state, credentials, provider policy, and opt-in', () => {
+    const providers = [
+      { id: 'free', tag: 'legit', enabled: true, keyPresent: true, keyRequired: true },
+      { id: 'disabled', tag: 'legit', enabled: false, keyPresent: true, keyRequired: true },
+      { id: 'missing-key', tag: 'legit', enabled: true, keyPresent: false, keyRequired: true },
+      { id: 'keyless', tag: 'caution', enabled: true, keyPresent: false, keyRequired: false },
+      { id: 'paid', tag: 'paid', enabled: true, keyPresent: true, keyRequired: true },
+      { id: 'credits', tag: 'credits', enabled: true, keyPresent: true, keyRequired: true },
+      {
+        id: 'subscription',
+        tag: 'subscription_cli',
+        enabled: true,
+        keyPresent: true,
+        keyRequired: true,
+      },
+      { id: 'trial', tag: 'trial', enabled: true, keyPresent: true, keyRequired: true },
+      {
+        id: 'unsupported',
+        tag: 'legit',
+        enabled: true,
+        keyPresent: true,
+        keyRequired: true,
+        freeTierUnsupported: true,
+      },
+      {
+        id: 'billing',
+        tag: 'legit',
+        enabled: true,
+        keyPresent: true,
+        keyRequired: true,
+        billingEnabled: true,
+      },
+    ];
+    const models = providers.map(({ id }) => ({
+      ref: `${id}/model`,
+      providerId: id,
+      free: id !== 'free',
+    }));
+    const selected = selectEvalProviders({ providers, models, profile: 'auto-free' });
+    expect(selected.providers.map(({ id }) => id)).toEqual(['free', 'keyless']);
+
+    const optedIn = selectEvalProviders({
+      providers,
+      models,
+      profile: 'auto-free',
+      include: ['trial', 'free', 'paid'],
+      exclude: ['free'],
+    });
+    expect(optedIn.providers.map(({ id }) => id)).toEqual(['trial']);
+  });
+
+  it('keeps paid providers in best-available selection so the budget guard reflects actual candidates', () => {
+    const providers = [
+      { id: 'free', tag: 'legit', enabled: true, keyPresent: true, keyRequired: true },
+      { id: 'credits', tag: 'credits', enabled: true, keyPresent: true, keyRequired: true },
+      { id: 'disabled', tag: 'paid', enabled: false, keyPresent: true, keyRequired: true },
+    ];
+    const models = providers.map(({ id }) => ({ ref: `${id}/model`, providerId: id, free: true }));
+    const selected = selectEvalProviders({ providers, models, profile: 'best-available' });
+    expect(selected.providers.map(({ id }) => id)).toEqual(['free', 'credits']);
+    expect(budgetGuard(selected.providers)).toEqual({ allowed: false, paid: ['credits'] });
   });
 
   it('runs scenarios through a local fake provider and accounts pass, fail, usage, and errors', async () => {

@@ -4,6 +4,8 @@ export function parseEvalArgs(args) {
   const options = {
     profile: 'auto-free',
     only: [],
+    include: [],
+    exclude: [],
     repeat: 1,
     model: undefined,
     json: false,
@@ -15,6 +17,7 @@ export function parseEvalArgs(args) {
   };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (arg === '--') continue;
     const value = () => {
       const next = args[++index];
       if (!next || next.startsWith('--')) throw new Error(`Missing value for ${arg}`);
@@ -22,6 +25,8 @@ export function parseEvalArgs(args) {
     };
     if (arg === '--profile') options.profile = value();
     else if (arg === '--only') options.only = value().split(',').filter(Boolean);
+    else if (arg === '--include') options.include = value().split(',').filter(Boolean);
+    else if (arg === '--exclude') options.exclude = value().split(',').filter(Boolean);
     else if (arg === '--repeat') options.repeat = positiveInteger(value(), '--repeat');
     else if (arg === '--model') options.model = value();
     else if (arg === '--data-dir') options.dataDir = value();
@@ -68,6 +73,61 @@ export function budgetGuard(providers, { allowPaid = false } = {}) {
       provider.tag === 'paid' || provider.tag === 'credits' || provider.billingEnabled === true,
   );
   return { allowed: allowPaid || paid.length === 0, paid: paid.map(({ id }) => id) };
+}
+
+/** Selects the cached models the live runner could actually route to. */
+export function selectEvalProviders({
+  providers,
+  models,
+  profile = 'auto-free',
+  include = [],
+  exclude = [],
+  model,
+}) {
+  const explicitlyIncluded = new Set(include);
+  const explicitlyExcluded = new Set(exclude);
+  const candidates = [];
+  for (const provider of providers) {
+    const hasCredential = provider.keyPresent || provider.keyRequired === false;
+    if (provider.enabled !== true || !hasCredential || provider.keyStatus === 'invalid') continue;
+    if (explicitlyExcluded.has(provider.id)) continue;
+    if (explicitlyIncluded.size > 0 && !explicitlyIncluded.has(provider.id)) continue;
+
+    const providerModels = models.filter(
+      (candidate) =>
+        candidate.providerId === provider.id &&
+        (!model || candidate.ref === model) &&
+        !(provider.excludedModelRefs ?? []).includes(candidate.ref),
+    );
+    const eligibleModels =
+      profile === 'auto-free'
+        ? providerModels.filter((candidate) =>
+            isAutoFreeEligible(provider, candidate, explicitlyIncluded.has(provider.id)),
+          )
+        : providerModels;
+    if (eligibleModels.length) candidates.push({ provider, models: eligibleModels });
+  }
+  return {
+    providers: candidates.map(({ provider }) => provider),
+    models: candidates.flatMap(({ models: providerModels }) => providerModels),
+  };
+}
+
+function isAutoFreeEligible(provider, model, trialOptedIn) {
+  if (
+    provider.freeTierUnsupported ||
+    provider.billingEnabled ||
+    provider.id === 'opencode' ||
+    provider.tag === 'paid' ||
+    provider.tag === 'credits' ||
+    provider.tag.startsWith('subscription_')
+  )
+    return false;
+  if (provider.tag === 'trial' && !trialOptedIn) return false;
+  if (provider.id === 'openrouter') return /:free(?:$|:)/i.test(model.ref);
+  if (provider.keyRequired === false) return true;
+  if (['legit', 'promo'].includes(provider.tag)) return true;
+  return model.free;
 }
 
 export function estimateProviderRequests(providers, taskCount, maxSteps) {

@@ -20,12 +20,14 @@ import {
   parseEvalArgs,
   redactText,
   runHarness,
+  selectEvalProviders,
 } from './eval-live-lib.mjs';
 
 const execFileAsync = promisify(execFile);
 const usage = `Usage: pnpm eval:live [--data-dir PATH] [--profile auto-free|best-available]
   [--only id,id] [--repeat N] [--model provider/model] [--max-steps N]
-  [--timeout SECONDS] [--allow-paid] [--yes] [--json]`;
+  [--timeout SECONDS] [--include provider,id] [--exclude provider,id]
+  [--allow-paid] [--yes] [--json]`;
 let activeSecrets = [];
 
 export async function runEvalLive(args = process.argv.slice(2)) {
@@ -93,8 +95,6 @@ export async function runEvalLive(args = process.argv.slice(2)) {
         keyringRef: providerId,
         createdAt: new Date().toISOString(),
       });
-      const saved = services.providers.get(providerId);
-      if (saved) services.providers.put({ ...saved, enabled: true });
     }
     host = new CoreHost({ dataDir: services.paths.home, services });
     for (const register of domainRegistrars) register(host, services);
@@ -110,42 +110,57 @@ export async function runEvalLive(args = process.argv.slice(2)) {
             .replaceAll('_', '-')
             .replace(/^opencode-zen$/, 'opencode') === limits.provider,
       );
-      if (
-        hasEnvKey ||
-        (!saved && (limits.key_required === false || services.providerKeys.get(limits.provider)))
-      )
+      if (!saved && (hasEnvKey || services.providerKeys.get(limits.provider)))
         await invokeCore('providers.setEnabled', limits.provider, true);
     }
     await host.start();
     await invokeCore('models.list');
 
-    const eligibleProviders = [];
-    for (const limits of services.catalog.providers) {
-      const keyAvailable =
-        Boolean(services.providerKeys.get(limits.provider)) || limits.key_required === false;
-      if (
-        keyAvailable &&
-        (limits.key_required === false || (await services.secrets.has(limits.provider)))
-      )
-        eligibleProviders.push(limits.provider);
-    }
-    const availableModels = eligibleProviders.flatMap((provider) => services.models.list(provider));
-    const modelCandidates = options.model
-      ? availableModels.filter(({ ref }) => ref === options.model)
-      : availableModels.filter((model) => options.profile !== 'auto-free' || model.free);
-    const providerIds = new Set(modelCandidates.map(({ providerId }) => providerId));
-    const selectedProviders = services.catalog.providers
-      .filter(({ provider }) => providerIds.has(provider))
-      .map((limits) => {
+    const providerPolicies = await Promise.all(
+      services.catalog.providers.map(async (limits) => {
         const saved = services.providers.get(limits.provider);
+        const hasReference = Boolean(services.providerKeys.get(limits.provider));
+        const keyPresent = hasReference && (await services.secrets.has(limits.provider));
         return {
           id: limits.provider,
           tag: limits.tag,
-          billingEnabled:
-            (saved?.billingEnabled ?? false) ||
-            modelCandidates.some((model) => model.providerId === limits.provider && !model.free),
+          keyRequired: limits.key_required !== false,
+          keyPresent,
+          keyStatus: keyPresent ? (saved?.keyStatus ?? 'unchecked') : 'missing',
+          enabled: saved?.enabled ?? keyPresent,
+          billingEnabled: saved?.billingEnabled ?? false,
+          freeTierUnsupported: saved?.freeTierUnsupported ?? false,
+          excludedModelRefs: saved?.excludedModelRefs ?? [],
         };
-      });
+      }),
+    );
+    const validProviderIds = new Set(providerPolicies.map(({ id }) => id));
+    const invalidSelections = [...options.include, ...options.exclude].filter(
+      (id) => !validProviderIds.has(id),
+    );
+    if (invalidSelections.length)
+      throw new Error(`Unknown provider id(s): ${[...new Set(invalidSelections)].join(', ')}`);
+    const cachedModels = services.catalog.providers.flatMap(({ provider }) =>
+      services.models.list(provider),
+    );
+    const selection = selectEvalProviders({
+      providers: providerPolicies,
+      models: cachedModels,
+      profile: options.profile,
+      include: options.include,
+      exclude: options.exclude,
+      model: options.model,
+    });
+    const selectedProviders = selection.providers;
+    const modelCandidates = selection.models;
+    const providerList = selectedProviders.map(({ id }) => id);
+    const listText = `Eligible providers: ${providerList.join(', ') || 'none'}`;
+    if (options.json) process.stderr.write(`${redactText(listText, secretValues)}\n`);
+    else console.log(listText);
+    if (modelCandidates.length === 0)
+      throw new Error(
+        'No enabled provider models match the selected profile and include/exclude options.',
+      );
     const guard = budgetGuard(selectedProviders, { allowPaid: options.allowPaid });
     if (!guard.allowed)
       throw new Error(
