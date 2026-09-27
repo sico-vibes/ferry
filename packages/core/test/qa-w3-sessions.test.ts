@@ -14,6 +14,28 @@ import {
 } from './qa-w3-harness.js';
 
 describe('QA W3 sessions: run lifecycle and races', () => {
+  it('persists picker model selection as manual and Auto selection as unpinned', async () => {
+    const h = await startHarness();
+    try {
+      const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      const model = h.services.models.list('openrouter').find((candidate) => candidate.toolCalling);
+      if (!model) throw new Error('OpenRouter fixture has no tool-capable model');
+
+      await h.rpc.models.select(session.id, model.ref);
+      expect((await h.rpc.sessions.get(session.id)).session).toMatchObject({
+        pinnedModelRef: model.ref,
+        modelRef: model.ref,
+      });
+      await h.rpc.models.select(session.id, 'auto');
+      expect((await h.rpc.sessions.get(session.id)).session).toMatchObject({
+        pinnedModelRef: null,
+        modelRef: model.ref,
+      });
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
+
   it('rejects a second send while a run is active instead of starting a second loop', async () => {
     const h = await startHarness({
       turns: [textTurn('one two three four five', { delayMs: 200 })],

@@ -118,6 +118,47 @@ describe('QuotaEngine', () => {
     engine.dispose();
   });
 
+  it('derives remaining steps from configured daily capacity when most capacity remains', () => {
+    const now = () => new Date('2026-06-01T10:00:00Z');
+    const configured = {
+      ...provider,
+      windows: [
+        {
+          scope: 'provider' as const,
+          metric: 'requests' as const,
+          kind: 'fixed_daily' as const,
+          limit: 100,
+        },
+      ],
+    };
+    const engine = new QuotaEngine({
+      now,
+      catalog: {
+        providers: [configured],
+        models: [{ providerId: 'gemini', ref: 'gemini/gemini-flash' } as Catalog['models'][number]],
+      },
+      eligibleProviders: () => ['gemini'],
+    });
+    const window = engine.getWindows('gemini')[0];
+    if (!window) throw new Error('Missing Gemini fixture window');
+    engine.observe({
+      id: 'ninety-one-percent-left',
+      providerId: 'gemini' as UsageRecord['providerId'],
+      windowId: window.id,
+      metric: 'requests',
+      limit: 100,
+      remaining: 91,
+      source: 'endpoint',
+      observedAt: now().toISOString(),
+    });
+
+    const summary = engine.capacitySummary();
+    expect(summary.percentRemaining).toBe(91);
+    expect(summary.stepsLeftToday).toBe(91);
+    expect(summary.perProvider[0]?.stepsLeft).toBe(91);
+    engine.dispose();
+  });
+
   it('persists request usage and rebuilds ledger records on restart', async () => {
     const db = await openDatabase(':memory:');
     const now = () => new Date('2026-06-01T10:00:00Z');

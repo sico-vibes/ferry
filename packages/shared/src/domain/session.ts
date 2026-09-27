@@ -9,6 +9,7 @@ import {
   MessageIdSchema,
   WorkspaceIdSchema,
 } from './ids.js';
+import { ProviderFailureFamilySchema } from './quota.js';
 export const SessionStatusSchema = z.enum(['idle', 'running', 'awaiting_approval', 'error']);
 export type SessionStatus = z.infer<typeof SessionStatusSchema>;
 export const SessionSchema = z.object({
@@ -18,6 +19,7 @@ export const SessionSchema = z.object({
   preview: z.string(),
   profileId: ProfileIdSchema,
   modelRef: ModelRefSchema.nullable(),
+  pinnedModelRef: ModelRefSchema.nullable().default(null),
   starred: z.boolean(),
   pinned: z.boolean(),
   status: SessionStatusSchema,
@@ -92,7 +94,18 @@ export const MessagePartSchema = z.discriminatedUnion('type', [
     type: z.literal('error'),
     ...partBase,
     message: z.string(),
-    details: z.string().optional(),
+    details: z
+      .object({
+        attempts: z.array(
+          z.object({
+            model: ModelRefSchema,
+            kind: ProviderFailureFamilySchema,
+            status: z.number().int().nullable(),
+            message: z.string(),
+          }),
+        ),
+      })
+      .optional(),
     kind: z.enum(['provider', 'tool', 'permission', 'internal']),
   }),
 ]);

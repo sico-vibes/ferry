@@ -36,7 +36,7 @@ export async function assembleSystemPrompt(options: PromptAssemblyOptions): Prom
   ]);
   const branchName = branch?.current ?? '(detached or unavailable)';
   const changes = status
-    ? [...status.modified, ...status.created, ...status.deleted, ...status.not_added].slice(0, 40)
+    ? [...status.modified, ...status.created, ...status.deleted, ...status.not_added].slice(0, 12)
     : [];
   const environment = [
     `OS: ${platform()} ${release()} (${hostname()})`,

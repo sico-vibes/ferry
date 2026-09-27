@@ -34,6 +34,29 @@ describe('routing resilience primitives', () => {
     expect(ledger.active('provider', 'gemini', 2_000)).toBeUndefined();
   });
 
+  it('classifies single-request 413 and TPM failures without charging quota or cooldown state', () => {
+    const errors = [
+      classifyProviderError({ status: 413, message: 'Request Entity Too Large' }),
+      classifyProviderError({
+        status: 400,
+        responseBody: JSON.stringify({
+          error: {
+            message: 'Request too large: tokens per minute limit 8000, requested 24552',
+          },
+        }),
+      }),
+    ];
+    expect(errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ family: 'request_too_large', scope: 'none' }),
+      ]),
+    );
+    const ledger = new ResilienceLedger();
+    for (const error of errors)
+      ledger.recordFailure(error, 'groq/openai/gpt-oss-20b', 'groq', 1000);
+    expect(ledger.snapshot()).toEqual([]);
+  });
+
   it('expires scope state, decays on success, and exposes the earliest reset for a half-open probe', () => {
     const ledger = new ResilienceLedger();
     ledger.recordFailure(classifyProviderError({ status: 503 }), 'p/a', 'p', 1_000);

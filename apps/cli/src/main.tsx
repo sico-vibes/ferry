@@ -6,7 +6,7 @@ import { createClientAsync } from './client.js';
 import { good, muted, warn } from './colors.js';
 import { collectDoctor } from './doctor.js';
 import type { FerryClient } from '@ferry/client';
-import type { Profile } from '@ferry/shared';
+import type { MessagePart, Profile } from '@ferry/shared';
 
 /* Event handlers intentionally return promises to the event emitter; the parser narrows argv flags. */
 /* eslint-disable @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/return-await, @typescript-eslint/consistent-type-definitions, @typescript-eslint/restrict-template-expressions */
@@ -178,27 +178,17 @@ function summarize(part: import('@ferry/shared').MessagePart): string | undefine
   return undefined;
 }
 
-function formatRoutingDetails(details: string): string {
-  try {
-    const parsed: unknown = JSON.parse(details);
-    if (!Array.isArray(parsed)) return 'Routing details unavailable';
-    const entries: unknown[] = parsed;
-    const rows = entries.flatMap((entry) => {
-      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
-      const row = entry as Record<string, unknown>;
-      if (typeof row.modelRef !== 'string' || !Array.isArray(row.reasons)) return [];
-      const reasons = (row.reasons as unknown[]).filter(
-        (reason): reason is string => typeof reason === 'string',
-      );
-      return [`${row.modelRef}: ${reasons.join(', ')}`];
-    });
-    const shown = rows.slice(0, 12);
-    if (rows.length > shown.length)
-      shown.push(`${String(rows.length - shown.length)} more excluded models`);
-    return shown.join('; ');
-  } catch {
-    return 'Routing details unavailable';
-  }
+function formatRoutingDetails(
+  details: NonNullable<Extract<MessagePart, { type: 'error' }>['details']>,
+): string {
+  const attempts = details.attempts.map(
+    (attempt) =>
+      `${attempt.model}: ${attempt.kind}${attempt.status === null ? '' : ` (HTTP ${String(attempt.status)})`} — ${attempt.message}`,
+  );
+  const shown = attempts.slice(0, 12);
+  if (attempts.length > shown.length)
+    shown.push(`${String(attempts.length - shown.length)} more attempts`);
+  return shown.join('; ') || 'No model attempts recorded';
 }
 
 export async function runCli(argv = process.argv.slice(2)): Promise<number> {

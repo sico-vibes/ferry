@@ -173,7 +173,7 @@ describe('QA router: selection invariants', () => {
             step: 'edit',
             estimate: { inputTokens: 100 },
           });
-          return results.length === (free && tier !== 'T1' ? 1 : 0);
+          return results.length === 0;
         },
       ),
       { numRuns: 100 },

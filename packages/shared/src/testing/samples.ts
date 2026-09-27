@@ -60,6 +60,7 @@ export const sampleSession: Session = {
   preview: 'Define contracts',
   profileId,
   modelRef,
+  pinnedModelRef: null,
   starred: false,
   pinned: false,
   status: 'idle',

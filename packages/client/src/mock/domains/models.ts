@@ -45,7 +45,8 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
         throw new MockNotFoundError('Model', ref);
       if (ref === 'auto') state.selections.delete(sessionId);
       else state.selections.set(sessionId, ref);
-      s.modelRef = ref === 'auto' ? null : ref;
+      s.pinnedModelRef = ref === 'auto' ? null : ref;
+      if (ref !== 'auto') s.modelRef = ref;
       updateSession(s);
       persist();
     },

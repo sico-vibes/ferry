@@ -57,6 +57,8 @@ export interface ModelStats {
 
 export interface StepEstimate {
   inputTokens: number;
+  /** Token estimate after compaction for context-window fit only; TPM always uses inputTokens. */
+  contextTokens?: number;
   outputTokens?: number;
   requiresTools?: boolean;
   /** Allow callers to provide a step count estimate for explanations and switching. */
@@ -303,7 +305,8 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       continue;
     const cooldown = provider.cooldownUntil ? Date.parse(provider.cooldownUntil) : 0;
     const coolingUntil = provider.health === 'cooldown' && Number.isFinite(cooldown) ? cooldown : 0;
-    if (model.contextWindow < input.estimate.inputTokens * 1.2) continue;
+    if (model.contextWindow < (input.estimate.contextTokens ?? input.estimate.inputTokens) * 1.2)
+      continue;
     if ((input.estimate.requiresTools ?? true) && !model.toolCalling) continue;
     if (!providerAllowed(input.profile, provider, model)) continue;
     if (!input.profile.tierByStep[input.step].includes(model.tier)) continue;
@@ -439,7 +442,7 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
       if (provider.health === 'cooldown' && (!Number.isFinite(cooldown) || cooldown > now))
         reasons.push('provider cooldown active');
     }
-    if (model.contextWindow < input.estimate.inputTokens * 1.2)
+    if (model.contextWindow < (input.estimate.contextTokens ?? input.estimate.inputTokens) * 1.2)
       reasons.push(`context ${String(model.contextWindow)} below estimate`);
     if ((input.estimate.requiresTools ?? true) && !model.toolCalling)
       reasons.push('model tool support unavailable');
@@ -507,7 +510,12 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
 
 function providerAllowed(profile: Profile, provider: Provider, model: ModelInfo): boolean {
   if (!profile.paidAllowed) {
-    if (provider.freeTierUnsupported) return false;
+    if (
+      provider.freeTierUnsupported ||
+      provider.id === 'opencode' ||
+      ['paid', 'credits'].includes(provider.tag)
+    )
+      return false;
     if (!isFreeForRouting(provider, model)) return false;
   }
   if (profile.allowedProviders === 'all') return true;
@@ -520,7 +528,8 @@ function isFreeForRouting(provider: Provider, model: ModelInfo): boolean {
   if (provider.id === 'openrouter') return /:free(?:$|:)/i.test(model.ref);
   if (provider.billingEnabled) return false;
   if (provider.keyRequired === false) return true;
-  if (['paid', 'credits', 'subscription_cli', 'subscription_oauth'].includes(provider.tag))
+  if (['paid', 'credits'].includes(provider.tag)) return false;
+  if (['subscription_cli', 'subscription_oauth'].includes(provider.tag))
     return model.free || (model.priceInPerM === 0 && model.priceOutPerM === 0);
   if (['legit', 'promo'].includes(provider.tag)) return true;
   return model.free;

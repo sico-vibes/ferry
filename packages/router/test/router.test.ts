@@ -85,6 +85,30 @@ describe('step classification and routing', () => {
         capacity: { providers: [paidProvider], now: '2026-09-24T12:00:00.000Z' },
       }),
     ).toHaveLength(0);
+    const creditsProvider = { ...provider, tag: 'credits' as const };
+    expect(
+      scoreModels({
+        ...input,
+        models: [{ ...model, free: true, priceInPerM: 0, priceOutPerM: 0 }],
+        providers: [creditsProvider],
+        capacity: { providers: [creditsProvider], now: '2026-09-24T12:00:00.000Z' },
+      }),
+    ).toHaveLength(0);
+    const zenProvider = { ...provider, id: 'opencode' as Provider['id'] };
+    expect(
+      scoreModels({
+        ...input,
+        models: [
+          {
+            ...model,
+            ref: 'opencode/deepseek-v4-flash' as ModelInfo['ref'],
+            providerId: zenProvider.id,
+          },
+        ],
+        providers: [zenProvider],
+        capacity: { providers: [zenProvider], now: '2026-09-24T12:00:00.000Z' },
+      }),
+    ).toHaveLength(0);
     const cautionProvider = { ...provider, tag: 'caution' as const };
     expect(
       scoreModels({
@@ -160,6 +184,10 @@ describe('step classification and routing', () => {
       'nvidia/deepseek-ai/deepseek-coder-6.7b-instruct',
       'nvidia/deepseek-ai/deepseek-v4.1-flash',
       'opencode/ling-3.0-flash-fin-free',
+      'opencode/deepseek-v4-flash',
+      'opencode/deepseek-v4-pro',
+      'opencode/deepseek-v4.1-flash',
+      'kilo/qwen/qwen3.8-27b:free',
       'openrouter/inclusionai/ling-3.0-flash-fin:free',
       'openrouter/qwen/qwen3.8-27b:free',
       'gemini/antigravity-preview-05-2026',
@@ -174,6 +202,7 @@ describe('step classification and routing', () => {
       id: id as Provider['id'],
       stepsLeftToday: id === 'nvidia' ? null : 20,
       ...(id === 'opencode' ? { freeTierUnsupported: true } : {}),
+      ...(id === 'kilo' ? { tag: 'credits' as const } : {}),
       ...(id === 'gemini'
         ? {
             excludedModelRefs: ['gemini/antigravity-preview-05-2026' as ModelInfo['ref']],
@@ -203,6 +232,10 @@ describe('step classification and routing', () => {
       verifiedModelRefs,
     });
     expect(candidates.map(({ ref }) => ref)).not.toContain('opencode/ling-3.0-flash-fin-free');
+    expect(candidates.map(({ ref }) => ref)).not.toContain('opencode/deepseek-v4-flash');
+    expect(candidates.map(({ ref }) => ref)).not.toContain('opencode/deepseek-v4-pro');
+    expect(candidates.map(({ ref }) => ref)).not.toContain('opencode/deepseek-v4.1-flash');
+    expect(candidates.map(({ ref }) => ref)).not.toContain('kilo/qwen/qwen3.8-27b:free');
     expect(candidates.map(({ ref }) => ref)).not.toContain('gemini/antigravity-preview-05-2026');
     expect(candidates[0]?.ref).toBe('cerebras/gpt-oss-120b');
     expect(candidates.map(({ score }) => score)).toEqual(

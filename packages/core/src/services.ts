@@ -116,8 +116,10 @@ export async function createServices({
       catalog.providers.flatMap(({ provider, key_required }) => {
         const hasKey = Boolean(providerKeys.get(provider));
         const saved = providers.get(provider);
-        const enabled = saved?.enabled ?? hasKey;
-        return enabled && (hasKey || key_required === false) ? [provider] : [];
+        const enabled = saved?.enabled ?? (hasKey || key_required === false);
+        return enabled && !saved?.freeTierUnsupported && (hasKey || key_required === false)
+          ? [provider]
+          : [];
       }),
     requestRepository: new RequestRepository(db.client),
     observationRepository: quotaObservations,

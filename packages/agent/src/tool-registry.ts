@@ -108,6 +108,7 @@ const PlanSchema = z.object({
 });
 const DecisionSchema = z.object({ text: z.string(), why: z.string() });
 const ReadOutputSchema = z.object({ handle: z.string() });
+const RepoMapSchema = z.object({ tokenBudget: z.number().int().min(200).max(1200).optional() });
 
 export function createWorkspaceTools(options: ToolRegistryOptions): {
   tools: AgentTool[];
@@ -168,8 +169,14 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
     {
       name: 'repo_map',
       title: 'Map repository',
-      schema: z.object({ tokenBudget: z.number().int().positive().optional() }),
-      execute: (a) => buildRepoMap(workspace.jail, a),
+      schema: RepoMapSchema,
+      execute: (raw) => {
+        const args = RepoMapSchema.parse(raw);
+        return buildRepoMap(workspace.jail, {
+          tokenBudget: Math.min(args.tokenBudget ?? 600, 1200),
+          maxFiles: 40,
+        });
+      },
     },
     {
       name: 'update_plan',

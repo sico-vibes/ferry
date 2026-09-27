@@ -342,6 +342,8 @@ export function HomeCanvas() {
 function PartView({
   part,
   sessionId,
+  canRetry,
+  onPickAnother,
   onFull,
   onDiff,
   onReview,
@@ -349,6 +351,8 @@ function PartView({
 }: {
   part: MessagePart;
   sessionId: SessionId;
+  canRetry: boolean;
+  onPickAnother: () => void;
   onFull: (text: string) => void;
   onDiff: () => void;
   onReview: (id: RunId) => void;
@@ -357,6 +361,17 @@ function PartView({
   const client = useFerryClient();
   const cache = useQueryClient();
   const navigate = useNavigate();
+  const retryLastPrompt = async (routingMode?: 'auto_for_step') => {
+    const detail = await client.sessions.get(sessionId);
+    const lastUserMessage = detail.messages.filter((message) => message.role === 'user').at(-1);
+    const text = lastUserMessage?.parts
+      .filter((item) => item.type === 'text')
+      .map((item) => item.text)
+      .join('\n');
+    if (!text) return;
+    await client.sessions.send(sessionId, { text, ...(routingMode ? { routingMode } : {}) });
+    await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+  };
   switch (part.type) {
     case 'text':
       return <MarkdownPart content={part.text} />;
@@ -436,19 +451,45 @@ function PartView({
         />
       );
     case 'error':
-      return part.message.startsWith('No available model —') ? (
-        <div className="space-y-2">
+      return (
+        <div>
           <ErrorPart message={part.message} />
-          <button
-            className="rounded-md bg-blue-tint px-3 py-1.5 text-label font-medium text-link"
-            onClick={() => void navigate({ to: '/explore' })}
-            type="button"
-          >
-            Explore providers
-          </button>
+          {part.details?.attempts.length ? (
+            <details>
+              <summary>Routing attempts ({String(part.details.attempts.length)})</summary>
+              <ul>
+                {part.details.attempts.map((attempt, index) => (
+                  <li key={`${attempt.model}:${String(index)}`}>
+                    {attempt.model} · {attempt.kind}
+                    {attempt.status === null ? '' : ` · HTTP ${String(attempt.status)}`} ·{' '}
+                    {attempt.message}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+          {canRetry ? (
+            <div>
+              <button onClick={() => void retryLastPrompt()} type="button">
+                Retry
+              </button>
+              <button onClick={() => void retryLastPrompt('auto_for_step')} type="button">
+                Switch to Auto for this step
+              </button>
+              <button onClick={onPickAnother} type="button">
+                Pick another model
+              </button>
+            </div>
+          ) : part.message.startsWith('No available model —') ? (
+            <button
+              className="rounded-md bg-blue-tint px-3 py-1.5 text-label font-medium text-link"
+              onClick={() => void navigate({ to: '/explore' })}
+              type="button"
+            >
+              Explore providers
+            </button>
+          ) : null}
         </div>
-      ) : (
-        <ErrorPart message={part.message} />
       );
   }
 }
@@ -511,6 +552,7 @@ export function SessionCanvas() {
   const { data: profiles = [] } = useProfiles();
   const [prompt, setPrompt] = useState('');
   const [fullOutput, setFullOutput] = useState<string | null>(null);
+  const [pickModelRequest, setPickModelRequest] = useState(0);
   const outputDialogRef = useRef<HTMLElement>(null);
   useEffect(() => {
     if (fullOutput === null) return;
@@ -886,8 +928,9 @@ export function SessionCanvas() {
           <div className="session-toolbar-primary flex min-w-0 items-center gap-2">
             <ModelPickerPopover
               sessionId={sessionId}
-              mode={data?.session.modelRef ? 'manual' : 'auto'}
+              mode={data?.session.pinnedModelRef ? 'manual' : 'auto'}
               modelName={currentModel}
+              openRequest={pickModelRequest}
             />
             {workspace && (
               <button
@@ -1041,6 +1084,7 @@ export function SessionCanvas() {
                           key={part.id}
                           part={part}
                           sessionId={sessionId}
+                          canRetry={data?.session.status === 'error'}
                           onFull={setFullOutput}
                           onDiff={() => {
                             setRightTab('changes');
@@ -1052,6 +1096,9 @@ export function SessionCanvas() {
                             });
                           }}
                           onCancel={(id) => void client.delegation.cancel(id)}
+                          onPickAnother={() => {
+                            setPickModelRequest((request) => request + 1);
+                          }}
                         />
                       ),
                     )}

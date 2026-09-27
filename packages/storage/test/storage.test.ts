@@ -26,6 +26,7 @@ describe('@ferry/storage', () => {
         preview: '',
         profileId: ProfileIdSchema.parse('default'),
         modelRef: null,
+        pinnedModelRef: null,
         starred: false,
         pinned: false,
         status: 'idle' as const,

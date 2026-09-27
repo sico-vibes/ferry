@@ -51,6 +51,7 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
         preview: '',
         profileId: i.profileId ?? state.settings.activeProfileId,
         modelRef: null,
+        pinnedModelRef: null,
         starred: false,
         pinned: false,
         status: 'idle',

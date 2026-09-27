@@ -50,7 +50,10 @@ export interface FerryClient {
       profileId?: ProfileId;
       title?: string;
     }): Promise<Session>;
-    send(id: SessionId, i: { text: string; maxSteps?: number; verbose?: boolean }): Promise<void>;
+    send(
+      id: SessionId,
+      i: { text: string; maxSteps?: number; verbose?: boolean; routingMode?: 'auto_for_step' },
+    ): Promise<void>;
     cancel(id: SessionId): Promise<void>;
     rename(id: SessionId, title: string): Promise<Session>;
     setStarred(id: SessionId, v: boolean): Promise<Session>;

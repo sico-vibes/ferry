@@ -17,6 +17,7 @@ export type ErrorFamily =
   | 'server'
   | 'timeout'
   | 'request_scoped_client'
+  | 'request_too_large'
   | 'stream_failure';
 
 export interface ClassifiedProviderError {
@@ -136,6 +137,13 @@ export function classifyProviderError(input: ProviderErrorInput): ClassifiedProv
   const lower = message.toLowerCase();
   let family: ErrorFamily;
   if (
+    status === 413 ||
+    /request too large|tokens per minute.{0,80}(?:requested|request size)|requested\s+\d+[\s\S]{0,60}tpm|single[- ]request.{0,40}(?:token|size)/i.test(
+      message,
+    )
+  )
+    family = 'request_too_large';
+  else if (
     status === 404 ||
     status === 410 ||
     /model_not_found|model.{0,25}(?:not found|no longer available|retired|end of life)/i.test(
@@ -219,6 +227,7 @@ export const ResilienceEntrySchema = z.object({
     'server',
     'timeout',
     'request_scoped_client',
+    'request_too_large',
     'stream_failure',
   ]),
   strikes: z.number().int().nonnegative(),

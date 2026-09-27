@@ -549,7 +549,7 @@ describe('QA agent: budgets and compaction', () => {
       const systems: string[] = [];
       const loop = makeLoop(state, {
         estimateTokens: (value) =>
-          value.startsWith('{') && value.includes('"goal"') && value.includes('README.md')
+          value.includes('Please update the greeting in README.md')
             ? 7000
             : Math.ceil(value.length / 4),
         generator: async ({ system, onDelta }) => {
@@ -748,6 +748,184 @@ describe('QA agent: evals harness', () => {
 });
 
 describe('QA agent: real SDK against a scripted fake server', () => {
+  it('hands off a single-request TPM overflow without cooling the provider', async () => {
+    const state = await setup();
+    const fallback = ModelInfoSchema.parse({
+      ...state.model,
+      ref: 'openai/fallback-model',
+      name: 'Fallback Model',
+    });
+    const fake = await FakeOpenAIServer.scriptedTurns([
+      {
+        status: 413,
+        body: {
+          error: {
+            message:
+              'Request too large for model openai/test-model: tokens per minute (TPM): Limit 8000, Requested 24552',
+          },
+        },
+      },
+      {
+        chunks: [
+          { id: 'chatcmpl_fallback', choices: [{ index: 0, delta: { role: 'assistant' } }] },
+          { id: 'chatcmpl_fallback', choices: [{ index: 0, delta: { content: 'Done.' } }] },
+          { id: 'chatcmpl_fallback', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+        ],
+      },
+    ]).start();
+    try {
+      let resilienceEntries = 0;
+      const loop = makeLoop(state, {
+        catalog: { ...state.catalog, models: [state.model, fallback] },
+        resolveCandidates: () => [state.model, fallback],
+        apiKeys: { openai: 'fixture-key' },
+        providerBaseUrls: { openai: `${fake.baseUrl}/v1` },
+        providerFetch: (input, init) => {
+          const request = input instanceof Request ? input : new Request(input, init);
+          const url = new URL(request.url);
+          return fetch(new URL(`${url.pathname}${url.search}`, fake.baseUrl), request);
+        },
+        onResilienceState: (entries) => {
+          resilienceEntries += entries.length;
+        },
+      });
+      expect((await loop.run({ sessionId: state.session.id })).status).toBe('completed');
+      const routedModels = fake.requests.map(({ body }) => (body as { model?: string }).model);
+      expect(routedModels).toEqual(['test-model', 'fallback-model']);
+      expect(resilienceEntries).toBe(0);
+    } finally {
+      await fake.stop();
+      state.database.close();
+    }
+  }, 30_000);
+
+  it.each([
+    {
+      label: 'hello.py',
+      prompt: "Create hello.py that prints 'hello from ferry', then run it with python",
+      file: 'hello.py',
+      content: "print('hello from ferry')\n",
+    },
+    {
+      label: 'FizzBuzz',
+      prompt: 'Create fizzbuzz.py that prints FizzBuzz from 1 to 100, then run it with python',
+      file: 'fizzbuzz.py',
+      content:
+        'for i in range(1, 101): print("FizzBuzz" if i % 15 == 0 else "Fizz" if i % 3 == 0 else "Buzz" if i % 5 == 0 else i)\n',
+    },
+  ])(
+    'keeps the captured $label request under 8K estimated tokens',
+    async ({ prompt, file, content }) => {
+      const state = await setup();
+      const session = state.store.create({
+        workspaceId: state.session.workspaceId,
+        profileId: state.session.profileId,
+        prompt,
+      });
+      const chunk = (delta: Record<string, unknown>, finishReason: string | null = null) => ({
+        id: 'chatcmpl_size_fixture',
+        object: 'chat.completion.chunk',
+        created: 1,
+        model: 'test-model',
+        choices: [{ index: 0, delta, finish_reason: finishReason }],
+      });
+      const callTurn = (name: string, args: Record<string, unknown>, id: string) => ({
+        chunks: [
+          chunk({ role: 'assistant' }),
+          chunk({
+            tool_calls: [
+              {
+                index: 0,
+                id,
+                type: 'function',
+                function: { name, arguments: JSON.stringify(args) },
+              },
+            ],
+          }),
+          chunk({}, 'tool_calls'),
+        ],
+      });
+      await writeFile(
+        path.join(state.root, 'README.md'),
+        `Repository notes for context compaction.\n${'Context line for the repository.\n'.repeat(2_500)}`,
+        'utf8',
+      );
+      const fake = await FakeOpenAIServer.scriptedTurns([
+        callTurn('read_file', { path: 'README.md' }, 'call_read'),
+        callTurn('write_file', { path: file, content }, 'call_write'),
+        { chunks: [chunk({ role: 'assistant' }), chunk({ content: 'Done.' }), chunk({}, 'stop')] },
+      ]).start();
+      try {
+        const loop = makeLoop(state, {
+          apiKeys: { openai: 'fixture-key' },
+          providerBaseUrls: { openai: `${fake.baseUrl}/v1` },
+          providerFetch: (input, init) => {
+            const request = input instanceof Request ? input : new Request(input, init);
+            const url = new URL(request.url);
+            return fetch(new URL(`${url.pathname}${url.search}`, fake.baseUrl), request);
+          },
+        });
+        expect((await loop.run({ sessionId: session.id })).status).toBe('completed');
+        expect(await readFile(path.join(state.root, file), 'utf8')).toBe(content);
+        const captured = fake.requests
+          .filter(({ method, url }) => method === 'POST' && url.endsWith('/chat/completions'))
+          .at(-1)?.body as
+          { messages?: { role?: string; content?: unknown }[]; tools?: unknown[] } | undefined;
+        expect(captured).toBeDefined();
+        if (!captured) throw new Error('Fake provider did not capture a completion request');
+        const messages = captured.messages ?? [];
+        const systemContent = messages.find((message) => message.role === 'system')?.content ?? '';
+        const history = messages.filter((message) => message.role !== 'system');
+        const systemText =
+          typeof systemContent === 'string' ? systemContent : JSON.stringify(systemContent);
+        const composition = {
+          system: Math.ceil(systemText.length / 4),
+          tools: Math.ceil(JSON.stringify(captured.tools ?? []).length / 4),
+          history: Math.ceil(JSON.stringify(history).length / 4),
+        };
+        const total = Math.ceil(
+          (composition.system + composition.tools + composition.history) * 1.15,
+        );
+        const persisted = state.store.load(session.id);
+        if (!persisted) throw new Error('Session messages were not persisted');
+        const legacyTranscript = persisted.messages
+          .map((message) => {
+            const parts = message.parts
+              .map((part) => {
+                if (part.type === 'text' || part.type === 'reasoning') return part.text;
+                if (part.type === 'tool_call')
+                  return `Tool ${part.tool} ${part.status}: ${part.output?.text ?? JSON.stringify(part.args)}`;
+                if (part.type === 'approval_request')
+                  return `Approval ${part.state}: ${part.summary}`;
+                if (part.type === 'handoff_marker') return `Model handoff: ${part.explanation}`;
+                if (part.type === 'checkpoint') return `Checkpoint created: ${part.label}`;
+                if (part.type === 'error') return `Error (${part.kind}): ${part.message}`;
+                return '';
+              })
+              .filter(Boolean)
+              .join('\n');
+            return `${message.role}: ${parts}`;
+          })
+          .join('\n\n');
+        const legacyEstimate = Math.ceil(
+          (Math.ceil(legacyTranscript.length / 4) +
+            Math.ceil(JSON.stringify(persisted.taskRecord).length / 4) +
+            composition.system +
+            composition.tools) *
+            1.15,
+        );
+        console.info(
+          `Captured request estimate for ${file}: ${JSON.stringify({ beforeLegacyEstimate: legacyEstimate, ...composition, afterCapturedEstimate: total })}`,
+        );
+        expect(total).toBeLessThan(8_000);
+      } finally {
+        await fake.stop();
+        state.database.close();
+      }
+    },
+    30_000,
+  );
+
   it('recovers from malformed tool-call JSON emitted by the provider', async () => {
     const state = await setup();
     try {
@@ -1174,13 +1352,13 @@ describe('QA agent: real SDK against a scripted fake server', () => {
       const result = state.store.load(state.session.id);
       expect(result?.session.status).toBe('error');
       const error = partsOf(state).find((part) => part.type === 'error');
-      expect(error?.type === 'error' ? error.message : '').toContain(
-        'request_scoped_client (HTTP 400)',
-      );
-      expect(error?.type === 'error' ? error.message : '').toContain(
-        'Invalid previous function call',
-      );
-      expect(error?.type === 'error' ? error.message : '').not.toContain('fixture-secret-value');
+      if (error?.type !== 'error') throw new Error('Missing provider error part');
+      expect(error.message).not.toContain('Invalid previous function call');
+      const attempt = error.details?.attempts[0];
+      expect(attempt?.kind).toBe('request_scoped_client');
+      expect(attempt?.status).toBe(400);
+      expect(attempt?.message).toContain('Invalid previous function call');
+      expect(JSON.stringify(error.details)).not.toContain('fixture-secret-value');
     } finally {
       state.database.close();
     }

@@ -80,7 +80,7 @@ export async function executeSlashCommand(context: SlashContext, command: string
   if (name === '/quota') {
     const capacity = await client.quota.capacity();
     const providers = await client.providers.list();
-    return `${formatCapacity(capacity)}\n${capacity.perProvider.map((row) => `${providers.find((provider) => provider.id === row.providerId)?.name ?? row.providerId}: ${row.stepsLeft ?? 'unlimited'} steps`).join('\n')}`;
+    return `${formatCapacity(capacity)}\n${capacity.perProvider.map((row) => `${providers.find((provider) => provider.id === row.providerId)?.name ?? row.providerId}: ${row.stepsLeft ?? '—'} steps`).join('\n')}`;
   }
   if (name === '/optimize') {
     const mode = words[0];

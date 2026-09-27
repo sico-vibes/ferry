@@ -337,10 +337,12 @@ export function ModelPickerPopover({
   sessionId,
   modelName,
   mode,
+  openRequest = 0,
 }: {
   sessionId: SessionId;
   modelName: string;
   mode: 'auto' | 'manual';
+  openRequest?: number;
 }) {
   const client = useFerryClient();
   const cache = useQueryClient();
@@ -357,6 +359,9 @@ export function ModelPickerPopover({
     queryFn: () => client.providers.list(),
   });
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (openRequest > 0) setOpen(true);
+  }, [openRequest]);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const ModelCommand = useCmdk(open);

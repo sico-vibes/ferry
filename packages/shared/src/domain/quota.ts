@@ -18,8 +18,25 @@ export const ProviderErrorKindSchema = z.enum([
   'tools_unsupported',
   'content_filter',
   'request_scoped_client',
+  'request_too_large',
   'stream_failure',
 ]);
+export const ProviderFailureFamilySchema = z.enum([
+  'rate_limit',
+  'quota_exhausted',
+  'auth',
+  'model_not_found',
+  'tools_unsupported',
+  'context_overflow',
+  'content_filter',
+  'unsupported_free_tier',
+  'server',
+  'timeout',
+  'request_scoped_client',
+  'request_too_large',
+  'stream_failure',
+]);
+export type ProviderFailureFamily = z.infer<typeof ProviderFailureFamilySchema>;
 export type ProviderErrorKind = z.infer<typeof ProviderErrorKindSchema>;
 
 // Canonical telemetry keeps the provider's model reference, numeric HTTP status,

@@ -208,6 +208,45 @@ describe('@ferry/agent', () => {
     }
   }, 30_000);
 
+  it('keeps a manually pinned model pinned when the provider fails', async () => {
+    const state = await setup();
+    try {
+      const fallback = { ...state.model, ref: 'openai/fallback-model' as typeof state.model.ref };
+      const attempts: string[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, fallback] },
+        pinnedModelRef: state.model.ref,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        generator: async ({ model: selected }) => {
+          attempts.push(selected.ref);
+          throw Object.assign(new Error('upstream unavailable'), { statusCode: 503 });
+        },
+      });
+      await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
+        'upstream unavailable',
+      );
+      expect(attempts).toEqual([state.model.ref]);
+      const failure = state.store
+        .load(state.session.id)
+        ?.messages.flatMap((message) => message.parts)
+        .find((part) => part.type === 'error');
+      if (failure?.type !== 'error') throw new Error('Missing pinned-model failure part');
+      expect(failure.message).not.toContain('scoreBreakdown');
+      expect(failure.details?.attempts).toMatchObject([
+        { model: state.model.ref, kind: 'server', status: 503 },
+      ]);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
   it('locks every failed model and caps a failure chain at four handoffs per step', async () => {
     const state = await setup();
     try {

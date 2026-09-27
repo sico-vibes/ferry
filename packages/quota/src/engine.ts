@@ -488,25 +488,12 @@ export class QuotaEngine {
     const candidates: number[] = [];
     for (const window of windows) {
       if (window.remaining === null) continue;
+      const definition = this.windowDefinitions(providerId).find((item) => item.id === window.id);
+      if (definition?.kind === 'rolling' && (definition.length ?? 0) < 3600) continue;
       if (window.metric === 'requests') candidates.push(window.remaining);
       if (window.metric === 'tokens') candidates.push(Math.floor(window.remaining / avgTokens));
       if ((window.metric === 'usd' || window.metric === 'credits') && avgCost > 0)
         candidates.push(Math.floor(window.remaining / avgCost));
-      const definition = this.windowDefinitions(providerId).find((item) => item.id === window.id);
-      if (
-        window.metric === 'requests' &&
-        window.kind === 'rolling' &&
-        window.limit !== null &&
-        definition?.kind === 'rolling' &&
-        typeof definition.length === 'number' &&
-        definition.length >= 3600
-      ) {
-        const seconds = Math.max(
-          1,
-          (Date.parse(window.resetAt ?? '') - this.now().getTime()) / 1000,
-        );
-        if (seconds < 60) candidates.push(Math.floor((seconds * window.limit) / 60));
-      }
     }
     return candidates.length ? Math.max(0, Math.min(...candidates)) : null;
   }
@@ -540,7 +527,7 @@ export class QuotaEngine {
     const eligible = perProvider
       .map((provider) => provider.stepsLeft)
       .filter((value): value is number => value !== null);
-    const stepsLeftToday = eligible.length ? Math.min(...eligible) : 0;
+    const stepsLeftToday = eligible.reduce((sum, steps) => sum + steps, 0);
     const percentages = perProvider
       .map((provider) => provider.percent)
       .filter((value): value is number => value !== null);
@@ -550,16 +537,17 @@ export class QuotaEngine {
     const low = perProvider
       .filter((provider) => (provider.percent ?? 100) <= this.lowThreshold)
       .sort((a, b) => Date.parse(a.nextResetAt ?? '') - Date.parse(b.nextResetAt ?? ''))[0];
-    const nextResets = providers.flatMap((providerId) =>
-      this.getWindows(providerId)
-        .filter((window) => window.resetAt)
-        .map((window) => ({
-          providerId: providerId as CapacitySummary['perProvider'][number]['providerId'],
-          windowId: window.id,
-          label: window.periodLabel,
-          at: window.resetAt ?? '',
-        })),
-    );
+    const resetByWindow = new Map<string, CapacitySummary['nextResets'][number]>();
+    for (const providerId of providers)
+      for (const window of this.getWindows(providerId))
+        if (window.resetAt)
+          resetByWindow.set(`${providerId}:${window.id}`, {
+            providerId: providerId as CapacitySummary['perProvider'][number]['providerId'],
+            windowId: window.id,
+            label: window.periodLabel,
+            at: window.resetAt,
+          });
+    const nextResets = [...resetByWindow.values()];
     return {
       stepsLeftToday,
       percentRemaining,

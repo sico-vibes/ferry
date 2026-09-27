@@ -153,12 +153,12 @@ export function UsageCanvas() {
                         </span>
                         {item.stepsLeft === null ? (
                           <span
-                            aria-label={`${names[item.providerId] ?? item.providerId} has no daily cap`}
+                            aria-label={`${names[item.providerId] ?? item.providerId} daily capacity unknown`}
                             className="text-label text-text-1"
                             role="img"
-                            title="No daily cap"
+                            title="Capacity unknown"
                           >
-                            ∞
+                            —
                           </span>
                         ) : (
                           <span className="tabular-nums text-text-1">{format(item.stepsLeft)}</span>

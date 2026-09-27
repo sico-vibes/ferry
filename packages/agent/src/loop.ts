@@ -23,6 +23,7 @@ import {
   type MessagePart,
   type ModelInfo,
   type ModelRef,
+  type ProviderFailureFamily,
   type Profile,
   type Session,
   type TaskRecord,
@@ -107,6 +108,7 @@ export interface AgentOptions {
   title?: (prompt: string, signal: AbortSignal) => Promise<string>;
   maxSteps?: number;
   maxHandoffsPerStep?: number;
+  pinnedModelRef?: ModelRef | null;
   tokenBudget?: number;
   /** Maximum time without stream progress before this model attempt is abandoned. */
   stepTimeoutMs?: number;
@@ -130,6 +132,13 @@ export interface AgentOptions {
   onResilienceState?: (entries: ResilienceEntry[]) => void;
 }
 
+interface AttemptFailure {
+  model: ModelRef;
+  kind: ProviderFailureFamily;
+  status: number | null;
+  message: string;
+}
+
 export interface RunInput {
   sessionId: string;
   signal?: AbortSignal;
@@ -147,6 +156,7 @@ export class AgentLoop {
   private readonly recoveryStore = new InMemoryBlobStore();
   private readonly resilience: ResilienceLedger;
   private readonly sessionModelLocks = new Map<string, Set<string>>();
+  private readonly requestTooLargeAt = new Map<ModelRef, number>();
 
   constructor(private readonly options: AgentOptions) {
     this.estimates = options.estimateTokens ?? estimateTextTokens;
@@ -178,6 +188,7 @@ export class AgentLoop {
     }
     let totalTokens = 0;
     let stepCount = 0;
+    const attemptFailures: AttemptFailure[] = [];
     let contextSummary: string | undefined;
     const maxSteps = this.options.maxSteps ?? 40;
     const budget = this.options.tokenBudget ?? 100_000;
@@ -267,9 +278,9 @@ export class AgentLoop {
         session = loaded.session;
         messages = loaded.messages;
         taskRecord = loaded.taskRecord;
-        const keepTurns = this.options.pinnedTurns ?? 8;
+        attemptFailures.length = 0;
+        const keepTurns = this.options.pinnedTurns ?? 4;
         const pinnedMessages = messages.slice(-keepTurns * 2);
-        const recentText = renderMessages(pinnedMessages);
         let system = await assembleSystemPrompt({
           workspace: this.options.workspace,
           sessionId,
@@ -299,17 +310,13 @@ export class AgentLoop {
               : []),
           ]),
         );
+        const messageTokens = this.estimates(
+          JSON.stringify(toModelMessages(pinnedMessages, this.options.catalog.models[0])),
+        );
         const inputTokens = Math.ceil(
-          (this.estimates(recentText) +
-            this.estimates(JSON.stringify(taskRecord)) +
-            this.estimates(system) +
-            toolSchemaTokens) *
-            1.15,
+          (this.estimates(system) + messageTokens + toolSchemaTokens) * 1.15,
         );
-        const maxContext = Math.max(
-          ...this.options.catalog.models.map((candidate) => candidate.contextWindow),
-        );
-        const routeEstimate = Math.min(inputTokens, Math.floor(maxContext * 0.55));
+        const routeEstimate = inputTokens;
         const stepKind = classifyStep({
           firstStep: stepCount === 0,
           pendingEdits: taskRecord.touchedFiles.length > 0,
@@ -317,7 +324,7 @@ export class AgentLoop {
         });
         let model = this.selectModel(stepKind, routeEstimate, session.modelRef, sessionId);
         if (!model) throw new Error('No eligible model is available for this step');
-        let contextMessages = contextSummary ? pinnedMessages : messages;
+        let contextMessages = pinnedMessages;
         if (inputTokens > model.contextWindow * 0.7) {
           if (stepCount >= maxSteps)
             return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
@@ -334,7 +341,7 @@ export class AgentLoop {
             model: summaryModel,
             system:
               'Summarize the conversation for continued coding work. Preserve user requirements, completed actions, key discoveries, file names, constraints, and unresolved next steps. Return only the concise summary.',
-            messages,
+            messages: pinnedMessages,
             tools: [],
             signal,
             onDelta: discardDelta,
@@ -469,6 +476,14 @@ export class AgentLoop {
             break;
           } catch (error) {
             const classified = classifyProviderError(errorInput(error));
+            attemptFailures.push({
+              model: model.ref,
+              kind: classified.family,
+              status: classified.status,
+              message: redactedProviderMessage(error),
+            });
+            if (classified.family === 'request_too_large')
+              this.requestTooLargeAt.set(model.ref, routeEstimate);
             if (isSignalAborted(signal)) throw error;
             const foreignUnsignedGeminiHistory =
               classified.family === 'request_scoped_client' &&
@@ -488,12 +503,13 @@ export class AgentLoop {
             const modelUnavailable = classified.family === 'model_not_found';
             const toolsUnsupported = classified.family === 'tools_unsupported';
             const unsupportedFreeTier = classified.family === 'unsupported_free_tier';
+            const requestTooLarge = classified.family === 'request_too_large';
             const timedOut = error instanceof StepWatchdogError || classified.family === 'timeout';
             const safeToSwitch = streamedText.length === 0;
             if (routingFailure.scope !== 'none') {
               this.resilience.recordFailure(routingFailure, model.ref, model.providerId);
             }
-            if (routingFailure.scope !== 'model')
+            if (routingFailure.scope !== 'model' && classified.family !== 'request_too_large')
               this.resilience.recordFailure(
                 { ...routingFailure, scope: 'model' },
                 model.ref,
@@ -506,11 +522,17 @@ export class AgentLoop {
                   ? 'provider'
                   : classified.family === 'quota_exhausted'
                     ? 'quota_exhausted'
-                    : classified.family,
+                    : classified.family === 'request_too_large'
+                      ? 'request_scoped_client'
+                      : classified.family,
               retryAfterSeconds:
                 classified.retryAfterMs === null ? null : classified.retryAfterMs / 1000,
             });
-            if (retryPolicy.action === 'retry_same' && sameModelRetries < retryPolicy.attempts) {
+            if (
+              !requestTooLarge &&
+              retryPolicy.action === 'retry_same' &&
+              sameModelRetries < retryPolicy.attempts
+            ) {
               sameModelRetries++;
               await delayForRetry(classified.retryAfterMs ?? 0, signal);
               continue;
@@ -521,8 +543,10 @@ export class AgentLoop {
                 !toolsUnsupported &&
                 !unsupportedFreeTier &&
                 !timedOut &&
+                !requestTooLarge &&
                 routingFailure.scope === 'none') ||
               !safeToSwitch ||
+              this.options.pinnedModelRef ||
               isSignalAborted(signal)
             )
               throw error;
@@ -760,13 +784,12 @@ export class AgentLoop {
       const cause = rootErrorCause(error);
       const classified = classifyProviderError(errorInput(cause));
       const providerDetail = formatClassifiedFailure(classified.family, cause);
-      const originalMessage = error instanceof Error ? error.message : String(error);
-      const message =
-        cause === error ? providerDetail : `${originalMessage}\nProvider detail: ${providerDetail}`;
+      const message = formatAttemptSummary(attemptFailures, providerDetail);
       this.addPart(sessionId, {
         type: 'error',
         id: PartIdSchema.parse(newId('part')),
         message,
+        details: { attempts: attemptFailures },
         kind: 'provider',
       });
       this.options.emit({ type: 'toast', tone: 'error', message });
@@ -788,22 +811,38 @@ export class AgentLoop {
     previous: ModelRef | null,
     sessionId: string,
   ): ModelInfo | undefined {
+    if (this.options.pinnedModelRef)
+      return this.options.catalog.models.find((model) => model.ref === this.options.pinnedModelRef);
     const locked = this.sessionModelLocks.get(sessionId);
+    const withinFailedSize = (model: ModelInfo) =>
+      (this.requestTooLargeAt.get(model.ref) ?? Number.POSITIVE_INFINITY) <= inputTokens;
     const resolved = this.options.resolveCandidates?.(this.options.profile, step, inputTokens);
     if (resolved)
-      return this.selectResilient(resolved.filter((candidate) => !locked?.has(candidate.ref)));
+      return this.selectResilient(
+        resolved.filter((candidate) => !locked?.has(candidate.ref) && !withinFailedSize(candidate)),
+      );
     const candidates = scoreModels({
       models: this.options.catalog.models,
       capacity: this.options.capacity(),
       profile: this.options.profile,
       step,
-      estimate: { inputTokens, outputTokens: 2048, expectedSteps: 1, requiresTools: true },
+      estimate: {
+        inputTokens,
+        contextTokens: this.contextFitEstimate(inputTokens),
+        outputTokens: 2048,
+        expectedSteps: 1,
+        requiresTools: true,
+      },
       ...(this.options.stats ? { stats: this.options.stats } : {}),
       previousModelRef: previous,
     });
     const selected = this.selectResilient(
       candidates.flatMap((item) => {
-        if (locked?.has(item.ref)) return [];
+        if (
+          locked?.has(item.ref) ||
+          (this.requestTooLargeAt.get(item.ref) ?? Infinity) <= inputTokens
+        )
+          return [];
         const model = this.options.catalog.models.find((candidate) => candidate.ref === item.ref);
         return model ? [model] : [];
       }),
@@ -817,12 +856,16 @@ export class AgentLoop {
     attemptedRefs: ReadonlySet<string>,
     sessionId: string,
   ): ModelInfo | undefined {
+    if (this.options.pinnedModelRef) return undefined;
     const locked = this.sessionModelLocks.get(sessionId);
     const candidates = this.options.resolveCandidates?.(this.options.profile, step, inputTokens);
     if (candidates)
       return this.selectResilient(
         candidates.filter(
-          (candidate) => !attemptedRefs.has(candidate.ref) && !locked?.has(candidate.ref),
+          (candidate) =>
+            !attemptedRefs.has(candidate.ref) &&
+            !locked?.has(candidate.ref) &&
+            (this.requestTooLargeAt.get(candidate.ref) ?? Number.POSITIVE_INFINITY) > inputTokens,
         ),
       );
     const previousModelRef = [...attemptedRefs].at(-1);
@@ -831,11 +874,20 @@ export class AgentLoop {
       capacity: this.options.capacity(),
       profile: this.options.profile,
       step,
-      estimate: { inputTokens, requiresTools: true },
+      estimate: {
+        inputTokens,
+        contextTokens: this.contextFitEstimate(inputTokens),
+        requiresTools: true,
+      },
       ...(previousModelRef ? { previousModelRef } : {}),
     });
     const remaining = ranked.flatMap((candidate) => {
-      if (attemptedRefs.has(candidate.ref) || locked?.has(candidate.ref)) return [];
+      if (
+        attemptedRefs.has(candidate.ref) ||
+        locked?.has(candidate.ref) ||
+        (this.requestTooLargeAt.get(candidate.ref) ?? Number.POSITIVE_INFINITY) <= inputTokens
+      )
+        return [];
       const model = this.options.catalog.models.find((entry) => entry.ref === candidate.ref);
       return model ? [model] : [];
     });
@@ -878,7 +930,13 @@ export class AgentLoop {
       capacity: this.options.capacity(),
       profile: this.options.profile,
       step,
-      estimate: { inputTokens, outputTokens: 2048, expectedSteps: 1, requiresTools: true },
+      estimate: {
+        inputTokens,
+        contextTokens: this.contextFitEstimate(inputTokens),
+        outputTokens: 2048,
+        expectedSteps: 1,
+        requiresTools: true,
+      },
       ...(this.options.stats ? { stats: this.options.stats } : {}),
     });
     const summary = ranked
@@ -909,6 +967,11 @@ export class AgentLoop {
     });
     this.options.emit({ type: 'session.updated', session });
     return { session, taskRecord, steps, tokens, status };
+  }
+
+  private contextFitEstimate(inputTokens: number): number {
+    const maxContext = Math.max(...this.options.catalog.models.map((model) => model.contextWindow));
+    return Math.min(inputTokens, Math.floor(maxContext * 0.55));
   }
 
   private persistTask(task: TaskRecord): void {
@@ -1061,7 +1124,10 @@ function toolSchemaForEstimate(schema: z.ZodType): unknown {
   }
 }
 
-function toModelMessages(messages: readonly Message[], targetModel: ModelInfo): ModelMessage[] {
+function toModelMessages(
+  messages: readonly Message[],
+  targetModel: ModelInfo | undefined,
+): ModelMessage[] {
   const prompt: ModelMessage[] = [];
   for (const message of messages) {
     if (message.role === 'user') {
@@ -1079,6 +1145,14 @@ function toModelMessages(messages: readonly Message[], targetModel: ModelInfo): 
       if (part.type === 'text' || part.type === 'reasoning') {
         if (part.text) content.push({ type: 'text', text: part.text });
       } else if (part.type === 'tool_call') {
+        if (part.status === 'succeeded' && JSON.stringify(part.args).length > 1_200) {
+          const path = typeof part.args.path === 'string' ? ` for ${part.args.path}` : '';
+          content.push({
+            type: 'text',
+            text: `${part.tool}${path} completed; large tool arguments were omitted. ${compactToolHistoryText(part.output?.text ?? '')}`.trim(),
+          });
+          continue;
+        }
         const toolCallId = part.toolCallId ?? part.id;
         const providerOptions = withGemini3ThoughtSignature(part.providerOptions, targetModel);
         content.push({
@@ -1096,7 +1170,9 @@ function toModelMessages(messages: readonly Message[], targetModel: ModelInfo): 
           toolName: part.tool,
           output: {
             type: 'text',
-            value: part.output?.text ?? `Tool ended with status ${part.status}.`,
+            value: compactToolHistoryText(
+              part.output?.text ?? `Tool ended with status ${part.status}.`,
+            ),
           },
         });
       } else {
@@ -1110,9 +1186,9 @@ function toModelMessages(messages: readonly Message[], targetModel: ModelInfo): 
   return prompt;
 }
 
-function isGemini3Model(model: ModelInfo): boolean {
+function isGemini3Model(model: ModelInfo | undefined): boolean {
   return (
-    model.providerId === 'gemini' && /gemini[-/]3(?:[.-]|$)/i.test(`${model.ref} ${model.name}`)
+    model?.providerId === 'gemini' && /gemini[-/]3(?:[.-]|$)/i.test(`${model.ref} ${model.name}`)
   );
 }
 
@@ -1141,7 +1217,7 @@ function hasThoughtSignature(
 
 function withGemini3ThoughtSignature(
   providerOptions: Record<string, Record<string, unknown>> | undefined,
-  targetModel: ModelInfo,
+  targetModel: ModelInfo | undefined,
 ): Record<string, Record<string, unknown>> | undefined {
   if (!isGemini3Model(targetModel) || hasThoughtSignature(providerOptions)) return providerOptions;
   return {
@@ -1151,6 +1227,12 @@ function withGemini3ThoughtSignature(
       thoughtSignature: 'skip_thought_signature_validator',
     },
   };
+}
+
+function compactToolHistoryText(text: string): string {
+  const limit = 1_600;
+  if (text.length <= limit) return text;
+  return `${text.slice(0, 1_250)}\n[Earlier tool output shortened; inspect again if needed.]\n${text.slice(-250)}`;
 }
 
 function rootErrorCause(error: unknown): unknown {
@@ -1314,6 +1396,37 @@ function formatClassifiedFailure(family: string, error: unknown): string {
   return `${family}${status ? ` (HTTP ${String(status)})` : ''}: ${redactedProviderMessage(error)}`;
 }
 
+function formatAttemptSummary(attempts: readonly AttemptFailure[], fallback: string): string {
+  if (!attempts.length) return `Couldn't finish this step: ${shortFailureSummary(fallback)}`;
+  const models = new Set(attempts.map((attempt) => attempt.model));
+  const reasons = new Set<string>();
+  for (const attempt of attempts) {
+    if (attempt.kind === 'rate_limit') reasons.add('rate limits');
+    else if (attempt.kind === 'quota_exhausted') reasons.add('quota limits');
+    else if (attempt.kind === 'request_too_large') {
+      const provider = attempt.model.split('/')[0] ?? 'provider';
+      reasons.add(`request too large for ${provider}`);
+    } else if (attempt.kind === 'request_scoped_client') reasons.add('request errors');
+    else if (attempt.kind === 'model_not_found') reasons.add('unavailable models');
+    else if (attempt.kind === 'timeout') reasons.add('timeouts');
+    else if (attempt.kind === 'auth') reasons.add('authentication errors');
+    else if (attempt.kind === 'server') reasons.add('provider errors');
+    else reasons.add(attempt.kind.replaceAll('_', ' '));
+  }
+  const count = models.size;
+  return `Couldn't finish this step: ${count === 1 ? 'the selected model failed' : `all ${String(count)} models failed`} (${[...reasons].join(', ')}).`;
+}
+
+function shortFailureSummary(value: string): string {
+  return (
+    value
+      .split(/Ranked candidates:|scoreBreakdown/i, 1)[0]
+      ?.replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 220) ?? 'No eligible model could handle this request.'
+  );
+}
+
 function redactedProviderMessage(error: unknown): string {
   return providerErrorMessage(error)
     .replace(/[\r\n]+/g, ' ')
@@ -1334,26 +1447,6 @@ function touchFile(task: TaskRecord, path: string, purpose: string): TaskRecord 
       ? task.touchedFiles.map((item) => (item.path === path ? { ...item, purpose } : item))
       : [...task.touchedFiles, { path, purpose }],
   };
-}
-function renderMessages(messages: readonly Message[]): string {
-  return messages
-    .map((message) => {
-      const parts = message.parts
-        .map((part) => {
-          if (part.type === 'text' || part.type === 'reasoning') return part.text;
-          if (part.type === 'tool_call')
-            return `Tool ${part.tool} ${part.status}: ${part.output?.text ?? JSON.stringify(part.args)}`;
-          if (part.type === 'approval_request') return `Approval ${part.state}: ${part.summary}`;
-          if (part.type === 'handoff_marker') return `Model handoff: ${part.explanation}`;
-          if (part.type === 'checkpoint') return `Checkpoint created: ${part.label}`;
-          if (part.type === 'error') return `Error (${part.kind}): ${part.message}`;
-          return '';
-        })
-        .filter(Boolean)
-        .join('\n');
-      return `${message.role}: ${parts}`;
-    })
-    .join('\n\n');
 }
 function isFileChange(
   value: unknown,

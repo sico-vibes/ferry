@@ -19,7 +19,6 @@ import type { MessagePart, Profile, Session, SessionId } from '@ferry/shared';
 import {
   BUILTIN_PROFILES,
   chainForProfile,
-  explainModelRouting,
   isStrictFallbackNameEligible,
   resolveFallbackChain,
   scoreModels,
@@ -43,6 +42,7 @@ const SendSchema = z.object({
   text: z.string().min(1),
   maxSteps: z.number().int().positive().optional(),
   verbose: z.boolean().optional(),
+  routingMode: z.enum(['auto_for_step']).optional(),
 });
 const RenameSchema = z.string().min(1).max(160);
 const BooleanSchema = z.boolean();
@@ -193,6 +193,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         preview: '',
         profileId: profile.id,
         modelRef: null,
+        pinnedModelRef: null,
         starred: false,
         pinned: false,
         status: 'idle',
@@ -216,7 +217,7 @@ export function register(host: CoreHost, services: FerryServices): void {
     },
     async send(rawId: unknown, rawInput: unknown) {
       const session = requireSession(rawId);
-      const { text, maxSteps, verbose } = SendSchema.parse(rawInput);
+      const { text, maxSteps, verbose, routingMode } = SendSchema.parse(rawInput);
       if (controllers.has(session.id) || shuttingDown)
         throw rpcDomainError(-32010, 'conflict', 'Session is already running');
       const workspace = services.workspaces.get(session.workspaceId);
@@ -326,7 +327,6 @@ export function register(host: CoreHost, services: FerryServices): void {
                 type: 'error',
                 id: PartIdSchema.parse(newId('part')),
                 message: noModelMessage,
-                details: JSON.stringify(explainModelRouting(routingInput)),
                 kind: 'provider',
               },
             ],
@@ -441,6 +441,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           dataDir: services.paths.home,
           profile,
           catalog: sessionCatalog,
+          pinnedModelRef: routingMode === 'auto_for_step' ? null : session.pinnedModelRef,
           stepTimeoutMs: stepTimeoutFromEnvironment(services.env.FERRY_STEP_TIMEOUT_MS),
           capacity: runtime.capacity,
           apiKeys: runtime.apiKeys,
