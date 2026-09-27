@@ -217,6 +217,7 @@ describe('external CLI adapters', () => {
         reject: false,
         windowsHide: true,
         buffer: false,
+        detached: false,
         ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
       });
       try {
@@ -238,14 +239,18 @@ describe('external CLI adapters', () => {
         expect(session.sessionId).toBeTruthy();
         await connection.agent.notify('session/cancel', { sessionId: session.sessionId });
       } finally {
-        if (process.platform === 'win32' && child.pid !== undefined) {
-          await execa('taskkill.exe', ['/pid', String(child.pid), '/T', '/F'], {
-            reject: false,
-            windowsHide: true,
-            timeout: 5_000,
-          });
-        }
         child.kill('SIGTERM');
+        if (process.platform === 'win32' && child.pid !== undefined) {
+          try {
+            await execa('taskkill.exe', ['/pid', String(child.pid), '/T', '/F'], {
+              reject: false,
+              windowsHide: true,
+              timeout: 5_000,
+            });
+          } catch {
+            // The direct child has already received a kill signal.
+          }
+        }
         await child.catch(() => undefined);
       }
     },

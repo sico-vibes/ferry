@@ -492,7 +492,7 @@ export function assertSafeArguments(args: readonly string[]): void {
 }
 
 function cliArgs(name: Implementer, request: AdapterRequest, outputPath: string): string[] {
-  const args: string[] = [];
+  const args: string[] = [...(request.args ?? [])];
   if (name === 'codex') {
     args.push('exec');
     if (request.resumeId) args.push('resume', request.resumeId);
@@ -631,6 +631,7 @@ async function execute(
     reject: false,
     windowsHide: true,
     buffer: false,
+    detached: false,
     ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
   });
   command.stdin.end(request.prompt);
@@ -649,30 +650,46 @@ async function execute(
     stderr += chunk;
   });
   const timeout = request.timeoutMs ?? 10 * 60_000;
+  const commandSettled = command.then(
+    () => undefined,
+    () => undefined,
+  );
   const killTree = async () => {
-    if (process.platform === 'win32' && command.pid !== undefined) {
-      const killed = await execa('taskkill.exe', ['/pid', String(command.pid), '/T', '/F'], {
-        reject: false,
-        windowsHide: true,
-      });
-      if (!killed.failed) return;
-      console.warn(`Delegate process tree termination failed: ${killed.stderr || killed.stdout}`);
-    }
     try {
       command.kill('SIGTERM');
     } catch (error) {
       console.warn('Delegate process termination failed', error);
     }
+    if (process.platform === 'win32' && command.pid !== undefined) {
+      try {
+        const killed = await execa('taskkill.exe', ['/pid', String(command.pid), '/T', '/F'], {
+          reject: false,
+          windowsHide: true,
+          timeout: 2_000,
+        });
+        if (killed.failed)
+          console.warn(
+            `Delegate process tree termination failed: ${killed.stderr || killed.stdout}`,
+          );
+      } catch (error) {
+        console.warn('Delegate process tree termination failed', error);
+      }
+    }
+    await Promise.race([
+      commandSettled,
+      new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
+    ]);
   };
   let rejectAbort: ((error: Error) => void) | undefined;
   const aborted = new Promise<never>((_, reject) => {
     rejectAbort = reject;
   });
   const onAbort = () => {
-    void killTree().catch((error: unknown) => {
-      console.warn('Delegate process tree termination failed', error);
-    });
-    rejectAbort?.(new Error('Delegate cancelled'));
+    void killTree()
+      .catch((error: unknown) => {
+        console.warn('Delegate process tree termination failed', error);
+      })
+      .finally(() => rejectAbort?.(new Error('Delegate cancelled')));
   };
   request.signal?.addEventListener('abort', onAbort, { once: true });
   if (request.signal?.aborted) onAbort();
@@ -735,6 +752,7 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
     reject: false,
     windowsHide: true,
     buffer: false,
+    detached: false,
     ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
   });
   child.stderr.on('data', (chunk: Buffer) =>
@@ -753,14 +771,26 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
   let connection: ClientConnection | undefined;
   let killInFlight: Promise<void> | undefined;
   const killTree = async () => {
+    child.kill('SIGTERM');
     if (process.platform === 'win32' && child.pid !== undefined) {
-      const result = await execa('taskkill.exe', ['/pid', String(child.pid), '/T', '/F'], {
-        reject: false,
-        windowsHide: true,
-        timeout: 2_000,
-      });
-      if (result.failed) child.kill('SIGKILL');
-    } else child.kill('SIGTERM');
+      try {
+        const result = await execa('taskkill.exe', ['/pid', String(child.pid), '/T', '/F'], {
+          reject: false,
+          windowsHide: true,
+          timeout: 2_000,
+        });
+        if (result.failed) console.warn('ACP process tree termination failed', result.stderr);
+      } catch (error) {
+        console.warn('ACP process tree termination failed', error);
+      }
+    }
+    await Promise.race([
+      child.then(
+        () => undefined,
+        () => undefined,
+      ),
+      new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
+    ]);
   };
   const onAbort = () => {
     if (connection && threadId)
