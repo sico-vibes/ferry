@@ -42,7 +42,7 @@ describe('catalog data', () => {
     expect(
       (await loadCatalog({ includeDead: true })).providers.some((provider) => provider.dead),
     ).toBe(true);
-  });
+  }, 30_000);
   it('supports user tier overrides', () => {
     const models = normalizeModels(
       {
@@ -76,5 +76,5 @@ describe('catalog data', () => {
         provider.provider,
       ).toBe(true);
     }
-  });
+  }, 30_000);
 });

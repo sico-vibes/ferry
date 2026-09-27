@@ -353,7 +353,7 @@ try {
     await openRenderer(page);
     await expect(page.getByText('Demo data', { exact: true })).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+    await page.getByRole('button', { name: 'Open folder', exact: true }).first().click();
     await page.getByRole('button', { name: `Open ${fixtureRepoName} in Library` }).click();
     await expect(page.getByRole('heading', { name: fixtureRepoName }).last()).toBeVisible();
     await expect(page.getByText('fixture/restore', { exact: true })).toBeVisible();
@@ -394,6 +394,11 @@ try {
       await window.ferryRpcClient.providers.setKey('openrouter', 'fixture-key');
       await window.ferryRpcClient.providers.setKey('groq', 'fixture-key');
     });
+    await expect
+      .poll(() =>
+        page.evaluate(async () => (await window.ferryRpcClient.models.list('groq')).length),
+      )
+      .toBeGreaterThan(0);
     const agentSession = await page.evaluate(async () => {
       const workspace = (await window.ferryRpcClient.workspaces.list())[0];
       if (!workspace) throw new Error('Real FixtureRepo workspace is unavailable');
@@ -415,7 +420,12 @@ try {
     const restoreDeadline = Date.now() + 15_000;
     let restoredSource = '';
     while (Date.now() < restoreDeadline) {
-      restoredSource = await readFile(sourcePath, 'utf8');
+      try {
+        restoredSource = await readFile(sourcePath, 'utf8');
+      } catch (error) {
+        if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT')
+          throw error;
+      }
       if (restoredSource === originalSource) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -586,10 +596,67 @@ try {
       .toBe('idle');
     console.log('e2e real domains: cancellation stops a streaming turn mid-run OK');
 
+    const autoTrigger = page.getByRole('button', { name: /Auto ·/ });
+    if (await autoTrigger.isVisible().catch(() => false)) {
+      await autoTrigger.click();
+      const manualModel = page.getByRole('option', { name: /North Mini Code/ });
+      await expect(manualModel).toBeVisible();
+      await manualModel.click();
+    }
+    await expect(page.getByRole('button', { name: /Manual · North Mini Code/ })).toBeVisible();
+    await page.getByRole('button', { name: /Manual · North Mini Code/ }).click();
+    const autoModel = page.getByRole('option', { name: /Auto \(recommended\)/ });
+    await expect(autoModel).toBeVisible();
+    await autoModel.click();
+    await expect(page.getByRole('dialog', { name: 'Choose model' })).toBeHidden();
+    await expect(page.getByRole('button', { name: /Auto ·/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Auto/ })).toBeVisible();
     await composer.fill('Continue with a forced provider handoff.');
     await composer.press('Enter');
     const handoff = page.getByRole('button', { name: /Switched .*rate_limit/ });
-    await expect(handoff).toBeVisible({ timeout: 30_000 });
+    try {
+      await expect(handoff).toBeVisible({ timeout: 30_000 });
+    } catch (error) {
+      const evidence = await page.evaluate(async (sessionId) => {
+        const detail = await window.ferryRpcClient.sessions.get(sessionId);
+        const providers = await window.ferryRpcClient.providers.list();
+        const groqModels = await window.ferryRpcClient.models.list('groq');
+        return {
+          status: detail.session.status,
+          parts: detail.messages
+            .at(-1)
+            ?.parts.map((part) =>
+              part.type === 'error'
+                ? { type: part.type, kind: part.kind, message: part.message }
+                : part.type,
+            ),
+          models: detail.messages.at(-1)?.modelAttempts?.map((attempt) => attempt.model),
+          handoffs: window.e2eHandoffParts,
+          providers: providers.map(({ id, enabled, keyStatus, health }) => ({
+            id,
+            enabled,
+            keyStatus,
+            health,
+          })),
+          groqModels: groqModels.map((model) => ({
+            ref: model.ref,
+            toolCalling: model.toolCalling,
+          })),
+        };
+      }, agentSession.id);
+      console.error(
+        'e2e handoff diagnostic',
+        JSON.stringify({
+          evidence,
+          requests: fakeProvider.requests.map((request) => ({
+            url: request.url,
+            model: request.body?.model,
+            stream: request.body?.stream,
+          })),
+        }),
+      );
+      throw error;
+    }
     await handoff.click();
     await expect(page.getByText(/HTTP 429/)).toBeVisible({ timeout: 30_000 });
     const handoffEvidence = await page.evaluate(

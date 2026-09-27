@@ -332,16 +332,16 @@ export class ResilienceLedger {
   }
 }
 
-export function reorderByCapabilities<T extends { toolCalling?: boolean }>(
-  models: readonly T[],
-  requiresTools: boolean,
-): T[] {
+export function reorderByCapabilities<
+  T extends { toolCalling?: boolean; capability?: { toolCall?: boolean } },
+>(models: readonly T[], requiresTools: boolean): T[] {
   return models
     .map((model, index) => ({ model, index }))
     .sort(
       (a, b) =>
-        Number(Boolean(b.model.toolCalling) && requiresTools) -
-          Number(Boolean(a.model.toolCalling) && requiresTools) || a.index - b.index,
+        Number(Boolean(b.model.capability?.toolCall ?? b.model.toolCalling) && requiresTools) -
+          Number(Boolean(a.model.capability?.toolCall ?? a.model.toolCalling) && requiresTools) ||
+        a.index - b.index,
     )
     .map(({ model }) => model);
 }

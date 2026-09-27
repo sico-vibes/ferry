@@ -218,5 +218,6 @@ describe('Explore providers and models', () => {
       .slice(1)
       .map((row) => row.querySelector('td')?.getAttribute('title') ?? '');
     expect(names[0]).toBe('Large');
+    expect(screen.getAllByRole('row')[1]?.querySelector('td')?.textContent).toContain('coding n/a');
   }, 20_000);
 });

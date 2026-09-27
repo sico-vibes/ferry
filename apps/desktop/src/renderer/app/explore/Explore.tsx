@@ -21,6 +21,7 @@ import { useFerryClient } from '../../data/client';
 import { useToasts } from '../../state/toasts';
 import { useUI } from '../../state/ui';
 import { ProviderKeyDialog } from '../ProviderKeyDialog';
+import { ModelQualityBadge } from '../ModelQualityBadge';
 
 type ModelSort =
   | 'name'
@@ -483,6 +484,9 @@ export function ExploreCanvas() {
                             providers.find((provider) => provider.id === model.providerId)?.dataUse
                           }
                         />
+                      </span>
+                      <span className="ml-2 inline-block align-middle">
+                        <ModelQualityBadge model={model} />
                       </span>
                       {oauthProviders.some((provider) => model.providerId === provider.id) && (
                         <span

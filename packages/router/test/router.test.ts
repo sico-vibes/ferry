@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import type { ModelInfo, Profile, Provider, TaskRecord } from '@ferry/shared';
+import { DEFAULT_ROUTING_SETTINGS } from '@ferry/shared';
 import {
   BUILTIN_PROFILES,
   buildBriefing,
@@ -62,6 +63,101 @@ const task: TaskRecord = {
 };
 
 describe('step classification and routing', () => {
+  it('keeps missing quality neutral and keeps quality weight independent of reliability', () => {
+    const input = {
+      models: [model],
+      providers: [provider],
+      capacity,
+      profile,
+      step: 'plan' as const,
+      estimate: { inputTokens: 1, requiresTools: true },
+    };
+    const unknown = scoreModels({ ...input, models: [{ ...model, quality: null }] })[0];
+    const baseline = scoreModels(input)[0];
+    const stats = [
+      {
+        modelRef: model.ref,
+        toolCalls: 4,
+        toolCallValidationFailures: 1,
+        averageLatencyMs: 2_000,
+        cacheAffinity: 0,
+      },
+    ];
+    const unknownWithStats = scoreModels({
+      ...input,
+      models: [{ ...model, quality: null }],
+      routing: { ...DEFAULT_ROUTING_SETTINGS, smartReliability: false, qualityWeight: 10 },
+      stats,
+    })[0];
+    const known = scoreModels({
+      ...input,
+      models: [{ ...model, quality: 1 }],
+      routing: { ...DEFAULT_ROUTING_SETTINGS, smartReliability: false, qualityWeight: 10 },
+      stats,
+    })[0];
+    expect(unknown?.scoreBreakdown?.quality).toBe(0);
+    expect(unknown?.score).toBe(baseline?.score);
+    expect(known?.scoreBreakdown?.quality).toBe(6.5);
+    expect(known?.scoreBreakdown?.success).toBe(unknownWithStats?.scoreBreakdown?.success);
+  });
+
+  it('allows XML tool fallback only when the routing flag is enabled', () => {
+    const xmlModel: ModelInfo = {
+      ...model,
+      toolCalling: false,
+      capability: {
+        toolCall: false,
+        parallelToolCalls: null,
+        vision: false,
+        reasoning: false,
+        context: model.contextWindow,
+        maxOutput: model.maxOutput,
+        editFormat: 'whole',
+        toolProtocol: 'xml',
+        cachePrompt: null,
+        temperature: null,
+      },
+    };
+    const input = {
+      models: [xmlModel],
+      providers: [provider],
+      capacity,
+      profile,
+      step: 'plan' as const,
+      estimate: { inputTokens: 1, requiresTools: true },
+    };
+    expect(scoreModels(input)).toHaveLength(0);
+    expect(scoreModels({ ...input, textToolFallbackEnabled: true })).toHaveLength(1);
+  });
+
+  it('allows a discovered model with unknown tool capability on tool steps', () => {
+    const unknownModel: ModelInfo = {
+      ...model,
+      toolCalling: true,
+      capability: {
+        toolCall: null,
+        parallelToolCalls: null,
+        vision: false,
+        reasoning: false,
+        context: model.contextWindow,
+        maxOutput: model.maxOutput,
+        editFormat: 'whole',
+        toolProtocol: 'none',
+        cachePrompt: null,
+        temperature: null,
+      },
+    };
+    const candidates = scoreModels({
+      models: [unknownModel],
+      providers: [provider],
+      capacity,
+      profile,
+      step: 'plan',
+      estimate: { inputTokens: 1, requiresTools: true },
+    });
+    expect(candidates.map((candidate) => candidate.ref)).toEqual([unknownModel.ref]);
+  });
+
   it('allows discovered unknown-price models through Auto-Free and explains hard exclusions', () => {
     const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
     if (!autoFree) throw new Error('Auto-Free profile fixture is missing');

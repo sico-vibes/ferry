@@ -9,6 +9,7 @@ import { useFerryClient } from '../data/client';
 import { keys, useSessions, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
+import { ModelQualityBadge } from './ModelQualityBadge';
 
 export function SessionPowerControls() {
   return (
@@ -348,6 +349,7 @@ export function ModelPickerPopover({
 }) {
   const client = useFerryClient();
   const cache = useQueryClient();
+  const pushToast = useToasts((state) => state.push);
   const { data: candidates = [] } = useQuery({
     queryKey: ['model-candidates', sessionId],
     queryFn: () => client.models.candidates(sessionId),
@@ -408,11 +410,24 @@ export function ModelPickerPopover({
     () => [...new Set(availableModels.map((model) => model.providerId))],
     [availableModels],
   );
+  const selectionInFlight = useRef<ModelRef | 'auto' | null>(null);
   const select = async (ref: ModelRef | 'auto') => {
-    await client.models.select(sessionId, ref);
-    await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
-    await cache.invalidateQueries({ queryKey: ['model-candidates', sessionId] });
+    if (selectionInFlight.current === ref) return;
+    selectionInFlight.current = ref;
     setOpen(false);
+    try {
+      await client.models.select(sessionId, ref);
+      await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+      await cache.invalidateQueries({ queryKey: ['model-candidates', sessionId] });
+    } catch (error) {
+      pushToast({
+        kind: 'error',
+        title: 'Model selection failed',
+        body: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      if (selectionInFlight.current === ref) selectionInFlight.current = null;
+    }
   };
   return (
     <div className="relative">
@@ -429,7 +444,7 @@ export function ModelPickerPopover({
       >
         <FerryMark className="text-text-2" decorative size={14} variant="mono" />
         <span>
-          {mode === 'auto' ? 'Auto' : 'Manual'} · {modelName}
+          {mode === 'auto' ? 'Auto' : 'Manual'} · {mode === 'auto' ? autoModel : modelName}
         </span>
         <ChevronDown aria-hidden="true" size={14} />
       </button>
@@ -450,6 +465,7 @@ export function ModelPickerPopover({
                   className="model-candidate auto"
                   value={`Auto ${autoModel}`}
                   onSelect={() => void select('auto')}
+                  onPointerDownCapture={() => void select('auto')}
                 >
                   <strong>Auto (recommended)</strong>
                   <span>{autoModel} · Router’s current pick</span>
@@ -479,6 +495,7 @@ export function ModelPickerPopover({
                             key={model.ref}
                             value={`${model.name} ${model.tier} ${provider?.name ?? providerId} ${why} ${capacity === null ? '' : String(capacity)}`}
                             onSelect={() => void select(model.ref)}
+                            onPointerDownCapture={() => void select(model.ref)}
                           >
                             <strong>
                               {model.name}
@@ -503,6 +520,7 @@ export function ModelPickerPopover({
                               ) : null}
                               {candidate?.selected ? <Check size={13} /> : null}
                             </strong>
+                            <ModelQualityBadge model={model} />
                             <span className="model-meta-line">
                               <DataUseBadge dataUse={provider?.dataUse} />{' '}
                               <span className="model-tier-pill">{model.tier}</span>

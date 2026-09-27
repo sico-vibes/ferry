@@ -1126,14 +1126,11 @@ export async function discoverProviderModels(
     const supportedParameters = (item as Record<string, unknown>).supported_parameters;
     const metadataSupportsTools =
       Array.isArray(supportedParameters) && supportedParameters.includes('tools');
-    const verifiedToolModel =
-      metadataSupportsTools ||
-      known?.toolCalling === true ||
-      isPreferredToolModel(providerId, normalizedId);
-    const excludedByName =
-      /(?:preview|experimental|image|tts|audio|transcribe|embedding|guard|omni|nano-banana|antigravity)/i.test(
-        normalizedId,
-      );
+    const registryToolSupport = known?.capability?.toolCall;
+    const registrySupportsTools = registryToolSupport ?? known?.toolCalling;
+    const toolCall = Array.isArray(supportedParameters)
+      ? metadataSupportsTools
+      : (registrySupportsTools ?? (isPreferredToolModel(providerId, normalizedId) ? true : null));
     const free =
       (providerId === 'openrouter' && /:free(?:$|:)/i.test(normalizedId)) || (known?.free ?? false);
     const contextWindow = known?.contextWindow ?? 8192;
@@ -1148,9 +1145,16 @@ export async function discoverProviderModels(
       tier: known?.tier ?? 'T2',
       contextWindow,
       maxOutput: known?.maxOutput ?? 4096,
-      toolCalling:
-        verifiedToolModel &&
-        (!excludedByName || metadataSupportsTools || known?.toolCalling === true),
+      toolCalling: toolCall ?? true,
+      ...(known?.family ? { family: known.family } : {}),
+      ...(known?.capability ? { capability: known.capability } : {}),
+      ...(known?.quality !== undefined ? { quality: known.quality } : {}),
+      ...(known?.qualityConfidence !== undefined
+        ? { qualityConfidence: known.qualityConfidence }
+        : {}),
+      ...(known?.qualityPenalty !== undefined ? { qualityPenalty: known.qualityPenalty } : {}),
+      ...(known?.qualitySources ? { qualitySources: known.qualitySources } : {}),
+      ...(known?.qualityDate ? { qualityDate: known.qualityDate } : {}),
       reasoning: known?.reasoning ?? false,
       free,
       priceInPerM: free ? 0 : (known?.priceInPerM ?? null),

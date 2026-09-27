@@ -1,0 +1,17 @@
+[
+  {"id":"gemini/gemini-flash-latest","score":0.6039,"confidence":0.8250000000000001,"sources":["Aider Polyglot","BFCL overall","BFCL live"],"datasetDate":"2026-09-27","rankingPenalty":0},
+  {"id":"groq/qwen/qwen3.8-27b","score":0.585,"confidence":0.925,"sources":["Aider Polyglot","BFCL overall","BFCL live"],"datasetDate":"2026-09-27","rankingPenalty":0},
+  {"id":"gemini/gemini-3.6-flash","score":0.5239,"confidence":0.8250000000000001,"sources":["Aider Polyglot","BFCL overall","BFCL live"],"datasetDate":"2026-09-27","rankingPenalty":0.08},
+  {"id":"groq/qwen/qwen3.6-27b","score":0.505,"confidence":0.925,"sources":["Aider Polyglot","BFCL overall","BFCL live"],"datasetDate":"2026-09-27","rankingPenalty":0.08},
+  {"id":"groq/llama-3.3-70b-versatile","score":0.4964,"confidence":0.95,"sources":["Aider Polyglot","BFCL overall","BFCL live"],"datasetDate":"2026-09-27","rankingPenalty":0},
+  {"id":"groq/openai/gpt-oss-20b","score":0.4518,"confidence":0.4,"sources":["Aider Polyglot"],"datasetDate":"2025-08-06","rankingPenalty":0},
+  {"id":"gemini/gemini-3.5-flash","score":0.4439,"confidence":0.8250000000000001,"sources":["Aider Polyglot","BFCL overall","BFCL live"],"datasetDate":"2026-09-27","rankingPenalty":0.16},
+  {"id":"gemini/gemma-4-31b-it","score":0.4417,"confidence":0.875,"sources":["Aider Polyglot","BFCL overall","BFCL live"],"datasetDate":"2026-09-27","rankingPenalty":0},
+  {"id":"cerebras/qwen-3.8-27b","score":0.4405,"confidence":0.45,"sources":["Aider Polyglot"],"datasetDate":"2024-12-26","rankingPenalty":0},
+  {"id":"mistral/codestral-latest","score":0.4322,"confidence":0.4,"sources":["Aider Polyglot"],"datasetDate":"2025-01-13","rankingPenalty":0},
+  {"id":"nvidia/qwen/qwen3-coder-480b-a35b-instruct","score":0.425,"confidence":0.925,"sources":["Aider Polyglot","BFCL overall","BFCL live"],"datasetDate":"2026-09-27","rankingPenalty":0.16},
+  {"id":"groq/llama-3.1-8b-instant","score":0.4164,"confidence":0.95,"sources":["Aider Polyglot","BFCL overall","BFCL live"],"datasetDate":"2026-09-27","rankingPenalty":0.08},
+  {"id":"groq/openai/gpt-oss-120b","score":0.3718,"confidence":0.4,"sources":["Aider Polyglot"],"datasetDate":"2025-08-06","rankingPenalty":0.08},
+  {"id":"gemini/gemini-2.5-flash","score":0.3639,"confidence":0.8250000000000001,"sources":["Aider Polyglot","BFCL overall","BFCL live"],"datasetDate":"2026-09-27","rankingPenalty":0.24},
+  {"id":"gemini/gemma-4-26b-a4b-it","score":0.3617,"confidence":0.875,"sources":["Aider Polyglot","BFCL overall","BFCL live"],"datasetDate":"2026-09-27","rankingPenalty":0.08}
+]

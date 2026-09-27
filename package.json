@@ -21,7 +21,8 @@
     "eval:live": "tsx scripts/eval-live.mjs",
     "check": "turbo run typecheck lint test && node scripts/check-text.mjs && prettier --check .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "catalog:sync-datasets": "node scripts/catalog-sync-datasets.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -38,6 +38,7 @@ const routingRows: {
     RoutingSettings,
     | 'stickySessions'
     | 'smartReliability'
+    | 'textToolFallbackEnabled'
     | 'quotaReservations'
     | 'cooldownReasons'
     | 'gentleQuotaRamp'
@@ -59,6 +60,12 @@ const routingRows: {
     title: 'Smart reliability',
     helper: 'Prefer models that have been working lately; old failures fade over time.',
     info: 'Trade-off: Thompson sampling explores uncertain models, so a less-proven model may occasionally be chosen.',
+  },
+  {
+    key: 'textToolFallbackEnabled',
+    title: 'Text tool-call fallback',
+    helper: 'Allow XML and ReAct tool formats when a text fallback adapter is available.',
+    info: 'This only enables routing eligibility; the fallback adapter is supplied separately.',
   },
   {
     key: 'quotaReservations',
@@ -777,6 +784,25 @@ export function SettingsCanvas() {
         <>
           <Group title="Advanced">
             <SettingRow
+              title="Benchmark quality weight"
+              helper="Give published coding and tool-use scores more or less influence. Models without scores remain neutral."
+            >
+              <div className="range-control">
+                <Slider
+                  label="Benchmark quality weight"
+                  min={0}
+                  max={12}
+                  step={1}
+                  value={settings?.routing.qualityWeight ?? 4}
+                  onValueChange={(value) =>
+                    settings &&
+                    void update({ routing: { ...settings.routing, qualityWeight: value } })
+                  }
+                />
+                <span>{settings?.routing.qualityWeight ?? 4}</span>
+              </div>
+            </SettingRow>
+            <SettingRow
               title="Tool-call repair for weaker models"
               helper="Automatically recover tool calls written as text when native tool calling is unreliable."
             >
@@ -882,6 +908,7 @@ export function SettingsCanvas() {
                     routing: {
                       ...settings.routing,
                       stickyTtlMinutes: 30,
+                      qualityWeight: 4,
                       rampStart: 0.2,
                       rampFloor: 0.1,
                     },

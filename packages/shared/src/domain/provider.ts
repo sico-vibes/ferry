@@ -75,6 +75,7 @@ export const ModelInfoSchema = z.object({
   ref: ModelRefSchema,
   providerId: ProviderIdSchema,
   name: z.string(),
+  family: z.string().nullable().optional(),
   tier: TierSchema,
   contextWindow: z.number().int().positive(),
   maxOutput: z.number().int().positive(),
@@ -83,6 +84,25 @@ export const ModelInfoSchema = z.object({
   free: z.boolean(),
   priceInPerM: z.number().nonnegative().nullable(),
   priceOutPerM: z.number().nonnegative().nullable(),
+  capability: z
+    .object({
+      toolCall: z.boolean().nullable(),
+      parallelToolCalls: z.boolean().nullable(),
+      vision: z.boolean(),
+      reasoning: z.boolean(),
+      context: z.number().int().positive(),
+      maxOutput: z.number().int().positive(),
+      editFormat: z.string(),
+      toolProtocol: z.enum(['native', 'xml', 'react', 'none']),
+      cachePrompt: z.boolean().nullable(),
+      temperature: z.boolean().nullable(),
+    })
+    .optional(),
+  quality: z.number().min(0).max(1).nullable().optional(),
+  qualityConfidence: z.number().min(0).max(1).optional(),
+  qualityPenalty: z.number().min(0).max(1).optional(),
+  qualitySources: z.array(z.string()).optional(),
+  qualityDate: z.iso.date().nullable().optional(),
 });
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 export const ModelCandidateSchema = z.object({
@@ -99,6 +119,7 @@ export const ModelCandidateSchema = z.object({
       cost: z.number(),
       affinity: z.number(),
       coding: z.number(),
+      quality: z.number(),
       preference: z.number(),
       reasoning: z.number(),
       verification: z.number(),
