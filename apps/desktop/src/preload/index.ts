@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { CoreHandoffTokenSchema, DesktopThemeSchema } from '@ferry/shared';
 
 const rendererWindow = globalThis as unknown as {
+  location: { origin: string; protocol: string };
   postMessage(message: unknown, targetOrigin: string, transfer: unknown[]): void;
 };
 
@@ -17,10 +19,11 @@ contextBridge.exposeInMainWorld('ferryHost', {
   openFolder: (): Promise<string | null> =>
     ipcRenderer.invoke('ferry:open-folder') as Promise<string | null>,
   updateTheme: (theme: 'dark' | 'light'): void => {
-    ipcRenderer.send('ferry:theme', theme);
+    ipcRenderer.send('ferry:theme', DesktopThemeSchema.parse(theme));
   },
-  connectCore: (token: string): Promise<void> =>
+  connectCore: (rawToken: string): Promise<void> =>
     new Promise((resolve, reject) => {
+      const token = CoreHandoffTokenSchema.parse(rawToken);
       const timeout = setTimeout(() => {
         ipcRenderer.removeListener('ferry:core-port', listener);
         reject(new Error('Core connection timed out'));
@@ -30,11 +33,14 @@ contextBridge.exposeInMainWorld('ferryHost', {
         if (!port) return;
         clearTimeout(timeout);
         ipcRenderer.removeListener('ferry:core-port', listener);
-        rendererWindow.postMessage({ type: 'ferry:core-port', token }, '/', [port]);
+        const origin = rendererWindow.location.origin;
+        const targetOrigin =
+          origin === 'null' || rendererWindow.location.protocol === 'file:' ? '*' : origin;
+        rendererWindow.postMessage({ type: 'ferry:core-port', token }, targetOrigin, [port]);
         resolve();
       };
       ipcRenderer.on('ferry:core-port', listener);
-      ipcRenderer.send('ferry:connect-core');
+      ipcRenderer.send('ferry:connect-core', token);
     }),
   getEngineStatus: (): Promise<{ status: 'connected' | 'restarting'; pid: number | null }> =>
     ipcRenderer.invoke('ferry:engine-status') as Promise<{

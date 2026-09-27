@@ -45,6 +45,8 @@ export async function startCoreWebSocketServer(
 ): Promise<CoreWebSocketHandle> {
   const token = randomBytes(32).toString('hex');
   const sockets = new Set<Duplex>();
+  const badTokensByAddress = new Map<string, number>();
+  const maxBadTokens = 5;
   const server: Server = createServer();
   server.on('error', (error: NodeJS.ErrnoException) => {
     if (error.code === 'ECONNRESET' || error.code === 'EPIPE')
@@ -67,13 +69,13 @@ export async function startCoreWebSocketServer(
     const expected = Buffer.from(token);
     const key = request.headers['sec-websocket-key'];
     const origin = request.headers.origin;
-    if (
-      url.pathname !== '/rpc' ||
-      origin !== undefined ||
-      supplied.length !== expected.length ||
-      !timingSafeEqual(supplied, expected) ||
-      !key
-    ) {
+    const clientAddress = request.socket.remoteAddress ?? 'unknown';
+    const blocked = (badTokensByAddress.get(clientAddress) ?? 0) >= maxBadTokens;
+    const authorized = supplied.length === expected.length && timingSafeEqual(supplied, expected);
+    if (!authorized && url.pathname === '/rpc' && origin === undefined) {
+      badTokensByAddress.set(clientAddress, (badTokensByAddress.get(clientAddress) ?? 0) + 1);
+    }
+    if (url.pathname !== '/rpc' || origin !== undefined || blocked || !authorized || !key) {
       socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       return;
     }

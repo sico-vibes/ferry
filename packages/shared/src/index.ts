@@ -11,4 +11,5 @@ export * from './domain/delegation.js';
 export * from './domain/optimizer.js';
 export * from './domain/settings.js';
 export * from './security/secrets.js';
+export * from './security/desktop-ipc.js';
 export * from './protocol.js';

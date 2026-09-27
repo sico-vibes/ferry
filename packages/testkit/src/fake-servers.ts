@@ -126,7 +126,7 @@ export class FakeOpenAIServer extends FakeProviderServer {
       return {
         data: [{ id: 'cohere/north-mini-code:free', supported_parameters: ['tools'] }],
       };
-    if (url.startsWith('/groq/')) return { data: [{ id: 'allam-2-7b' }] };
+    if (url.startsWith('/groq/')) return { data: [{ id: 'openai/gpt-oss-20b' }] };
     return { data: [{ id: 'gpt-4o-mini' }] };
   }
   protected override responseFor(_body: unknown, malformed: boolean): unknown {
