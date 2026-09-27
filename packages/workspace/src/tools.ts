@@ -125,11 +125,18 @@ export class WorkspaceTools {
       ignore: ['.git/**', 'node_modules/**'],
     });
     const visible: string[] = [];
-    for (const item of files) {
-      const file = await this.jail.resolve(item);
-      if (!(await this.jail.isIgnored(file))) visible.push(item.split(path.sep).join('/'));
+    const workspaceRoot = path.resolve(this.jail.root);
+    for (const item of files.sort()) {
+      const file = path.resolve(workspaceRoot, item);
+      const relative = path.relative(workspaceRoot, file);
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+        continue;
+      const normalized = relative.split(path.sep).join('/');
+      if (await this.jail.isIgnoredRelative(normalized)) continue;
+      visible.push(normalized);
+      if (visible.length >= 5000) break;
     }
-    return visible.sort().slice(0, 5000);
+    return visible.sort();
   }
   async grep(raw: unknown): Promise<GrepMatch[]> {
     const input = GrepInput.parse(raw);
@@ -145,42 +152,77 @@ export class WorkspaceTools {
       '--context',
       String(input.context),
       '--max-count',
-      '200',
+      '1',
+      '--max-depth',
+      '12',
+      '--max-columns',
+      '500',
+      '--max-columns-preview',
       '--max-filesize',
-      `${String(this.maxBytes)}b`,
+      `${String(Math.ceil(this.maxBytes / 1024))}K`,
     ];
     if (input.glob) args.push('--glob', input.glob);
     args.push('--', input.pattern, base);
-    const result = await execa(rgPath, args, {
+    const child = execa(rgPath, args, {
       cwd: this.jail.root,
       reject: false,
-      maxBuffer: 8 * 1024 * 1024,
     });
-    if ((result.exitCode ?? 1) > 1) throw new Error(result.stderr || 'ripgrep failed');
     const matches: GrepMatch[] = [];
-    for (const line of result.stdout.split(/\r?\n/)) {
-      if (!line) continue;
-      const event = JSON.parse(line) as {
-        type: string;
-        data?: {
-          path?: { text?: string };
-          line_number?: number;
-          lines?: { text?: string };
-          submatches?: unknown[];
+    let pending = '';
+    let reachedLimit = false;
+    child.stdout.setEncoding('utf8');
+    for await (const chunk of child.stdout) {
+      pending += String(chunk);
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line) continue;
+        const event = JSON.parse(line) as {
+          type: string;
+          data?: {
+            path?: { text?: string };
+            line_number?: number;
+            lines?: { text?: string };
+          };
         };
-      };
-      if (event.type !== 'match' || !event.data?.path?.text) continue;
-      const full = path.resolve(this.jail.root, event.data.path.text);
-      if (!(await this.jail.resolve(this.jail.relative(full)))) continue;
-      matches.push({
-        path: this.jail.relative(full),
-        line: event.data.line_number ?? 0,
-        text: (event.data.lines?.text ?? '').replace(/\r?\n$/, ''),
-        before: [],
-        after: [],
-      });
-      if (matches.length >= 1000) break;
+        if (event.type !== 'match' || !event.data?.path?.text) continue;
+        const full = path.resolve(this.jail.root, event.data.path.text);
+        if (!(await this.jail.resolve(this.jail.relative(full)))) continue;
+        matches.push({
+          path: this.jail.relative(full),
+          line: event.data.line_number ?? 0,
+          text: (event.data.lines?.text ?? '').replace(/\r?\n$/, ''),
+          before: [],
+          after: [],
+        });
+        if (matches.length >= 250) {
+          reachedLimit = true;
+          child.kill();
+          break;
+        }
+      }
+      if (reachedLimit) break;
     }
+    if (pending && !reachedLimit) {
+      const event = JSON.parse(pending) as {
+        type: string;
+        data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } };
+      };
+      if (event.type === 'match' && event.data?.path?.text) {
+        const full = path.resolve(this.jail.root, event.data.path.text);
+        if (await this.jail.resolve(this.jail.relative(full)))
+          matches.push({
+            path: this.jail.relative(full),
+            line: event.data.line_number ?? 0,
+            text: (event.data.lines?.text ?? '').replace(/\r?\n$/, ''),
+            before: [],
+            after: [],
+          });
+      }
+    }
+    const result = await child;
+    if (!reachedLimit && (result.exitCode ?? 1) > 1)
+      throw new Error(result.stderr || 'ripgrep failed');
     const lineCache = new Map<string, string[]>();
     for (const match of matches) {
       let lines = lineCache.get(match.path);

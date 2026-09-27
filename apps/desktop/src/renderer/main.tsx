@@ -20,6 +20,7 @@ const queryClient = new QueryClient({
 });
 const root = document.getElementById('root');
 if (!root) throw new Error('Renderer root element is missing');
+const appRoot = createRoot(root);
 
 const speedParam = new URLSearchParams(location.search).get('speed');
 const configuredSpeed = speedParam === null ? undefined : Number(speedParam);
@@ -87,7 +88,6 @@ const bootstrapClient = async () => {
   }
   const hello = await rpc.hello;
   window.ferryEngineHello = hello;
-  window.ferryRpcClient = rpc;
   const settings = await rpc.settings.get();
   const configuredDomains = settings.developer.realDomains;
   const domains = [
@@ -98,12 +98,13 @@ const bootstrapClient = async () => {
     console.warn(`Ferry is using Demo data for domains: ${demoDomains.join(', ')}`);
   const hybrid = createHybridClient(mock, rpc, domains);
   window.ferryHybrid = hybrid;
+  window.ferryRpcClient = rpc;
   return hybrid;
 };
 const mountApp = (currentClient: FerryClient) => {
   if (window.ferryHost && currentClient === mock)
     console.warn('Ferry is using the Demo client because the core connection failed.');
-  createRoot(root).render(
+  appRoot.render(
     <StrictMode>
       <FerryProvider client={currentClient}>
         <QueryClientProvider client={queryClient}>
@@ -113,12 +114,24 @@ const mountApp = (currentClient: FerryClient) => {
     </StrictMode>,
   );
 };
-if (new URLSearchParams(location.search).get('demo') === 'long') {
-  void import('./perf-demo').then(({ seedLongTranscript }) => {
-    seedLongTranscript(mock);
+const demoMode = new URLSearchParams(location.search).get('demo');
+if (demoMode === 'long' || demoMode === 'exhausted') {
+  void import('./perf-demo').then(({ seedExhaustedSession, seedLongTranscript }) => {
+    if (demoMode === 'long') seedLongTranscript(mock);
+    else seedExhaustedSession(mock);
     if (window.ferryHost) console.warn('Ferry is using the Demo client for the performance demo.');
     mountApp(mock);
   });
+} else if (window.ferryHost) {
+  mountApp(mock);
+  void bootstrapClient()
+    .then((currentClient) => {
+      queryClient.clear();
+      mountApp(currentClient);
+    })
+    .catch((error: unknown) => {
+      console.error('Core connection failed, continuing with mock client', error);
+    });
 } else
   void bootstrapClient()
     .then((currentClient) => {

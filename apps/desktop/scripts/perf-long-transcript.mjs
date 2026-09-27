@@ -37,10 +37,11 @@ try {
   }
   if (!ready) throw new Error('Timed out waiting for the built renderer preview.');
 
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, args: ['--js-flags=--expose-gc'] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   await page.goto(`${origin}/?demo=long`, { waitUntil: 'domcontentloaded' });
   await page.locator('.transcript-viewport').waitFor({ state: 'visible' });
+  await page.waitForFunction(() => window.ferryPerfReady === true, null, { timeout: 30_000 });
   await page.locator('.transcript-message').first().waitFor({ state: 'visible' });
   const initial = await page.evaluate(() => {
     const viewport = document.querySelector('.transcript-viewport');
@@ -48,21 +49,31 @@ try {
     if (!viewport || rows > 40)
       throw new Error(`Expected a virtualized transcript; got ${rows} rows.`);
     viewport.scrollTop = 0;
-    return { renderedRows: rows, scrollHeight: viewport.scrollHeight };
+    window.gc?.();
+    return {
+      renderedRows: rows,
+      scrollHeight: viewport.scrollHeight,
+      messageCount: window.ferryPerfMessageCount ?? null,
+      heapBeforeBytes: performance.memory?.usedJSHeapSize ?? null,
+    };
   });
 
   await page.evaluate(async () => {
     const viewport = document.querySelector('.transcript-viewport');
     if (!viewport) throw new Error('Transcript viewport disappeared.');
-    for (let step = 0; step < 70; step += 1) {
-      viewport.scrollTop = (step % 35) * (viewport.scrollHeight / 35);
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    for (let step = 0; step < 200; step += 1) {
+      viewport.scrollTop = Math.min(viewport.scrollTop + 60, viewport.scrollHeight);
+      await new Promise(requestAnimationFrame);
     }
   });
   await page.waitForFunction(() => Boolean(window.ferryPerfFrameTimes?.length), null, {
     timeout: 6_000,
   });
   const frames = await page.evaluate(() => window.ferryPerfFrameTimes ?? []);
+  const heapAfterBytes = await page.evaluate(() => {
+    window.gc?.();
+    return performance.memory?.usedJSHeapSize ?? null;
+  });
   const sorted = frames.slice().sort((a, b) => a - b);
   const averageMs = frames.reduce((sum, value) => sum + value, 0) / Math.max(1, frames.length);
   const p95Ms = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0;
@@ -72,9 +83,15 @@ try {
     averageFrameMs: Number(averageMs.toFixed(2)),
     p95FrameMs: Number(p95Ms.toFixed(2)),
     framesOver33ms: frames.filter((value) => value > 33.3).length,
+    heapAfterBytes,
+    heapDeltaBytes:
+      initial.heapBeforeBytes !== null && heapAfterBytes !== null
+        ? heapAfterBytes - initial.heapBeforeBytes
+        : null,
   };
   console.log(JSON.stringify(result));
-  if (result.renderedRows > 40 || result.p95FrameMs > 33.3) process.exitCode = 1;
+  if (result.messageCount !== 10_000 || result.renderedRows > 40 || result.p95FrameMs > 33.3)
+    process.exitCode = 1;
 } finally {
   await browser?.close();
   server.kill();

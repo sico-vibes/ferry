@@ -1076,6 +1076,9 @@ body {
   color: var(--text-2);
   font-size: 11px;
 }
+.review-deletion-count {
+  color: var(--text-1);
+}
 .review-gates span {
   white-space: nowrap;
   font-size: 11px;

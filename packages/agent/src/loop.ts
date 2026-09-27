@@ -238,6 +238,10 @@ export class AgentLoop {
   private readonly retirementFailures: RetirementFailure[];
   private readonly retiredModels: Set<string>;
   private readonly sessionBadKeys = new Map<string, Set<string>>();
+  private readonly activeMessageParts = new Map<
+    string,
+    { messageId: Message['id']; parts: MessagePart[] }
+  >();
 
   constructor(private readonly options: AgentOptions) {
     this.estimates = options.estimateTokens ?? estimateTextTokens;
@@ -549,6 +553,14 @@ export class AgentLoop {
         this.options.emit({ type: 'session.message', message: assistant });
         const streamedTextPartId = PartIdSchema.parse(newId('part'));
         let streamedText = '';
+        const streamedParts = {
+          messageId: assistant.id,
+          parts:
+            this.options.store
+              .load(sessionId)
+              ?.messages.find((message) => message.id === assistant.id)?.parts ?? [],
+        };
+        this.activeMessageParts.set(sessionId, streamedParts);
         if (stepCount >= maxSteps)
           return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
         const stepRequest = (
@@ -570,15 +582,18 @@ export class AgentLoop {
             if (isSignalAborted(signal)) return;
             onProgress();
             streamedText += text;
-            const currentParts =
-              this.options.store
-                .load(sessionId)
-                ?.messages.find((message) => message.id === assistant.id)?.parts ?? [];
             const partial = { type: 'text' as const, id: streamedTextPartId, text: streamedText };
-            this.replaceMessageParts(assistant, [
-              ...currentParts.filter((part) => part.id !== streamedTextPartId),
+            const previousParts = streamedParts.parts;
+            streamedParts.parts = [
+              ...streamedParts.parts.filter((part) => part.id !== streamedTextPartId),
               partial,
-            ]);
+            ];
+            this.replaceMessageParts(
+              assistant,
+              streamedParts.parts,
+              previousParts,
+              streamedTextPartId,
+            );
             this.options.emit({
               type: 'session.delta',
               sessionId,
@@ -859,6 +874,7 @@ export class AgentLoop {
             this.options.store.updateSession(sessionId, { modelRef: fallback.ref });
           }
         }
+        this.activeMessageParts.delete(sessionId);
         this.options.onUsage?.({
           id: newId('usage'),
           providerId: model.providerId,
@@ -1125,7 +1141,9 @@ export class AgentLoop {
       const message = poolExhausted
         ? error.message
         : formatAttemptSummary(attemptFailures, providerDetail);
-      const nextCapacity = poolExhausted ? message.split('Next free capacity: ')[1] : undefined;
+      const nextCapacity = poolExhausted
+        ? message.split('Next free capacity: ')[1]?.replace(/\. Wait or add a provider\.$/, '')
+        : undefined;
       this.addPart(sessionId, {
         type: 'error',
         id: PartIdSchema.parse(newId('part')),
@@ -1405,20 +1423,34 @@ export class AgentLoop {
     );
     if (existing) this.options.store.replacePart(sessionId, part);
     else this.options.store.appendPart(sessionId, target.id, part);
+    const streamed = this.activeMessageParts.get(sessionId);
+    if (streamed?.messageId === target.id) {
+      streamed.parts = [...streamed.parts.filter((candidate) => candidate.id !== part.id), part];
+    }
     this.options.emit({ type: 'session.part', sessionId, messageId: target.id, part });
   }
   private replacePart(sessionId: string, part: MessagePart): void {
     this.options.store.replacePart(sessionId, part);
   }
-  private replaceMessageParts(message: Message, parts: MessagePart[]): void {
+  private replaceMessageParts(
+    message: Message,
+    parts: MessagePart[],
+    previousParts: MessagePart[],
+    incrementalPartId: MessagePart['id'],
+  ): void {
     this.options.store.replaceMessage({ ...message, parts });
-    for (const part of parts)
+    const previousById = new Map(previousParts.map((part) => [part.id, part]));
+    for (const part of parts) {
+      const prior = previousById.get(part.id);
+      if (prior === part) continue;
+      if (part.id === incrementalPartId) continue;
       this.options.emit({
         type: 'session.part',
         sessionId: message.sessionId,
         messageId: message.id,
         part,
       });
+    }
   }
   private noteValidationFailure(modelRef: string): void {
     const stats = this.options.stats?.find((item) => item.modelRef === modelRef);

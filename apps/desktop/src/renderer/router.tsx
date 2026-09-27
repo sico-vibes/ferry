@@ -1,8 +1,11 @@
-import { createRouter, RouterProvider } from '@tanstack/react-router';
+import { createHashHistory, createRouter, RouterProvider } from '@tanstack/react-router';
 import { rootRoute, routeRegistry } from './app/routes';
 
 const routeTree = rootRoute.addChildren(routeRegistry);
-const router = createRouter({ routeTree });
+const router = createRouter({
+  routeTree,
+  ...(location.protocol === 'file:' ? { history: createHashHistory() } : {}),
+});
 
 declare module '@tanstack/react-router' {
   interface Register {

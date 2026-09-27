@@ -261,6 +261,9 @@ async function startEmbeddedCore() {
     await page.waitForFunction(() => Boolean(window.ferryRpcClient), undefined, {
       timeout: 30_000,
     });
+    await page.evaluate(async () => {
+      await window.ferryRpcClient.providers.setKey('openrouter', 'fixture-key');
+    });
     await expect
       .poll(() => page.evaluate(async () => (await window.ferryRpcClient.models.list()).length))
       .toBeGreaterThan(0);
@@ -307,34 +310,43 @@ async function openRenderer(page) {
 }
 
 try {
-  fakeProvider = FakeOpenAIServer.scriptedTurns([
-    toolTurn(
-      'update_plan',
-      { items: [{ text: 'Edit the failing fixture and run its tests', status: 'doing' }] },
-      'I will update the failing fixture and verify the tests.',
-    ),
-    toolTurn('edit_file', { path: 'index.js', edits: [{ search: '42', replace: '0' }] }),
-    toolTurn('run_command', { command: 'node test.js', cwd: '.', timeoutMs: 10000 }),
-    textTurn('The fixture now passes its tests.'),
-    {
-      chunks: Array.from({ length: 30 }, (_, index) => ({
-        id: 'chatcmpl_slow',
-        object: 'chat.completion.chunk',
-        created: 1,
-        model: 'fixture',
-        choices: [
-          {
-            index: 0,
-            delta: { ...(index === 0 ? { role: 'assistant' } : {}), content: 'working ' },
-            finish_reason: null,
-          },
-        ],
-      })),
-      delayMs: 500,
-    },
-    { status: 429, body: { error: { message: 'scripted rate limit', type: 'rate_limit_error' } } },
-    textTurn('Continued successfully after a provider handoff.'),
-  ]);
+  fakeProvider = new FakeOpenAIServer({
+    models: [
+      { id: 'cohere/north-mini-code:free', supported_parameters: ['tools'] },
+      { id: 'allam-2-7b', supported_parameters: ['tools'] },
+    ],
+    responses: [
+      toolTurn(
+        'update_plan',
+        { items: [{ text: 'Edit the failing fixture and run its tests', status: 'doing' }] },
+        'I will update the failing fixture and verify the tests.',
+      ),
+      toolTurn('edit_file', { path: 'index.js', edits: [{ search: '42', replace: '0' }] }),
+      toolTurn('run_command', { command: 'node test.js', cwd: '.', timeoutMs: 10000 }),
+      textTurn('The fixture now passes its tests.'),
+      {
+        chunks: Array.from({ length: 30 }, (_, index) => ({
+          id: 'chatcmpl_slow',
+          object: 'chat.completion.chunk',
+          created: 1,
+          model: 'fixture',
+          choices: [
+            {
+              index: 0,
+              delta: { ...(index === 0 ? { role: 'assistant' } : {}), content: 'working ' },
+              finish_reason: null,
+            },
+          ],
+        })),
+        delayMs: 500,
+      },
+      {
+        status: 429,
+        body: { error: { message: 'scripted rate limit', type: 'rate_limit_error' } },
+      },
+      textTurn('Continued successfully after a provider handoff.'),
+    ],
+  });
   await fakeProvider.start();
   await mkdir(join(agentFixture.path, '.ferry'), { recursive: true });
   await writeFile(
@@ -393,6 +405,10 @@ try {
     await page.evaluate(async () => {
       await window.ferryRpcClient.providers.setKey('openrouter', 'fixture-key');
       await window.ferryRpcClient.providers.setKey('groq', 'fixture-key');
+      await Promise.all([
+        window.ferryRpcClient.models.list('openrouter'),
+        window.ferryRpcClient.models.list('groq'),
+      ]);
     });
     const agentSession = await page.evaluate(async () => {
       const workspace = (await window.ferryRpcClient.workspaces.list())[0];

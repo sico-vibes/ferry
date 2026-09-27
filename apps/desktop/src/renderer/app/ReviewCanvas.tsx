@@ -167,7 +167,7 @@ export function ReviewCanvas() {
               <FileCode2 size={14} />
               <span>{file.path}</span>
               <small className="text-success">+{file.additions}</small>
-              <small className="text-danger">−{file.deletions}</small>
+              <small className="review-deletion-count">−{file.deletions}</small>
             </button>
           ))}
         </nav>
@@ -187,8 +187,22 @@ export function ReviewCanvas() {
                       ? 'markdown'
                       : 'typescript'
                 }
+                onMount={(editor) => {
+                  editor
+                    .getOriginalEditor()
+                    .getDomNode()
+                    ?.querySelector<HTMLElement>('.native-edit-context')
+                    ?.setAttribute('aria-label', 'Original file contents');
+                  editor
+                    .getModifiedEditor()
+                    .getDomNode()
+                    ?.querySelector<HTMLElement>('.native-edit-context')
+                    ?.setAttribute('aria-label', 'Changed file contents');
+                }}
                 options={{
                   readOnly: true,
+                  originalAriaLabel: 'Original file contents',
+                  modifiedAriaLabel: 'Changed file contents',
                   minimap: { enabled: false },
                   renderSideBySide: true,
                   scrollBeyondLastLine: false,
