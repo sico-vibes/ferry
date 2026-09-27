@@ -10,6 +10,7 @@ export function parseEvalArgs(args) {
     repeat: 1,
     model: undefined,
     json: false,
+    verbose: false,
     allowPaid: false,
     yes: false,
     dataDir: undefined,
@@ -35,6 +36,7 @@ export function parseEvalArgs(args) {
     else if (arg === '--max-steps') options.maxSteps = positiveInteger(value(), '--max-steps');
     else if (arg === '--timeout') options.timeoutMs = positiveInteger(value(), '--timeout') * 1000;
     else if (arg === '--json') options.json = true;
+    else if (arg === '--verbose') options.verbose = true;
     else if (arg === '--allow-paid') options.allowPaid = true;
     else if (arg === '--yes') options.yes = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
@@ -152,6 +154,27 @@ export function accountRun({ result, measurements = [] }) {
       return counts;
     }, {}),
   };
+}
+
+export function diffUsageHistory(before, after) {
+  const prior = new Map(
+    before.map((entry) => [
+      `${entry.date}:${entry.providerId}`,
+      { inputTokens: entry.inputTokens, outputTokens: entry.outputTokens },
+    ]),
+  );
+  return after.reduce(
+    (delta, entry) => {
+      const previous = prior.get(`${entry.date}:${entry.providerId}`) ?? {
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+      delta.inputTokens += Math.max(0, entry.inputTokens - previous.inputTokens);
+      delta.outputTokens += Math.max(0, entry.outputTokens - previous.outputTokens);
+      return delta;
+    },
+    { inputTokens: 0, outputTokens: 0 },
+  );
 }
 
 export async function runHarness({ scenarios, repeat = 1, runScenario }) {

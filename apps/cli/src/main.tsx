@@ -6,7 +6,13 @@ import { createClientAsync } from './client.js';
 import { good, muted, warn } from './colors.js';
 import { collectDoctor } from './doctor.js';
 import type { FerryClient } from '@ferry/client';
-import { RoutingSettingsSchema, type MessagePart, type Profile } from '@ferry/shared';
+import {
+  ModelRefSchema,
+  RoutingSettingsSchema,
+  type MessagePart,
+  type Profile,
+  type Session,
+} from '@ferry/shared';
 
 /* Event handlers intentionally return promises to the event emitter; the parser narrows argv flags. */
 /* eslint-disable @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/return-await, @typescript-eslint/consistent-type-definitions, @typescript-eslint/restrict-template-expressions */
@@ -22,6 +28,10 @@ export async function runPrompt(
     maxSteps?: number;
     mock?: boolean;
     verbose?: boolean;
+    quiet?: boolean;
+    modelRef?: string;
+    onSessionCreated?: (session: Session) => void;
+    onEvent?: (event: Record<string, unknown>) => void;
   } = {},
 ): Promise<number> {
   const settings = await client.settings.get();
@@ -34,6 +44,13 @@ export async function runPrompt(
     ...(profile ? { profileId: profile.id } : {}),
     title: prompt.slice(0, 60),
   });
+  if (options.modelRef)
+    await client.models.select(session.id, ModelRefSchema.parse(options.modelRef));
+  options.onSessionCreated?.(session);
+  const publish = (event: Record<string, unknown>, human?: string) => {
+    options.onEvent?.(event);
+    if (!options.quiet) emit(json, event, human);
+  };
   let approvalNeeded = false;
   let failed = false;
   let stepLimitExceeded = false;
@@ -47,7 +64,7 @@ export async function runPrompt(
   const disposers = [
     client.on('session.delta', (event) => {
       if (event.sessionId !== session.id) return;
-      emit(json, { type: 'session.delta', ...event }, event.textDelta);
+      publish({ type: 'session.delta', ...event }, event.textDelta);
     }),
     client.on('session.part', (event) => {
       if (event.sessionId !== session.id) return;
@@ -71,7 +88,7 @@ export async function runPrompt(
       }
       if (event.part.type === 'error') {
         failed = true;
-        if (options.verbose && event.part.details)
+        if (!options.quiet && options.verbose && event.part.details)
           process.stderr.write(`Routing exclusions: ${formatRoutingDetails(event.part.details)}\n`);
       }
       if (event.part.type === 'tool_call' && !seenParts.has(event.part.id)) {
@@ -82,43 +99,41 @@ export async function runPrompt(
         if (options.mock && options.maxSteps !== undefined && observedSteps > options.maxSteps)
           stepLimitExceeded = true;
       }
-      emit(json, { type: 'session.part', ...event }, summarize(event.part));
+      publish({ type: 'session.part', ...event }, summarize(event.part));
     }),
     client.on('session.message', (event) => {
-      if (event.sessionId === session.id) emit(json, { type: 'session.message', ...event });
+      if (event.sessionId === session.id) publish({ type: 'session.message', ...event });
     }),
     client.on('routing.explain', (event) => {
       if (!options.verbose) return;
-      process.stderr.write(`Router explain: ${JSON.stringify(event)}\n`);
-      emit(json, { type: 'routing.explain', payload: event });
+      if (!options.quiet) process.stderr.write(`Router explain: ${JSON.stringify(event)}\n`);
+      publish({ type: 'routing.explain', payload: event });
     }),
-    client.on('task.updated', (event) => emit(json, { type: 'task.updated', payload: event })),
-    client.on('quota.updated', (event) => emit(json, { type: 'quota.updated', payload: event })),
-    client.on('provider.updated', (event) =>
-      emit(json, { type: 'provider.updated', payload: event }),
-    ),
+    client.on('task.updated', (event) => publish({ type: 'task.updated', payload: event })),
+    client.on('quota.updated', (event) => publish({ type: 'quota.updated', payload: event })),
+    client.on('provider.updated', (event) => publish({ type: 'provider.updated', payload: event })),
     client.on('delegation.updated', (event) =>
-      emit(json, { type: 'delegation.updated', payload: event }),
+      publish({ type: 'delegation.updated', payload: event }),
     ),
     client.on('toast', (event) => {
       const message = 'title' in event && typeof event.title === 'string' ? event.title : '';
       if (message.startsWith('FERRY_RUN_LIMIT:max_steps:')) stepLimitExceeded = true;
-      emit(json, { type: 'toast', payload: event });
+      publish({ type: 'toast', payload: event });
     }),
   ];
   disposers.push(
     client.on('session.status', (value) => {
       if (value.id !== session.id) return;
       if (['idle', 'error'].includes(value.status)) {
-        if (!terminalStatusEmitted) emit(json, { type: 'session.status', session: value });
+        if (!terminalStatusEmitted) publish({ type: 'session.status', session: value });
         terminalStatusEmitted = true;
         finishRun();
-      } else emit(json, { type: 'session.status', session: value });
+      } else publish({ type: 'session.status', session: value });
     }),
     client.on('session.updated', (value) => {
       if (value.id !== session.id || !['idle', 'error'].includes(value.status)) return;
       if (!terminalStatusEmitted) {
-        emit(json, { type: 'session.status', session: value });
+        publish({ type: 'session.status', session: value });
         terminalStatusEmitted = true;
       }
       finishRun();
@@ -137,9 +152,10 @@ export async function runPrompt(
       await client.settings.update({ permissionMode: settings.permissionMode });
   }
   if (stepLimitExceeded) {
-    process.stderr.write(
-      `Maximum step count (${options.maxSteps}) reached; session ended cleanly.\n`,
-    );
+    if (!options.quiet)
+      process.stderr.write(
+        `Maximum step count (${options.maxSteps}) reached; session ended cleanly.\n`,
+      );
     return 4;
   }
   if (approvalNeeded) return 3;

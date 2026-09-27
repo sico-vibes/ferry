@@ -1,8 +1,18 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createRpcFerryClient } from '../packages/client/src/index.js';
+import { CoreHost, createMemoryTransportPair } from '../packages/core/src/index.js';
+import { domainRegistrars } from '../packages/core/src/domains/index.js';
+import { createServices } from '../packages/core/src/services.js';
+import { MemorySecretStore } from '../packages/secrets/src/index.js';
 import { FakeOpenAIServer } from '../packages/testkit/src/fake-servers.js';
+import { driveEvalSession } from './eval-live-runner.mjs';
 import {
   accountRun,
   budgetGuard,
+  diffUsageHistory,
   parseDotEnv,
   parseEvalArgs,
   redactText,
@@ -26,6 +36,7 @@ describe('live eval harness helpers', () => {
         'one,two',
         '--repeat',
         '2',
+        '--verbose',
         '--yes',
       ]),
     ).toMatchObject({
@@ -34,6 +45,7 @@ describe('live eval harness helpers', () => {
       include: [],
       exclude: [],
       repeat: 2,
+      verbose: true,
       yes: true,
     });
     expect(parseEvalArgs(['--include', 'groq,trial-a', '--exclude', 'credits-a'])).toMatchObject({
@@ -166,6 +178,92 @@ describe('live eval harness helpers', () => {
     });
   }, 30_000);
 
+  it('drives a real core session through the CLI run path and observes a passing model step', async () => {
+    const chunk = (delta: Record<string, unknown>, finishReason: string | null = null) => ({
+      id: 'chatcmpl_cli_eval',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model: 'openai/gpt-oss-120b',
+      choices: [{ index: 0, delta, finish_reason: finishReason }],
+    });
+    const server = await FakeOpenAIServer.scriptedTurns([
+      {
+        chunks: [chunk({ role: 'assistant' }), chunk({ content: 'pong' }), chunk({}, 'stop')],
+      },
+    ]);
+    server.options.models = [{ id: 'openai/gpt-oss-120b', supported_parameters: ['tools'] }];
+    await server.start();
+    servers.push(server);
+    const root = await mkdtemp(join(tmpdir(), 'ferry-live-runner-'));
+    const workspace = join(root, 'workspace');
+    await mkdir(workspace, { recursive: true });
+    const secrets = new MemorySecretStore(`eval-live-runner-${process.pid}`);
+    const services = await createServices({
+      dataDir: join(root, 'data'),
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        FERRY_DEV_MODE: 'true',
+        FERRY_PROVIDER_BASE_URL_GROQ: `${server.baseUrl}/v1`,
+      },
+      secrets,
+    });
+    const [coreTransport, clientTransport] = createMemoryTransportPair();
+    const host = new CoreHost({ dataDir: services.paths.home, services, transport: coreTransport });
+    for (const register of domainRegistrars) register(host, services);
+    await host.start();
+    const client = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
+    try {
+      await client.hello;
+      await client.providers.setKey('groq', 'fake-eval-key');
+      for (const provider of await client.providers.list())
+        await client.providers.setEnabled(provider.id, provider.id === 'groq');
+      const autoFreeProfile = (await client.profiles.list()).find(
+        (profile) => profile.name === 'Auto-Free',
+      );
+      expect(autoFreeProfile).toBeDefined();
+      if (!autoFreeProfile) throw new Error('Auto-Free profile missing in fake core');
+      const rolesOn = await client.profiles.save({
+        ...autoFreeProfile,
+        roles: { ...autoFreeProfile.roles, enabled: true },
+      });
+      expect(rolesOn.roles.enabled).toBe(true);
+      await client.profiles.save(autoFreeProfile);
+      const result = await driveEvalSession({
+        client,
+        prompt: 'Reply with exactly one word: pong',
+        cwd: workspace,
+        profileName: 'Auto-Free',
+        maxSteps: 3,
+        timeoutMs: 12_000,
+        inactivityTimeoutMs: 3_000,
+        logDirectory: services.paths.logs,
+      });
+      const reply = result.detail.messages
+        .filter(({ role }) => role === 'assistant')
+        .flatMap(({ parts }) => parts.filter(({ type }) => type === 'text').map(({ text }) => text))
+        .join('\n');
+      expect(result.exitCode).toBe(0);
+      expect(result.detail.session.status, JSON.stringify(result.detail)).toBe('idle');
+      expect(reply).toMatch(/pong/i);
+      const requestRows = services.db.client
+        .prepare('SELECT * FROM requests WHERE session_id = ?')
+        .all(result.detail.session.id);
+      const steps = new Set(
+        requestRows.map(
+          ({ step_id }: { step_id?: string | null }, index: number) => step_id ?? `row-${index}`,
+        ),
+      );
+      expect(steps.size).toBeGreaterThan(0);
+      expect(result.exitCode === 0 && /pong/i.test(reply)).toBe(true);
+      expect(server.requests.some(({ url }) => url.endsWith('/chat/completions'))).toBe(true);
+    } finally {
+      client.close();
+      await host.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    }
+  }, 30_000);
+
   it('accounts engine request rows by session id', () => {
     expect(
       accountRun({
@@ -189,5 +287,40 @@ describe('live eval harness helpers', () => {
       tokensOut: 9,
       providerErrors: { rate_limit: 1 },
     });
+  });
+
+  it('uses quota usage history deltas for per-task token accounting', () => {
+    expect(
+      diffUsageHistory(
+        [
+          {
+            date: '2026-09-27',
+            providerId: 'groq',
+            requests: 2,
+            inputTokens: 100,
+            outputTokens: 30,
+            costUsd: 0,
+          },
+        ],
+        [
+          {
+            date: '2026-09-27',
+            providerId: 'groq',
+            requests: 3,
+            inputTokens: 145,
+            outputTokens: 48,
+            costUsd: 0,
+          },
+          {
+            date: '2026-09-27',
+            providerId: 'gemini',
+            requests: 1,
+            inputTokens: 12,
+            outputTokens: 7,
+            costUsd: 0,
+          },
+        ],
+      ),
+    ).toEqual({ inputTokens: 57, outputTokens: 25 });
   });
 });
