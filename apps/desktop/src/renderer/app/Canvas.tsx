@@ -745,7 +745,10 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
             .join('')}
         </UserMessage>
       ) : (
-        <AssistantMessage modelName={modelName}>
+        <AssistantMessage
+          modelName={modelName}
+          {...(message.agentRole ? { agentRole: message.agentRole } : {})}
+        >
           {groupParts(message.parts).map((part) =>
             part.type === 'tool_group' ? (
               <ToolStepGroup

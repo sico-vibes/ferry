@@ -4,3 +4,4 @@ export * from './tool-registry.js';
 export * from './loop.js';
 export * from '../evals/fixtures.js';
 export * from './weak-model.js';
+export * from './role-plan.js';

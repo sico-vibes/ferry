@@ -149,6 +149,30 @@ describe('@ferry/cli argument parsing and exit codes', () => {
   it('exits after the terminal status from the bundled CLI and embedded core', async () => {
     const dataDir = tempDirectory('embedded-terminal');
     const workspaceDir = tempDirectory('embedded-workspace');
+    const roles = runCli([
+      'profiles',
+      'roles',
+      'set',
+      'Best Available',
+      'off',
+      '--engine',
+      'local',
+      '--data-dir',
+      dataDir,
+    ]);
+    expect(roles.status, roles.stderr).toBe(0);
+    const autoFreeRoles = runCli([
+      'profiles',
+      'roles',
+      'set',
+      'Auto-Free',
+      'off',
+      '--engine',
+      'local',
+      '--data-dir',
+      dataDir,
+    ]);
+    expect(autoFreeRoles.status, autoFreeRoles.stderr).toBe(0);
     const fake = new FakeOpenAIServer({
       models: [{ id: 'qwen/qwen3.8-27b:free', supported_parameters: ['tools'] }],
       responses: [
@@ -279,7 +303,9 @@ describe('@ferry/cli argument parsing and exit codes', () => {
     );
     await fake.stop();
     fakeServers.splice(fakeServers.indexOf(fake), 1);
-    expect(exit).toMatchObject({ code: 0 });
+    expect(exit, `${stdout}\n${stderr}\nrequests=${JSON.stringify(fake.requests)}`).toMatchObject({
+      code: 0,
+    });
     expect(
       finalMessageAt,
       `${stdout}\nrequests=${JSON.stringify(fake.requests)}\nlogs=${readTree(join(dataDir, 'logs'))}`,

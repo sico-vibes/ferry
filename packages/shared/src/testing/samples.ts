@@ -248,6 +248,7 @@ export const sampleProfile: Profile = {
   caps: { dailyUsd: null, monthlyUsd: null },
   delegationMode: 'suggest',
   optimizers: sampleOptimizerToggles,
+  roles: { enabled: false, plannerModelRef: null, editorModelRef: null, editorFailureThreshold: 2 },
 };
 export const sampleMcpServer: McpServer = {
   id: 'mcp_00000000000000000000' as McpServer['id'],

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 export function parseEvalArgs(args) {
   const options = {
     profile: 'auto-free',
+    roles: undefined,
     only: [],
     include: [],
     exclude: [],
@@ -24,6 +25,7 @@ export function parseEvalArgs(args) {
       return next;
     };
     if (arg === '--profile') options.profile = value();
+    else if (arg === '--roles') options.roles = value();
     else if (arg === '--only') options.only = value().split(',').filter(Boolean);
     else if (arg === '--include') options.include = value().split(',').filter(Boolean);
     else if (arg === '--exclude') options.exclude = value().split(',').filter(Boolean);
@@ -40,6 +42,8 @@ export function parseEvalArgs(args) {
   }
   if (!['auto-free', 'best-available'].includes(options.profile))
     throw new Error('--profile must be auto-free or best-available');
+  if (options.roles !== undefined && !['on', 'off'].includes(options.roles))
+    throw new Error('--roles must be on or off');
   if (options.repeat > 100) throw new Error('--repeat must be 100 or less');
   return options;
 }

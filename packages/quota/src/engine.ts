@@ -389,8 +389,14 @@ export class QuotaEngine {
           : window.metric === 'usd'
             ? pricedUsd
             : pricedCredits;
-    const modelRef = window.model
-      ? (this.models.find((model) => model.ref.includes(window.model ?? ''))?.ref ?? null)
+    const normalizedWindowModel = window.model?.toLowerCase().replace(/^.*\//, '');
+    const modelRef = normalizedWindowModel
+      ? (this.models.find(
+          (model) =>
+            model.providerId === providerId &&
+            (model.ref.toLowerCase().endsWith(`/${normalizedWindowModel}`) ||
+              model.family?.toLowerCase() === normalizedWindowModel),
+        )?.ref ?? null)
       : null;
     const observation = this.snapshots.get(this.key(providerId, window.id, modelRef ?? undefined));
     const validSnapshot =

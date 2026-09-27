@@ -34,19 +34,31 @@ export function register(host: CoreHost, services: FerryServices): void {
       if (builtin) {
         const { fallbackChain: _overrideChain, ...candidateSettings } = profile;
         const { fallbackChain: _baseChain, ...builtinSettings } = builtin;
+        const { roles: _candidateRoles, ...candidateWithoutRoles } = candidateSettings;
+        const { roles: _baseRoles, ...builtinWithoutRoles } = builtinSettings;
         if (
           !profile.builtin ||
-          JSON.stringify(candidateSettings) !== JSON.stringify(builtinSettings)
+          JSON.stringify(candidateWithoutRoles) !== JSON.stringify(builtinWithoutRoles)
         )
           throw rpcDomainError(
             -32010,
             'validation',
-            'Built-in profiles only allow editing the fallback order',
+            'Built-in profiles only allow editing the fallback order and planner/editor roles',
           );
         const current = savedBuiltinOverrides(services).filter((item) => item.id !== profile.id);
-        current.push(ProfileSchema.parse({ ...builtin, fallbackChain: profile.fallbackChain }));
+        current.push(
+          ProfileSchema.parse({
+            ...builtin,
+            fallbackChain: profile.fallbackChain,
+            roles: profile.roles,
+          }),
+        );
         services.settings.put('profile-overrides', current);
-        return ProfileSchema.parse({ ...builtin, fallbackChain: profile.fallbackChain });
+        return ProfileSchema.parse({
+          ...builtin,
+          fallbackChain: profile.fallbackChain,
+          roles: profile.roles,
+        });
       }
       const current = savedProfiles(services);
       if (profile.builtin)

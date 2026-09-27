@@ -604,6 +604,57 @@ async function oauth(client: FerryClient, args: string[], json = false): Promise
 async function profiles(client: FerryClient, args: string[], json = false) {
   const [action, name] = args;
   const rows = await client.profiles.list();
+  if (action === 'roles') {
+    const roleAction = args[1];
+    const profileName = args[2] ?? 'Auto-Free';
+    const profile = rows.find((item) => item.name.toLowerCase() === profileName.toLowerCase());
+    if (!profile) throw new CliError(2, `Profile not found: ${profileName}`);
+    if (roleAction === 'set') {
+      const enabled = args[3];
+      if (enabled !== 'on' && enabled !== 'off')
+        throw new CliError(
+          2,
+          'Usage: ferry profiles roles set <profile> on|off [planner=auto|model editor=auto|model]',
+        );
+      const values = Object.fromEntries(
+        args.slice(4).map((value) => {
+          const separator = value.indexOf('=');
+          if (separator < 1) throw new CliError(2, `Invalid role option: ${value}`);
+          return [value.slice(0, separator), value.slice(separator + 1)];
+        }),
+      );
+      const saved = await client.profiles.save({
+        ...profile,
+        roles: {
+          ...profile.roles,
+          enabled: enabled === 'on',
+          ...(values.planner === undefined
+            ? {}
+            : { plannerModelRef: values.planner === 'auto' ? null : values.planner }),
+          ...(values.editor === undefined
+            ? {}
+            : { editorModelRef: values.editor === 'auto' ? null : values.editor }),
+        },
+      });
+      writeResult(
+        json,
+        { profile: saved.name, roles: saved.roles },
+        `Saved planner/editor roles for ${saved.name}.\n`,
+      );
+      return 0;
+    }
+    if (roleAction !== 'show')
+      throw new CliError(
+        2,
+        'Usage: ferry profiles roles show [profile] | set <profile> on|off [planner=auto|model editor=auto|model]',
+      );
+    writeResult(
+      json,
+      { profile: profile.name, roles: profile.roles },
+      `${profile.name}: ${profile.roles.enabled ? 'on' : 'off'} (planner=${profile.roles.plannerModelRef ?? 'auto'}, editor=${profile.roles.editorModelRef ?? 'auto'})\n`,
+    );
+    return 0;
+  }
   if (action === 'chain') {
     const chainAction = args[1];
     const profileName = args[2] ?? 'Auto-Free';

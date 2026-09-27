@@ -95,6 +95,7 @@ export class SessionStore {
     parts: Message['parts'],
     modelRef: Message['modelRef'],
     now = new Date(),
+    agentRole?: Message['agentRole'],
   ): Message {
     const previousTime = this.repositories.messages
       .list()
@@ -108,6 +109,7 @@ export class SessionStore {
       role,
       createdAt: new Date(at).toISOString(),
       modelRef,
+      ...(agentRole ? { agentRole } : {}),
       parts,
     });
     this.repositories.messages.put(message);

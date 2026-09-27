@@ -119,6 +119,7 @@ export const MessageSchema = z.object({
   role: z.enum(['user', 'assistant']),
   createdAt: z.iso.datetime(),
   modelRef: ModelRefSchema.nullable(),
+  agentRole: z.enum(['planner', 'editor']).optional(),
   modelAttempts: z
     .array(
       z.object({

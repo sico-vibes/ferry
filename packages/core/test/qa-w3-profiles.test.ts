@@ -29,6 +29,12 @@ function customProfile(overrides: Record<string, unknown> = {}): Profile {
       contextHygiene: true,
       rtk: false,
     },
+    roles: {
+      enabled: false,
+      plannerModelRef: null,
+      editorModelRef: null,
+      editorFailureThreshold: 2,
+    },
     ...overrides,
   };
 }
@@ -82,6 +88,35 @@ describe('QA W3 profiles: validation and paid-routing guarantees', () => {
       expect(
         (await h.rpc.profiles.list()).find((item) => item.id === autoFree.id)?.fallbackChain,
       ).toEqual(updated.fallbackChain);
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
+
+  it('persists planner/editor role settings for built-in profiles', async () => {
+    const h = await startHarness();
+    try {
+      const autoFree = (await h.rpc.profiles.list()).find(
+        (item) => item.id === 'profile_builtin_auto_free',
+      );
+      if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
+      const updated = await h.rpc.profiles.save({
+        ...autoFree,
+        roles: {
+          ...autoFree.roles,
+          enabled: true,
+          plannerModelRef: 'openrouter/planner-fixture',
+          editorModelRef: 'groq/editor-fixture',
+        },
+      });
+      expect(updated.roles).toMatchObject({
+        enabled: true,
+        plannerModelRef: 'openrouter/planner-fixture',
+        editorModelRef: 'groq/editor-fixture',
+      });
+      expect((await h.rpc.profiles.list()).find((item) => item.id === autoFree.id)?.roles).toEqual(
+        updated.roles,
+      );
     } finally {
       await h.close();
     }

@@ -39,6 +39,24 @@ describe('QA profiles domain', () => {
     expect(stored[0]?.name).toBe('QA Custom v2');
   });
 
+  it('persists planner/editor role preferences on a profile', async () => {
+    const client = makeClient();
+    const base = (await client.profiles.list())[0];
+    if (!base) throw new Error('Profile fixture missing');
+    const saved = await client.profiles.save({
+      ...base,
+      roles: {
+        enabled: true,
+        plannerModelRef: 'gemini/google/gemini-3.8-flash',
+        editorModelRef: 'groq/openai/gpt-oss-120b',
+        editorFailureThreshold: 3,
+      },
+    });
+    expect((await client.profiles.list()).find(({ id }) => id === saved.id)?.roles).toEqual(
+      saved.roles,
+    );
+  });
+
   it('activate with a sessionId changes only that session', async () => {
     const client = makeClient();
     const sessions = await client.sessions.list();
