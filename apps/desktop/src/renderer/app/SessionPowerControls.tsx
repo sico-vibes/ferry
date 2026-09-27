@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Bell, Check, ChevronDown, Search, X } from 'lucide-react';
-import { Dialog, FerryMark, Pill } from '@ferry/ui';
+import { DataUseBadge, Dialog, FerryMark, Pill, TagBadge } from '@ferry/ui';
 import type { ModelRef, PartId, SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { keys, useSessions, useWorkspaces } from '../data/queries';
@@ -482,6 +482,14 @@ export function ModelPickerPopover({
                           >
                             <strong>
                               {model.name}
+                              {provider?.tag === 'promo' ? (
+                                <span className="ml-1" title="Promotional — may end without notice">
+                                  <TagBadge kind="promo" />
+                                </span>
+                              ) : null}
+                              {provider?.tag === 'trial' ? (
+                                <TagBadge className="ml-1" kind="trial" />
+                              ) : null}
                               {['anthropic', 'openai-codex', 'github-copilot'].includes(
                                 model.providerId,
                               ) ? (
@@ -496,6 +504,7 @@ export function ModelPickerPopover({
                               {candidate?.selected ? <Check size={13} /> : null}
                             </strong>
                             <span className="model-meta-line">
+                              <DataUseBadge dataUse={provider?.dataUse} />{' '}
                               <span className="model-tier-pill">{model.tier}</span>
                               <span className="model-capacity-badge">
                                 {capacity == null

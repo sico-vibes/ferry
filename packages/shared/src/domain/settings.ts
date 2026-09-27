@@ -10,6 +10,7 @@ export const RoutingSettingsSchema = z.object({
   gentleQuotaRamp: z.boolean().default(true),
   toolRejectionMemory: z.boolean().default(true),
   carefulModelRetirement: z.boolean().default(true),
+  avoidTrainingProviders: z.boolean().default(false),
   stickyTtlMinutes: z.number().int().min(1).max(1440).default(30),
   rampStart: z.number().min(0.01).max(1).default(0.2),
   rampFloor: z.number().min(0).max(1).default(0.1),

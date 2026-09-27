@@ -216,7 +216,7 @@ describe('Explore providers and models', () => {
     const names = screen
       .getAllByRole('row')
       .slice(1)
-      .map((row) => row.querySelector('td')?.textContent ?? '');
+      .map((row) => row.querySelector('td')?.getAttribute('title') ?? '');
     expect(names[0]).toBe('Large');
   }, 20_000);
 });

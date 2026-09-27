@@ -267,7 +267,15 @@ export class ResilienceLedger {
     const id = `${scope}:${key}`;
     const previous = this.active(scope, key, now);
     const withinStrikeWindow = previous && Date.parse(previous.strikeWindowEndsAt) > now;
-    const strikes = withinStrikeWindow ? previous.strikes + 1 : 1;
+    const transient =
+      error.family === 'server' || error.family === 'timeout' || error.family === 'stream_failure';
+    const strikes = transient
+      ? withinStrikeWindow
+        ? previous.strikes
+        : 0
+      : withinStrikeWindow
+        ? previous.strikes + 1
+        : 1;
     const failures = (previous?.failures ?? 0) + 1;
     const hinted = error.retryAfterMs;
     const backoff = Math.min(30 * 60_000, 5_000 * 2 ** Math.min(failures - 1, 8));
@@ -291,12 +299,7 @@ export class ResilienceLedger {
     });
   }
   recordSuccess(scope: ResilienceScope, key: string): void {
-    const id = `${scope}:${key}`;
-    const previous = this.entries.get(id);
-    if (!previous) return;
-    const failures = Math.floor(previous.failures / 2);
-    if (!failures) this.entries.delete(id);
-    else this.entries.set(id, { ...previous, failures, expiresAt: new Date(0).toISOString() });
+    this.entries.delete(`${scope}:${key}`);
   }
   earliest(now = Date.now()): ResilienceEntry | undefined {
     return this.snapshot()

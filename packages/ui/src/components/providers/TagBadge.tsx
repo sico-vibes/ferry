@@ -1,11 +1,12 @@
 import { cn } from '../../lib/cn';
 
 export type TagBadgeKind =
-  'legit' | 'promo' | 'credits' | 'paid' | 'cli' | 'caution' | 'subscription_oauth';
+  'legit' | 'promo' | 'trial' | 'credits' | 'paid' | 'cli' | 'caution' | 'subscription_oauth';
 
 const labels: Record<TagBadgeKind, string> = {
   legit: 'Free',
   promo: 'Promo',
+  trial: 'Trial',
   credits: 'Credits',
   paid: 'Paid',
   cli: 'CLI',
@@ -16,6 +17,7 @@ const labels: Record<TagBadgeKind, string> = {
 const styles: Record<TagBadgeKind, string> = {
   legit: 'bg-[var(--tint-success)] text-success',
   promo: 'bg-[var(--tint-warn)] text-warn',
+  trial: 'bg-[var(--tint-warn)] text-warn',
   credits: 'bg-[var(--tint-blue)] text-link',
   paid: 'bg-[var(--tint-blue)] text-link',
   cli: 'bg-icon-circle text-text-2',
@@ -24,6 +26,12 @@ const styles: Record<TagBadgeKind, string> = {
 };
 
 export function TagBadge({ kind, className }: { kind: TagBadgeKind; className?: string }) {
+  const description =
+    kind === 'promo'
+      ? 'Promotional — may end without notice'
+      : kind === 'trial'
+        ? 'Trial access is temporary and may require payment details'
+        : labels[kind];
   return (
     <span
       className={cn(
@@ -31,6 +39,7 @@ export function TagBadge({ kind, className }: { kind: TagBadgeKind; className?: 
         styles[kind],
         className,
       )}
+      title={description}
     >
       {labels[kind]}
     </span>

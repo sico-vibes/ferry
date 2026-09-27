@@ -1,6 +1,6 @@
 provider: kilo
 name: Kilo Gateway free models
-tag: caution
+tag: promo
 optional: true
 signup_url: https://app.kilo.ai/
 docs_url: https://kilo.ai/docs/gateway/usage-and-billing

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { MessagePart, RunId, SessionDetail, SessionId } from '@ferry/shared';
+import type { MessagePart, Provider, RunId, SessionDetail, SessionId } from '@ferry/shared';
 import {
   ApprovalCard,
   AssistantMessage,
@@ -26,6 +26,7 @@ import {
   SuggestionChips,
   ToolCallBlock,
   ToolStepGroup,
+  dataUseStatus,
   groupParts,
   UserMessage,
 } from '@ferry/ui';
@@ -53,6 +54,7 @@ const starters: Record<string, string> = {
   'Plan a feature': 'Help me plan this feature and identify the files it will touch.',
 };
 const warnedOAuthRuns = new Set<string>();
+const warnedTrainingSessions = new Set<string>();
 
 function warnOAuthUseOnce(
   _runId: string,
@@ -72,6 +74,28 @@ function warnOAuthUseOnce(
     kind: 'warning',
     title: 'Subscription OAuth account risk',
     body: 'This model uses an unofficial subscription login. The provider may suspend or ban your account.',
+  });
+}
+
+function warnTrainingUseOnce(
+  sessionId: string,
+  modelRef: string | null,
+  models: readonly { ref: string; free: boolean }[],
+  providers: readonly Provider[],
+  pushToast: (toast: { kind: 'warning'; title: string; body: string }) => void,
+) {
+  if (!modelRef || !models.some((model) => model.ref === modelRef && model.free)) return;
+  const providerId = modelRef.split('/')[0];
+  const provider = providers.find((item) => item.id === providerId);
+  if (!provider || dataUseStatus(provider.dataUse) !== 'training') return;
+  const key = `ferry.training-notice.${sessionId}`;
+  if (warnedTrainingSessions.has(sessionId) || localStorage.getItem(key)) return;
+  warnedTrainingSessions.add(sessionId);
+  localStorage.setItem(key, 'shown');
+  pushToast({
+    kind: 'warning',
+    title: 'Free lane data-use notice',
+    body: `${provider.name} may use prompts to train or improve its services. Review provider terms before sharing sensitive code.`,
   });
 }
 
@@ -465,9 +489,32 @@ function PartView({
           <ErrorPart
             message={presentation.summary}
             attempts={presentation.attempts}
-            onRetry={canRetry ? () => void retryLastPrompt() : undefined}
+            onRetry={
+              canRetry && !presentation.allExhausted ? () => void retryLastPrompt() : undefined
+            }
             onSwitchToAuto={canRetry ? () => void retryLastPrompt('auto_for_step') : undefined}
             onPickModel={canRetry ? onPickAnother : undefined}
+            onWait={
+              canRetry && presentation.allExhausted
+                ? () => {
+                    const minutes = Number(
+                      /in (\d+) min/i.exec(presentation.nextCapacity ?? '')?.[1] ?? 0,
+                    );
+                    window.setTimeout(
+                      () => void retryLastPrompt('auto_for_step'),
+                      Math.max(60_000, minutes * 60_000),
+                    );
+                    pushToast({
+                      kind: 'info',
+                      title: 'Retry scheduled',
+                      body: presentation.nextCapacity ?? 'The next free reset.',
+                    });
+                  }
+                : undefined
+            }
+            onAddProvider={
+              presentation.allExhausted ? () => void navigate({ to: '/explore' }) : undefined
+            }
           />
           {presentation.summary.startsWith('No available model —') ? (
             <button
@@ -487,6 +534,8 @@ function PartView({
 function getErrorPresentation(part: MessagePart & { type: 'error' }): {
   summary: string;
   attempts: { model: string; kind: string; status: string; message: string }[];
+  allExhausted: boolean;
+  nextCapacity: string | null;
 } {
   const raw = part as unknown as Record<string, unknown>;
   const safeText = (value: unknown, fallback: string): string => {
@@ -511,7 +560,16 @@ function getErrorPresentation(part: MessagePart & { type: 'error' }): {
       : undefined;
   const attempts = Array.isArray(rawAttempts)
     ? rawAttempts.flatMap(
-        (attempt): { model: string; kind: string; status: string; message: string }[] => {
+        (
+          attempt,
+        ): {
+          model: string;
+          kind: string;
+          status: string;
+          message: string;
+          provider?: string;
+          latencyMs?: number;
+        }[] => {
           if (!attempt || typeof attempt !== 'object') return [];
           const item = attempt as Record<string, unknown>;
           return [
@@ -520,12 +578,23 @@ function getErrorPresentation(part: MessagePart & { type: 'error' }): {
               kind: safeText(item.kind ?? item.errorKind, 'Error'),
               status: safeText(item.status ?? item.statusCode, 'Failed'),
               message: safeText(item.message ?? item.shortMessage, 'No additional detail.'),
+              ...(typeof item.provider === 'string' ? { provider: item.provider } : {}),
+              ...(typeof item.latencyMs === 'number' ? { latencyMs: item.latencyMs } : {}),
             },
           ];
         },
       )
     : [];
-  return { summary, attempts };
+  const details = raw.details && typeof raw.details === 'object' ? raw.details : null;
+  return {
+    summary,
+    attempts,
+    allExhausted: raw.kind === 'all_candidates_exhausted',
+    nextCapacity:
+      details && 'nextCapacity' in details && typeof details.nextCapacity === 'string'
+        ? details.nextCapacity
+        : null,
+  };
 }
 
 function DelegationRunView({
@@ -582,6 +651,10 @@ export function SessionCanvas() {
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
     queryFn: () => client.models.list(),
+  });
+  const { data: providers = [] } = useQuery({
+    queryKey: ['providers'],
+    queryFn: () => client.providers.list(),
   });
   const { data: profiles = [] } = useProfiles();
   const [prompt, setPrompt] = useState('');
@@ -848,12 +921,14 @@ export function SessionCanvas() {
     const offStatus = client.on('session.status', (session) => {
       if (session.id === sessionId)
         warnOAuthUseOnce(`app:${sessionId}`, session.modelRef, pushToast);
+      if (session.id === sessionId)
+        warnTrainingUseOnce(sessionId, session.modelRef, models, providers, pushToast);
     });
     return () => {
       offUpdated();
       offStatus();
     };
-  }, [client, pushToast, sessionId]);
+  }, [client, models, providers, pushToast, sessionId]);
   const running =
     data?.session.status === 'running' || data?.session.status === 'awaiting_approval';
   const currentModel = shortModel(data?.session.modelRef, models);

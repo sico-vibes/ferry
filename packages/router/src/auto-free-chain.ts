@@ -2,6 +2,7 @@ import { ProviderIdSchema } from '@ferry/shared';
 import type { FallbackChainEntry, ModelInfo, Profile, Provider, StepKind } from '@ferry/shared';
 import type { CapacityView } from './index.js';
 import { explainModelRouting, scoreModels } from './index.js';
+import { mayUsePromptsForTraining } from './data-use.js';
 
 const provider = (id: string) => ProviderIdSchema.parse(id);
 
@@ -9,28 +10,59 @@ const provider = (id: string) => ProviderIdSchema.parse(id);
 export const DEFAULT_AUTO_FREE_CHAIN: readonly FallbackChainEntry[] = [
   {
     provider: provider('gemini'),
-    patterns: ['gemini-3.8-flash', 'gemini-3.*-flash', 'gemini-flash-latest'],
+    patterns: [
+      'gemini-*-flash-lite*',
+      'gemini-flash-lite*',
+      'gemini-3.8-flash',
+      'gemini-3.*-flash',
+      'gemini-flash-latest',
+    ],
   },
-  { provider: provider('groq'), patterns: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'] },
-  { provider: provider('cerebras'), patterns: ['gpt-oss-120b', 'qwen-3.8-27b'] },
+  {
+    provider: provider('groq'),
+    patterns: ['openai/gpt-oss-120b', 'qwen/qwen3-coder*', 'qwen/qwen3.8-27b'],
+  },
+  {
+    provider: provider('nvidia'),
+    patterns: [
+      'openai/gpt-oss-120b',
+      'deepseek/deepseek-v4-flash*',
+      'nvidia/nemotron-3-super-*',
+      'nvidia/nemotron-3-ultra-*',
+    ],
+  },
+  { provider: provider('cloudflare-workers-ai'), patterns: ['@cf/openai/gpt-oss-120b'] },
   { provider: provider('mistral'), patterns: ['codestral-*', 'devstral-*', 'mistral-medium*'] },
   {
     provider: provider('sambanova'),
     patterns: ['gpt-oss-120b', 'DeepSeek-R1', 'Qwen3.8-32B', 'Meta-Llama-3.3-70B-Instruct'],
   },
-  { provider: provider('nvidia'), patterns: ['nvidia/nemotron-3-super-*'] },
   {
     provider: provider('openrouter'),
     patterns: [
-      'qwen/qwen3.8-27b:free',
-      'deepseek/*:free',
-      'z-ai/glm*:free',
       'openai/gpt-oss-120b:free',
+      'deepseek/deepseek-v4-flash:free',
+      'z-ai/glm-5*:free',
+      'nvidia/nemotron-3-super*:free',
+      'nvidia/nemotron-3-ultra*:free',
+      'minimax/minimax-m3:free',
+      'minimax/minimax-m2.5:free',
+      'qwen/qwen3-coder:free',
     ],
   },
   {
     provider: provider('kilo'),
-    patterns: ['qwen/qwen3.8-27b:free', 'deepseek/*:free', 'openai/gpt-oss-120b:free'],
+    patterns: [
+      'openai/gpt-oss-120b:free',
+      'deepseek/deepseek-v4-flash:free',
+      'z-ai/glm-5*:free',
+      'minimax/minimax-m3:free',
+      'minimax/minimax-m2.5:free',
+      'qwen/qwen3-coder:free',
+      'stepfun/step-*-flash:free',
+      'moonshotai/kimi-*:free',
+      'longcat/longcat-*:free',
+    ],
   },
 ];
 
@@ -90,6 +122,7 @@ export function resolveFallbackChain(input: {
   step?: StepKind;
   inputTokens: number;
   verifiedModelRefs?: readonly string[];
+  avoidTrainingProviders?: boolean;
   now?: number;
 }): ResolvedFallbackChain {
   const now = input.now ?? Date.parse(input.capacity.now ?? new Date().toISOString());
@@ -113,6 +146,16 @@ export function resolveFallbackChain(input: {
           status: 'no_key',
           modelRef: null,
           detail: 'Provider has no configured usable key.',
+        });
+        continue;
+      }
+      if (input.avoidTrainingProviders && mayUsePromptsForTraining(provider.dataUse)) {
+        diagnostics.push({
+          provider: entry.provider,
+          pattern,
+          status: 'ineligible',
+          modelRef: null,
+          detail: 'Provider data policy says prompts may be used for training.',
         });
         continue;
       }

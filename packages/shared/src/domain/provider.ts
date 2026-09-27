@@ -5,6 +5,7 @@ import { ProviderErrorKindSchema } from './quota.js';
 export const ProviderTagSchema = z.enum([
   'legit',
   'promo',
+  'trial',
   'credits',
   'paid',
   'subscription_cli',

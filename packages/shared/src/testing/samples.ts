@@ -321,6 +321,7 @@ export const sampleSettings: Settings = {
     gentleQuotaRamp: true,
     toolRejectionMemory: true,
     carefulModelRetirement: true,
+    avoidTrainingProviders: false,
     stickyTtlMinutes: 30,
     rampStart: 0.2,
     rampFloor: 0.1,

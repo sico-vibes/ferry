@@ -15,6 +15,35 @@ import {
   ToolCallBlock,
 } from './index';
 describe('transcript components', () => {
+  it('shows exhausted-pool actions and an attempt audit in Details', () => {
+    const wait = vi.fn();
+    const addProvider = vi.fn();
+    render(
+      <ErrorPart
+        message="All free candidates exhausted. Next free capacity: Groq in 12 min."
+        attempts={[
+          {
+            model: 'groq/openai/gpt-oss-120b',
+            provider: 'groq',
+            kind: 'rate_limit',
+            status: '429',
+            latencyMs: 84,
+            message: 'Rate limit reached',
+          },
+        ]}
+        onWait={wait}
+        onAddProvider={addProvider}
+      />,
+    );
+    expect(screen.getByText(/Next free capacity: Groq in 12 min/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Wait' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }));
+    fireEvent.click(screen.getByText(/Details/));
+    expect(screen.getByText('groq/openai/gpt-oss-120b')).toBeTruthy();
+    expect(screen.getByText(/groq · rate_limit · 429 · 84 ms/)).toBeTruthy();
+    expect(wait).toHaveBeenCalledOnce();
+    expect(addProvider).toHaveBeenCalledOnce();
+  });
   it('expands tool details and filtered recovery callback', () => {
     const show = vi.fn();
     render(

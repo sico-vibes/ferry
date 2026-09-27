@@ -40,6 +40,8 @@ export type {
   RetirementFailure,
 } from './techniques.js';
 import { decayedBetaPosterior, sampleBeta, headroomFactor } from './techniques.js';
+import { mayUsePromptsForTraining } from './data-use.js';
+export { mayUsePromptsForTraining } from './data-use.js';
 export {
   classifyProviderError,
   parseRetryAfter,
@@ -290,6 +292,7 @@ export interface ScoreInput {
   /** Models confirmed available to the current provider key, by probe or successful use. */
   verifiedModelRefs?: readonly string[];
   routing?: RoutingSettings;
+  avoidTrainingProviders?: boolean;
   reliability?: readonly import('./techniques.js').ReliabilityObservation[];
   random?: () => number;
 }
@@ -315,6 +318,11 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       provider.health === 'down' ||
       (provider.keyStatus === 'missing' && provider.keyRequired !== false) ||
       provider.keyStatus === 'invalid'
+    )
+      continue;
+    if (
+      (input.avoidTrainingProviders ?? input.routing?.avoidTrainingProviders) &&
+      mayUsePromptsForTraining(provider.dataUse)
     )
       continue;
     if (!input.profile.paidAllowed && provider.freeTierUnsupported) continue;
@@ -672,6 +680,58 @@ export function onStepError(error: StepError): ErrorPolicy {
     error.retryAfterSeconds >= 0
     ? { action: 'retry_same', attempts: 1 }
     : { action: 'reselect', attempts: 0 };
+}
+
+export type RetryAction = 'retry' | 'stop';
+
+/** Status-first fallback classification with defensive keyword and default handling. */
+export function classifyRetryAction(error: {
+  status?: number | null;
+  message?: string;
+}): RetryAction {
+  try {
+    if (typeof error.status === 'number') {
+      if ([400, 401, 402, 403, 404, 409, 422].includes(error.status)) return 'stop';
+      if (
+        error.status === 408 ||
+        error.status === 425 ||
+        error.status === 429 ||
+        error.status >= 500
+      )
+        return 'retry';
+    }
+    const message = error.message ?? '';
+    if (
+      /invalid (?:api )?key|unauthorized|forbidden|authentication failed|model not found|unsupported request/i.test(
+        message,
+      )
+    )
+      return 'stop';
+    if (/timeout|temporar|overload|rate.?limit|network|connection/i.test(message)) return 'retry';
+    return 'retry';
+  } catch {
+    return 'stop';
+  }
+}
+
+export function retryDelayMs(
+  attempt: number,
+  baseMs: number,
+  maxMs: number,
+  random: () => number = Math.random,
+): number {
+  const ceiling = Math.min(maxMs, baseMs * 2 ** Math.max(0, attempt));
+  return Math.round(ceiling * (0.5 + Math.max(0, Math.min(1, random())) * 0.5));
+}
+
+export function shouldStopFallback(input: {
+  pinnedModelRef?: string | null;
+  attemptedModelRef: string;
+  avoidTrainingProviders?: boolean;
+  providerDataUse?: string | null;
+}): boolean {
+  if (input.pinnedModelRef && input.pinnedModelRef === input.attemptedModelRef) return true;
+  return Boolean(input.avoidTrainingProviders && mayUsePromptsForTraining(input.providerDataUse));
 }
 
 export interface BriefingSection {

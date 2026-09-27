@@ -41,4 +41,18 @@ describe('ProviderCard', () => {
     expect(screen.getByText('Needs attention')).toBeTruthy();
     expect(screen.getByText('Needs attention: re-enter key')).toBeTruthy();
   });
+
+  it('shows honest training and temporary-promotion labels on provider cards', () => {
+    render(
+      <ProviderCard
+        provider={{
+          ...provider,
+          tag: 'promo',
+          dataUse: 'Auto Free may route prompts to providers that use them to improve services.',
+        }}
+      />,
+    );
+    expect(screen.getByText('May train on your prompts')).toBeTruthy();
+    expect(screen.getByText('Promotional — may end without notice.')).toBeTruthy();
+  });
 });

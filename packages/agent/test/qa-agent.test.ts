@@ -1347,7 +1347,7 @@ describe('QA agent: real SDK against a scripted fake server', () => {
         maxSteps: 4,
       });
       await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
-        /No eligible unlocked model remains for plan/,
+        /All free candidates exhausted for plan/,
       );
       const result = state.store.load(state.session.id);
       expect(result?.session.status).toBe('error');

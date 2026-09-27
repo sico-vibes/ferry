@@ -72,6 +72,21 @@ describe('SettingsCanvas', () => {
     expect(screen.getByRole('slider', { name: 'Quota ramp start' })).toBeTruthy();
   });
 
+  it('keeps training-provider avoidance off by default and persists the privacy toggle', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const user = userEvent.setup();
+    useUI.setState({ settingsSection: 'Data & Privacy' });
+    mount(client);
+    const toggle = await screen.findByRole('switch', {
+      name: 'Avoid providers that train on my prompts',
+    });
+    expect(toggle.getAttribute('data-state')).toBe('unchecked');
+    await user.click(toggle);
+    await waitFor(async () => {
+      expect((await client.settings.get()).routing.avoidTrainingProviders).toBe(true);
+    });
+  });
+
   // BUG (P2): `PermissionsContent` JSON-parses `ferry.permissionRules` but never asserts the
   // result is an array. A persisted value like `{}` survives the try/catch and `rules.map`
   // throws during render, replacing the whole app with the error boundary.

@@ -2,7 +2,7 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createMockFerryClient, createPlaybackRunner } from '@ferry/client';
-import { routingSettings, runPrompt } from '../src/main.js';
+import { formatRoutingDetails, routingSettings, runPrompt } from '../src/main.js';
 import { ApprovalPrompt, Chat } from '../src/tui.js';
 import { formatCapacity, statusLine } from '../src/format.js';
 
@@ -16,6 +16,24 @@ function client() {
 
 describe('@ferry/cli', () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it('formats attempt audits with provider, status, and latency for verbose output', () => {
+    const details = {
+      attempts: [
+        {
+          model: 'groq/openai/gpt-oss-120b',
+          provider: 'groq',
+          kind: 'server' as const,
+          status: 503,
+          latencyMs: 124,
+          message: 'Temporary outage',
+        },
+      ],
+    } as Parameters<typeof formatRoutingDetails>[0];
+    expect(formatRoutingDetails(details)).toContain(
+      'groq · groq/openai/gpt-oss-120b: server (HTTP 503) · 124 ms',
+    );
+  });
 
   it('formats quota as a capacity bar with a percentage', async () => {
     const text = formatCapacity(await client().quota.capacity());

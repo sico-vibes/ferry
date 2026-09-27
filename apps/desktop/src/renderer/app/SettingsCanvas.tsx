@@ -688,6 +688,10 @@ export function SettingsCanvas() {
             Keys are stored by the local client. Free tier data use depends on each provider's
             terms.
           </p>
+          <p className="muted">
+            Avoid multi-account workarounds, shared keys, and web-session proxies. Providers may ban
+            accounts or revoke access for these practices; Ferry does not support them.
+          </p>
           <div aria-label="Provider keys" className="provider-key-table">
             <div aria-hidden="true" className="provider-key-columns text-meta text-text-3">
               <span>Provider</span>
@@ -1127,6 +1131,21 @@ export function SettingsCanvas() {
             Provider data practices vary by plan and endpoint. Review each provider's terms before
             adding a key.
           </p>
+          <SettingRow
+            title="Avoid providers that train on my prompts"
+            helper="Off by default. When enabled, Auto routing skips providers whose catalog data says prompts may be used for training or service improvement."
+          >
+            <Switch
+              label="Avoid providers that train on my prompts"
+              checked={settings?.routing.avoidTrainingProviders ?? false}
+              onCheckedChange={(avoidTrainingProviders) =>
+                settings &&
+                void update({
+                  routing: { ...settings.routing, avoidTrainingProviders },
+                })
+              }
+            />
+          </SettingRow>
           {providers
             .filter((provider) => provider.dataUse)
             .map((provider) => (

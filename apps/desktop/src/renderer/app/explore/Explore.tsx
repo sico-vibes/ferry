@@ -11,6 +11,8 @@ import {
   PageHeader,
   Pill,
   ProviderCard,
+  DataUseBadge,
+  TagBadge,
   Section,
   Skeleton,
   Stack,
@@ -464,6 +466,24 @@ export function ExploreCanvas() {
                       title={model.name}
                     >
                       {model.name}
+                      {providers.find((provider) => provider.id === model.providerId)?.tag ===
+                        'promo' && (
+                        <span
+                          className="ml-2 rounded-pill bg-[var(--tint-warn)] px-2 py-0.5 text-meta text-warn"
+                          title="Promotional — may end without notice"
+                        >
+                          Promo
+                        </span>
+                      )}
+                      {providers.find((provider) => provider.id === model.providerId)?.tag ===
+                        'trial' && <TagBadge className="ml-2" kind="trial" />}
+                      <span className="ml-2 inline-block align-middle">
+                        <DataUseBadge
+                          dataUse={
+                            providers.find((provider) => provider.id === model.providerId)?.dataUse
+                          }
+                        />
+                      </span>
                       {oauthProviders.some((provider) => model.providerId === provider.id) && (
                         <span
                           className="ml-2 rounded-pill bg-warn/10 px-2 py-0.5 text-meta text-warn"

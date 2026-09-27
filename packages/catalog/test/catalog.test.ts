@@ -23,6 +23,15 @@ describe('catalog data', () => {
     expect(() => TierCatalogSchema.parse(parse(tierYaml))).not.toThrow();
     expect(ProviderTagSchema.options).toContain('legit');
     expect(TierSchema.options).toContain('T1');
+    const cerebras = ProviderLimitsSchema.parse(
+      parse(await readFile(join(root, 'limits', 'cerebras.yaml'), 'utf8')),
+    );
+    const kilo = ProviderLimitsSchema.parse(
+      parse(await readFile(join(root, 'limits', 'kilo.yaml'), 'utf8')),
+    );
+    expect(cerebras.tag).toBe('trial');
+    expect(kilo.tag).toBe('promo');
+    expect(cerebras.terms_note).toContain('1,000,000');
   });
   it('normalizes the snapshot and returns model schema-valid records', async () => {
     const catalog = await loadCatalog({ now: new Date('2026-09-24T00:00:00Z') });

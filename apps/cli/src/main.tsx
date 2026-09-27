@@ -178,12 +178,12 @@ function summarize(part: import('@ferry/shared').MessagePart): string | undefine
   return undefined;
 }
 
-function formatRoutingDetails(
+export function formatRoutingDetails(
   details: NonNullable<Extract<MessagePart, { type: 'error' }>['details']>,
 ): string {
   const attempts = details.attempts.map(
     (attempt) =>
-      `${attempt.model}: ${attempt.kind}${attempt.status === null ? '' : ` (HTTP ${String(attempt.status)})`} — ${attempt.message}`,
+      `${attempt.provider ?? attempt.model.split('/')[0] ?? 'provider'} · ${attempt.model}: ${attempt.kind}${attempt.status === null ? '' : ` (HTTP ${String(attempt.status)})`} · ${String(attempt.latencyMs ?? 0)} ms — ${attempt.message}`,
   );
   const shown = attempts.slice(0, 12);
   if (attempts.length > shown.length)

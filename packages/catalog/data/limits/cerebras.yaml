@@ -1,6 +1,6 @@
 provider: cerebras
 name: Cerebras Inference (Free Trial is credits-only)
-tag: caution
+tag: trial
 signup_url: https://cloud.cerebras.ai/
 docs_url: https://inference-docs.cerebras.ai/support/rate-limits
 terms_note: >-

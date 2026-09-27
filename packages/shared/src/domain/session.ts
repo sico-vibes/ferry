@@ -102,11 +102,14 @@ export const MessagePartSchema = z.discriminatedUnion('type', [
             kind: ProviderFailureFamilySchema,
             status: z.number().int().nullable(),
             message: z.string(),
+            provider: z.string().optional(),
+            latencyMs: z.number().nonnegative().optional(),
           }),
         ),
+        nextCapacity: z.string().optional(),
       })
       .optional(),
-    kind: z.enum(['provider', 'tool', 'permission', 'internal']),
+    kind: z.enum(['provider', 'tool', 'permission', 'internal', 'all_candidates_exhausted']),
   }),
 ]);
 export type MessagePart = z.infer<typeof MessagePartSchema>;
@@ -116,6 +119,17 @@ export const MessageSchema = z.object({
   role: z.enum(['user', 'assistant']),
   createdAt: z.iso.datetime(),
   modelRef: ModelRefSchema.nullable(),
+  modelAttempts: z
+    .array(
+      z.object({
+        model: ModelRefSchema,
+        provider: z.string(),
+        status: z.number().int().nullable(),
+        latencyMs: z.number().nonnegative(),
+        errorKind: ProviderFailureFamilySchema.nullable(),
+      }),
+    )
+    .optional(),
   parts: z.array(MessagePartSchema),
 });
 export type Message = z.infer<typeof MessageSchema>;

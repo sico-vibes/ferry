@@ -7,6 +7,7 @@ import { Switch } from '../forms';
 import { LatticeLoader } from '../feedback/LatticeLoader';
 import { TagBadge } from './TagBadge';
 import { QuotaWindowBar } from './QuotaWindowBar';
+import { DataUseBadge } from './DataUseBadge';
 
 export function ProviderCard({
   provider,
@@ -95,6 +96,9 @@ export function ProviderCard({
             onCheckedChange={(enabled) => onToggle?.(enabled)}
           />
         </header>
+        {provider.tag === 'promo' && (
+          <p className="text-meta text-warn">Promotional — may end without notice.</p>
+        )}
         {trialNote && <p className="text-meta text-text-2">{trialNote}</p>}
         <p
           className={`flex items-center gap-1.5 text-meta ${provider.keyStatus === 'invalid' ? 'text-danger' : provider.keyStatus === 'valid' ? 'text-success' : 'text-text-2'}`}
@@ -108,12 +112,13 @@ export function ProviderCard({
         {provider.windows.length === 0 && (
           <p className="text-meta text-text-2">Quota reported by provider when available</p>
         )}
-        {provider.dataUse && (
-          <p className="flex items-start gap-1.5 text-[11px] leading-4 text-text-2">
+        {
+          <p className="flex flex-wrap items-start gap-1.5 text-[11px] leading-4 text-text-2">
             <AlertTriangle className="mt-0.5 shrink-0" size={13} />
-            {provider.dataUse}
+            <DataUseBadge dataUse={provider.dataUse} />
+            {provider.dataUse && <span>{provider.dataUse}</span>}
           </p>
-        )}
+        }
         <footer className="provider-card-footer mt-auto grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 border-t border-border-hair pt-2.5">
           <span className="truncate text-meta text-text-2" title="Rate-limited · no daily cap">
             {provider.stepsLeftToday === null ? (

@@ -1,16 +1,28 @@
-# This ordered chain is mirrored by src/auto-free-chain.ts so the chain also
-# works in renderer builds that do not have filesystem access.
+# Community-informed ordering: docs/research/community-free-llm.md §§1,2,5 and
+# docs/research/free-providers.md (reviewed 2026-09-27); patterns resolve against live models.
+# Gemini Flash-Lite precedes Flash because Flash has a small free RPD (community-free-llm.md §5).
+# gpt-oss-120b and Nemotron lead for agent-loop reliability (routers-2.md, borrow items 1-5, 9).
+# Cerebras is intentionally omitted: its free offer is a $5/30-day card-backed
+# trial as of 2026-07-21. It remains manually selectable; live headers still win.
+# Kilo StepFun/Kimi/LongCat are opt-in promotions (routers-2.md, borrow item 9; reviewed 2026-09-27).
 providers:
   gemini:
+    - gemini-*-flash-lite*
+    - gemini-flash-lite*
     - gemini-3.8-flash
     - gemini-3.*-flash
     - gemini-flash-latest
   groq:
-    - qwen/qwen3.8-27b
     - openai/gpt-oss-120b
-  cerebras:
-    - gpt-oss-120b
-    - qwen-3.8-27b
+    - qwen/qwen3-coder*
+    - qwen/qwen3.8-27b
+  nvidia:
+    - openai/gpt-oss-120b
+    - deepseek/deepseek-v4-flash*
+    - nvidia/nemotron-3-super-*
+    - nvidia/nemotron-3-ultra-*
+  cloudflare-workers-ai:
+    - '@cf/openai/gpt-oss-120b'
   mistral:
     - codestral-*
     - devstral-*
@@ -20,14 +32,22 @@ providers:
     - DeepSeek-R1
     - Qwen3.8-32B
     - Meta-Llama-3.3-70B-Instruct
-  nvidia:
-    - nvidia/nemotron-3-super-*
   openrouter:
-    - qwen/qwen3.8-27b:free
-    - deepseek/*:free
-    - z-ai/glm*:free
     - openai/gpt-oss-120b:free
+    - deepseek/deepseek-v4-flash:free
+    - z-ai/glm-5*:free
+    - nvidia/nemotron-3-super*:free
+    - nvidia/nemotron-3-ultra*:free
+    - minimax/minimax-m3:free
+    - minimax/minimax-m2.5:free
+    - qwen/qwen3-coder:free
   kilo:
-    - qwen/qwen3.8-27b:free
-    - deepseek/*:free
     - openai/gpt-oss-120b:free
+    - deepseek/deepseek-v4-flash:free
+    - z-ai/glm-5*:free
+    - minimax/minimax-m3:free
+    - minimax/minimax-m2.5:free
+    - qwen/qwen3-coder:free
+    - stepfun/step-*-flash:free
+    - moonshotai/kimi-*:free
+    - longcat/longcat-*:free

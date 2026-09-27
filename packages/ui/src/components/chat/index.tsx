@@ -519,6 +519,8 @@ export interface ErrorAttempt {
   kind: string;
   status: string;
   message: string;
+  provider?: string;
+  latencyMs?: number;
 }
 
 export function ErrorPart({
@@ -527,12 +529,16 @@ export function ErrorPart({
   onRetry,
   onSwitchToAuto,
   onPickModel,
+  onWait,
+  onAddProvider,
 }: {
   message: string;
   attempts?: ErrorAttempt[];
   onRetry?: (() => void) | undefined;
   onSwitchToAuto?: (() => void) | undefined;
   onPickModel?: (() => void) | undefined;
+  onWait?: (() => void) | undefined;
+  onAddProvider?: (() => void) | undefined;
 }) {
   return (
     <section className="session-error-card" role="alert">
@@ -556,6 +562,16 @@ export function ErrorPart({
             Pick another model
           </button>
         )}
+        {onWait && (
+          <button type="button" onClick={onWait}>
+            Wait
+          </button>
+        )}
+        {onAddProvider && (
+          <button type="button" onClick={onAddProvider}>
+            Add provider
+          </button>
+        )}
       </div>
       <details className="session-error-details">
         <summary>
@@ -567,7 +583,9 @@ export function ErrorPart({
               <li key={`${attempt.model}-${String(index)}`}>
                 <strong>{attempt.model}</strong>
                 <span>
+                  {attempt.provider ? `${attempt.provider} · ` : ''}
                   {attempt.kind} · {attempt.status}
+                  {attempt.latencyMs === undefined ? '' : ` · ${String(attempt.latencyMs)} ms`}
                 </span>
                 <small>{attempt.message}</small>
               </li>

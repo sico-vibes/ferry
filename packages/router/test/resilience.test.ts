@@ -1,8 +1,55 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { classifyProviderError, parseRetryAfter, ResilienceLedger } from '../src/resilience.js';
+import { classifyRetryAction, retryDelayMs, shouldStopFallback } from '../src/index.js';
 
 describe('routing resilience primitives', () => {
+  it('classifies retry/stop defensively and computes bounded jittered backoff', () => {
+    expect(classifyRetryAction({ status: 401, message: 'temporary outage' })).toBe('stop');
+    expect(classifyRetryAction({ status: 503, message: 'invalid key' })).toBe('retry');
+    expect(classifyRetryAction({ message: 'authentication failed' })).toBe('stop');
+    expect(classifyRetryAction({ message: 'unclassified provider issue' })).toBe('retry');
+    expect(retryDelayMs(2, 300, 1_000, () => 0)).toBe(500);
+    expect(retryDelayMs(20, 300, 1_000, () => 1)).toBe(1_000);
+    expect(
+      shouldStopFallback({ pinnedModelRef: 'groq/model', attemptedModelRef: 'groq/model' }),
+    ).toBe(true);
+    expect(
+      shouldStopFallback({
+        attemptedModelRef: 'gemini/model',
+        avoidTrainingProviders: true,
+        providerDataUse: 'Requests may be used to improve products.',
+      }),
+    ).toBe(true);
+    expect(
+      shouldStopFallback({
+        attemptedModelRef: 'cloudflare/model',
+        avoidTrainingProviders: true,
+        providerDataUse: 'Does not use customer content to train models.',
+      }),
+    ).toBe(false);
+  });
+
+  it('does not count transient failures toward strikes and resets state on success', () => {
+    const ledger = new ResilienceLedger();
+    ledger.recordFailure(classifyProviderError({ status: 503 }), 'm/model', 'p', 1_000);
+    expect(ledger.active('provider', 'p', 1_001)?.strikes).toBe(0);
+    ledger.recordFailure(
+      classifyProviderError({ status: 429, retryAfter: '30s' }),
+      'm/model',
+      'p',
+      1_000,
+    );
+    ledger.recordFailure(
+      classifyProviderError({ status: 429, retryAfter: '30s' }),
+      'm/model',
+      'p',
+      2_000,
+    );
+    ledger.recordSuccess('key', 'p');
+    expect(ledger.active('key', 'p', 2_001)).toBeUndefined();
+  });
+
   it('distinguishes a short throttle from exhausted quota and honors reset hints', () => {
     expect(
       classifyProviderError({ status: 429, message: 'Quota exceeded', retryAfter: '5m' }),

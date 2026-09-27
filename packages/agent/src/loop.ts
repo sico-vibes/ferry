@@ -10,8 +10,10 @@ import {
   createHandoffMarker,
   estimateTextTokens,
   classifyProviderError,
+  classifyRetryAction,
+  retryDelayMs,
+  shouldStopFallback,
   ResilienceLedger,
-  onStepError,
   type ResilienceEntry,
   type CapacityView,
   type ModelStats,
@@ -95,6 +97,13 @@ class QuotaReservationError extends Error {
   }
 }
 
+class AllCandidatesExhaustedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AllCandidatesExhaustedError';
+  }
+}
+
 export interface AgentOptions {
   store: SessionStore;
   workspace: string;
@@ -129,6 +138,7 @@ export interface AgentOptions {
   tokenBudget?: number;
   /** Maximum time without stream progress before this model attempt is abandoned. */
   stepTimeoutMs?: number;
+  waitForRetry?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   pinnedTurns?: number;
   estimateTokens?: (text: string) => number;
   onObservation?: (observation: RawCallObservation) => void;
@@ -165,9 +175,19 @@ export interface AgentOptions {
 
 interface AttemptFailure {
   model: ModelRef;
+  provider: string;
   kind: ProviderFailureFamily;
   status: number | null;
+  latencyMs: number;
   message: string;
+}
+
+interface ModelAttempt {
+  model: ModelRef;
+  provider: string;
+  status: number | null;
+  latencyMs: number;
+  errorKind: ProviderFailureFamily | null;
 }
 
 export interface RunInput {
@@ -193,6 +213,7 @@ export class AgentLoop {
   private readonly toolRejections: ToolRejection[];
   private readonly retirementFailures: RetirementFailure[];
   private readonly retiredModels: Set<string>;
+  private readonly sessionBadKeys = new Map<string, Set<string>>();
 
   constructor(private readonly options: AgentOptions) {
     this.estimates = options.estimateTokens ?? estimateTextTokens;
@@ -219,6 +240,7 @@ export class AgentLoop {
     const signal = controller.signal;
     let loaded = this.options.store.load(sessionId);
     if (!loaded) throw new Error(`Unknown session ${sessionId}`);
+    this.sessionBadKeys.set(sessionId, new Set());
     let { session, messages, taskRecord } = loaded;
     if (this.options.title && messages.filter((message) => message.role === 'user').length === 1) {
       const prompt =
@@ -370,8 +392,14 @@ export class AgentLoop {
           pendingEdits: taskRecord.touchedFiles.length > 0,
           estimatedInputTokens: routeEstimate,
         });
-        let model = this.selectModel(stepKind, routeEstimate, session.modelRef, sessionId);
-        if (!model) throw new Error('No eligible model is available for this step');
+        const selectedModel = this.selectModel(
+          stepKind,
+          routeEstimate,
+          session.modelRef,
+          sessionId,
+        );
+        if (!selectedModel) throw new AllCandidatesExhaustedError(this.exhaustedMessage(stepKind));
+        let model: ModelInfo = selectedModel;
         let contextMessages = pinnedMessages;
         if (inputTokens > model.contextWindow * 0.7) {
           if (stepCount >= maxSteps)
@@ -502,10 +530,12 @@ export class AgentLoop {
         let generated!: GeneratedStep;
         let generationComplete = false;
         const attemptedModels = new Set<string>([model.ref]);
+        const modelAttempts: ModelAttempt[] = [];
         const toolCapabilityFailures: string[] = [];
         let sameModelRetries = 0;
         let handoffsThisStep = 0;
         while (!generationComplete) {
+          const attemptStartedAt = performance.now();
           try {
             const generator =
               this.options.generator ?? this.createStreamingGenerator(model, sessionId);
@@ -531,6 +561,13 @@ export class AgentLoop {
               this.options.stepTimeoutMs ?? 120_000,
             );
             generationComplete = true;
+            modelAttempts.push({
+              model: model.ref,
+              provider: model.providerId,
+              status: 200,
+              latencyMs: Math.max(0, performance.now() - attemptStartedAt),
+              errorKind: null,
+            });
             const successRouting = this.options.routingSettings?.();
             if (successRouting?.smartReliability) {
               this.reliability.push({ modelRef: model.ref, outcome: 'success', at: this.now() });
@@ -548,7 +585,7 @@ export class AgentLoop {
             this.toolRejections.splice(
               0,
               this.toolRejections.length,
-              ...this.toolRejections.filter((item) => item.modelRef !== model?.ref),
+              ...this.toolRejections.filter((item) => item.modelRef !== model.ref),
             );
             this.options.onToolRejectionState?.([...this.toolRejections]);
             this.resilience.recordSuccess('provider', model.providerId);
@@ -597,9 +634,18 @@ export class AgentLoop {
             }
             attemptFailures.push({
               model: model.ref,
+              provider: model.providerId,
               kind: classified.family,
               status: classified.status,
+              latencyMs: Math.max(0, performance.now() - attemptStartedAt),
               message: redactedProviderMessage(error),
+            });
+            modelAttempts.push({
+              model: model.ref,
+              provider: model.providerId,
+              status: classified.status,
+              latencyMs: Math.max(0, performance.now() - attemptStartedAt),
+              errorKind: classified.family,
             });
             if (classified.family === 'request_too_large')
               this.requestTooLargeAt.set(model.ref, routeEstimate);
@@ -625,11 +671,23 @@ export class AgentLoop {
             const requestTooLarge = classified.family === 'request_too_large';
             const timedOut = error instanceof StepWatchdogError || classified.family === 'timeout';
             const safeToSwitch = streamedText.length === 0;
-            if (!localQuotaReservation && routingFailure.scope !== 'none') {
+            const providerPolicy = this.options
+              .capacity()
+              .providers.find((item) => item.id === model.providerId);
+            const stopFallback = shouldStopFallback({
+              pinnedModelRef: this.options.pinnedModelRef ?? null,
+              attemptedModelRef: model.ref,
+              avoidTrainingProviders: routing?.avoidTrainingProviders ?? false,
+              providerDataUse: providerPolicy?.dataUse ?? null,
+            });
+            const badCredentialStatus = [401, 402, 403].includes(classified.status ?? 0);
+            if (badCredentialStatus) this.sessionBadKeys.get(sessionId)?.add(model.providerId);
+            if (!localQuotaReservation && !badCredentialStatus && routingFailure.scope !== 'none') {
               this.resilience.recordFailure(routingFailure, model.ref, model.providerId);
             }
             if (
               !localQuotaReservation &&
+              !badCredentialStatus &&
               routingFailure.scope !== 'model' &&
               classified.family !== 'request_too_large'
             )
@@ -639,25 +697,28 @@ export class AgentLoop {
                 model.providerId,
               );
             this.options.onResilienceState?.(this.resilience.snapshot());
-            const retryPolicy = onStepError({
-              kind:
-                classified.family === 'server' || classified.family === 'unsupported_free_tier'
-                  ? 'provider'
-                  : classified.family === 'quota_exhausted'
-                    ? 'quota_exhausted'
-                    : classified.family === 'request_too_large'
-                      ? 'request_scoped_client'
-                      : classified.family,
-              retryAfterSeconds:
-                classified.retryAfterMs === null ? null : classified.retryAfterMs / 1000,
+            const retryAction = classifyRetryAction({
+              status: classified.status,
+              message: classified.message,
             });
+            const transient =
+              classified.status === null ||
+              classified.status >= 500 ||
+              classified.family === 'timeout' ||
+              classified.family === 'stream_failure';
             if (
               !requestTooLarge &&
-              retryPolicy.action === 'retry_same' &&
-              sameModelRetries < retryPolicy.attempts
+              !rateLimited &&
+              !badCredentialStatus &&
+              retryAction === 'retry' &&
+              transient &&
+              sameModelRetries < 2
             ) {
               sameModelRetries++;
-              await delayForRetry(classified.retryAfterMs ?? 0, signal);
+              await (this.options.waitForRetry ?? delayForRetry)(
+                retryDelayMs(sameModelRetries - 1, 300, 3_000),
+                signal,
+              );
               continue;
             }
             if (
@@ -669,7 +730,7 @@ export class AgentLoop {
                 !requestTooLarge &&
                 routingFailure.scope === 'none') ||
               !safeToSwitch ||
-              this.options.pinnedModelRef ||
+              stopFallback ||
               isSignalAborted(signal)
             )
               throw error;
@@ -688,10 +749,7 @@ export class AgentLoop {
               sessionId,
             );
             if (!fallback) {
-              throw new Error(
-                `No eligible unlocked model remains for ${stepKind}. ${formatClassifiedFailure(classified.family, error)} ${toolCapabilityFailures.join('; ')} ${this.routingSummary(stepKind, routeEstimate, attemptedModels)}`.trim(),
-                { cause: error },
-              );
+              throw new AllCandidatesExhaustedError(this.exhaustedMessage(stepKind));
             }
             attemptedModels.add(fallback.ref);
             handoffsThisStep++;
@@ -728,6 +786,7 @@ export class AgentLoop {
               marker.to,
             );
             model = fallback;
+            sameModelRetries = 0;
             system += `\n\nHandoff briefing:\n${briefing.text}`;
             this.options.store.updateSession(sessionId, { modelRef: fallback.ref });
           }
@@ -763,7 +822,14 @@ export class AgentLoop {
             ...parts,
             { type: 'text', id: PartIdSchema.parse(newId('part')), text: generated.text },
           ];
-        this.replaceMessageParts(assistant, parts);
+        this.options.store.replaceMessage({ ...assistant, parts, modelAttempts });
+        for (const part of parts)
+          this.options.emit({
+            type: 'session.part',
+            sessionId,
+            messageId: assistant.id,
+            part,
+          });
         totalTokens +=
           (generated.inputTokens ?? inputTokens) +
           (generated.outputTokens ?? this.estimates(generated.text ?? ''));
@@ -907,25 +973,58 @@ export class AgentLoop {
       const cause = rootErrorCause(error);
       const classified = classifyProviderError(errorInput(cause));
       const providerDetail = formatClassifiedFailure(classified.family, cause);
-      const message = formatAttemptSummary(attemptFailures, providerDetail);
+      const poolExhausted =
+        error instanceof AllCandidatesExhaustedError ||
+        (error instanceof Error && error.message.startsWith('All free candidates exhausted.'));
+      const message = poolExhausted
+        ? error.message
+        : formatAttemptSummary(attemptFailures, providerDetail);
+      const nextCapacity = poolExhausted ? message.split('Next free capacity: ')[1] : undefined;
       this.addPart(sessionId, {
         type: 'error',
         id: PartIdSchema.parse(newId('part')),
         message,
-        details: { attempts: attemptFailures },
-        kind: 'provider',
+        details: { attempts: attemptFailures, ...(nextCapacity ? { nextCapacity } : {}) },
+        kind: poolExhausted ? 'all_candidates_exhausted' : 'provider',
       });
+      const failedMessage = this.options.store.load(sessionId)?.messages.at(-1);
+      if (failedMessage)
+        this.options.store.replaceMessage({
+          ...failedMessage,
+          modelAttempts: attemptFailures.map((attempt) => ({
+            model: attempt.model,
+            provider: attempt.provider,
+            status: attempt.status,
+            latencyMs: attempt.latencyMs,
+            errorKind: attempt.kind,
+          })),
+        });
       this.options.emit({ type: 'toast', tone: 'error', message });
       const failedSession = this.options.store.updateSession(sessionId, { status: 'error' });
       this.options.emit({ type: 'session.updated', session: failedSession });
       throw error;
     } finally {
+      this.sessionBadKeys.delete(sessionId);
       outerSignal?.removeEventListener('abort', relayAbort);
     }
   }
 
   private createStreamingGenerator(model: ModelInfo, sessionId: string): StepGenerator {
     return createStepGenerator(this.options, model, sessionId);
+  }
+
+  private exhaustedMessage(step: import('@ferry/shared').StepKind): string {
+    const earliest = this.resilience.earliest(this.now());
+    const provider = earliest
+      ? (this.options.capacity().providers.find((item) => item.id === earliest.key)?.name ??
+        earliest.key)
+      : null;
+    const minutes = earliest
+      ? Math.max(1, Math.ceil((Date.parse(earliest.expiresAt) - this.now()) / 60_000))
+      : null;
+    const reset =
+      provider && minutes ? `${provider} in ${String(minutes)} min` : 'when a free provider resets';
+    return `All free candidates exhausted for ${step}. Next free capacity: ${reset}. Wait or add a provider.`;
   }
 
   private pruneReliability(): void {
@@ -951,6 +1050,7 @@ export class AgentLoop {
     const routing = this.options.routingSettings?.();
     const stickyRef = routing?.stickySessions ? this.sticky.get(sessionId, this.now()) : undefined;
     const eligible = (model: ModelInfo) =>
+      !this.sessionBadKeys.get(sessionId)?.has(model.providerId) &&
       !locked?.has(model.ref) &&
       !(routing?.carefulModelRetirement && this.retiredModels.has(model.ref)) &&
       !withinFailedSize(model);
@@ -981,6 +1081,12 @@ export class AgentLoop {
     const selected = this.selectResilient(
       candidates.flatMap((item) => {
         if (
+          this.sessionBadKeys
+            .get(sessionId)
+            ?.has(
+              this.options.catalog.models.find((candidate) => candidate.ref === item.ref)
+                ?.providerId ?? '',
+            ) ||
           locked?.has(item.ref) ||
           (routing?.carefulModelRetirement && this.retiredModels.has(item.ref)) ||
           (this.requestTooLargeAt.get(item.ref) ?? Infinity) <= inputTokens
@@ -1007,6 +1113,7 @@ export class AgentLoop {
       return this.selectResilient(
         candidates.filter(
           (candidate) =>
+            !this.sessionBadKeys.get(sessionId)?.has(candidate.providerId) &&
             !attemptedRefs.has(candidate.ref) &&
             !locked?.has(candidate.ref) &&
             !(retirementEnabled && this.retiredModels.has(candidate.ref)) &&
@@ -1030,6 +1137,7 @@ export class AgentLoop {
     });
     const remaining = ranked.flatMap((candidate) => {
       if (
+        this.sessionBadKeys.get(sessionId)?.has(candidate.ref.split('/')[0] ?? '') ||
         attemptedRefs.has(candidate.ref) ||
         locked?.has(candidate.ref) ||
         (this.requestTooLargeAt.get(candidate.ref) ?? Number.POSITIVE_INFINITY) <= inputTokens

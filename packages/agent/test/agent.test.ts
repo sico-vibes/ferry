@@ -228,20 +228,69 @@ describe('@ferry/agent', () => {
           attempts.push(selected.ref);
           throw Object.assign(new Error('upstream unavailable'), { statusCode: 503 });
         },
+        waitForRetry: async () => {},
       });
       await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
         'upstream unavailable',
       );
-      expect(attempts).toEqual([state.model.ref]);
+      expect(attempts).toEqual([state.model.ref, state.model.ref, state.model.ref]);
       const failure = state.store
         .load(state.session.id)
         ?.messages.flatMap((message) => message.parts)
         .find((part) => part.type === 'error');
       if (failure?.type !== 'error') throw new Error('Missing pinned-model failure part');
       expect(failure.message).not.toContain('scoreBreakdown');
-      expect(failure.details?.attempts).toMatchObject([
-        { model: state.model.ref, kind: 'server', status: 503 },
+      expect(failure.details?.attempts).toMatchObject(
+        Array.from({ length: 3 }, () => ({ model: state.model.ref, kind: 'server', status: 503 })),
+      );
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('retries transient failures with bounded delays and persists the attempt audit', async () => {
+    const state = await setup();
+    try {
+      let calls = 0;
+      let fakeNow = 1_000;
+      const delays: number[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        maxSteps: 1,
+        generator: async () => {
+          calls++;
+          if (calls < 3)
+            throw Object.assign(new Error('temporary upstream outage'), { statusCode: 503 });
+          return { text: 'Recovered after retry.', finishReason: 'stop' };
+        },
+        routingNow: () => fakeNow,
+        waitForRetry: async (milliseconds) => {
+          delays.push(milliseconds);
+          fakeNow += milliseconds;
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      expect(calls).toBe(3);
+      expect(delays).toHaveLength(2);
+      expect(delays[0]).toBeGreaterThanOrEqual(150);
+      expect(delays[1]).toBeGreaterThanOrEqual(300);
+      const finalMessage = state.store.load(state.session.id)?.messages.at(-1);
+      expect(finalMessage?.modelAttempts).toMatchObject([
+        { status: 503, errorKind: 'server' },
+        { status: 503, errorKind: 'server' },
+        { status: 200, errorKind: null },
       ]);
+      expect(finalMessage?.modelAttempts?.every((attempt) => attempt.provider.length > 0)).toBe(
+        true,
+      );
     } finally {
       state.database.close();
     }
@@ -271,12 +320,13 @@ describe('@ferry/agent', () => {
           attempted.push(selected.ref);
           throw Object.assign(new Error('upstream service unavailable'), { statusCode: 503 });
         },
+        waitForRetry: async () => {},
       });
       await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
         /Routing stopped after 4 handoffs.*Ranked candidates:/,
       );
-      expect(attempted).toHaveLength(5);
-      expect(new Set(attempted).size).toBe(attempted.length);
+      expect(attempted).toHaveLength(15);
+      expect(new Set(attempted).size).toBe(5);
     } finally {
       state.database.close();
     }
@@ -612,9 +662,10 @@ describe('@ferry/agent', () => {
           expect(selected.ref).toBe(fallback.ref);
           return { text: 'Completed after the stalled model.', finishReason: 'stop' };
         },
+        waitForRetry: async () => {},
       });
       expect((await loop.run({ sessionId: state.session.id })).status).toBe('completed');
-      expect(calls).toBe(2);
+      expect(calls).toBe(4);
       expect(
         state.store
           .load(state.session.id)
@@ -639,9 +690,10 @@ describe('@ferry/agent', () => {
         emit: () => {},
         stepTimeoutMs: 10,
         generator: async () => await new Promise(() => undefined),
+        waitForRetry: async () => {},
       });
       await expect(failingLoop.run({ sessionId: failedSession.id })).rejects.toThrow(
-        /stalled without stream progress/,
+        /All free candidates exhausted for plan/,
       );
       expect(state.store.load(failedSession.id)?.session.status).toBe('error');
     } finally {
