@@ -18,11 +18,15 @@ const templates: Record<string, Record<string, string>> = {
   crlf: { 'README.md': 'CRLF fixture\r\nsecond line\r\n', 'source.txt': 'alpha\r\nbeta\r\n' },
   large: { 'large.txt': 'large fixture line\n'.repeat(100000) },
   monorepo: {
-    'package.json': '{"private":true,"workspaces":["packages/*"]}\n',
+    'package.json':
+      '{"private":true,"workspaces":["packages/*"],"scripts":{"test":"node test.js"},"type":"module"}\n',
     'packages/a/package.json': '{"name":"a"}\n',
-    'packages/a/src/index.ts': 'export const a = 1;\n',
+    'packages/a/src/index.js': 'export const answer = 42;\n',
     'packages/b/package.json': '{"name":"b"}\n',
-    'packages/b/src/index.ts': 'export const b = 2;\n',
+    'packages/b/src/index.js':
+      "import { answer } from '../../a/src/index.js';\nexport const result = answer;\n",
+    'test.js':
+      "import { result } from './packages/b/src/index.js';\nif (result !== 42) throw new Error('expected 42');\n",
   },
 };
 export async function createFixtureRepo(
