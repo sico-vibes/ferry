@@ -1,10 +1,10 @@
 import { DEFAULT_SETTINGS } from '@ferry/config';
-import { SettingsSchema } from '@ferry/shared';
+import { SettingsPatchSchema, SettingsSchema } from '@ferry/shared';
 import { FERRY_DOMAINS } from '@ferry/shared';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 
-const PatchSchema = SettingsSchema.partial();
+const PatchSchema = SettingsPatchSchema;
 
 export function register(host: CoreHost, services: FerryServices): void {
   const defaults = SettingsSchema.parse({

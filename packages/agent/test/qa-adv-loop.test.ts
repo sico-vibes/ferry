@@ -284,30 +284,26 @@ describe('QA adv: quota leases', () => {
     }
   }, 30_000);
 
-  it.fails(
-    'BUG: a lease leaks when the step watchdog fires and the generator ignores the abort',
-    async () => {
-      // runWithStepWatchdog rejects on timeout, but the lease release lives in
-      // a `finally` that only runs when the generator promise settles. A stalled
-      // provider that ignores the abort signal holds the reservation for its TTL.
-      const state = await setup();
-      try {
-        const alpha = state.catalog.models[0]!;
-        const release = vi.fn();
-        const loop = makeLoop(state, routedSettings({ quotaReservations: true }), {
-          stepTimeoutMs: 50,
-          resolveCandidates: () => [alpha],
-          acquireQuotaLease: () => release,
-          generator: async () => new Promise(() => {}),
-        });
-        await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow();
-        expect(release).toHaveBeenCalledTimes(1);
-      } finally {
-        state.database.close();
-      }
-    },
-    30_000,
-  );
+  it('BUG: a lease leaks when the step watchdog fires and the generator ignores the abort', async () => {
+    // runWithStepWatchdog rejects on timeout, but the lease release lives in
+    // a `finally` that only runs when the generator promise settles. A stalled
+    // provider that ignores the abort signal holds the reservation for its TTL.
+    const state = await setup();
+    try {
+      const alpha = state.catalog.models[0]!;
+      const release = vi.fn();
+      const loop = makeLoop(state, routedSettings({ quotaReservations: true }), {
+        stepTimeoutMs: 50,
+        resolveCandidates: () => [alpha],
+        acquireQuotaLease: () => release,
+        generator: async () => new Promise(() => {}),
+      });
+      await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow();
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
 });
 
 describe('QA adv: tool-rejection deferral', () => {

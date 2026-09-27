@@ -122,7 +122,7 @@ export function isToolDeferred(
   now: number,
 ): boolean {
   const fresh = rejections.filter(
-    (item) => item.modelRef === modelRef && now - item.at < 60 * 60_000,
+    (item) => item.modelRef === modelRef && now >= item.at && now - item.at < 60 * 60_000,
   );
   return new Set(fresh.map((item) => item.requestId)).size >= 3;
 }
@@ -145,7 +145,10 @@ export function shouldRetireModel(
   if (status !== 404 && !/model (?:not found|does not exist)/i.test(message)) return false;
   const recent = failures.filter(
     (item) =>
-      item.modelRef === modelRef && item.requestId !== requestId && now - item.at < 60 * 60_000,
+      item.modelRef === modelRef &&
+      item.requestId !== requestId &&
+      now >= item.at &&
+      now - item.at < 60 * 60_000,
   );
   return new Set(recent.map((item) => item.requestId)).size >= 1;
 }

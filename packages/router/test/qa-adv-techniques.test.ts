@@ -132,18 +132,15 @@ describe('QA adv: tool-rejection deferral', () => {
     ).toBe(false);
   });
 
-  it.fails(
-    'BUG: future-dated tool rejections count as fresh after the clock jumps backwards',
-    () => {
-      // A backwards clock (NTP/DST) must not extend a tool bench indefinitely.
-      const future = [
-        rejection('a', now + 60_000),
-        rejection('b', now + 60_000),
-        rejection('c', now + 60_000),
-      ];
-      expect(isToolDeferred(future, 'm', now)).toBe(false);
-    },
-  );
+  it('BUG: future-dated tool rejections count as fresh after the clock jumps backwards', () => {
+    // A backwards clock (NTP/DST) must not extend a tool bench indefinitely.
+    const future = [
+      rejection('a', now + 60_000),
+      rejection('b', now + 60_000),
+      rejection('c', now + 60_000),
+    ];
+    expect(isToolDeferred(future, 'm', now)).toBe(false);
+  });
 });
 
 describe('QA adv: model-retirement corroboration', () => {
@@ -162,15 +159,12 @@ describe('QA adv: model-retirement corroboration', () => {
     expect(shouldRetireModel(200, 'ok', [failure('r1')], 'm', 'r2', now)).toBe(false);
   });
 
-  it.fails(
-    'BUG: a single transient 404 with a future timestamp falsely corroborates retirement',
-    () => {
-      // One flaky 404 must never retire a model; a backwards clock currently
-      // makes the sole failure look "recent" and satisfies corroboration.
-      const future = [failure('r1', now + 60_000)];
-      expect(shouldRetireModel(404, 'model not found', future, 'm', 'r2', now)).toBe(false);
-    },
-  );
+  it('BUG: a single transient 404 with a future timestamp falsely corroborates retirement', () => {
+    // One flaky 404 must never retire a model; a backwards clock currently
+    // makes the sole failure look "recent" and satisfies corroboration.
+    const future = [failure('r1', now + 60_000)];
+    expect(shouldRetireModel(404, 'model not found', future, 'm', 'r2', now)).toBe(false);
+  });
 });
 
 describe('QA adv: cooldown provenance probes', () => {

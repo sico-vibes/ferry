@@ -91,9 +91,19 @@ describe('QA settings domain', () => {
       expect(after.optimizers.contextHygiene).toBe(before.optimizers.contextHygiene);
       expect(after.developer.mockLatency).toBe(true);
       expect(after.developer.showReferenceOverlay).toBe(before.developer.showReferenceOverlay);
+      const partialNested = await core.rpc.settings.update({
+        optimizers: { terse: 'lite' },
+        developer: { mockLatency: false },
+      } as never);
+      expect(partialNested.optimizers.terse).toBe('lite');
+      expect(partialNested.optimizers.contextHygiene).toBe(before.optimizers.contextHygiene);
+      expect(partialNested.developer.mockLatency).toBe(false);
+      expect(partialNested.developer.showReferenceOverlay).toBe(
+        before.developer.showReferenceOverlay,
+      );
       const partial = await core.rpc.settings.update({ fontScale: 1.2 });
-      expect(partial.optimizers.terse).toBe('full');
-      expect(partial.developer.mockLatency).toBe(true);
+      expect(partial.optimizers.terse).toBe('lite');
+      expect(partial.developer.mockLatency).toBe(false);
     } finally {
       await core.close();
     }

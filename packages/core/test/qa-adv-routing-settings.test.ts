@@ -94,30 +94,27 @@ describe('QA adv: routing settings persistence', () => {
     }
   });
 
-  it.fails(
-    'BUG: a partial routing patch resets unspecified Advanced toggles to defaults',
-    async () => {
-      // `SettingsSchema.partial()` leaves `routing` as a full RoutingSettings
-      // object whose missing keys are default-filled, so the nested merge
-      // `{ ...current.routing, ...patch.routing }` overwrites previously saved
-      // toggles with schema defaults.
-      const core = await makeCore('routing-partial');
-      try {
-        const before = await core.rpc.settings.get();
-        await core.rpc.settings.update({
-          routing: { ...before.routing, smartReliability: false, gentleQuotaRamp: false },
-        });
-        const after = await core.rpc.settings.update({
-          routing: { rampFloor: 0.42 },
-        } as never);
-        expect(after.routing.smartReliability).toBe(false);
-        expect(after.routing.gentleQuotaRamp).toBe(false);
-        expect(after.routing.rampFloor).toBe(0.42);
-      } finally {
-        await core.close();
-      }
-    },
-  );
+  it('BUG: a partial routing patch resets unspecified Advanced toggles to defaults', async () => {
+    // `SettingsSchema.partial()` leaves `routing` as a full RoutingSettings
+    // object whose missing keys are default-filled, so the nested merge
+    // `{ ...current.routing, ...patch.routing }` overwrites previously saved
+    // toggles with schema defaults.
+    const core = await makeCore('routing-partial');
+    try {
+      const before = await core.rpc.settings.get();
+      await core.rpc.settings.update({
+        routing: { ...before.routing, smartReliability: false, gentleQuotaRamp: false },
+      });
+      const after = await core.rpc.settings.update({
+        routing: { rampFloor: 0.42 },
+      } as never);
+      expect(after.routing.smartReliability).toBe(false);
+      expect(after.routing.gentleQuotaRamp).toBe(false);
+      expect(after.routing.rampFloor).toBe(0.42);
+    } finally {
+      await core.close();
+    }
+  });
 });
 
 describe('QA adv: quota lease ledger', () => {

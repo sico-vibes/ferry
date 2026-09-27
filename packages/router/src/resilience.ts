@@ -45,7 +45,7 @@ export function parseRetryAfter(value: unknown, now = Date.now()): number | null
   const text = String(value).trim();
   if (!text) return null;
   const seconds = Number(text);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  if (/^\d+(?:\.\d+)?$/.test(text) && Number.isFinite(seconds)) return Math.round(seconds * 1000);
   const relative =
     /^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?(?:(\d+(?:\.\d+)?)ms)?$/i.exec(
       text,
@@ -57,6 +57,11 @@ export function parseRetryAfter(value: unknown, now = Date.now()): number | null
         Number(relative[3] ?? 0) * 1000 +
         Number(relative[4] ?? 0),
     );
+  const httpDate =
+    /^(?:[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT|[A-Z][a-z]+, \d{2}-[A-Z][a-z]{2}-\d{2} \d{2}:\d{2}:\d{2} GMT|[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/.test(
+      text,
+    );
+  if (!httpDate) return null;
   const date = Date.parse(text);
   return Number.isFinite(date) ? Math.max(0, date - now) : null;
 }
@@ -173,10 +178,10 @@ export function classifyProviderError(input: ProviderErrorInput): ClassifiedProv
       terminalQuota.test(message) || (!shortDeclaredWindow && quotaWords.test(message))
         ? 'quota_exhausted'
         : 'rate_limit';
-  } else if (status === 400 || (status !== null && status >= 400 && status < 500))
-    family = 'request_scoped_client';
-  else if (status === 408 || status === 504 || /timeout|timed out|aborterror/i.test(message))
+  } else if (status === 408 || status === 504 || /timeout|timed out|aborterror/i.test(message))
     family = 'timeout';
+  else if (status === 400 || (status !== null && status >= 400 && status < 500))
+    family = 'request_scoped_client';
   else if (status !== null && status >= 500) family = 'server';
   else family = status === null ? 'stream_failure' : 'server';
   const scope =
@@ -250,6 +255,7 @@ export class ResilienceLedger {
       this.entries.delete(id);
       return undefined;
     }
+    if (entry?.strikes === 0) return undefined;
     return entry;
   }
   availableModelRefs(refs: readonly string[], now = Date.now()): string[] {
@@ -265,8 +271,10 @@ export class ResilienceLedger {
     const scope = error.scope;
     const key = scope === 'model' ? modelRef : scope === 'key' ? providerId : providerId;
     const id = `${scope}:${key}`;
-    const previous = this.active(scope, key, now);
-    const withinStrikeWindow = previous && Date.parse(previous.strikeWindowEndsAt) > now;
+    const saved = this.entries.get(id);
+    const previous = saved && Date.parse(saved.expiresAt) > now ? saved : undefined;
+    const withinStrikeWindow =
+      previous && previous.strikes > 0 && Date.parse(previous.strikeWindowEndsAt) > now;
     const strikes = withinStrikeWindow ? previous.strikes + 1 : 1;
     const failures = (previous?.failures ?? 0) + 1;
     const hinted = error.retryAfterMs;
@@ -290,17 +298,25 @@ export class ResilienceLedger {
       ).toISOString(),
     });
   }
-  recordSuccess(scope: ResilienceScope, key: string): void {
+  recordSuccess(scope: ResilienceScope, key: string, now = Date.now()): void {
     const id = `${scope}:${key}`;
     const previous = this.entries.get(id);
     if (!previous) return;
     const failures = Math.floor(previous.failures / 2);
     if (!failures) this.entries.delete(id);
-    else this.entries.set(id, { ...previous, failures, expiresAt: new Date(0).toISOString() });
+    else
+      this.entries.set(id, {
+        ...previous,
+        failures,
+        strikes: 0,
+        expiresAt: new Date(
+          now + Math.min(30 * 60_000, 5_000 * 2 ** Math.min(failures - 1, 8)),
+        ).toISOString(),
+      });
   }
   earliest(now = Date.now()): ResilienceEntry | undefined {
     return this.snapshot()
-      .filter((entry) => Date.parse(entry.expiresAt) > now)
+      .filter((entry) => entry.strikes > 0 && Date.parse(entry.expiresAt) > now)
       .sort((a, b) => Date.parse(a.expiresAt) - Date.parse(b.expiresAt))[0];
   }
 }

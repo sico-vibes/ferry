@@ -110,7 +110,7 @@ describe('QA adv: typed error classifier', () => {
     }
   });
 
-  it.fails('BUG: HTTP 408 is classified as request_scoped_client instead of timeout', () => {
+  it('BUG: HTTP 408 is classified as request_scoped_client instead of timeout', () => {
     // The generic 4xx branch (`status >= 400 && status < 500`) is evaluated
     // before the `status === 408` timeout branch, so a provider request
     // timeout gets scope 'none'. In the agent loop that means a 408 is
@@ -136,7 +136,7 @@ describe('QA adv: typed error classifier', () => {
     expect(parseRetryAfter(new Date(now - 60_000).toUTCString(), now)).toBe(0);
   });
 
-  it.fails('BUG: a negative Retry-After is parsed as a historical date instead of rejected', () => {
+  it('BUG: a negative Retry-After is parsed as a historical date instead of rejected', () => {
     // `Date.parse('-5')` succeeds (as a year-ish value), so an invalid
     // Retry-After header becomes a bogus 0ms delay rather than null.
     expect(parseRetryAfter('-5')).toBeNull();
@@ -206,7 +206,7 @@ describe('QA adv: resilience ledger', () => {
     expect(ledger.active('provider', 'p', now + 3)).toBeUndefined();
   });
 
-  it.fails('BUG: a success erases the halved failure count before it can be used', () => {
+  it('BUG: a success erases the halved failure count before it can be used', () => {
     // `recordSuccess` halves failures (2 -> 1) but stamps expiresAt at the
     // epoch; the next `active()` read deletes the entry, so the retained
     // failure is lost and the following failure is counted as a first strike.
