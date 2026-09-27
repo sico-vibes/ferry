@@ -3,6 +3,7 @@ import { AlertTriangle, Check, KeyRound } from 'lucide-react';
 import { CountUp } from '../data/CountUp';
 import { Spotlight } from '../../effects/Spotlight';
 import { BrandIcon, Pill } from '../primitives';
+import { Switch } from '../forms';
 import { LatticeLoader } from '../feedback/LatticeLoader';
 import { TagBadge } from './TagBadge';
 import { QuotaWindowBar } from './QuotaWindowBar';
@@ -80,18 +81,11 @@ export function ProviderCard({
               {status}
             </p>
           </div>
-          <button
-            aria-label={`${provider.enabled ? 'Disable' : 'Enable'} ${provider.name}`}
-            aria-checked={provider.enabled}
-            className={`relative h-5 w-9 rounded-pill border transition ${provider.enabled ? 'border-blue-500/40 bg-blue-tint' : 'border-border-soft bg-raised'}`}
-            onClick={() => onToggle?.(!provider.enabled)}
-            role="switch"
-            type="button"
-          >
-            <span
-              className={`absolute top-0.5 size-3.5 rounded-full bg-text-1 transition ${provider.enabled ? 'left-[18px]' : 'left-0.5'}`}
-            />
-          </button>
+          <Switch
+            label={`${provider.enabled ? 'Disable' : 'Enable'} ${provider.name}`}
+            checked={provider.enabled}
+            onCheckedChange={(enabled) => onToggle?.(enabled)}
+          />
         </header>
         <p
           className={`flex items-center gap-1.5 text-meta ${provider.keyStatus === 'invalid' ? 'text-danger' : provider.keyStatus === 'valid' ? 'text-success' : 'text-text-2'}`}

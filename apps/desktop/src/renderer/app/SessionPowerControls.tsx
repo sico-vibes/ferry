@@ -337,12 +337,14 @@ export function ModelPickerPopover({
   sessionId,
   modelName,
   mode,
-  openRequest = 0,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   sessionId: SessionId;
   modelName: string;
   mode: 'auto' | 'manual';
-  openRequest?: number;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const client = useFerryClient();
   const cache = useQueryClient();
@@ -358,10 +360,9 @@ export function ModelPickerPopover({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (openRequest > 0) setOpen(true);
-  }, [openRequest]);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = onOpenChange ?? setLocalOpen;
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const ModelCommand = useCmdk(open);
@@ -393,15 +394,19 @@ export function ModelPickerPopover({
     };
   }, [open]);
   const autoModel = models.find((model) => model.ref === candidates[0]?.ref)?.name ?? modelName;
+  const configuredProviderIds = new Set(
+    providers
+      .filter(
+        (provider) =>
+          provider.enabled && ['valid', 'unchecked', 'not_applicable'].includes(provider.keyStatus),
+      )
+      .map((provider) => provider.id),
+  );
+  const availableModels = models.filter((model) => configuredProviderIds.has(model.providerId));
+  const candidateByRef = new Map(candidates.map((candidate) => [candidate.ref, candidate]));
   const grouped = useMemo(
-    () => [
-      ...new Set(
-        candidates.map(
-          (candidate) => models.find((model) => model.ref === candidate.ref)?.providerId ?? 'other',
-        ),
-      ),
-    ],
-    [candidates, models],
+    () => [...new Set(availableModels.map((model) => model.providerId))],
+    [availableModels],
   );
   const select = async (ref: ModelRef | 'auto') => {
     await client.models.select(sessionId, ref);
@@ -459,21 +464,21 @@ export function ModelPickerPopover({
                       providers.find((provider) => provider.id === providerId)?.name ?? providerId
                     }
                   >
-                    {candidates
-                      .filter(
-                        (candidate) =>
-                          (models.find((model) => model.ref === candidate.ref)?.providerId ??
-                            'other') === providerId,
-                      )
-                      .map((candidate) => {
-                        const model = models.find((item) => item.ref === candidate.ref);
-                        if (!model) return null;
+                    {availableModels
+                      .filter((model) => model.providerId === providerId)
+                      .map((model) => {
+                        const candidate = candidateByRef.get(model.ref);
+                        const provider = providers.find((item) => item.id === providerId);
+                        const capacity = candidate?.stepsLeft ?? provider?.stepsLeftToday ?? null;
+                        const why =
+                          candidate?.explanation ??
+                          `${model.tier} model · ${model.free ? 'Free tier' : 'Paid tier'} · ${String(Math.round(model.contextWindow / 1000))}K context`;
                         return (
                           <ModelCommand.Item
                             className="model-candidate"
-                            key={candidate.ref}
-                            value={`${model.name} ${model.tier} ${candidate.explanation}`}
-                            onSelect={() => void select(candidate.ref)}
+                            key={model.ref}
+                            value={`${model.name} ${model.tier} ${provider?.name ?? providerId} ${why} ${capacity === null ? '' : String(capacity)}`}
+                            onSelect={() => void select(model.ref)}
                           >
                             <strong>
                               {model.name}
@@ -488,17 +493,19 @@ export function ModelPickerPopover({
                                   Risk
                                 </span>
                               ) : null}
-                              {candidate.selected ? <Check size={13} /> : null}
+                              {candidate?.selected ? <Check size={13} /> : null}
                             </strong>
-                            <span>
-                              <span className="model-tier-pill">{model.tier}</span> ·{' '}
-                              {candidate.stepsLeft == null
-                                ? 'steps unknown'
-                                : `${String(candidate.stepsLeft)} steps left`}{' '}
+                            <span className="model-meta-line">
+                              <span className="model-tier-pill">{model.tier}</span>
+                              <span className="model-capacity-badge">
+                                {capacity == null
+                                  ? 'Capacity unknown'
+                                  : `≈ ${String(capacity)} steps`}
+                              </span>
                               · {Math.round(model.contextWindow / 1000)}K ·{' '}
                               {model.free ? 'Free' : 'Paid'}
                             </span>
-                            <small>{candidate.explanation}</small>
+                            <small>{why}</small>
                           </ModelCommand.Item>
                         );
                       })}

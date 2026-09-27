@@ -28,9 +28,8 @@ import {
   ToolStepGroup,
   groupParts,
   UserMessage,
-  DropdownMenu,
 } from '@ferry/ui';
-import { GitBranch, MoreHorizontal } from 'lucide-react';
+import { GitBranch } from 'lucide-react';
 import { useFerryClient } from '../data/client';
 import {
   keys,
@@ -361,16 +360,25 @@ function PartView({
   const client = useFerryClient();
   const cache = useQueryClient();
   const navigate = useNavigate();
+  const pushToast = useToasts((state) => state.push);
   const retryLastPrompt = async (routingMode?: 'auto_for_step') => {
-    const detail = await client.sessions.get(sessionId);
-    const lastUserMessage = detail.messages.filter((message) => message.role === 'user').at(-1);
-    const text = lastUserMessage?.parts
-      .filter((item) => item.type === 'text')
-      .map((item) => item.text)
-      .join('\n');
-    if (!text) return;
-    await client.sessions.send(sessionId, { text, ...(routingMode ? { routingMode } : {}) });
-    await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+    try {
+      const detail = await client.sessions.get(sessionId);
+      const lastUserMessage = detail.messages.filter((message) => message.role === 'user').at(-1);
+      const text = lastUserMessage?.parts
+        .filter((item) => item.type === 'text')
+        .map((item) => item.text)
+        .join('\n');
+      if (!text) return;
+      await client.sessions.send(sessionId, { text, ...(routingMode ? { routingMode } : {}) });
+      await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+    } catch (error) {
+      pushToast({
+        kind: 'error',
+        title: 'Retry failed',
+        body: error instanceof Error ? error.message : 'Try again or choose a different model.',
+      });
+    }
   };
   switch (part.type) {
     case 'text':
@@ -450,37 +458,18 @@ function PartView({
           }}
         />
       );
-    case 'error':
+    case 'error': {
+      const presentation = getErrorPresentation(part);
       return (
-        <div>
-          <ErrorPart message={part.message} />
-          {part.details?.attempts.length ? (
-            <details>
-              <summary>Routing attempts ({String(part.details.attempts.length)})</summary>
-              <ul>
-                {part.details.attempts.map((attempt, index) => (
-                  <li key={`${attempt.model}:${String(index)}`}>
-                    {attempt.model} · {attempt.kind}
-                    {attempt.status === null ? '' : ` · HTTP ${String(attempt.status)}`} ·{' '}
-                    {attempt.message}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          ) : null}
-          {canRetry ? (
-            <div>
-              <button onClick={() => void retryLastPrompt()} type="button">
-                Retry
-              </button>
-              <button onClick={() => void retryLastPrompt('auto_for_step')} type="button">
-                Switch to Auto for this step
-              </button>
-              <button onClick={onPickAnother} type="button">
-                Pick another model
-              </button>
-            </div>
-          ) : part.message.startsWith('No available model —') ? (
+        <div className="space-y-2">
+          <ErrorPart
+            message={presentation.summary}
+            attempts={presentation.attempts}
+            onRetry={canRetry ? () => void retryLastPrompt() : undefined}
+            onSwitchToAuto={canRetry ? () => void retryLastPrompt('auto_for_step') : undefined}
+            onPickModel={canRetry ? onPickAnother : undefined}
+          />
+          {presentation.summary.startsWith('No available model —') ? (
             <button
               className="rounded-md bg-blue-tint px-3 py-1.5 text-label font-medium text-link"
               onClick={() => void navigate({ to: '/explore' })}
@@ -491,7 +480,52 @@ function PartView({
           ) : null}
         </div>
       );
+    }
   }
+}
+
+function getErrorPresentation(part: MessagePart & { type: 'error' }): {
+  summary: string;
+  attempts: { model: string; kind: string; status: string; message: string }[];
+} {
+  const raw = part as unknown as Record<string, unknown>;
+  const safeText = (value: unknown, fallback: string): string => {
+    const text = typeof value === 'number' ? String(value) : value;
+    if (typeof text !== 'string' || !text.trim()) return fallback;
+    const cleaned = text
+      .replace(/\s+(?:Attempted:|Ranked candidates:|Provider detail:)[\s\S]*$/i, '')
+      .replace(/\s+\{[\s\S]*$/, '')
+      .replace(/\s+\[[\s\S]*$/, '')
+      .trim();
+    if (!cleaned || cleaned.startsWith('{') || cleaned.startsWith('[')) return fallback;
+    return cleaned.length > 240 ? `${cleaned.slice(0, 237).trimEnd()}…` : cleaned;
+  };
+  const summary = safeText(
+    raw.summary,
+    safeText(raw.message, 'The model could not complete this step.'),
+  );
+  const rawDetails = raw.details;
+  const rawAttempts =
+    rawDetails && typeof rawDetails === 'object' && 'attempts' in rawDetails
+      ? (rawDetails as { attempts?: unknown }).attempts
+      : undefined;
+  const attempts = Array.isArray(rawAttempts)
+    ? rawAttempts.flatMap(
+        (attempt): { model: string; kind: string; status: string; message: string }[] => {
+          if (!attempt || typeof attempt !== 'object') return [];
+          const item = attempt as Record<string, unknown>;
+          return [
+            {
+              model: safeText(item.model ?? item.modelRef, 'Unknown model'),
+              kind: safeText(item.kind ?? item.errorKind, 'Error'),
+              status: safeText(item.status ?? item.statusCode, 'Failed'),
+              message: safeText(item.message ?? item.shortMessage, 'No additional detail.'),
+            },
+          ];
+        },
+      )
+    : [];
+  return { summary, attempts };
 }
 
 function DelegationRunView({
@@ -551,8 +585,8 @@ export function SessionCanvas() {
   });
   const { data: profiles = [] } = useProfiles();
   const [prompt, setPrompt] = useState('');
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [fullOutput, setFullOutput] = useState<string | null>(null);
-  const [pickModelRequest, setPickModelRequest] = useState(0);
   const outputDialogRef = useRef<HTMLElement>(null);
   useEffect(() => {
     if (fullOutput === null) return;
@@ -930,7 +964,8 @@ export function SessionCanvas() {
               sessionId={sessionId}
               mode={data?.session.pinnedModelRef ? 'manual' : 'auto'}
               modelName={currentModel}
-              openRequest={pickModelRequest}
+              open={modelPickerOpen}
+              onOpenChange={setModelPickerOpen}
             />
             {workspace && (
               <button
@@ -948,32 +983,11 @@ export function SessionCanvas() {
             )}
           </div>
           <div className="session-toolbar-actions flex items-center gap-1">
-            <DropdownMenu
-              trigger={
-                <button
-                  aria-label="Session options"
-                  className="inline-flex size-8 items-center justify-center rounded-full text-text-2 hover:bg-icon-circle"
-                  type="button"
-                >
-                  <MoreHorizontal size={17} />
-                </button>
-              }
-              items={[
+            <CanvasHeaderActions
+              moreItems={[
                 {
                   label: 'Copy link',
-                  onSelect: () => {
-                    void navigator.clipboard.writeText(window.location.href);
-                  },
-                },
-                {
-                  label: 'Share',
-                  onSelect: () => {
-                    pushToast({
-                      kind: 'info',
-                      title: 'Share',
-                      body: 'There is nothing to share yet.',
-                    });
-                  },
+                  onSelect: () => void navigator.clipboard.writeText(window.location.href),
                 },
                 { separator: true },
                 {
@@ -983,11 +997,7 @@ export function SessionCanvas() {
                   },
                 },
               ]}
-            />
-            <CanvasHeaderActions
-              onLink={() => {
-                void navigator.clipboard.writeText(window.location.href);
-              }}
+              onLink={() => void navigator.clipboard.writeText(window.location.href)}
               onShare={() => {
                 pushToast({ kind: 'info', title: 'Share', body: 'There is nothing to share yet.' });
               }}
@@ -1097,7 +1107,7 @@ export function SessionCanvas() {
                           }}
                           onCancel={(id) => void client.delegation.cancel(id)}
                           onPickAnother={() => {
-                            setPickModelRequest((request) => request + 1);
+                            setModelPickerOpen(true);
                           }}
                         />
                       ),

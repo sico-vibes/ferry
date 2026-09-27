@@ -24,6 +24,7 @@ export function Dialog({
   children,
   trigger,
   contentClassName,
+  onOpenAutoFocus,
 }: {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -32,6 +33,7 @@ export function Dialog({
   children: ReactNode;
   trigger?: ReactNode;
   contentClassName?: string;
+  onOpenAutoFocus?: React.ComponentProps<typeof DialogPrimitive.Content>['onOpenAutoFocus'];
 }) {
   return (
     <DialogPrimitive.Root
@@ -41,7 +43,11 @@ export function Dialog({
       {trigger ? <DialogPrimitive.Trigger asChild>{trigger}</DialogPrimitive.Trigger> : null}
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="ferry-overlay" />
-        <DialogPrimitive.Content className={cn('ferry-dialog', surface, contentClassName)}>
+        <DialogPrimitive.Content
+          className={cn('ferry-dialog', surface, contentClassName)}
+          onOpenAutoFocus={onOpenAutoFocus}
+          tabIndex={-1}
+        >
           <header className="ferry-dialog-head">
             <div>
               <DialogPrimitive.Title className="ferry-dialog-title">{title}</DialogPrimitive.Title>

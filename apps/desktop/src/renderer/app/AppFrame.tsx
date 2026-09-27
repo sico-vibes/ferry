@@ -12,6 +12,8 @@ import { Sidebar } from './Sidebar';
 import { RightPanel } from './right-panel/RightPanel';
 import { appMounts } from './mounts';
 import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
+import { ConfigurationSheet } from './ConfigurationSheet';
+import type { SessionId } from '@ferry/shared';
 
 export function AppFrame({ children }: { children: React.ReactNode }) {
   const client = useFerryClient();
@@ -70,6 +72,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const dismissToast = useToasts((state) => state.dismiss);
   const [closePrompt, setClosePrompt] = useState<string | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [configurationOpen, setConfigurationOpen] = useState(false);
   const [completedDelegationIds, setCompletedDelegationIds] = useState<string[]>([]);
   const [simulatedOffline, setSimulatedOffline] = useState(
     () => localStorage.getItem('ferry.simulateOffline') === 'true',
@@ -250,6 +253,9 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     : homeTab
       ? 'home'
       : (activeId ?? '');
+  const configurationSessionId = pathname.startsWith('/s/')
+    ? (pathname.slice('/s/'.length).split('/')[0] as SessionId | undefined)
+    : undefined;
   return (
     <div
       className={`app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed ? 'right-is-collapsed' : ''}`}
@@ -311,12 +317,9 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
                   )}
                   <TopRightCluster
                     onAccount={() => void navigate({ to: '/settings' })}
+                    showShare={false}
                     onConfiguration={() => {
-                      pushToast({
-                        kind: 'info',
-                        title: 'Configuration',
-                        body: 'Configuration controls arrive in a later update.',
-                      });
+                      setConfigurationOpen(true);
                     }}
                     onShare={() => {
                       pushToast({
@@ -389,6 +392,11 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           </Pill>
         </div>
       </Dialog>
+      <ConfigurationSheet
+        open={configurationOpen}
+        onOpenChange={setConfigurationOpen}
+        sessionId={configurationSessionId}
+      />
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </div>
   );
