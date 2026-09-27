@@ -307,6 +307,7 @@ export const sampleSettings: Settings = {
   fontScale: 1,
   restoreTabs: true,
   allowSubscriptionOAuthRouting: false,
+  toolCallRepair: true,
   subscriptionOAuthAcknowledged: [],
   delegationMode: 'suggest',
   permissionMode: 'ask',

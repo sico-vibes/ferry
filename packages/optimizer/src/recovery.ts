@@ -56,10 +56,9 @@ export function readOutput(
   const options = typeof first === 'string' ? (second as ReadOutputOptions) : third;
   const content = store.get(handle);
   if (content === undefined) return undefined;
-  const lines =
-    content
-      .match(/.*(?:\r\n|\n|\r|$)/g)
-      ?.filter((line, i, all) => line.length > 0 || i < all.length - 1) ?? [];
+  // Split only on LF so U+2028/U+2029 remain ordinary bytes and CR-only files
+  // retain their original contents rather than being interpreted by `.` rules.
+  const lines = content.match(/[^\n]*\n|[^\n]+$/g) ?? [];
   const start = Math.max(1, options.startLine ?? 1);
   const end = Math.max(start, options.endLine ?? lines.length);
   return lines
