@@ -23,6 +23,44 @@ const record = (occurredAt: string, extra: Partial<UsageRecord> = {}): UsageReco
 });
 
 describe('QA quota: window boundaries and DST', () => {
+  it('resolves model quota references only within the window provider', () => {
+    const cerebras = {
+      ...provider,
+      provider: 'cerebras',
+      windows: [
+        {
+          scope: 'model' as const,
+          model: 'gpt-oss-120b',
+          metric: 'tokens' as const,
+          kind: 'fixed_daily' as const,
+          tz: 'UTC',
+          time: '00:00',
+          limit: 1000,
+        },
+      ],
+    };
+    const other: ModelInfo = {
+      ref: ModelRefSchema.parse('deepinfra/openai/gpt-oss-120b'),
+      providerId: ProviderIdSchema.parse('deepinfra'),
+      name: 'OSS elsewhere',
+      tier: 'T1',
+      contextWindow: 100_000,
+      maxOutput: 8_000,
+      toolCalling: true,
+      reasoning: false,
+      free: true,
+      priceInPerM: null,
+      priceOutPerM: null,
+    };
+    const target: ModelInfo = {
+      ...other,
+      ref: ModelRefSchema.parse('cerebras/openai/gpt-oss-120b'),
+      providerId: ProviderIdSchema.parse('cerebras'),
+      name: 'Cerebras OSS',
+    };
+    const engine = makeEngine({ catalog: { providers: [cerebras], models: [other, target] } });
+    expect(engine.getWindows('cerebras')[0]?.modelRef).toBe(target.ref);
+  });
   it('treats the window as half-open at exact boundaries', () => {
     const usage = usageIn(
       { start: new Date('2026-01-01T00:00:00Z'), end: new Date('2026-01-02T00:00:00Z') },

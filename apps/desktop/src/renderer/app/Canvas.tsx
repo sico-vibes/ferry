@@ -1152,7 +1152,10 @@ export function SessionCanvas() {
                       .join('')}
                   </UserMessage>
                 ) : (
-                  <AssistantMessage modelName={shortModel(message.modelRef, models)}>
+                  <AssistantMessage
+                    modelName={shortModel(message.modelRef, models)}
+                    {...(message.agentRole ? { agentRole: message.agentRole } : {})}
+                  >
                     {groupParts(message.parts).map((part) =>
                       part.type === 'tool_group' ? (
                         <ToolStepGroup

@@ -8,6 +8,13 @@ import { ProviderIdSchema } from '@ferry/shared';
 import type { Session, SessionId, Workspace, WorkspaceId } from '@ferry/shared';
 import { createCoreHost, createMemoryTransportPair, type CoreHost } from '../src/index.js';
 import type { FerryServices } from '../src/index.js';
+import { BUILTIN_PROFILES } from '@ferry/router';
+
+// Core integration scenarios predate role planning and use one scripted response per turn.
+const autoFreeFixture = BUILTIN_PROFILES.find((profile) => profile.name === 'Auto-Free');
+if (autoFreeFixture) autoFreeFixture.roles.enabled = false;
+const bestAvailableFixture = BUILTIN_PROFILES.find((profile) => profile.name === 'Best Available');
+if (bestAvailableFixture) bestAvailableFixture.roles.enabled = false;
 
 export interface CoreHarness {
   root: string;

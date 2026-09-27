@@ -154,6 +154,12 @@ function builtinProfile(
           })),
         }
       : {}),
+    roles: {
+      enabled: name === 'Auto-Free' || name === 'Best Available',
+      plannerModelRef: null,
+      editorModelRef: null,
+      editorFailureThreshold: 2,
+    },
   };
 }
 

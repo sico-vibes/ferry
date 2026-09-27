@@ -89,7 +89,7 @@ function makeLoop(state: State, overrides: Partial<AgentOptions> = {}): AgentLoo
     store: state.store,
     workspace: state.root,
     dataDir: state.root,
-    profile: BUILTIN_PROFILES[0]!,
+    profile: testAutoFree,
     catalog: state.catalog,
     capacity: () => ({ providers: [state.provider] }),
     apiKeys: {},
@@ -1364,3 +1364,10 @@ describe('QA agent: real SDK against a scripted fake server', () => {
     }
   }, 30_000);
 });
+const testAutoFree = {
+  ...BUILTIN_PROFILES.find((profile) => profile.name === 'Auto-Free')!,
+  roles: {
+    ...BUILTIN_PROFILES.find((profile) => profile.name === 'Auto-Free')!.roles,
+    enabled: false,
+  },
+};

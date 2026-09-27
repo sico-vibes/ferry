@@ -8,7 +8,12 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_ROUTING_SETTINGS, ModelInfoSchema, ProviderSchema } from '@ferry/shared';
+import {
+  DEFAULT_ROUTING_SETTINGS,
+  ModelInfoSchema,
+  ProviderIdSchema,
+  ProviderSchema,
+} from '@ferry/shared';
 import type { ModelInfo, RoutingSettings } from '@ferry/shared';
 import { openDatabase, MessageRepository, SessionRepository, TaskRepository } from '@ferry/storage';
 import { BUILTIN_PROFILES } from '@ferry/router';
@@ -94,7 +99,153 @@ async function setup() {
 }
 
 type State = Awaited<ReturnType<typeof setup>>;
-const autoFree = BUILTIN_PROFILES.find((profile) => profile.name === 'Auto-Free')!;
+const autoFree = {
+  ...BUILTIN_PROFILES.find((profile) => profile.name === 'Auto-Free')!,
+  roles: {
+    ...BUILTIN_PROFILES.find((profile) => profile.name === 'Auto-Free')!.roles,
+    enabled: false,
+  },
+};
+
+describe('QA role routing', () => {
+  it('routes plan and edit calls to configured models from different providers without handoff markers', async () => {
+    const state = await setup();
+    try {
+      const planner = model('openai/planner');
+      const editor = model('groq/editor');
+      const roleProfile = {
+        ...autoFree,
+        name: 'Role Test',
+        allowedProviders: [ProviderIdSchema.parse('openai'), ProviderIdSchema.parse('groq')],
+        fallbackChain: [],
+        roles: {
+          enabled: true,
+          plannerModelRef: planner.ref,
+          editorModelRef: editor.ref,
+          editorFailureThreshold: 2,
+        },
+      };
+      const groq = ProviderSchema.parse({ ...state.provider, id: 'groq', name: 'Groq' });
+      const calls: string[] = [];
+      const formats: string[] = [];
+      const loop = makeLoop(state, routedSettings({ stickySessions: false }), {
+        profile: roleProfile,
+        catalog: { ...state.catalog, models: [planner, editor] },
+        capacity: () => ({ providers: [state.provider, groq] }),
+        modelHints: (selected) => ({
+          toolProtocol: 'native',
+          editFormat: selected.ref === planner.ref ? 'whole' : 'diff',
+        }),
+        generator: async ({ model: selected, modelHints }) => {
+          calls.push(selected.ref);
+          formats.push(modelHints.editFormat ?? 'missing');
+          return calls.length === 1
+            ? {
+                text: JSON.stringify({
+                  files: [{ path: 'README.md', intent: 'Update the copy.' }],
+                  changes: [{ path: 'README.md', instructions: 'Change the heading.' }],
+                }),
+              }
+            : { text: 'Updated.', finishReason: 'stop' };
+        },
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      const messages = state.store.load(state.session.id)?.messages ?? [];
+      expect(result.status).toBe('completed');
+      expect(calls).toEqual([planner.ref, editor.ref]);
+      expect(formats).toEqual(['whole', 'diff']);
+      expect(
+        messages
+          .filter((message) => message.role === 'assistant')
+          .map((message) => message.agentRole),
+      ).toEqual(['planner', 'editor']);
+      expect(
+        messages.flatMap((message) => message.parts).some((part) => part.type === 'handoff_marker'),
+      ).toBe(false);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('falls back to single-model routing when only one eligible role model is available', async () => {
+    const state = await setup();
+    try {
+      const only = state.catalog.models[0]!;
+      const loop = makeLoop(state, routedSettings({ stickySessions: false }), {
+        profile: { ...autoFree, roles: { ...autoFree.roles, enabled: true } },
+        catalog: { ...state.catalog, models: [only] },
+        generator: async () => ({ text: 'Single model reply.', finishReason: 'stop' }),
+      });
+      await loop.run({ sessionId: state.session.id });
+      const assistant = state.store
+        .load(state.session.id)
+        ?.messages.find((message) => message.role === 'assistant');
+      expect(assistant?.agentRole).toBeUndefined();
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('lets the planner edit after repeated editor failures', async () => {
+    const state = await setup();
+    try {
+      const planner = model('openai/planner');
+      const editor = model('groq/editor');
+      const backupEditor = model('cerebras/backup-editor');
+      const groq = ProviderSchema.parse({ ...state.provider, id: 'groq', name: 'Groq' });
+      const cerebras = ProviderSchema.parse({
+        ...state.provider,
+        id: 'cerebras',
+        name: 'Cerebras',
+      });
+      const roleProfile = {
+        ...autoFree,
+        allowedProviders: [
+          ProviderIdSchema.parse('openai'),
+          ProviderIdSchema.parse('groq'),
+          ProviderIdSchema.parse('cerebras'),
+        ],
+        fallbackChain: [],
+        roles: {
+          enabled: true,
+          plannerModelRef: planner.ref,
+          editorModelRef: editor.ref,
+          editorFailureThreshold: 2,
+        },
+      };
+      const calls: string[] = [];
+      const loop = makeLoop(state, routedSettings({ stickySessions: false }), {
+        profile: roleProfile,
+        catalog: { ...state.catalog, models: [planner, editor, backupEditor] },
+        capacity: () => ({ providers: [state.provider, groq, cerebras] }),
+        resolveCandidates: (_profile, step) =>
+          step === 'edit' ? [editor, backupEditor] : [planner, editor, backupEditor],
+        generator: async ({ model: selected }) => {
+          calls.push(selected.ref);
+          if (selected.ref === editor.ref || selected.ref === backupEditor.ref)
+            throw httpError(429, 'Editor is temporarily unavailable');
+          if (calls.length === 1)
+            return {
+              text: JSON.stringify({
+                files: [{ path: 'README.md', intent: 'Update the copy.' }],
+                changes: [{ path: 'README.md', instructions: 'Change the heading.' }],
+              }),
+            };
+          return { text: 'Planner applied the planned change.', finishReason: 'stop' };
+        },
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      const assistant = state.store
+        .load(state.session.id)
+        ?.messages.filter((message) => message.role === 'assistant');
+      expect(result.status).toBe('completed');
+      expect(calls).toEqual([planner.ref, editor.ref, backupEditor.ref, planner.ref]);
+      expect(assistant?.at(-1)?.agentRole).toBe('planner');
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+});
 
 function makeLoop(
   state: State,
@@ -526,7 +677,7 @@ describe('QA adv: exhaustion and handoff budget', () => {
         expect(typeof nextCapacity).toBe('string');
         if (typeof nextCapacity === 'string')
           expect(
-            /^(?:OpenAI in \d+ min|when a free provider resets(?:\. Wait or add a provider\.)?)$/.test(
+            /^(?:OpenAI in \d+ min(?:\. Wait or add a provider\.)?|when a free provider resets(?:\. Wait or add a provider\.)?)$/.test(
               nextCapacity,
             ),
           ).toBe(true);

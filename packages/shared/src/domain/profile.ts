@@ -14,6 +14,13 @@ export const OptimizerTogglesSchema = z.object({
   rtk: z.boolean(),
 });
 export type OptimizerToggles = z.infer<typeof OptimizerTogglesSchema>;
+export const ProfileRolesSchema = z.object({
+  enabled: z.boolean().default(false),
+  plannerModelRef: z.string().nullable().default(null),
+  editorModelRef: z.string().nullable().default(null),
+  editorFailureThreshold: z.number().int().min(1).max(5).default(2),
+});
+export type ProfileRoles = z.infer<typeof ProfileRolesSchema>;
 export const ProfileSchema = z.object({
   id: ProfileIdSchema,
   name: z.string(),
@@ -31,5 +38,11 @@ export const ProfileSchema = z.object({
   delegationMode: DelegationModeSchema,
   optimizers: OptimizerTogglesSchema,
   fallbackChain: z.array(FallbackChainEntrySchema).optional(),
+  roles: ProfileRolesSchema.default({
+    enabled: false,
+    plannerModelRef: null,
+    editorModelRef: null,
+    editorFailureThreshold: 2,
+  }),
 });
 export type Profile = z.infer<typeof ProfileSchema>;

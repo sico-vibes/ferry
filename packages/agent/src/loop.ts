@@ -64,6 +64,7 @@ import {
   ToolRepetitionDetector,
   type ModelHints,
 } from './weak-model.js';
+import { formatEditPlan, parseEditPlan, type EditPlan } from './role-plan.js';
 
 export type AgentEvent =
   | { type: 'session.message'; message: Message }
@@ -287,7 +288,11 @@ export class AgentLoop {
     const reflectionBudget = new ReflectionBudget(3);
     const repetitionDetector = new ToolRepetitionDetector();
     let nativeFormatFailures = 0;
+    let pendingEditPlan: EditPlan | null = null;
+    let activeRole: 'planner' | 'editor' | undefined;
+    let editorFailures = 0;
     const maxSteps = this.options.maxSteps ?? 40;
+    let rolesEnabled = this.options.profile.roles.enabled && maxSteps >= 2;
     const budget = this.options.tokenBudget ?? 100_000;
     const approvals = this.options.requestApproval;
     const registry = createWorkspaceTools({
@@ -440,17 +445,42 @@ export class AgentLoop {
           (this.estimates(system) + messageTokens + toolSchemaTokens) * 1.15,
         );
         const routeEstimate = inputTokens;
-        const stepKind = classifyStep({
-          firstStep: stepCount === 0,
-          pendingEdits: taskRecord.touchedFiles.length > 0,
-          estimatedInputTokens: routeEstimate,
-        });
-        const selectedModel = this.selectModel(
-          stepKind,
-          routeEstimate,
-          session.modelRef,
-          sessionId,
-        );
+        const stepKind = pendingEditPlan
+          ? 'edit'
+          : classifyStep({
+              firstStep: stepCount === 0,
+              pendingEdits: taskRecord.touchedFiles.length > 0,
+              estimatedInputTokens: routeEstimate,
+            });
+        let requestedRole =
+          rolesEnabled && (stepKind === 'plan' || stepKind === 'edit')
+            ? stepKind === 'plan'
+              ? ('planner' as const)
+              : ('editor' as const)
+            : undefined;
+        let selectedModel = requestedRole
+          ? this.selectRoleModel(
+              requestedRole,
+              stepKind,
+              routeEstimate,
+              session.modelRef,
+              sessionId,
+            )
+          : this.selectModel(stepKind, routeEstimate, session.modelRef, sessionId);
+        if (requestedRole === 'planner' && selectedModel) {
+          const editor = this.selectRoleModel(
+            'editor',
+            'edit',
+            routeEstimate,
+            selectedModel.ref,
+            sessionId,
+          );
+          if (!editor || editor.ref === selectedModel.ref) {
+            rolesEnabled = false;
+            requestedRole = undefined;
+            selectedModel = this.selectModel(stepKind, routeEstimate, session.modelRef, sessionId);
+          }
+        }
         if (!selectedModel) throw new AllCandidatesExhaustedError(this.exhaustedMessage(stepKind));
         let model: ModelInfo = selectedModel;
         let contextMessages = pinnedMessages;
@@ -503,7 +533,7 @@ export class AgentLoop {
           stepCount++;
           contextMessages = pinnedMessages;
         }
-        if (session.modelRef && session.modelRef !== model.ref) {
+        if (session.modelRef && session.modelRef !== model.ref && activeRole === requestedRole) {
           const briefing = buildBriefing(
             taskRecord,
             messages,
@@ -545,7 +575,15 @@ export class AgentLoop {
           status: 'running',
         });
         this.options.emit({ type: 'session.updated', session });
-        const assistant = this.options.store.appendMessage(sessionId, 'assistant', [], selectedRef);
+        let executionRole = requestedRole;
+        let assistant = this.options.store.appendMessage(
+          sessionId,
+          'assistant',
+          [],
+          selectedRef,
+          new Date(),
+          executionRole,
+        );
         this.options.emit({ type: 'session.message', message: assistant });
         const streamedTextPartId = PartIdSchema.parse(newId('part'));
         let streamedText = '';
@@ -557,9 +595,16 @@ export class AgentLoop {
           onProgress: () => void,
         ): StepGeneratorInput => ({
           model: selected,
-          system,
+          system:
+            executionRole === 'planner' && stepKind === 'plan'
+              ? `${system}\n\nYou are the planner. Do not call tools or edit files. Return only a JSON edit plan matching this shape: {"files":[{"path":"relative/path","intent":"why this file changes"}],"changes":[{"path":"relative/path","instructions":"exact edits or a precise pseudo-diff"}]}. Include every file the editor must change.`
+              : executionRole === 'planner'
+                ? `${system}\n\nThe editor failed repeatedly. Apply the structured edit plan directly with your own tool/edit format. Keep the change within the planned files.\n\n${formatEditPlan(pendingEditPlan ?? { files: [], changes: [] })}`
+                : executionRole === 'editor' && pendingEditPlan
+                  ? `${system}\n\nExecute this approved planner output with your own tool/edit format. Do not expand scope beyond the listed files and instructions.\n\n${formatEditPlan(pendingEditPlan)}`
+                  : system,
           messages: contextMessages,
-          tools,
+          tools: requestedRole === 'planner' && stepKind === 'plan' ? [] : tools,
           modelHints: this.options.modelHints?.(selected) ?? {
             toolProtocol: 'native',
             editFormat: 'search_replace',
@@ -662,6 +707,7 @@ export class AgentLoop {
             this.options.onResilienceState?.(this.resilience.snapshot());
             break;
           } catch (error) {
+            if (executionRole === 'editor') editorFailures += 1;
             const classified = classifyProviderError(errorInput(error));
             const routing = this.options.routingSettings?.();
             const localQuotaReservation = error instanceof QuotaReservationError;
@@ -802,6 +848,28 @@ export class AgentLoop {
               isSignalAborted(signal)
             )
               throw error;
+            if (
+              executionRole === 'editor' &&
+              editorFailures >= this.options.profile.roles.editorFailureThreshold
+            ) {
+              const planner = this.selectRoleModel(
+                'planner',
+                stepKind,
+                routeEstimate,
+                model.ref,
+                sessionId,
+              );
+              if (planner && planner.ref !== model.ref) {
+                attemptedModels.add(planner.ref);
+                executionRole = 'planner';
+                model = planner;
+                assistant = { ...assistant, agentRole: 'planner', modelRef: planner.ref };
+                this.options.store.replaceMessage(assistant);
+                this.options.store.updateSession(sessionId, { modelRef: planner.ref });
+                sameModelRetries = 0;
+                continue;
+              }
+            }
             const maxHandoffs = this.options.maxHandoffsPerStep ?? 4;
             if (handoffsThisStep >= maxHandoffs)
               throw new Error(
@@ -902,6 +970,34 @@ export class AgentLoop {
           (generated.inputTokens ?? inputTokens) +
           (generated.outputTokens ?? this.estimates(generated.text ?? ''));
         stepCount++;
+        if (requestedRole === 'planner' && executionRole === 'planner' && stepKind === 'plan') {
+          const plan = parseEditPlan(generated.text ?? '');
+          if (!plan) {
+            pendingEditPlan = null;
+            rolesEnabled = false;
+            taskRecord = {
+              ...taskRecord,
+              nextStep:
+                'Planner output did not match the edit-plan contract; continue in single-model mode.',
+            };
+            this.persistTask(taskRecord);
+            continue;
+          }
+          pendingEditPlan = plan;
+          activeRole = requestedRole;
+          taskRecord = {
+            ...taskRecord,
+            touchedFiles: plan.files.map(({ path, intent }) => ({ path, purpose: intent })),
+            nextStep: 'Editor should apply the structured planner instructions.',
+          };
+          this.persistTask(taskRecord);
+          continue;
+        }
+        if (requestedRole === 'editor') {
+          pendingEditPlan = null;
+          activeRole = requestedRole;
+          editorFailures = 0;
+        }
         const retryErrors: string[] = [];
         const calls = [...(generated.toolCalls ?? [])];
         const hints = this.options.modelHints?.(model) ?? {
@@ -1180,6 +1276,54 @@ export class AgentLoop {
       this.reliability.length,
       ...this.reliability.filter((item) => item.at >= oldest),
     );
+  }
+
+  private selectRoleModel(
+    role: 'planner' | 'editor',
+    step: import('@ferry/shared').StepKind,
+    inputTokens: number,
+    previous: ModelRef | null,
+    sessionId: string,
+  ): ModelInfo | undefined {
+    const configured =
+      role === 'planner'
+        ? this.options.profile.roles.plannerModelRef
+        : this.options.profile.roles.editorModelRef;
+    const baseline = this.selectModel(step, inputTokens, previous, sessionId);
+    const candidates = scoreModels({
+      models: this.options.catalog.models,
+      capacity: this.options.capacity(),
+      profile: this.options.profile,
+      step,
+      estimate: {
+        inputTokens,
+        contextTokens: this.contextFitEstimate(inputTokens),
+        outputTokens: 2048,
+        requiresTools: role === 'editor',
+      },
+      ...(this.options.stats ? { stats: this.options.stats } : {}),
+      ...(this.options.routingSettings ? { routing: this.options.routingSettings() } : {}),
+      ...(this.reliability.length ? { reliability: this.reliability } : {}),
+    });
+    const models = candidates.flatMap(({ ref }) => {
+      const model = this.options.catalog.models.find((candidate) => candidate.ref === ref);
+      return model ? [model] : [];
+    });
+    const stats = this.options.stats ?? [];
+    models.sort((left, right) =>
+      role === 'planner'
+        ? (right.quality ?? 0.35) * (right.qualityConfidence ?? 0.1) -
+          (right.qualityPenalty ?? 0) -
+          ((left.quality ?? 0.35) * (left.qualityConfidence ?? 0.1) - (left.qualityPenalty ?? 0))
+        : Number(right.toolCalling) - Number(left.toolCalling) ||
+          (stats.find((item) => item.modelRef === left.ref)?.toolCallValidationFailures ?? 0) -
+            (stats.find((item) => item.modelRef === right.ref)?.toolCallValidationFailures ?? 0) ||
+          (stats.find((item) => item.modelRef === left.ref)?.averageLatencyMs ?? 2000) -
+            (stats.find((item) => item.modelRef === right.ref)?.averageLatencyMs ?? 2000),
+    );
+    const preferred = configured ? models.find((model) => model.ref === configured) : undefined;
+    if (preferred) return this.selectResilient([preferred]);
+    return this.selectResilient(models.length ? models : baseline ? [baseline] : []);
   }
 
   private selectModel(

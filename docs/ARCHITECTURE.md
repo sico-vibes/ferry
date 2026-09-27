@@ -32,6 +32,9 @@ core: agent loop · router · quota ledger · providers (AI SDK) · workspace to
 ## Engine data flow per agent step (Part B)
 1. Tag the step kind.
 2. `router.select` picks a model using profile, quota capacity, context fit and reliability.
+   With profile planner/editor roles enabled, `plan` selects the planner and `edit` selects
+   the editor; the planner's structured file/change plan is passed to the editor. Other step kinds
+   keep normal routing, and role changes do not emit provider-failure handoff markers.
 3. The provider call goes through a fetch interceptor, producing a `UsageRecord`.
 4. The ledger and reconciler record it and emit `quota.update`.
 5. Tool calls are validated, pass the permission check and execute.

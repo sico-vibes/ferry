@@ -1,0 +1,11 @@
+# Suggested role pairs. Runtime eligibility determines whether a model is used.
+pairs:
+  - planner: gemini/google/gemini-3.8-flash
+    editor: gemini/google/gemini-3.8-flash-lite
+    rationale: Flash has a stronger quality prior for planning; Flash-Lite is fast and tool-capable.
+  - planner: groq/openai/gpt-oss-120b
+    editor: groq/qwen/qwen3.8-27b
+    rationale: The larger OSS model plans while Qwen provides a fast tool-oriented edit path.
+  - planner: cerebras/openai/gpt-oss-120b
+    editor: cerebras/openai/gpt-oss-120b
+    rationale: Cerebras is opt-in and latency oriented; one available model naturally uses single-model routing.

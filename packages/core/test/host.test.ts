@@ -43,6 +43,10 @@ import { BUILTIN_PROFILES } from '@ferry/router';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'ferry-core-test-'));
 vi.setConfig({ testTimeout: 30_000 });
+const autoFreeFixture = BUILTIN_PROFILES.find((profile) => profile.name === 'Auto-Free');
+if (autoFreeFixture) autoFreeFixture.roles.enabled = false;
+const bestAvailableFixture = BUILTIN_PROFILES.find((profile) => profile.name === 'Best Available');
+if (bestAvailableFixture) bestAvailableFixture.roles.enabled = false;
 let activeHost: CoreHost | undefined;
 
 async function makeStdioHarness() {

@@ -40,6 +40,8 @@ describe('live eval harness helpers', () => {
       include: ['groq', 'trial-a'],
       exclude: ['credits-a'],
     });
+    expect(parseEvalArgs(['--roles', 'off'])).toMatchObject({ roles: 'off' });
+    expect(() => parseEvalArgs(['--roles', 'sometimes'])).toThrow('--roles must be on or off');
     const env = parseDotEnv("GROQ_API_KEY='secret-key'\nexport GEMINI_API_KEY=another-secret");
     expect(env).toEqual({ GROQ_API_KEY: 'secret-key', GEMINI_API_KEY: 'another-secret' });
     expect(redactText(JSON.stringify(env), Object.values(env))).not.toContain('secret-key');

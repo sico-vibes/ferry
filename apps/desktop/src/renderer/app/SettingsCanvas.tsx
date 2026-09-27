@@ -138,6 +138,10 @@ export function SettingsCanvas() {
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
+  const { data: models = [] } = useQuery({
+    queryKey: ['models'],
+    queryFn: () => client.models.list(),
+  });
   const { data: lanes = [] } = useQuery({
     queryKey: ['lanes'],
     queryFn: () => client.delegation.lanes(),
@@ -399,6 +403,40 @@ export function SettingsCanvas() {
                   }}
                 />
               </div>
+              <h3>Planner/editor split</h3>
+              <SettingRow
+                title="Separate planning and editing"
+                helper="A planner writes a file-by-file edit plan. An editor applies it with its own tool format."
+              >
+                <Switch
+                  label="Planner/editor split"
+                  checked={profileDraft.roles.enabled}
+                  onCheckedChange={(enabled) => {
+                    mutateProfile('roles', { ...profileDraft.roles, enabled });
+                  }}
+                />
+              </SettingRow>
+              {profileDraft.roles.enabled && (
+                <div className="form-grid">
+                  {(['plannerModelRef', 'editorModelRef'] as const).map((key) => (
+                    <Select
+                      key={key}
+                      label={key === 'plannerModelRef' ? 'Planner model' : 'Editor model'}
+                      value={profileDraft.roles[key] ?? 'auto'}
+                      onValueChange={(value) => {
+                        mutateProfile('roles', {
+                          ...profileDraft.roles,
+                          [key]: value === 'auto' ? null : value,
+                        });
+                      }}
+                      options={[
+                        { value: 'auto', label: 'Auto' },
+                        ...models.map((model) => ({ value: model.ref, label: model.name })),
+                      ]}
+                    />
+                  ))}
+                </div>
+              )}
               <h3>Fallback order</h3>
               <p className="muted">
                 Drag providers to reorder them. Ferry uses the first live, tool-capable model and
@@ -783,6 +821,12 @@ export function SettingsCanvas() {
       return (
         <>
           <Group title="Advanced">
+            <SettingRow
+              title="Planner/editor roles"
+              helper="Role model selection uses catalog quality priors, context fit, tool support, and observed reliability."
+            >
+              <span className="muted">Configure per profile</span>
+            </SettingRow>
             <SettingRow
               title="Benchmark quality weight"
               helper="Give published coding and tool-use scores more or less influence. Models without scores remain neutral."

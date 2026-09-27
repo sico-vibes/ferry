@@ -13,6 +13,25 @@ ferry profiles chain show Auto-Free
 ferry profiles chain set Auto-Free gemini=gemini-3.8-flash,gemini-3.*-flash groq=qwen/qwen3.8-27b
 ```
 
+## Planner/editor roles
+
+Auto-Free and Best Available enable a planner/editor split by default. Planning uses the strongest
+eligible model by catalog quality prior and context fit. Editing favors fast, tool-capable models
+with good observed tool reliability. A planner returns a structured list of files, intent, and
+concrete changes; the editor receives that contract and uses its own registry edit format and tool
+protocol. A single eligible model or repeated editor failures falls back to planner-led editing.
+Planner/editor role changes do not create a provider-failure handoff marker.
+
+Choose roles per profile in Settings, or with the CLI:
+
+```sh
+ferry profiles roles show Auto-Free
+ferry profiles roles set Auto-Free on planner=auto editor=auto
+```
+
+The live evaluation harness accepts `--roles on|off` for paired comparisons. Suggested role pairs
+and their rationale are in `packages/router/data/role-pairs.yaml`.
+
 ## Advanced → Routing
 
 Defaults are off unless noted; these switches opt into specific behavior. Actual defaults are shown by the current Settings screen (updating).

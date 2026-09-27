@@ -72,6 +72,24 @@ describe('SettingsCanvas', () => {
     expect(screen.getByRole('slider', { name: 'Quota ramp start' })).toBeTruthy();
   });
 
+  it('persists the planner/editor split on an individual profile', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    useUI.setState({ settingsSection: 'Profiles' });
+    const user = userEvent.setup();
+    mount(client);
+    await user.click(await screen.findByRole('button', { name: /Auto-Free/ }));
+    const toggle = await screen.findByRole('switch', { name: 'Planner/editor split' });
+    expect(toggle.getAttribute('data-state')).toBe('checked');
+    await user.click(toggle);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(async () => {
+      expect(
+        (await client.profiles.list()).find((profile) => profile.name === 'Auto-Free')?.roles
+          .enabled,
+      ).toBe(false);
+    });
+  });
+
   it('keeps training-provider avoidance off by default and persists the privacy toggle', async () => {
     const client = createMockFerryClient({ behavior: 'test' });
     const user = userEvent.setup();

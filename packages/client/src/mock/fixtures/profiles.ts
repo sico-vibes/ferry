@@ -11,6 +11,12 @@ export function createProfiles(): Profile[] {
       pinned: true,
       paidAllowed: i !== 1,
       caps: { dailyUsd: i === 0 ? 2 : null, monthlyUsd: i === 0 ? 20 : null },
+      roles: {
+        enabled: i === 0 || i === 1,
+        plannerModelRef: null,
+        editorModelRef: null,
+        editorFailureThreshold: 2,
+      },
       tierByStep: {
         plan: ['T1', 'T2', 'T3'] as ('T1' | 'T2' | 'T3')[],
         edit: ['T1', 'T2', 'T3'] as ('T1' | 'T2' | 'T3')[],

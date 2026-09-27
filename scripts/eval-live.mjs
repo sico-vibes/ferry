@@ -27,7 +27,7 @@ const execFileAsync = promisify(execFile);
 const usage = `Usage: pnpm eval:live [--data-dir PATH] [--profile auto-free|best-available]
   [--only id,id] [--repeat N] [--model provider/model] [--max-steps N]
   [--timeout SECONDS] [--include provider,id] [--exclude provider,id]
-  [--allow-paid] [--yes] [--json]`;
+  [--allow-paid] [--roles on|off] [--yes] [--json]`;
 let activeSecrets = [];
 
 export async function runEvalLive(args = process.argv.slice(2)) {
@@ -199,6 +199,7 @@ export async function runEvalLive(args = process.argv.slice(2)) {
     const output = {
       timestamp,
       profile: options.profile,
+      roles: options.roles ?? 'profile-default',
       model: options.model ?? null,
       dataDir: options.dataDir ? '[provided]' : '[temporary]',
       maxSteps: options.maxSteps,
@@ -233,6 +234,14 @@ async function runScenario({ scenario, services, host, options, secrets }) {
   const invoke = (method, ...params) =>
     host.dispatch({ jsonrpc: '2.0', id: `${Date.now()}-${Math.random()}`, method, params });
   try {
+    if (options.roles !== undefined) {
+      const profile = (await invoke('profiles.list')).find((item) => item.id === profileId);
+      if (profile)
+        await invoke('profiles.save', {
+          ...profile,
+          roles: { ...profile.roles, enabled: options.roles === 'on' },
+        });
+    }
     await mkdir(join(fixture.path, '.ferry'), { recursive: true });
     await writeFile(
       join(fixture.path, '.ferry', 'config.json'),
