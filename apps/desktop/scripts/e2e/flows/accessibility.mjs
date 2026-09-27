@@ -64,7 +64,13 @@ export async function run(page, { url, expect }) {
   const reviewViolations = results.violations.filter((item) =>
     ['serious', 'critical'].includes(item.impact),
   );
-  if (reviewViolations.length)
+  if (reviewViolations.length) {
     failures.push(`review: ${reviewViolations.map((item) => item.id).join(', ')}`);
+    for (const issue of reviewViolations) {
+      console.error(`serious ${issue.id}: ${issue.help}`);
+      for (const node of issue.nodes.slice(0, 10))
+        console.error(`  ${node.target.join(', ')}: ${node.failureSummary}`);
+    }
+  }
   expect(failures.length, `Axe violations: ${failures.join('; ')}`).toBe(0);
 }

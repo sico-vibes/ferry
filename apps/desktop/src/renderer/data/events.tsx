@@ -20,8 +20,32 @@ export function useFerryEvents(): void {
         'session.message',
         ({ sessionId }) => void cache.invalidateQueries({ queryKey: keys.session(sessionId) }),
       ),
-      client.on('session.part', ({ sessionId, part }) => {
-        void cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+      client.on('session.part', ({ sessionId, messageId, part }) => {
+        const key = keys.session(sessionId);
+        const current = cache.getQueryData<import('@ferry/shared').SessionDetail>(key);
+        if (!current) {
+          void cache.invalidateQueries({ queryKey: key });
+        } else {
+          const messageIndex = current.messages.findIndex((message) => message.id === messageId);
+          const message = current.messages[messageIndex];
+          if (messageIndex < 0 || !message) {
+            void cache.invalidateQueries({ queryKey: key });
+          } else {
+            const existing = message.parts.find((item) => item.id === part.id);
+            if (!existing || JSON.stringify(existing) !== JSON.stringify(part)) {
+              const updatedMessage = existing
+                ? {
+                    ...message,
+                    parts: message.parts.map((item) => (item.id === part.id ? part : item)),
+                  }
+                : { ...message, parts: [...message.parts, part] };
+              const messages = current.messages.map((item, index) =>
+                index === messageIndex ? updatedMessage : item,
+              );
+              cache.setQueryData(key, { ...current, messages });
+            }
+          }
+        }
         if (
           part.type === 'approval_request' &&
           part.state === 'pending' &&
@@ -37,10 +61,35 @@ export function useFerryEvents(): void {
           });
         }
       }),
-      client.on(
-        'session.delta',
-        ({ sessionId }) => void cache.invalidateQueries({ queryKey: keys.session(sessionId) }),
-      ),
+      client.on('session.delta', ({ sessionId, messageId, partId, textDelta }) => {
+        const key = keys.session(sessionId);
+        const current = cache.getQueryData<import('@ferry/shared').SessionDetail>(key);
+        if (!current) {
+          void cache.invalidateQueries({ queryKey: key });
+          return;
+        }
+        const messageIndex = current.messages.findIndex((message) => message.id === messageId);
+        const message = current.messages[messageIndex];
+        if (messageIndex < 0 || !message) {
+          void cache.invalidateQueries({ queryKey: key });
+          return;
+        }
+        const exists = message.parts.some((part) => part.id === partId);
+        const updatedMessage = {
+          ...message,
+          parts: exists
+            ? message.parts.map((part) =>
+                part.id === partId && part.type === 'text'
+                  ? { ...part, text: part.text + textDelta }
+                  : part,
+              )
+            : [...message.parts, { type: 'text' as const, id: partId, text: textDelta }],
+        };
+        const messages = current.messages.map((item, index) =>
+          index === messageIndex ? updatedMessage : item,
+        );
+        cache.setQueryData(key, { ...current, messages });
+      }),
       client.on('task.updated', (task) => {
         void cache.invalidateQueries({ queryKey: keys.session(task.sessionId) });
       }),

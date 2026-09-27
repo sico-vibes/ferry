@@ -27,6 +27,7 @@ import {
   WINDOW_SYMBOL,
 } from './window-theme.js';
 import { buildCoreEnvironment } from './core-environment.js';
+import { isTrustedRendererOrigin } from './renderer-origin.js';
 
 // Packaged builds use the icon embedded in the .exe by electron-builder (build/icon.ico).
 const DEV_WINDOW_ICON = join(import.meta.dirname, '../../build/icon.ico');
@@ -126,18 +127,6 @@ function isTrustedRendererUrl(url: string): boolean {
     return false;
   }
 }
-function isTrustedRendererOrigin(url: string): boolean {
-  try {
-    const actual = new URL(url);
-    const devUrl = process.env.ELECTRON_RENDERER_URL;
-    if (devUrl) return actual.origin === new URL(devUrl).origin;
-    // File URLs have opaque origins and the router may change their pathname with pushState.
-    // Trust is additionally bound to this window's main frame in isTrustedSender.
-    return actual.protocol === 'file:' && actual.host === '';
-  } catch {
-    return false;
-  }
-}
 function isTrustedSender(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean {
   const frame = event.senderFrame;
   return Boolean(
@@ -146,7 +135,7 @@ function isTrustedSender(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEv
     event.sender === mainWindow.webContents &&
     frame &&
     frame === event.sender.mainFrame &&
-    isTrustedRendererOrigin(frame.url),
+    isTrustedRendererOrigin(frame.url, process.env.ELECTRON_RENDERER_URL),
   );
 }
 async function openExternalSafely(url: string): Promise<void> {
@@ -330,7 +319,9 @@ ipcMain.handle('ferry:open-folder', async (event, ...args: unknown[]) => {
 
 const consumedHandoffTokens = new Set<string>();
 ipcMain.on('ferry:connect-core', (event, rawToken: unknown) => {
-  if (!isTrustedSender(event)) return;
+  if (!isTrustedSender(event)) {
+    return;
+  }
   const token = CoreHandoffTokenSchema.safeParse(rawToken);
   if (!token.success || consumedHandoffTokens.has(token.data)) return;
   consumedHandoffTokens.add(token.data);

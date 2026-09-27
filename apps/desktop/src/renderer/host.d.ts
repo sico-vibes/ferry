@@ -13,6 +13,8 @@ declare global {
       onEngineConnected(handler: () => void): () => void;
     };
     ferryPerfFrameTimes?: number[];
+    ferryPerfMessageCount?: number;
+    ferryPerfReady?: boolean;
     ferryHybrid?: import('@ferry/client').HybridFerryClient;
     ferryEngineHello?: import('@ferry/shared').HelloResult;
     ferryRpcClient?: import('@ferry/client').RpcFerryClient;

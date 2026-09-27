@@ -25,6 +25,38 @@ import type { RoutingSettings } from '@ferry/shared';
 import { Info } from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
+const settingsPageCopy: Record<string, { title: string; description: string }> = {
+  General: { title: 'Settings', description: 'Control how Ferry works across your workspaces.' },
+  Profiles: {
+    title: 'Profiles',
+    description: 'Choose the models and limits Ferry uses for each kind of work.',
+  },
+  'Providers & Keys': {
+    title: 'Providers & Keys',
+    description: 'Connect providers and review their access and data use.',
+  },
+  Advanced: { title: 'Advanced', description: 'Tune routing behavior, reliability, and recovery.' },
+  Optimizers: {
+    title: 'Optimizers',
+    description: 'Choose how Ferry keeps context focused during longer runs.',
+  },
+  Delegation: {
+    title: 'Delegation',
+    description: 'Set when Ferry can hand work to another coding agent.',
+  },
+  Permissions: {
+    title: 'Permissions',
+    description: 'Control which workspace actions Ferry can take.',
+  },
+  Developer: { title: 'Developer', description: 'Inspect local engine state and diagnostics.' },
+  Skills: { title: 'Skills', description: 'Choose which reusable workflows Ferry can use.' },
+  MCP: { title: 'MCP', description: 'Manage local tool server connections.' },
+  'Data & Privacy': {
+    title: 'Data & Privacy',
+    description: 'Review local storage and provider data handling.',
+  },
+  About: { title: 'About', description: 'Ferry version and project information.' },
+};
 const stepLabels: Record<StepKind, string> = {
   plan: 'Plan',
   edit: 'Edit',
@@ -1261,13 +1293,19 @@ export function SettingsCanvas() {
       </Group>
     );
   };
+  const pageCopy =
+    settingsPageCopy[section] ??
+    ({
+      title: 'Settings',
+      description: 'Control how Ferry works across your workspaces.',
+    } as const);
   return (
     <section className="canvas settings-page">
       <Stack className="settings-page-content" gap={4}>
         <PageHeader
           eyebrow="PREFERENCES"
-          title="Settings"
-          subtitle="Control how Ferry works across your workspaces."
+          title={pageCopy.title}
+          subtitle={pageCopy.description}
           actions={
             section === 'General' ? (
               <Pill

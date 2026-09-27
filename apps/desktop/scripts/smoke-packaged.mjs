@@ -21,6 +21,7 @@ await new Promise((resolveClose, reject) =>
   portServer.close((error) => (error ? reject(error) : resolveClose())),
 );
 
+const launchStartedAt = performance.now();
 const child = spawn(
   executable,
   [
@@ -117,6 +118,15 @@ async function waitForRendererLoad() {
           await page.waitForLoadState('load', { timeout: 5_000 });
           const readyState = await page.evaluate(() => document.readyState);
           if (readyState === 'complete') {
+            const composer = page.getByRole('textbox', { name: 'Message Ferry' });
+            const skipSetup = page.getByRole('button', { name: 'Skip setup' });
+            await Promise.race([
+              composer.waitFor({ state: 'visible' }),
+              skipSetup.waitFor({ state: 'visible' }),
+            ]);
+            const firstRunOnboardingVisible = await skipSetup.isVisible();
+            const interactiveMs = Number((performance.now() - launchStartedAt).toFixed(1));
+            console.log(`Packaged time to interactive: ${String(interactiveMs)} ms`);
             await page.waitForFunction(() => Boolean(window.ferryHybrid), undefined, {
               timeout: 20_000,
             });
@@ -144,6 +154,24 @@ async function waitForRendererLoad() {
               typeof domains.capacity.percentRemaining !== 'number'
             )
               throw new Error(`Packaged real-domain RPC smoke failed: ${JSON.stringify(domains)}`);
+            console.log(
+              `Packaged real client connected with ${String(domains.realDomains.length)} domains`,
+            );
+            if (interactiveMs >= 2_000)
+              throw new Error(`Packaged app became interactive after ${String(interactiveMs)} ms`);
+            if (firstRunOnboardingVisible) await skipSetup.click();
+            try {
+              await composer.waitFor({ state: 'visible' });
+            } catch (error) {
+              const rendererState = await page.evaluate(() => ({
+                title: document.title,
+                bodyText: document.body.innerText.slice(0, 2_000),
+                rootMarkup: document.querySelector('#root')?.innerHTML.slice(0, 2_000) ?? '',
+              }));
+              throw new Error(
+                `Packaged composer did not become visible: ${JSON.stringify(rendererState)}; ${error.message}`,
+              );
+            }
             console.log(`Packaged renderer loaded: ${page.url()}`);
             console.log('Packaged providers/quota RPC connected');
             return;

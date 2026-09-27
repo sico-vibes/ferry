@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildCoreEnvironment } from './core-environment.js';
+import { isTrustedRendererOrigin } from './renderer-origin.js';
+import { isExpectedCorePortOrigin } from '../shared/core-port-origin.js';
 
 const mainSource = await readFile(join(import.meta.dirname, 'index.ts'), 'utf8');
 const preloadSource = await readFile(join(import.meta.dirname, '../preload/index.ts'), 'utf8');
@@ -60,7 +62,9 @@ describe('Electron security boundary', () => {
     expect(mainSource).toContain('isTrustedSender(event)');
     expect(mainSource).toContain('event.sender === mainWindow.webContents');
     expect(mainSource).toContain('frame === event.sender.mainFrame');
-    expect(mainSource).toContain('isTrustedRendererOrigin(frame.url)');
+    expect(mainSource).toContain(
+      'isTrustedRendererOrigin(frame.url, process.env.ELECTRON_RENDERER_URL)',
+    );
     expect(mainSource).toContain('EmptyIpcArgsSchema.parse(args)');
     expect(mainSource).toContain('OpenFolderResultSchema.parse(result.canceled');
     expect(mainSource).toContain('CoreHandoffTokenSchema.safeParse(rawToken)');
@@ -69,6 +73,31 @@ describe('Electron security boundary', () => {
     expect(preloadSource).toContain("send('ferry:connect-core', token)");
     expect(preloadSource).not.toMatch(/ipcRenderer\.(?:invoke|send)\(\s*\w+\s*,/);
     expect(preloadSource).not.toContain('invoke(channel');
+  });
+
+  it('trusts hash-routed file renderers while rejecting foreign file origins', () => {
+    expect(isTrustedRendererOrigin('file:///C:/Ferry/renderer/index.html#/explore')).toBe(true);
+    expect(isTrustedRendererOrigin('file://untrusted-host/renderer/index.html#/explore')).toBe(
+      false,
+    );
+    expect(
+      isTrustedRendererOrigin('http://127.0.0.1:5173/#/explore', 'http://127.0.0.1:5173'),
+    ).toBe(true);
+    expect(
+      isTrustedRendererOrigin('http://127.0.0.1:5174/#/explore', 'http://127.0.0.1:5173'),
+    ).toBe(false);
+  });
+
+  it('accepts opaque file MessageEvent origins only for the token-bound main window', () => {
+    expect(isExpectedCorePortOrigin('file:', 'null', 'null')).toBe(true);
+    expect(isExpectedCorePortOrigin('file:', 'file://', 'null')).toBe(true);
+    expect(isExpectedCorePortOrigin('file:', 'https://attacker.invalid', 'null')).toBe(false);
+    expect(
+      isExpectedCorePortOrigin('http:', 'http://127.0.0.1:5173', 'http://127.0.0.1:5173'),
+    ).toBe(true);
+    expect(
+      isExpectedCorePortOrigin('http:', 'http://127.0.0.1:5174', 'http://127.0.0.1:5173'),
+    ).toBe(false);
   });
 
   it('denies renderer permissions and routes external links through the guarded opener', () => {
@@ -102,8 +131,9 @@ describe('Electron security boundary', () => {
     const rendererMain = await readFile(join(import.meta.dirname, '../renderer/main.tsx'), 'utf8');
     expect(rendererMain).toContain('crypto.getRandomValues');
     expect(rendererMain).toContain('event.source !== window');
-    expect(rendererMain).toContain('event.origin !==');
-    expect(rendererMain).toMatch(/location\.protocol === 'file:'\s*\?/);
+    expect(rendererMain).toContain(
+      'isExpectedCorePortOrigin(location.protocol, event.origin, location.origin)',
+    );
     expect(preloadSource).toMatch(/rendererWindow\.location\.protocol === 'file:'\s*\?/);
   });
 });

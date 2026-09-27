@@ -67,9 +67,13 @@ export function MarkdownContent({ content }: { content: string }) {
         ),
       }}
     >
-      {content}
+      {normalizeFencedCode(content)}
     </ReactMarkdown>
   );
+}
+
+export function normalizeFencedCode(content: string): string {
+  return content.replace(/([^\n])([ \t]*)```(?=[\w+-]*\r?\n)/g, '$1\n\n```');
 }
 
 function CodeBlock({ code, className }: { code: string; className?: string }) {

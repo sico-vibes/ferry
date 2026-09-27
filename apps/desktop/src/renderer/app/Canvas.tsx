@@ -1,4 +1,13 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -128,6 +137,44 @@ function captureTranscriptAnchor(
     index: Number(firstVisible.dataset.index),
     offset: firstVisible.getBoundingClientRect().top - element.getBoundingClientRect().top,
   };
+}
+
+const streamedTextByPart = new Map<string, string>();
+const streamedTextListeners = new Map<string, Set<() => void>>();
+
+function publishStreamedText(partId: string, delta: string): void {
+  streamedTextByPart.set(partId, `${streamedTextByPart.get(partId) ?? ''}${delta}`);
+  streamedTextListeners.get(partId)?.forEach((listener) => {
+    listener();
+  });
+}
+
+function clearStreamedText(partId: string): void {
+  streamedTextByPart.delete(partId);
+  streamedTextListeners.get(partId)?.forEach((listener) => {
+    listener();
+  });
+}
+
+function useStreamedText(partId: string | null): string | null {
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      if (!partId) return () => undefined;
+      const listeners = streamedTextListeners.get(partId) ?? new Set<() => void>();
+      listeners.add(listener);
+      streamedTextListeners.set(partId, listeners);
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0) streamedTextListeners.delete(partId);
+      };
+    },
+    [partId],
+  );
+  const getSnapshot = useCallback(
+    () => (partId ? (streamedTextByPart.get(partId) ?? null) : null),
+    [partId],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 export function HomeCanvas() {
@@ -366,6 +413,7 @@ function PartView({
   part,
   sessionId,
   canRetry,
+  isStreaming = false,
   onPickAnother,
   onFull,
   onDiff,
@@ -375,6 +423,7 @@ function PartView({
   part: MessagePart;
   sessionId: SessionId;
   canRetry: boolean;
+  isStreaming?: boolean;
   onPickAnother: () => void;
   onFull: (text: string) => void;
   onDiff: () => void;
@@ -406,7 +455,14 @@ function PartView({
   };
   switch (part.type) {
     case 'text':
-      return <MarkdownPart content={part.text} />;
+      return isStreaming ? (
+        <div className="whitespace-pre-wrap break-words">
+          {part.text}
+          <StreamingCursor />
+        </div>
+      ) : (
+        <MarkdownPart content={part.text} />
+      );
     case 'reasoning':
       return <ReasoningPart text={part.text} />;
     case 'tool_call':
@@ -637,6 +693,103 @@ function DelegationRunView({
   );
 }
 
+const TranscriptMessageRow = memo(function TranscriptMessageRow({
+  message,
+  index,
+  top,
+  modelName,
+  planSteps,
+  sessionId,
+  canRetry,
+  streamPartId,
+  onFullOutput,
+  onPickModel,
+  measureElement,
+}: {
+  message: SessionDetail['messages'][number];
+  index: number;
+  top: number;
+  modelName: string;
+  planSteps: { label: string; status: 'done' | 'active' | 'pending' }[];
+  sessionId: SessionId;
+  canRetry: boolean;
+  streamPartId: string | null;
+  onFullOutput: (value: string | null) => void;
+  onPickModel: () => void;
+  measureElement: (element: HTMLElement | null) => void;
+}) {
+  const client = useFerryClient();
+  const navigate = useNavigate();
+  const setRightTab = useUI((state) => state.setRightTab);
+  const streamingText = useStreamedText(streamPartId);
+  const streamingPartIsInMessage =
+    streamPartId !== null && message.parts.some((part) => part.id === streamPartId);
+  return (
+    <div
+      className="transcript-message"
+      data-index={index}
+      ref={measureElement}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: '50%',
+        width: 'min(760px, 100%)',
+        transform: `translate(-50%, ${String(top)}px)`,
+      }}
+    >
+      {message.role === 'user' ? (
+        <UserMessage>
+          {message.parts
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text)
+            .join('')}
+        </UserMessage>
+      ) : (
+        <AssistantMessage modelName={modelName}>
+          {groupParts(message.parts).map((part) =>
+            part.type === 'tool_group' ? (
+              <ToolStepGroup
+                key={part.parts[0]?.id ?? 'tool-group'}
+                parts={part.parts}
+                onShowFull={onFullOutput}
+                onOpenDiff={() => {
+                  setRightTab('changes');
+                }}
+              />
+            ) : part.type === 'reasoning' ? (
+              <ReasoningPart key={part.id} text={part.text} steps={planSteps} />
+            ) : (
+              <PartView
+                key={part.id}
+                part={part}
+                sessionId={sessionId}
+                canRetry={canRetry}
+                isStreaming={part.id === streamPartId}
+                onFull={onFullOutput}
+                onDiff={() => {
+                  setRightTab('changes');
+                }}
+                onReview={(runId) =>
+                  void navigate({ to: '/s/$sessionId/review/$runId', params: { sessionId, runId } })
+                }
+                onCancel={(id) => void client.delegation.cancel(id)}
+                onPickAnother={onPickModel}
+              />
+            ),
+          )}
+          {streamingText !== null && !streamingPartIsInMessage && (
+            <div className="whitespace-pre-wrap break-words">
+              {streamingText}
+              <StreamingCursor />
+            </div>
+          )}
+          {streamingText !== null && streamingPartIsInMessage && <StreamingCursor />}
+        </AssistantMessage>
+      )}
+    </div>
+  );
+});
+
 export function SessionCanvas() {
   const { sessionId: rawId } = useParams({ from: '/s/$sessionId' });
   const sessionId = rawId as SessionId;
@@ -644,7 +797,6 @@ export function SessionCanvas() {
   const cache = useQueryClient();
   const navigate = useNavigate();
   const pushToast = useToasts((state) => state.push);
-  const setRightTab = useUI((state) => state.setRightTab);
   const density = useUI((state) => state.density);
   const { data, isLoading, isError } = useSessionDetail(sessionId);
   const { data: workspaces = [] } = useWorkspaces();
@@ -659,6 +811,9 @@ export function SessionCanvas() {
   const { data: profiles = [] } = useProfiles();
   const [prompt, setPrompt] = useState('');
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const openModelPicker = useCallback(() => {
+    setModelPickerOpen(true);
+  }, []);
   const [fullOutput, setFullOutput] = useState<string | null>(null);
   const outputDialogRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -697,7 +852,7 @@ export function SessionCanvas() {
       previousFocus?.focus();
     };
   }, [fullOutput]);
-  const [streaming, setStreaming] = useState<Record<string, string>>({});
+  const [streamingPartId, setStreamingPartId] = useState<string | null>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
   const initialSession = useRef<SessionId | null>(null);
@@ -707,9 +862,10 @@ export function SessionCanvas() {
   const [newOutputCount, setNewOutputCount] = useState(0);
   const [atBottom, setAtBottom] = useState(true);
   const messages = data?.messages ?? [];
-  const streamingMessageId = [...messages]
-    .reverse()
-    .find((message) => message.role === 'assistant')?.id;
+  const streamingMessageId = useMemo(
+    () => [...messages].reverse().find((message) => message.role === 'assistant')?.id,
+    [messages.length, sessionId],
+  );
   const virtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => viewport.current,
@@ -721,35 +877,17 @@ export function SessionCanvas() {
   useEffect(() => {
     const off = client.on('session.delta', (event) => {
       if (event.sessionId !== sessionId) return;
+      setStreamingPartId(event.partId);
       if (!pinnedToBottom.current) {
-        const element = viewport.current;
-        const firstVisible = element
-          ? [...element.querySelectorAll<HTMLElement>('.transcript-message')].find(
-              (message) =>
-                message.getBoundingClientRect().bottom > element.getBoundingClientRect().top,
-            )
-          : null;
-        if (element && firstVisible) {
-          streamAnchor.current = {
-            index: Number(firstVisible.dataset.index),
-            offset: firstVisible.getBoundingClientRect().top - element.getBoundingClientRect().top,
-          };
-        }
+        streamAnchor.current ??= captureTranscriptAnchor(viewport.current);
         setNewOutputCount((count) => count + 1);
       }
-      setStreaming((current) => ({
-        ...current,
-        [event.partId]: `${current[event.partId] ?? ''}${event.textDelta}`,
-      }));
+      publishStreamedText(event.partId, event.textDelta);
     });
     const partOff = client.on('session.part', (event) => {
       if (event.sessionId !== sessionId) return;
-      setStreaming((current) => {
-        if (!(event.part.id in current)) return current;
-        return Object.fromEntries(
-          Object.entries(current).filter(([partId]) => partId !== event.part.id),
-        );
-      });
+      clearStreamedText(event.part.id);
+      setStreamingPartId((current) => (current === event.part.id ? null : current));
     });
     return () => {
       off();
@@ -757,7 +895,8 @@ export function SessionCanvas() {
     };
   }, [client, sessionId]);
   useEffect(() => {
-    if (new URLSearchParams(location.search).get('demo') !== 'long') return;
+    if (new URLSearchParams(location.search).get('demo') !== 'long' || !initialTailReady) return;
+    window.ferryPerfReady = true;
     const frameTimes: number[] = [];
     let previousFrame = performance.now();
     let frameId = 0;
@@ -772,25 +911,11 @@ export function SessionCanvas() {
     const streamSpeed = Number.isFinite(speedParam) && speedParam > 0 ? speedParam : 1;
     const stream = window.setInterval(() => {
       if (!pinnedToBottom.current) {
-        const element = viewport.current;
-        const firstVisible = element
-          ? [...element.querySelectorAll<HTMLElement>('.transcript-message')].find(
-              (message) =>
-                message.getBoundingClientRect().bottom > element.getBoundingClientRect().top,
-            )
-          : null;
-        if (element && firstVisible) {
-          streamAnchor.current = {
-            index: Number(firstVisible.dataset.index),
-            offset: firstVisible.getBoundingClientRect().top - element.getBoundingClientRect().top,
-          };
-        }
+        streamAnchor.current ??= captureTranscriptAnchor(viewport.current);
         setNewOutputCount((count) => count + 1);
       }
-      setStreaming((current) => ({
-        ...current,
-        'perf-demo-stream': `${current['perf-demo-stream'] ?? ''} token `,
-      }));
+      setStreamingPartId('perf-demo-stream');
+      publishStreamedText('perf-demo-stream', ' token ');
     }, 80 * streamSpeed);
     const finish = window.setTimeout(() => {
       window.clearInterval(stream);
@@ -798,11 +923,12 @@ export function SessionCanvas() {
       window.ferryPerfFrameTimes = frameTimes;
     }, 4_000);
     return () => {
+      window.ferryPerfReady = false;
       window.clearInterval(stream);
       window.clearTimeout(finish);
       cancelAnimationFrame(frameId);
     };
-  }, []);
+  }, [initialTailReady]);
   useLayoutEffect(() => {
     if (!data) return;
     if (initialSession.current !== sessionId) {
@@ -821,6 +947,7 @@ export function SessionCanvas() {
     const lastIndex = messages.length - 1;
     let cancelled = false;
     let frame = 0;
+    let tailLookupAttempts = 0;
     const scrollTail = () => {
       virtualizer.measure();
       virtualizer.scrollToIndex(lastIndex, { align: 'end' });
@@ -835,22 +962,29 @@ export function SessionCanvas() {
             `.transcript-message[data-index="${String(lastIndex)}"]`,
           );
           if (!element || !tail) {
-            if (!cancelled) frame = requestAnimationFrame(scrollTail);
+            tailLookupAttempts += 1;
+            if (!cancelled && tailLookupAttempts < 120) frame = requestAnimationFrame(scrollTail);
+            else if (!cancelled) {
+              initializedTailSession.current = sessionId;
+              pinnedToBottom.current = false;
+              setAtBottom(false);
+              setInitialTailReady(true);
+            }
             return;
           }
+          initializedTailSession.current = sessionId;
+          setInitialTailReady(true);
           let attempts = 0;
           let stableFrames = 0;
           const alignMeasuredTail = () => {
             if (cancelled) return;
             const tailDelta =
               tail.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom;
-            if (Math.abs(tailDelta) <= 48) {
+            if (Math.abs(tailDelta) <= 2) {
               stableFrames += 1;
               if (stableFrames >= 3) {
                 pinnedToBottom.current = true;
-                initializedTailSession.current = sessionId;
                 setAtBottom(true);
-                setInitialTailReady(true);
                 return;
               }
             } else {
@@ -890,7 +1024,7 @@ export function SessionCanvas() {
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [initialTailReady, streaming]);
+  }, [initialTailReady, streamingPartId]);
   useLayoutEffect(() => {
     if (!initialTailReady || !pinnedToBottom.current || messages.length === 0) return;
     const tailIndex = messages.length - 1;
@@ -904,12 +1038,12 @@ export function SessionCanvas() {
       virtualizer.measureElement(tail);
       const tailDelta =
         tail.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom;
-      if (Math.abs(tailDelta) > 48) element.scrollTop += tailDelta;
+      if (Math.abs(tailDelta) > 2) element.scrollTop += tailDelta;
     });
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [initialTailReady, messages.length, streaming, virtualizer]);
+  }, [initialTailReady, messages.length, virtualizer]);
   useEffect(() => {
     if (data?.session.title) useUI.getState().renameTab(sessionId, data.session.title);
   }, [data?.session.title, sessionId]);
@@ -960,12 +1094,12 @@ export function SessionCanvas() {
         }
         const tailDelta =
           last.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom;
-        if (Math.abs(tailDelta) > 48) {
+        if (Math.abs(tailDelta) > 2) {
           element.scrollTop += tailDelta;
           requestAnimationFrame(() => {
             const finalDelta =
               last.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom;
-            if (Math.abs(finalDelta) <= 48) {
+            if (Math.abs(finalDelta) <= 2) {
               pinnedToBottom.current = true;
               setNewOutputCount(0);
               setAtBottom(true);
@@ -1111,7 +1245,7 @@ export function SessionCanvas() {
             tail &&
             Math.abs(
               tail.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom,
-            ) <= 48,
+            ) <= 2,
           );
           if (bottom) {
             pinnedToBottom.current = true;
@@ -1130,76 +1264,22 @@ export function SessionCanvas() {
           {virtualizer.getVirtualItems().map((item) => {
             const message = messages[item.index];
             if (!message) return null;
+            const streamPartId = message.id === streamingMessageId ? streamingPartId : null;
             return (
-              <div
-                className="transcript-message"
-                data-index={item.index}
+              <TranscriptMessageRow
                 key={message.id}
-                ref={virtualizer.measureElement}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: '50%',
-                  width: 'min(760px, 100%)',
-                  transform: `translate(-50%, ${String(item.start)}px)`,
-                }}
-              >
-                {message.role === 'user' ? (
-                  <UserMessage>
-                    {message.parts
-                      .filter((part) => part.type === 'text')
-                      .map((part) => part.text)
-                      .join('')}
-                  </UserMessage>
-                ) : (
-                  <AssistantMessage modelName={shortModel(message.modelRef, models)}>
-                    {groupParts(message.parts).map((part) =>
-                      part.type === 'tool_group' ? (
-                        <ToolStepGroup
-                          key={part.parts[0]?.id ?? 'tool-group'}
-                          parts={part.parts}
-                          onShowFull={setFullOutput}
-                          onOpenDiff={() => {
-                            setRightTab('changes');
-                          }}
-                        />
-                      ) : part.type === 'reasoning' ? (
-                        <ReasoningPart key={part.id} text={part.text} steps={planSteps} />
-                      ) : (
-                        <PartView
-                          key={part.id}
-                          part={part}
-                          sessionId={sessionId}
-                          canRetry={data?.session.status === 'error'}
-                          onFull={setFullOutput}
-                          onDiff={() => {
-                            setRightTab('changes');
-                          }}
-                          onReview={(runId) => {
-                            void navigate({
-                              to: '/s/$sessionId/review/$runId',
-                              params: { sessionId, runId },
-                            });
-                          }}
-                          onCancel={(id) => void client.delegation.cancel(id)}
-                          onPickAnother={() => {
-                            setModelPickerOpen(true);
-                          }}
-                        />
-                      ),
-                    )}
-                    {message.id === streamingMessageId &&
-                      Object.entries(streaming)
-                        .filter(([id]) => !message.parts.some((part) => part.id === id))
-                        .map(([id, text]) => (
-                          <div key={id}>
-                            <MarkdownPart content={text} />
-                            <StreamingCursor />
-                          </div>
-                        ))}
-                  </AssistantMessage>
-                )}
-              </div>
+                message={message}
+                index={item.index}
+                top={item.start}
+                modelName={shortModel(message.modelRef, models)}
+                planSteps={planSteps}
+                sessionId={sessionId}
+                canRetry={data?.session.status === 'error'}
+                streamPartId={streamPartId}
+                onFullOutput={setFullOutput}
+                onPickModel={openModelPicker}
+                measureElement={virtualizer.measureElement}
+              />
             );
           })}
         </div>

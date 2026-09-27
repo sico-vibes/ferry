@@ -62,6 +62,7 @@ interface TreeSitterModule {
 }
 interface CachedParse {
   mtimeMs: number;
+  ctimeMs: number;
   size: number;
   hash: string;
   symbols: RepoMapSymbol[];
@@ -127,19 +128,27 @@ export async function buildRepoMap(jail: WorkspaceJail, raw: unknown = {}): Prom
   );
   const gitModified = await modifiedFiles(jail);
   const files: SourceFile[] = [];
-  for (const rel of supported) {
+  for (let index = 0; index < supported.length; index++) {
+    const rel = supported[index];
+    if (!rel) continue;
+    if (index > 0 && index % 64 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
     const absolute = await jail.resolve(rel).catch(() => undefined);
     if (!absolute || (await jail.isIgnored(absolute))) continue;
     const stat = await fs.stat(absolute);
     if (stat.size > 1_000_000) continue;
-    const buffer = await fs.readFile(absolute);
-    if (isBinary(buffer)) continue;
-    const source = buffer.toString('utf8').replace(/^\uFEFF/, '');
-    const hash = createHash('sha256').update(buffer).digest('hex');
     const key = `${jail.root}\0${rel}`;
     const cached = parseCache.get(key);
-    let parsed = cached;
-    if (cached?.hash !== hash || cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
+    let parsed =
+      cached?.mtimeMs === stat.mtimeMs &&
+      cached.ctimeMs === stat.ctimeMs &&
+      cached.size === stat.size
+        ? cached
+        : undefined;
+    if (!parsed) {
+      const buffer = await fs.readFile(absolute);
+      if (isBinary(buffer)) continue;
+      const source = buffer.toString('utf8').replace(/^\uFEFF/, '');
+      const hash = createHash('sha256').update(buffer).digest('hex');
       const grammar = sourceGrammars[path.posix.extname(rel).toLowerCase()];
       if (!grammar) continue;
       try {
@@ -153,6 +162,7 @@ export async function buildRepoMap(jail: WorkspaceJail, raw: unknown = {}): Prom
           try {
             parsed = {
               mtimeMs: stat.mtimeMs,
+              ctimeMs: stat.ctimeMs,
               size: stat.size,
               hash,
               symbols: extractSymbols(tree.rootNode, source),
@@ -169,7 +179,6 @@ export async function buildRepoMap(jail: WorkspaceJail, raw: unknown = {}): Prom
         continue;
       }
     }
-    if (!parsed) continue;
     files.push({ ...parsed, path: rel.split(path.sep).join('/'), modifiedAt: stat.mtimeMs });
   }
   const inbound = rankReferences(files);

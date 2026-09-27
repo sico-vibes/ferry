@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { MarkdownContent } from './MarkdownContent';
 import {
   ApprovalCard,
   AssistantMessage,
@@ -15,6 +16,14 @@ import {
   ToolCallBlock,
 } from './index';
 describe('transcript components', () => {
+  it('normalizes inline-opening fenced code into a Markdown code block', () => {
+    const { container } = render(
+      <MarkdownContent content={'Here is code: ```ts\nconst answer = 42;\n```'} />,
+    );
+    expect(container.querySelector('pre code')).toBeTruthy();
+    expect(container.querySelector('pre')?.textContent).toContain('const answer = 42;');
+    expect(container.textContent).toContain('Here is code:');
+  });
   it('shows exhausted-pool actions and an attempt audit in Details', () => {
     const wait = vi.fn();
     const addProvider = vi.fn();

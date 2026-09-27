@@ -9,12 +9,12 @@ export async function run(page, { url, expect }) {
   const viewport = page.locator('.transcript-viewport');
   await viewport.waitFor({ state: 'visible' });
   await expect
-    .poll(() => page.locator('.transcript-message[data-index="999"]').count(), { timeout: 20_000 })
+    .poll(() => page.locator('.transcript-message[data-index="9999"]').count(), { timeout: 20_000 })
     .toBe(1);
   await expect
     .poll(() =>
       viewport.evaluate((element) => {
-        const tail = element.querySelector('.transcript-message[data-index="999"]');
+        const tail = element.querySelector('.transcript-message[data-index="9999"]');
         return tail
           ? Math.abs(tail.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom)
           : Number.POSITIVE_INFINITY;
@@ -22,7 +22,7 @@ export async function run(page, { url, expect }) {
     )
     .toBeLessThanOrEqual(48);
   const startup = await viewport.evaluate((element) => {
-    const tail = element.querySelector('.transcript-message[data-index="999"]');
+    const tail = element.querySelector('.transcript-message[data-index="9999"]');
     return {
       scrollTop: element.scrollTop,
       scrollHeight: element.scrollHeight,
@@ -80,7 +80,7 @@ export async function run(page, { url, expect }) {
     timeout: 5_000,
   });
   const jumped = await viewport.evaluate((element) => {
-    const tail = element.querySelector('.transcript-message[data-index="999"]');
+    const tail = element.querySelector('.transcript-message[data-index="9999"]');
     return {
       scrollTop: element.scrollTop,
       scrollHeight: element.scrollHeight,

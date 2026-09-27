@@ -532,7 +532,6 @@ export function ModelPickerPopover({
                               · {Math.round(model.contextWindow / 1000)}K ·{' '}
                               {model.free ? 'Free' : 'Paid'}
                             </span>
-                            <small>{why}</small>
                           </ModelCommand.Item>
                         );
                       })}

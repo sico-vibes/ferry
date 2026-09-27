@@ -124,6 +124,31 @@ try {
   await expect(getStarted.or(page.getByRole('button', { name: 'Explore' })).first()).toBeVisible({
     timeout: 20_000,
   });
+  const coreBootstrapTimeoutMs = 15_000;
+  try {
+    await page.waitForFunction(
+      () =>
+        Boolean(window.ferryRpcClient) &&
+        Boolean(window.ferryHybrid) &&
+        (window.ferryEngineHello?.realDomains.length ?? 0) > 0,
+      undefined,
+      { timeout: coreBootstrapTimeoutMs },
+    );
+  } catch (error) {
+    const state = await page.evaluate(() => ({
+      host: Boolean(window.ferryHost),
+      rpc: Boolean(window.ferryRpcClient),
+      helloDomains: window.ferryEngineHello?.realDomains ?? null,
+      hybrid: Boolean(window.ferryHybrid),
+    }));
+    throw new Error(
+      `Electron renderer did not connect a real client within ${String(coreBootstrapTimeoutMs)} ms: ${JSON.stringify(state)}; core output: ${output}`,
+      { cause: error },
+    );
+  }
+  const realDomains = await page.evaluate(() => window.ferryEngineHello?.realDomains ?? []);
+  assert.ok(realDomains.length > 0, 'Electron hello must include real domains');
+  console.log(`Electron renderer real client connected with ${String(realDomains.length)} domains`);
   if (await getStarted.isVisible().catch(() => false)) {
     await getStarted.click();
     await page.getByRole('button', { name: 'Continue' }).click();
