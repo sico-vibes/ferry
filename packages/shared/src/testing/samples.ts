@@ -316,6 +316,8 @@ export const sampleSettings: Settings = {
   routing: {
     stickySessions: true,
     smartReliability: true,
+    qualityWeight: 4,
+    textToolFallbackEnabled: false,
     quotaReservations: true,
     cooldownReasons: true,
     gentleQuotaRamp: true,

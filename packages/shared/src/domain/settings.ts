@@ -5,6 +5,8 @@ import { OptimizerTogglesSchema } from './profile.js';
 export const RoutingSettingsSchema = z.object({
   stickySessions: z.boolean().default(true),
   smartReliability: z.boolean().default(true),
+  qualityWeight: z.number().min(0).max(20).default(4),
+  textToolFallbackEnabled: z.boolean().default(false),
   quotaReservations: z.boolean().default(true),
   cooldownReasons: z.boolean().default(true),
   gentleQuotaRamp: z.boolean().default(true),

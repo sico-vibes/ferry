@@ -11,7 +11,12 @@ const files = (
     : execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
         encoding: 'utf8',
       }).split('\n')
-).filter((file) => TEXT.test(file) && existsSync(file));
+).filter(
+  (file) =>
+    TEXT.test(file) &&
+    existsSync(file) &&
+    !file.replaceAll('\\', '/').includes('packages/catalog/data/vendor/'),
+);
 
 const withBom = files.filter((file) => {
   const head = readFileSync(file).subarray(0, 3);

@@ -7,6 +7,7 @@ import {
   SessionSchema,
 } from '@ferry/shared';
 import { oauthModelCatalog } from '@ferry/oauth';
+import { modelSupportsTools } from '@ferry/router';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { getModelDiscovery } from './model-discovery.js';
@@ -43,11 +44,11 @@ export function register(host: CoreHost, services: FerryServices): void {
           ? services.models.list(provider)
           : [];
       });
-      const enabled = models.filter((model) => model.toolCalling);
+      const enabled = models.filter((model) => modelSupportsTools(model));
       const oauthModels = oauthModelCatalog
         .filter((model) => services.providers.get(model.providerId)?.enabled)
         .map((model) => ModelInfoSchema.parse(model))
-        .filter((model) => model.toolCalling);
+        .filter((model) => modelSupportsTools(model));
       const choices = [...enabled, ...oauthModels];
       return choices.map((model, index) => {
         const stepsLeft = services.quota.stepsLeft(model.providerId, model.ref);

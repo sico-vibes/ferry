@@ -19,6 +19,7 @@ import { useFerryClient } from '../../data/client';
 import { useToasts } from '../../state/toasts';
 import { useUI } from '../../state/ui';
 import { ProviderKeyDialog } from '../ProviderKeyDialog';
+import { ModelQualityBadge } from '../ModelQualityBadge';
 
 type ModelSort =
   | 'name'
@@ -464,6 +465,7 @@ export function ExploreCanvas() {
                       title={model.name}
                     >
                       {model.name}
+                      <ModelQualityBadge model={model} />
                       {oauthProviders.some((provider) => model.providerId === provider.id) && (
                         <span
                           className="ml-2 rounded-pill bg-warn/10 px-2 py-0.5 text-meta text-warn"

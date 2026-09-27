@@ -394,6 +394,11 @@ try {
       await window.ferryRpcClient.providers.setKey('openrouter', 'fixture-key');
       await window.ferryRpcClient.providers.setKey('groq', 'fixture-key');
     });
+    await expect
+      .poll(() =>
+        page.evaluate(async () => (await window.ferryRpcClient.models.list('groq')).length),
+      )
+      .toBeGreaterThan(0);
     const agentSession = await page.evaluate(async () => {
       const workspace = (await window.ferryRpcClient.workspaces.list())[0];
       if (!workspace) throw new Error('Real FixtureRepo workspace is unavailable');
@@ -415,7 +420,12 @@ try {
     const restoreDeadline = Date.now() + 15_000;
     let restoredSource = '';
     while (Date.now() < restoreDeadline) {
-      restoredSource = await readFile(sourcePath, 'utf8');
+      try {
+        restoredSource = await readFile(sourcePath, 'utf8');
+      } catch (error) {
+        if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT')
+          throw error;
+      }
       if (restoredSource === originalSource) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }

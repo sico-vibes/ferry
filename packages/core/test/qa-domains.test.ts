@@ -3,10 +3,11 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createRpcFerryClient, RpcError, type RpcFerryClient } from '@ferry/client';
-import { SettingsSchema, SystemInfoSchema } from '@ferry/shared';
+import { ProviderIdSchema, SettingsSchema, SystemInfoSchema } from '@ferry/shared';
 import type { CheckpointId, Session, SessionId, WorkspaceId } from '@ferry/shared';
 import { ShadowCheckpoints, WorkspaceJail } from '@ferry/workspace';
 import { openDatabase } from '@ferry/storage';
+import { FakeOpenAIServer } from '@ferry/testkit';
 import { CoreHost, createCoreHost, createMemoryTransportPair } from '../src/index.js';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'ferry-qa-domains-'));
@@ -22,10 +23,14 @@ interface Harness {
   close(): Promise<void>;
 }
 
-async function makeCore(name: string): Promise<Harness> {
+async function makeCore(name: string, env?: NodeJS.ProcessEnv): Promise<Harness> {
   const dir = join(dataDir, name);
   const [coreTransport, clientTransport] = createMemoryTransportPair();
-  const host = await createCoreHost({ dataDir: dir, transport: coreTransport });
+  const host = await createCoreHost({
+    dataDir: dir,
+    transport: coreTransport,
+    ...(env ? { env } : {}),
+  });
   const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
   await rpc.hello;
   return {
@@ -171,6 +176,37 @@ describe('QA settings domain', () => {
       await recovered.stop();
     }
   });
+});
+
+describe('QA discovered models', () => {
+  it('lists and routes a live model with no registry capability metadata', async () => {
+    const server = new FakeOpenAIServer({ models: [{ id: 'custom/discovered-coder' }] });
+    await server.start();
+    const core = await makeCore('models-unknown-capability', {
+      NODE_ENV: 'test',
+      FERRY_TEST_KEYRING_NAMESPACE: 'models-unknown-capability',
+      FERRY_PROVIDER_BASE_URL_OPENROUTER: `${server.baseUrl}/openrouter/v1`,
+    });
+    try {
+      const providerId = ProviderIdSchema.parse('openrouter');
+      await core.rpc.providers.setKey(providerId, 'fixture-key');
+      const models = await core.rpc.models.list(providerId);
+      const discovered = models.find((model) => model.ref === 'openrouter/custom/discovered-coder');
+      expect(discovered).toMatchObject({ toolCalling: true });
+      expect(discovered?.capability?.toolCall).toBeUndefined();
+
+      const workspaceDir = join(core.dir, 'workspace');
+      await mkdir(workspaceDir, { recursive: true });
+      const workspace = await core.rpc.workspaces.open(workspaceDir);
+      const session = await core.rpc.sessions.create({ workspaceId: workspace.id });
+      expect(
+        (await core.rpc.models.candidates(session.id)).map((candidate) => candidate.ref),
+      ).toContain('openrouter/custom/discovered-coder');
+    } finally {
+      await core.close();
+      await server.stop();
+    }
+  }, 30_000);
 });
 
 // BUG (Windows): the same folder opened with different case creates a second

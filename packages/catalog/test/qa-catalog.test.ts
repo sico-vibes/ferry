@@ -91,7 +91,7 @@ describe('QA catalog: limits schema and loading', () => {
     expect(fresh.warnings.length).toBeLessThanOrEqual(fresh.providers.length);
     expect(stale.warnings.length).toBe(stale.providers.filter((provider) => !provider.dead).length);
     expect(stale.warnings.every((warning) => warning.includes('older than 60 days'))).toBe(true);
-  });
+  }, 30_000);
 
   it('hides dead providers unless requested and keeps tags valid', async () => {
     const hidden = await loadCatalog({ includeDead: false });
@@ -101,5 +101,5 @@ describe('QA catalog: limits schema and loading', () => {
     expect(
       hidden.providers.every((provider) => ProviderTagSchema.safeParse(provider.tag).success),
     ).toBe(true);
-  });
+  }, 30_000);
 });

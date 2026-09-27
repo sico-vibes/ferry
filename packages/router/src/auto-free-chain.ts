@@ -1,7 +1,7 @@
 import { ProviderIdSchema } from '@ferry/shared';
 import type { FallbackChainEntry, ModelInfo, Profile, Provider, StepKind } from '@ferry/shared';
 import type { CapacityView } from './index.js';
-import { explainModelRouting, scoreModels } from './index.js';
+import { explainModelRouting, modelSupportsTools, scoreModels } from './index.js';
 
 const provider = (id: string) => ProviderIdSchema.parse(id);
 
@@ -65,7 +65,7 @@ export function isStrictFallbackNameEligible(
   verifiedModelRefs: readonly string[],
 ): boolean {
   if (!excludedName.test(`${model.ref} ${model.name}`)) return true;
-  return model.toolCalling && verifiedModelRefs.includes(model.ref);
+  return (model.capability?.toolCall ?? model.toolCalling) && verifiedModelRefs.includes(model.ref);
 }
 
 function matchesPattern(model: ModelInfo, pattern: string): boolean {
@@ -90,6 +90,7 @@ export function resolveFallbackChain(input: {
   step?: StepKind;
   inputTokens: number;
   verifiedModelRefs?: readonly string[];
+  textToolFallbackEnabled?: boolean;
   now?: number;
 }): ResolvedFallbackChain {
   const now = input.now ?? Date.parse(input.capacity.now ?? new Date().toISOString());
@@ -136,7 +137,7 @@ export function resolveFallbackChain(input: {
           coolingUntil = provider.cooldownUntil;
           continue;
         }
-        if (!model.toolCalling) {
+        if (!modelSupportsTools(model, input.textToolFallbackEnabled ?? false)) {
           diagnostics.push({
             provider: entry.provider,
             pattern,
@@ -163,6 +164,7 @@ export function resolveFallbackChain(input: {
           step: input.step ?? 'plan',
           estimate: { inputTokens: input.inputTokens, requiresTools: true },
           verifiedModelRefs: verified,
+          textToolFallbackEnabled: input.textToolFallbackEnabled ?? false,
         } as const;
         if (!scoreModels(scoreInput).length) {
           const reasons = explainModelRouting(scoreInput).flatMap((row) => row.reasons);

@@ -1,0 +1,5 @@
+# Model-specific corrections. Keys may be provider/model refs or bare model ids.
+openrouter/qwen/qwen3.8-27b:free:
+  tool_call: true
+  edit_format: diff
+  tool_protocol: native

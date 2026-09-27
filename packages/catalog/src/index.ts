@@ -2,6 +2,8 @@ import { access, readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parse } from 'yaml';
+import { loadCapabilityRegistry, normalizeModelId } from './registry.js';
+import { loadQualityPriors, qualityPenaltyForModel, resolveQualityFamily } from './quality.js';
 import {
   ModelInfoSchema,
   ProviderTagSchema,
@@ -64,12 +66,34 @@ export const CatalogSchema = z.object({
   models: z.array(ModelInfoSchema),
   providers: z.array(ProviderLimitsSchema),
   tiers: TierCatalogSchema,
+  capabilities: z.record(z.string(), z.unknown()).optional(),
+  qualityPriors: z.record(z.string(), z.unknown()).optional(),
 });
+
+export {
+  buildCapabilityRegistry,
+  loadCapabilityRegistry,
+  normalizeCapability,
+  normalizeModelId,
+} from './registry.js';
+export {
+  loadFreeCodingRanking,
+  loadQualityPriors,
+  matchLeaderboardModel,
+  QUALITY_FAMILY_ALIASES,
+  QUALITY_MODEL_ALIASES,
+  qualityPenaltyForModel,
+  rankFreeCodingModels,
+  resolveQualityFamily,
+} from './quality.js';
+export type { CapabilityRegistry, LiveModelDiscovery, ModelCapability } from './registry.js';
+export type { QualityPrior } from './quality.js';
 export type Catalog = z.infer<typeof CatalogSchema>;
 
 interface SnapshotModel {
   id: string;
   name?: string;
+  family?: string;
   tool_call?: boolean;
   reasoning?: boolean;
   limit?: { context?: number; output?: number };
@@ -93,6 +117,7 @@ export function normalizeModels(snapshot: unknown, tiers: TierCatalog = {}): Mod
         ref,
         providerId,
         name: model.name ?? model.id,
+        ...(model.family ? { family: model.family } : {}),
         tier: tierInfo?.tier ?? 'T2',
         contextWindow: model.limit?.context ?? 8192,
         maxOutput: model.limit?.output ?? Math.min(model.limit?.context ?? 8192, 4096),
@@ -111,6 +136,7 @@ export function normalizeModels(snapshot: unknown, tiers: TierCatalog = {}): Mod
 export async function loadCatalog(
   options: {
     tierOverrides?: Record<string, { tier?: Tier; tool_reliability_prior?: number }>;
+    liveModels?: import('./registry.js').LiveModelDiscovery[];
     includeDead?: boolean;
     now?: Date;
   } = {},
@@ -123,6 +149,10 @@ export async function loadCatalog(
     readFile(join(data, 'models.snapshot.json'), 'utf8'),
     readFile(join(data, 'tiers.yaml'), 'utf8'),
     readdir(join(data, 'limits')),
+  ]);
+  const [capabilities, qualityPriors] = await Promise.all([
+    loadCapabilityRegistry(data, options.liveModels),
+    loadQualityPriors(data),
   ]);
   const tiers = TierCatalogSchema.parse(parse(tierText));
   for (const [model, override] of Object.entries(options.tierOverrides ?? {})) {
@@ -147,11 +177,39 @@ export async function loadCatalog(
       (provider) => now.getTime() - Date.parse(`${provider.verified_at}T00:00:00Z`) > 60 * 86400000,
     )
     .map((provider) => `Provider limits for ${provider.provider} are older than 60 days.`);
-  const models = normalizeModels(JSON.parse(snapshotText), tiers);
+  const models = normalizeModels(JSON.parse(snapshotText), tiers).map((model) => {
+    const capability =
+      capabilities[model.ref] ?? capabilities[model.ref.slice(model.ref.indexOf('/') + 1)];
+    const bareId = model.ref.slice(model.ref.indexOf('/') + 1);
+    const quality =
+      qualityPriors[model.ref] ??
+      qualityPriors[bareId] ??
+      qualityPriors[
+        `family:${normalizeModelId(resolveQualityFamily(bareId, model.family ?? undefined) ?? '')}`
+      ];
+    const score = quality?.score ?? 0.35;
+    const confidence = quality?.confidence ?? 0.1;
+    return {
+      ...model,
+      toolCalling: capability?.toolCall ?? true,
+      ...(capability ? { capability } : {}),
+      quality: score,
+      qualityConfidence: confidence,
+      qualityPenalty: qualityPenaltyForModel(`${model.name} ${bareId}`, confidence),
+      qualitySources:
+        quality?.sources.map((source) => {
+          const date = source.startsWith('Aider') ? quality.aiderDate : quality.bfclDate;
+          return date ? `${source} (${date})` : source;
+        }) ?? [],
+      qualityDate: quality?.datasetDate ?? null,
+    };
+  });
   return CatalogSchema.extend({ warnings: z.array(z.string()) }).parse({
     models,
     providers,
     tiers,
+    capabilities,
+    qualityPriors,
     warnings,
   });
 }

@@ -28,7 +28,7 @@ describe('live probe runner', () => {
     expect(discovered.find((model) => model.ref === 'groq/whisper-large-v3')).toBeUndefined();
   });
 
-  it('uses OpenRouter tool metadata and keeps unverified preview models out of tool routing', async () => {
+  it('uses explicit tool metadata and defaults unknown capability metadata to routable', async () => {
     const discovered = await discoverProviderModels('openrouter', 'fixture-key', {
       baseUrl: 'https://example.invalid/api/v1',
       fetch: () =>
@@ -38,6 +38,7 @@ describe('live probe runner', () => {
               { id: 'vendor/verified:free', supported_parameters: ['tools'] },
               { id: 'vendor/no-tools:free', supported_parameters: ['temperature'] },
               { id: 'vendor/antigravity-preview:free' },
+              { id: 'vendor/unlisted-coder:free' },
             ],
           }),
         ),
@@ -45,11 +46,15 @@ describe('live probe runner', () => {
     expect(discovered.map((model) => [model.ref, model.toolCalling])).toEqual([
       ['openrouter/vendor/verified:free', true],
       ['openrouter/vendor/no-tools:free', false],
-      ['openrouter/vendor/antigravity-preview:free', false],
+      ['openrouter/vendor/antigravity-preview:free', true],
+      ['openrouter/vendor/unlisted-coder:free', true],
     ]);
+    expect(
+      discovered.find((model) => model.ref === 'openrouter/vendor/unlisted-coder:free'),
+    ).not.toHaveProperty('capability');
   });
 
-  it('keeps discovered preview models out of tool routing unless verified', async () => {
+  it('uses the neutral tool assumption for discovered models without registry evidence', async () => {
     const discovered = await discoverProviderModels('gemini', 'fixture-key', {
       baseUrl: 'https://example.invalid/v1',
       fetch: () =>
@@ -64,8 +69,8 @@ describe('live probe runner', () => {
         ),
     });
     expect(discovered.map(({ ref, toolCalling }) => [ref, toolCalling])).toEqual([
-      ['gemini/antigravity-preview-05-2026', false],
-      ['gemini/experimental-flash', false],
+      ['gemini/antigravity-preview-05-2026', true],
+      ['gemini/experimental-flash', true],
       ['gemini/gemini-3.8-flash', true],
     ]);
   });
@@ -85,7 +90,7 @@ describe('live probe runner', () => {
     });
     expect(discovered.map(({ ref, toolCalling }) => [ref, toolCalling])).toEqual([
       ['nvidia/nemotron-3-super-120b-a12b', true],
-      ['nvidia/nemotron-3-nano-omni-unverified-reasoning', false],
+      ['nvidia/nemotron-3-nano-omni-unverified-reasoning', true],
     ]);
   });
 

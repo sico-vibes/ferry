@@ -23,6 +23,7 @@ import {
 import {
   chainForProfile,
   isStrictFallbackNameEligible,
+  modelSupportsTools,
   resolveFallbackChain,
   scoreModels,
   type ReliabilityObservation,
@@ -380,15 +381,19 @@ export function createSessionDependencies(
           const preferredId = provider === 'nvidia' ? id.replace(/^nvidia\//i, '') : id;
           const ref = refsById.get(preferredId);
           const model = providerModels.find((candidate) => candidate.ref === ref);
-          return ref && model?.toolCalling && isPreferredToolModel(provider, preferredId)
+          return ref &&
+            model &&
+            modelSupportsTools(model) &&
+            isPreferredToolModel(provider, preferredId)
             ? [ref]
             : [];
         });
         const providerDefaults = providerModels
           .filter(
             (model) =>
-              model.toolCalling &&
+              modelSupportsTools(model) &&
               (isPreferredToolModel(provider, model.ref.slice(provider.length + 1)) ||
+                model.capability?.toolCall == null ||
                 (provider === 'openrouter' && /:free(?:$|:)/i.test(model.ref))),
           )
           .map((model) => model.ref);
@@ -529,7 +534,13 @@ export function createSessionDependencies(
             });
         }
         if (isToolCapabilityError(error)) {
-          const updatedModel = { ...req.model, toolCalling: false };
+          const updatedModel = {
+            ...req.model,
+            toolCalling: false,
+            ...(req.model.capability
+              ? { capability: { ...req.model.capability, toolCall: false } }
+              : {}),
+          };
           const updatedAt = services.clock.now().toISOString();
           services.models.put(providerId, updatedModel, updatedAt);
           const provider = services.providers.get(providerId);

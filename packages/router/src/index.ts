@@ -285,6 +285,8 @@ export interface ScoreInput {
   spendCaps?: SpendCaps;
   /** Extra context for cache / capability preferences. */
   preferReasoning?: boolean;
+  /** Enables text-encoded tool fallback for XML/ReAct capable models. */
+  textToolFallbackEnabled?: boolean;
   /** Tool-verified defaults for providers that expose multiple discovered models. */
   preferredModelRefs?: readonly string[];
   /** Models confirmed available to the current provider key, by probe or successful use. */
@@ -292,6 +294,15 @@ export interface ScoreInput {
   routing?: RoutingSettings;
   reliability?: readonly import('./techniques.js').ReliabilityObservation[];
   random?: () => number;
+}
+
+export function modelSupportsTools(model: ModelInfo, textToolFallbackEnabled = false): boolean {
+  const native = model.capability?.toolCall === false ? false : model.toolCalling;
+  return (
+    native ||
+    (textToolFallbackEnabled &&
+      (model.capability?.toolProtocol === 'xml' || model.capability?.toolProtocol === 'react'))
+  );
 }
 
 /** Remove models that cannot safely execute this step, then rank the remaining models. */
@@ -330,7 +341,11 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
     const coolingUntil = provider.health === 'cooldown' && Number.isFinite(cooldown) ? cooldown : 0;
     if (model.contextWindow < (input.estimate.contextTokens ?? input.estimate.inputTokens) * 1.2)
       continue;
-    if ((input.estimate.requiresTools ?? true) && !model.toolCalling) continue;
+    const toolsSupported = modelSupportsTools(
+      model,
+      (input.textToolFallbackEnabled ?? input.routing?.textToolFallbackEnabled) === true,
+    );
+    if ((input.estimate.requiresTools ?? true) && !toolsSupported) continue;
     if (!providerAllowed(input.profile, provider, model)) continue;
     if (!input.profile.tierByStep[input.step].includes(model.tier)) continue;
     const cost = isFreeForRouting(provider, model)
@@ -369,6 +384,11 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
     const latencyScore = 1 / (1 + latency / 2_000);
     const costScore = cost === 0 ? 1 : 1 / (1 + cost * 100);
     const codingRank = codingModelRank(model);
+    const quality = model.quality ?? 0.35;
+    const qualityConfidence = model.qualityConfidence ?? (model.quality === undefined ? 0.1 : 1);
+    const qualityPenalty = model.qualityPenalty ?? 0;
+    const qualityScore =
+      ((quality - 0.35) * qualityConfidence - qualityPenalty) * (input.routing?.qualityWeight ?? 4);
     const coding = codingRank === 0 ? 8 : codingRank === 2 ? -8 : 0;
     const preference = preferredModelRefs.has(model.ref) ? 4 : 0;
     const affinity =
@@ -395,6 +415,7 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
         6 * costScore +
         4 * affinity +
         coding +
+        qualityScore +
         preference +
         (input.preferReasoning && model.reasoning ? 2 : 0) +
         (verifiedModelRefs.has(model.ref) ? 10 : -10));
@@ -406,6 +427,7 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       cost: 6 * costScore,
       affinity: 4 * affinity,
       coding,
+      quality: qualityScore,
       preference,
       reasoning: input.preferReasoning && model.reasoning ? 2 : 0,
       verification: verifiedModelRefs.has(model.ref) ? 10 : -10,
@@ -483,7 +505,11 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
     }
     if (model.contextWindow < (input.estimate.contextTokens ?? input.estimate.inputTokens) * 1.2)
       reasons.push(`context ${String(model.contextWindow)} below estimate`);
-    if ((input.estimate.requiresTools ?? true) && !model.toolCalling)
+    const toolsSupported = modelSupportsTools(
+      model,
+      (input.textToolFallbackEnabled ?? input.routing?.textToolFallbackEnabled) === true,
+    );
+    if ((input.estimate.requiresTools ?? true) && !toolsSupported)
       reasons.push('model tool support unavailable');
     if (
       (chainForProfile(input.profile).length > 0 ||

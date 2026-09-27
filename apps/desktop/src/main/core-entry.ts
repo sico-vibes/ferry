@@ -21,6 +21,7 @@ parentPort.on('message', (event) => {
     ? Promise.resolve(host)
     : createCoreHost({
         dataDir: process.env.FERRY_CORE_DATA_DIR ?? join(process.cwd(), 'engine'),
+        env: process.env,
         selfTest: runNativeSelfTest,
         websocketEnabled: process.env.FERRY_E2E_WEBSOCKET === '1',
         transport: {

@@ -9,6 +9,7 @@ import { useFerryClient } from '../data/client';
 import { keys, useSessions, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
+import { ModelQualityBadge } from './ModelQualityBadge';
 
 export function SessionPowerControls() {
   return (
@@ -495,6 +496,7 @@ export function ModelPickerPopover({
                               ) : null}
                               {candidate?.selected ? <Check size={13} /> : null}
                             </strong>
+                            <ModelQualityBadge model={model} />
                             <span className="model-meta-line">
                               <span className="model-tier-pill">{model.tier}</span>
                               <span className="model-capacity-badge">
