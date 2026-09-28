@@ -1,16 +1,44 @@
 import { z } from 'zod';
 
-export const OAuthProviderIdSchema = z.enum(['anthropic', 'openai-codex', 'github-copilot']);
+export const KNOWN_OAUTH_PROVIDER_IDS = [
+  'anthropic',
+  'openai-codex',
+  'github-copilot',
+  'openrouter',
+  'kimi-coding',
+  'meta',
+  'xai',
+  'radius',
+  'kilo',
+  'qoder',
+  'cline',
+  'gemini-cli',
+  'antigravity',
+] as const;
+export const OAuthProviderIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
 export type OAuthProviderId = z.infer<typeof OAuthProviderIdSchema>;
+export const OAuthProviderRiskSchema = z.enum(['low', 'medium', 'high']);
+export const OAuthProviderGroupSchema = z.enum([
+  'official',
+  'subscription',
+  'gateway',
+  'unavailable',
+]);
 export const OAuthProviderSchema = z.object({
   id: OAuthProviderIdSchema,
-  tag: z.literal('subscription_oauth'),
+  tag: z.enum(['legit', 'subscription_oauth']),
   name: z.string(),
-  subscriptionRequired: z.literal(true),
+  subscriptionRequired: z.boolean(),
   models: z.array(z.string()),
-  riskLevel: z.literal('high'),
+  riskLevel: OAuthProviderRiskSchema,
   riskText: z.string(),
   connected: z.boolean(),
+  status: z.enum(['not_connected', 'connected', 'expired']).optional(),
+  account: z.string().nullable().optional(),
+  group: OAuthProviderGroupSchema.optional(),
+  actionAvailable: z.boolean().optional(),
+  advanced: z.boolean().optional(),
+  signupUrl: z.url().nullable().optional(),
 });
 export type OAuthProvider = z.infer<typeof OAuthProviderSchema>;
 export const OAuthLoginProgressSchema = z.discriminatedUnion('type', [

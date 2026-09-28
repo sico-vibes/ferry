@@ -125,6 +125,21 @@ describe('@ferry/cli argument parsing and exit codes', () => {
     expect(result.stderr).not.toContain('access-secret');
   }, 30_000);
 
+  it('allows the official OpenRouter OAuth login without the unofficial-risk flag', () => {
+    const dataDir = tempDirectory('oauth-official');
+    const result = runCli([
+      'oauth',
+      'login',
+      'openrouter',
+      '--engine',
+      'mock',
+      '--data-dir',
+      dataDir,
+    ]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Logged in to OpenRouter');
+  }, 30_000);
+
   it('rejects an unknown local engine with usage exit code 2', () => {
     const result = runCli(['quota', '--engine', 'typo']);
     expect(result.status).toBe(2);

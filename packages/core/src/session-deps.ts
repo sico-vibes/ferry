@@ -11,7 +11,6 @@ import {
   ProviderIdSchema,
   ProviderSchema,
   RoutingSettingsSchema,
-  OAuthProviderIdSchema,
   UsageRecordSchema,
   QuotaObservationSchema,
   newId,
@@ -147,7 +146,7 @@ export function createSessionDependencies(
         });
       },
     ),
-    ...OAuthProviderIdSchema.options.map((id) => {
+    ...[...new Set(oauthModelCatalog.map((model) => model.providerId))].map((id) => {
       const saved = services.providers.get(id);
       return ProviderSchema.parse({
         id,
@@ -156,7 +155,15 @@ export function createSessionDependencies(
             ? 'Anthropic Claude Pro/Max'
             : id === 'openai-codex'
               ? 'OpenAI ChatGPT'
-              : 'GitHub Copilot',
+              : id === 'github-copilot'
+                ? 'GitHub Copilot'
+                : id === 'kimi-coding'
+                  ? 'Kimi Code'
+                  : id === 'meta'
+                    ? 'Meta Muse'
+                    : id === 'xai'
+                      ? 'xAI Grok'
+                      : id,
         tag: 'subscription_oauth',
         kind: 'api',
         brand: null,
@@ -494,7 +501,7 @@ export function createSessionDependencies(
     },
     async streamStep(req, signal) {
       const providerId = req.model.providerId;
-      if (OAuthProviderIdSchema.safeParse(providerId).success)
+      if (oauthModelCatalog.some((model) => model.providerId === providerId))
         return await streamOAuthStep(services.secrets, { ...req, signal });
       if (!loadedApiKeys.has(providerId)) {
         loadedApiKeys.add(providerId);

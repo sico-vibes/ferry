@@ -82,7 +82,7 @@ export interface FerryClient {
   };
   oauth: {
     list(): Promise<OAuthProvider[]>;
-    login(id: OAuthProviderId): Promise<void>;
+    login(id: OAuthProviderId, options?: { gateway?: string }): Promise<void>;
     logout(id: OAuthProviderId): Promise<void>;
     status(id: OAuthProviderId): Promise<boolean>;
   };
