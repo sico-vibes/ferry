@@ -41,16 +41,19 @@ describe('QA final: quality priors stay finite and bounded', () => {
     }
   });
 
-  it.fails('never surfaces a NaN or negative ranking score even for a degenerate prior', () => {
+  it('never surfaces a NaN or negative ranking score even for a degenerate prior', () => {
     const ranked = rankFreeCodingModels(
       [{ providerId: 'groq', id: 'qwen3.8-27b', name: 'Qwen 3.8 27B' }],
       { 'qwen3.8-27b': prior(Number.NaN, 0.5) },
     );
-    // BUG: rankFreeCodingModels passes the prior score straight through, so a
-    // non-finite prior yields a NaN displayed score (Math.max(0, NaN) === NaN
-    // and Number(NaN.toFixed(4)) === NaN) instead of falling back to baseline.
     expect(ranked[0]?.score).toBeGreaterThanOrEqual(0);
     expect(Number.isFinite(ranked[0]?.score)).toBe(true);
+    const invalidConfidence = rankFreeCodingModels(
+      [{ providerId: 'groq', id: 'qwen3.8-27b', name: 'Qwen 3.8 27B' }],
+      { 'qwen3.8-27b': prior(0.6, Number.POSITIVE_INFINITY) },
+    );
+    expect(Number.isFinite(invalidConfidence[0]?.score)).toBe(true);
+    expect(Number.isFinite(invalidConfidence[0]?.confidence)).toBe(true);
   });
 
   it('clamps a negative prior score up to zero', () => {

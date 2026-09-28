@@ -105,6 +105,27 @@ describe('SettingsCanvas', () => {
     });
   });
 
+  it('persists trial-credit opt-ins per provider from Providers & Keys', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const originalList = client.providers.list.bind(client.providers);
+    vi.spyOn(client.providers, 'list').mockImplementation(async () =>
+      (await originalList()).map((provider) =>
+        provider.id === 'cerebras' ? { ...provider, tag: 'trial' } : provider,
+      ),
+    );
+    useUI.setState({ settingsSection: 'Providers & Keys' });
+    const user = userEvent.setup();
+    mount(client);
+    const toggle = await screen.findByRole('switch', {
+      name: 'Use trial credits for Cerebras',
+    });
+    expect(toggle.getAttribute('data-state')).toBe('unchecked');
+    await user.click(toggle);
+    await waitFor(async () => {
+      expect((await client.settings.get()).routing.trialOptInProviders).toContain('cerebras');
+    });
+  });
+
   // BUG (P2): `PermissionsContent` JSON-parses `ferry.permissionRules` but never asserts the
   // result is an array. A persisted value like `{}` survives the try/catch and `rules.map`
   // throws during render, replacing the whole app with the error boundary.

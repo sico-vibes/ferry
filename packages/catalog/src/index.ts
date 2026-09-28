@@ -44,6 +44,7 @@ export const ProviderLimitsSchema = z.object({
   docs_url: z.url().nullable(),
   terms_note: z.string(),
   data_use: z.string(),
+  data_use_training: z.boolean().nullable().optional(),
   verified_at: z.iso.date(),
   source_url: z.url(),
   parser: z.string().nullable().optional(),

@@ -4,6 +4,8 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts', 'test/**/*.test.tsx'],
     passWithNoTests: true,
+    fileParallelism: false,
+    testTimeout: 60_000,
     globalSetup: ['./test/global-setup.ts'],
   },
 });

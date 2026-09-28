@@ -313,6 +313,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           step: 'plan',
           verifiedModelRefs,
           avoidTrainingProviders: routing.avoidTrainingProviders,
+          trialOptInProviders: routing.trialOptInProviders,
           now: services.clock.now().getTime(),
         });
         const chainRefs = new Set(chainResult.models.map((model) => model.ref));

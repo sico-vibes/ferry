@@ -124,6 +124,7 @@ export function resolveFallbackChain(input: {
   inputTokens: number;
   verifiedModelRefs?: readonly string[];
   avoidTrainingProviders?: boolean;
+  trialOptInProviders?: readonly string[];
   textToolFallbackEnabled?: boolean;
   now?: number;
 }): ResolvedFallbackChain {
@@ -151,13 +152,26 @@ export function resolveFallbackChain(input: {
         });
         continue;
       }
-      if (input.avoidTrainingProviders && mayUsePromptsForTraining(provider.dataUse)) {
+      if (
+        input.avoidTrainingProviders &&
+        mayUsePromptsForTraining(provider.dataUse, provider.dataUseTraining)
+      ) {
         diagnostics.push({
           provider: entry.provider,
           pattern,
           status: 'ineligible',
           modelRef: null,
           detail: 'Provider data policy says prompts may be used for training.',
+        });
+        continue;
+      }
+      if (provider.tag === 'trial' && !input.trialOptInProviders?.includes(provider.id)) {
+        diagnostics.push({
+          provider: entry.provider,
+          pattern,
+          status: 'ineligible',
+          modelRef: null,
+          detail: 'Trial provider requires explicit routing opt-in.',
         });
         continue;
       }
@@ -209,6 +223,7 @@ export function resolveFallbackChain(input: {
           estimate: { inputTokens: input.inputTokens, requiresTools: true },
           verifiedModelRefs: verified,
           textToolFallbackEnabled: input.textToolFallbackEnabled ?? false,
+          ...(input.trialOptInProviders ? { trialOptInProviders: input.trialOptInProviders } : {}),
         } as const;
         if (!scoreModels(scoreInput).length) {
           const reasons = explainModelRouting(scoreInput).flatMap((row) => row.reasons);

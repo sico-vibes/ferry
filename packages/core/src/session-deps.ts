@@ -133,6 +133,9 @@ export function createSessionDependencies(
               ? (cooldown.provenance ?? null)
               : null,
           dataUse: data_use,
+          dataUseTraining:
+            services.catalog.providers.find((item) => item.provider === provider)
+              ?.data_use_training ?? null,
           termsNote: terms_note,
           signupUrl: signup_url,
           docsUrl: docs_url,
@@ -459,6 +462,7 @@ export function createSessionDependencies(
         step: stepKind,
         verifiedModelRefs,
         avoidTrainingProviders: routingSettings().avoidTrainingProviders,
+        trialOptInProviders: routingSettings().trialOptInProviders,
         textToolFallbackEnabled: routingSettings().textToolFallbackEnabled,
         now: services.clock.now().getTime(),
       });
@@ -477,6 +481,7 @@ export function createSessionDependencies(
         preferredModelRefs,
         verifiedModelRefs,
         routing: routingSettings(),
+        trialOptInProviders: routingSettings().trialOptInProviders,
         textToolFallbackEnabled: routingSettings().textToolFallbackEnabled,
         reliability: reliability(),
       });

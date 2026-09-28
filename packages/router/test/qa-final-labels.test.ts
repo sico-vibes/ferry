@@ -82,20 +82,27 @@ function score(profile: Profile, models: ModelInfo[], providers: Provider[], rou
 }
 
 describe('QA final: data-use training opt-out detection', () => {
-  it.fails(
-    'treats explicit negation phrasing as not-training even when a train/improve verb appears',
-    () => {
-      // BUG: mayUsePromptsForTraining only recognizes a few exact negations
-      // ("not used for training", "not train", "no training", "zero data
-      // retention"). A provider that says "data is not used to train" or "we
-      // never train" still matches the bare `\b(?:train|training|improve)\b`
-      // branch and is wrongly flagged as a training provider, so enabling
-      // avoid-training excludes a safe provider.
-      expect(mayUsePromptsForTraining('Your data is not used to train our models.')).toBe(false);
-      expect(mayUsePromptsForTraining('We never train on customer prompts.')).toBe(false);
-      expect(mayUsePromptsForTraining('We do not use prompts to improve our models.')).toBe(false);
-    },
-  );
+  it('treats explicit negation phrasing as not-training even when a train/improve verb appears', () => {
+    expect(mayUsePromptsForTraining('Your data is not used to train our models.')).toBe(false);
+    expect(mayUsePromptsForTraining('We never train on customer prompts.')).toBe(false);
+    expect(mayUsePromptsForTraining('We do not use prompts to improve our models.')).toBe(false);
+  });
+
+  it.each([
+    'Your data is not used to train our models.',
+    'We never train on customer prompts.',
+    'We do not use prompts to improve our models.',
+    "Your prompts won't be used for training.",
+    'Customer inputs are never used for training or improvement.',
+    'We will not use submitted prompts to train or improve models.',
+  ])('handles explicit training opt-outs: %s', (policy) => {
+    expect(mayUsePromptsForTraining(policy)).toBe(false);
+  });
+
+  it('prefers explicit catalog classification to fallback policy text', () => {
+    expect(mayUsePromptsForTraining('May be used to train models.', false)).toBe(false);
+    expect(mayUsePromptsForTraining('Not used for training.', true)).toBe(true);
+  });
 
   it('flags a provider that admits it improves products from unpaid requests', () => {
     expect(
@@ -144,21 +151,19 @@ describe('QA final: avoid-training routing', () => {
 });
 
 describe('QA final: provider labels and free routing', () => {
-  it.fails(
-    'does not send Auto-Free traffic to a trial/credits-only provider without opt-in',
-    () => {
-      // BUG: isFreeForRouting falls through to `model.free` for tag 'trial', so
-      // Auto-Free routes to the Cerebras free trial (a finite, credits-only
-      // trial) with no opt-in, even though the eval harness and the label
-      // semantics require trial providers to be explicitly included.
-      const trial = provider('cerebras', {
-        tag: 'trial',
-        dataUse: 'Subject to Cerebras terms.',
-      });
-      const candidates = score(autoFree, [model('cerebras/gpt-oss-120b')], [trial]);
-      expect(candidates).toHaveLength(0);
-    },
-  );
+  it('does not send Auto-Free traffic to a trial/credits-only provider without opt-in', () => {
+    const trial = provider('cerebras', {
+      tag: 'trial',
+      dataUse: 'Subject to Cerebras terms.',
+    });
+    const candidates = score(autoFree, [model('cerebras/gpt-oss-120b')], [trial]);
+    expect(candidates).toHaveLength(0);
+    expect(
+      score(autoFree, [model('cerebras/gpt-oss-120b')], [trial], {
+        trialOptInProviders: ['cerebras'],
+      }),
+    ).toHaveLength(1);
+  });
 
   it('keeps a promo provider routable for Auto-Free even when models.dev marks it paid', () => {
     const promo = provider('novita', { tag: 'promo' });
