@@ -300,6 +300,7 @@ export interface ScoreInput {
   /** Models confirmed available to the current provider key, by probe or successful use. */
   verifiedModelRefs?: readonly string[];
   routing?: RoutingSettings;
+  trialOptInProviders?: readonly string[];
   avoidTrainingProviders?: boolean;
   reliability?: readonly import('./techniques.js').ReliabilityObservation[];
   random?: () => number;
@@ -339,9 +340,11 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       continue;
     if (
       (input.avoidTrainingProviders ?? input.routing?.avoidTrainingProviders) &&
-      mayUsePromptsForTraining(provider.dataUse)
+      mayUsePromptsForTraining(provider.dataUse, provider.dataUseTraining)
     )
       continue;
+    const trialOptIns = input.trialOptInProviders ?? input.routing?.trialOptInProviders ?? [];
+    if (provider.tag === 'trial' && !trialOptIns.includes(provider.id)) continue;
     if (!input.profile.paidAllowed && provider.freeTierUnsupported) continue;
     if (provider.excludedModelRefs?.includes(model.ref)) continue;
     if (
@@ -360,9 +363,9 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       (input.textToolFallbackEnabled ?? input.routing?.textToolFallbackEnabled) === true,
     );
     if ((input.estimate.requiresTools ?? true) && !toolsSupported) continue;
-    if (!providerAllowed(input.profile, provider, model)) continue;
+    if (!providerAllowed(input.profile, provider, model, trialOptIns)) continue;
     if (!input.profile.tierByStep[input.step].includes(model.tier)) continue;
-    const cost = isFreeForRouting(provider, model)
+    const cost = isFreeForRouting(provider, model, trialOptIns)
       ? 0
       : calculateSpend(
           {
@@ -578,7 +581,12 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
         );
       }
       if (
-        !providerAllowed(input.profile, provider, model) &&
+        !providerAllowed(
+          input.profile,
+          provider,
+          model,
+          input.trialOptInProviders ?? input.routing?.trialOptInProviders ?? [],
+        ) &&
         !reasons.includes('model not marked free')
       )
         reasons.push('provider not allowed by profile');
@@ -587,7 +595,13 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
   });
 }
 
-function providerAllowed(profile: Profile, provider: Provider, model: ModelInfo): boolean {
+function providerAllowed(
+  profile: Profile,
+  provider: Provider,
+  model: ModelInfo,
+  trialOptInProviders: readonly string[],
+): boolean {
+  if (provider.tag === 'trial' && !trialOptInProviders.includes(provider.id)) return false;
   if (!profile.paidAllowed) {
     if (
       provider.freeTierUnsupported ||
@@ -595,14 +609,21 @@ function providerAllowed(profile: Profile, provider: Provider, model: ModelInfo)
       ['paid', 'credits'].includes(provider.tag)
     )
       return false;
-    if (!isFreeForRouting(provider, model)) return false;
+    if (!isFreeForRouting(provider, model, trialOptInProviders)) return false;
   }
   if (profile.allowedProviders === 'all') return true;
-  if (profile.allowedProviders === 'all_free') return isFreeForRouting(provider, model);
+  if (profile.allowedProviders === 'all_free')
+    return isFreeForRouting(provider, model, trialOptInProviders);
   return profile.allowedProviders.includes(provider.id);
 }
 
-function isFreeForRouting(provider: Provider, model: ModelInfo): boolean {
+function isFreeForRouting(
+  provider: Provider,
+  model: ModelInfo,
+  trialOptInProviders: readonly string[] = [],
+): boolean {
+  if (provider.tag === 'trial')
+    return !provider.billingEnabled && trialOptInProviders.includes(provider.id);
   // OpenRouter's free label is model-specific even when the account has credits.
   if (provider.id === 'openrouter') return /:free(?:$|:)/i.test(model.ref);
   if (provider.billingEnabled) return false;

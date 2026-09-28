@@ -1,10 +1,22 @@
-export function mayUsePromptsForTraining(dataUse: string | null | undefined): boolean {
+export function mayUsePromptsForTraining(
+  dataUse: string | null | undefined,
+  structuredTrainingUse?: boolean | null,
+): boolean {
+  if (structuredTrainingUse !== null && structuredTrainingUse !== undefined)
+    return structuredTrainingUse;
   if (!dataUse) return false;
-  if (
-    /not used for training|does not use .* train|no training|not train|zero data retention/i.test(
-      dataUse,
-    )
-  )
-    return false;
-  return /\b(?:train|training|improve)\b/i.test(dataUse);
+  const clauses = dataUse
+    .toLowerCase()
+    .replaceAll('’', "'")
+    .split(/[.!?;]|\bbut\b|\bhowever\b|\balthough\b/);
+  const negations = [
+    /\b(?:not|never|no|without|don't|do not|doesn't|does not|won't|will not|cannot|can't)\b.{0,50}\b(?:use|used|using|train(?:ing)?|improv(?:e|ement|ing))\b/,
+    /\b(?:train(?:ing)?|improv(?:e|ement|ing))\b.{0,35}\b(?:not|never|no|isn't|aren't|won't|will not)\b/,
+    /\bzero\s+data\s+retention\b/,
+  ];
+  return clauses.some(
+    (clause) =>
+      /\b(?:train(?:ing)?|improv(?:e|ement|ing))\b/.test(clause) &&
+      !negations.some((pattern) => pattern.test(clause)),
+  );
 }

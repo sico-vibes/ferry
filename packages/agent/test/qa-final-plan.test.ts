@@ -180,51 +180,71 @@ describe('QA final: edit-plan parsing variants', () => {
 });
 
 describe('QA final: planner output confinement', () => {
-  it.fails(
-    'never records planner-provided paths that escape the workspace',
-    async () => {
-      const state = await setup();
-      try {
-        const planner = model('openai/planner');
-        const editor = model('groq/editor');
-        const groq = ProviderSchema.parse({ ...state.provider, id: 'groq', name: 'Groq' });
-        const calls: string[] = [];
-        const loop = makeLoop(state, routedSettings({ stickySessions: false }), {
-          profile: roleProfile(),
-          catalog: { ...state.catalog, models: [planner, editor] },
-          capacity: () => ({ providers: [state.provider, groq] }),
-          generator: async ({ model: selected }) => {
-            calls.push(selected.ref);
-            return calls.length === 1
+  it('never records planner-provided paths that escape the workspace', async () => {
+    const state = await setup();
+    try {
+      const planner = model('openai/planner');
+      const editor = model('groq/editor');
+      const groq = ProviderSchema.parse({ ...state.provider, id: 'groq', name: 'Groq' });
+      const calls: string[] = [];
+      const plannerPrompts: string[] = [];
+      const editorPrompts: string[] = [];
+      const editorContexts: string[] = [];
+      const loop = makeLoop(state, routedSettings({ stickySessions: false }), {
+        profile: roleProfile(),
+        catalog: { ...state.catalog, models: [planner, editor] },
+        capacity: () => ({ providers: [state.provider, groq] }),
+        generator: async ({ model: selected, system, messages }) => {
+          calls.push(selected.ref);
+          if (selected.ref === planner.ref) plannerPrompts.push(system);
+          if (selected.ref === editor.ref) {
+            editorPrompts.push(system);
+            editorContexts.push(JSON.stringify(messages));
+          }
+          return calls.length === 1
+            ? {
+                text: JSON.stringify({
+                  files: [
+                    { path: '../escape.txt', intent: 'Write outside the workspace' },
+                    { path: 'C:\\Windows\\system32\\drivers\\etc\\hosts', intent: 'Absolute' },
+                    { path: '\\\\server\\share\\outside.txt', intent: 'UNC' },
+                    { path: '/etc/passwd', intent: 'Absolute POSIX' },
+                  ],
+                  changes: [{ path: '../escape.txt', instructions: 'overwrite' }],
+                }),
+              }
+            : calls.length === 2
               ? {
                   text: JSON.stringify({
-                    files: [
-                      { path: '../escape.txt', intent: 'Write outside the workspace' },
-                      { path: 'C:\\Windows\\system32\\drivers\\etc\\hosts', intent: 'Absolute' },
-                    ],
-                    changes: [{ path: '../escape.txt', instructions: 'overwrite' }],
+                    files: [{ path: 'README.md', intent: 'Update greeting' }],
+                    changes: [{ path: 'README.md', instructions: 'Change greeting' }],
                   }),
                 }
               : { text: 'Applied.', finishReason: 'stop' };
-          },
-        });
-        const result = await loop.run({ sessionId: state.session.id });
-        // BUG: AgentLoop trusts planner JSON paths with no workspace check, so
-        // taskRecord.touchedFiles records '../escape.txt' and an absolute path,
-        // and the editor prompt is built from the unvalidated plan.
-        const escaped = result.taskRecord.touchedFiles.filter(
-          (file) =>
-            path.isAbsolute(file.path) ||
-            file.path.split(/[\\/]/).includes('..') ||
-            /^[A-Za-z]:/.test(file.path),
-        );
-        expect(escaped).toEqual([]);
-      } finally {
-        state.database.close();
-      }
-    },
-    30_000,
-  );
+        },
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      const escaped = result.taskRecord.touchedFiles.filter(
+        (file) =>
+          path.isAbsolute(file.path) ||
+          file.path.split(/[\\/]/).includes('..') ||
+          /^[A-Za-z]:/.test(file.path),
+      );
+      expect(escaped).toEqual([]);
+      expect(result.taskRecord.touchedFiles.map((file) => file.path)).toEqual(['README.md']);
+      expect(plannerPrompts[1]).toContain('Repair required');
+      expect(editorPrompts).toHaveLength(1);
+      expect(editorPrompts[0]).toContain('README.md');
+      expect(editorPrompts[0]).not.toMatch(
+        /escape\.txt|C:\\\\Windows|server\\\\share|\/etc\/passwd/,
+      );
+      expect(editorContexts[0]).not.toMatch(
+        /escape\.txt|C:\\\\Windows|server\\\\share|\/etc\/passwd/,
+      );
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
 
   it('disables the roles split and continues in single-model mode after malformed planner JSON', async () => {
     const state = await setup();

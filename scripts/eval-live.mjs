@@ -24,6 +24,7 @@ import {
   redactText,
   runHarness,
   selectEvalProviders,
+  verifyScenario,
 } from './eval-live-lib.mjs';
 import { driveEvalSession } from './eval-live-runner.mjs';
 
@@ -385,79 +386,6 @@ function countEditRetries(messages) {
 
 function requestRows(services) {
   return services.db.client.prepare('SELECT * FROM requests ORDER BY ts').all();
-}
-
-async function verifyScenario(id, root, before, after, explanation) {
-  const read = (relative) => readFile(join(root, relative), 'utf8').catch(() => '');
-  if (id === 'fix-failing-test') return runNodeTest(root);
-  if (id === 'add-function-test') {
-    const [source, test] = await Promise.all([read('index.js'), read('test.js')]);
-    return (
-      /function\s+double|const\s+double|double\s*=/.test(source) &&
-      /double/.test(test) &&
-      (await runNodeTest(root))
-    );
-  }
-  if (id === 'rename-symbol') {
-    const [source, test] = await Promise.all([read('index.js'), read('test.js')]);
-    return (
-      /\bresult\b/.test(source) &&
-      /\bresult\b/.test(test) &&
-      !/\banswer\b/.test(`${source}\n${test}`)
-    );
-  }
-  if (id === 'read-explain')
-    return (
-      fileDigest(before) === fileDigest(after) &&
-      /intentional|assertion|test\.js/i.test(explanation)
-    );
-  if (id === 'diagnose-build')
-    return (
-      fileDigest(before) === fileDigest(after) &&
-      /intentional|assertion|test\.js/i.test(explanation)
-    );
-  if (id === 'crlf-edit') {
-    const bytes = await readFile(join(root, 'README.md')).catch(() => Buffer.alloc(0));
-    const text = bytes.toString('utf8');
-    return text.includes('CRLF fixture\r\nupdated\r\n') && !/(?<!\r)\n/.test(text);
-  }
-  if (id === 'large-targeted-edit') {
-    const old = before.find(([name]) => name === 'large.txt')?.[1] ?? '';
-    const current = await readFile(join(root, 'large.txt'), 'utf8').catch(() => '');
-    const oldLines = String(old).split('\n');
-    const newLines = current.split('\n');
-    return (
-      newLines[49999] === 'updated' &&
-      oldLines.length === newLines.length &&
-      oldLines.filter((line, index) => line !== newLines[index]).length === 1 &&
-      fileDigest(before.filter(([name]) => name !== 'large.txt')) ===
-        fileDigest(after.filter(([name]) => name !== 'large.txt'))
-    );
-  }
-  if (id === 'multi-file-refactor') {
-    const [newModule, a, b] = await Promise.all([
-      read('packages/a/src/answer.js'),
-      read('packages/a/src/index.js'),
-      read('packages/b/src/index.js'),
-    ]);
-    return (
-      /export\s+const\s+answer\s*=\s*42/.test(newModule) &&
-      !/export\s+const\s+answer/.test(a) &&
-      /answer\.js/.test(a) &&
-      /answer/.test(b) &&
-      (await runNodeTest(root))
-    );
-  }
-  return false;
-}
-
-async function runNodeTest(root) {
-  try {
-    await execFileAsync(process.execPath, ['test.js'], { cwd: root, timeout: 30_000 });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function snapshot(root, relative = '') {

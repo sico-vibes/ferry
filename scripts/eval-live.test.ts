@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRpcFerryClient } from '../packages/client/src/index.js';
@@ -8,6 +8,7 @@ import { domainRegistrars } from '../packages/core/src/domains/index.js';
 import { createServices } from '../packages/core/src/services.js';
 import { MemorySecretStore } from '../packages/secrets/src/index.js';
 import { FakeOpenAIServer } from '../packages/testkit/src/fake-servers.js';
+import { ProviderIdSchema } from '../packages/shared/src/index.js';
 import { driveEvalSession } from './eval-live-runner.mjs';
 import {
   accountRun,
@@ -18,6 +19,7 @@ import {
   redactText,
   runHarness,
   selectEvalProviders,
+  verifyScenario,
 } from './eval-live-lib.mjs';
 
 const servers: FakeOpenAIServer[] = [];
@@ -26,6 +28,29 @@ afterEach(async () => {
 });
 
 describe('live eval harness helpers', () => {
+  it('rejects success claims when scenario artifacts or tests do not pass', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ferry-eval-verify-'));
+    try {
+      await writeFile(join(root, 'test.js'), "throw new Error('still failing');\n", 'utf8');
+      expect(
+        await verifyScenario('fix-failing-test', root, [], [], 'Everything passed successfully.'),
+      ).toBe(false);
+      await writeFile(join(root, 'index.js'), 'export const value = 1;\n', 'utf8');
+      await writeFile(join(root, 'test.js'), "console.log('all tests pass');\n", 'utf8');
+      expect(
+        await verifyScenario(
+          'add-function-test',
+          root,
+          [],
+          [],
+          'I added the function and tests pass.',
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    }
+  }, 30_000);
+
   it('parses CLI options and dotenv values without emitting credentials', () => {
     expect(
       parseEvalArgs([
@@ -186,7 +211,7 @@ describe('live eval harness helpers', () => {
       model: 'openai/gpt-oss-120b',
       choices: [{ index: 0, delta, finish_reason: finishReason }],
     });
-    const server = await FakeOpenAIServer.scriptedTurns([
+    const server = FakeOpenAIServer.scriptedTurns([
       {
         chunks: [chunk({ role: 'assistant' }), chunk({ content: 'pong' }), chunk({}, 'stop')],
       },
@@ -197,7 +222,7 @@ describe('live eval harness helpers', () => {
     const root = await mkdtemp(join(tmpdir(), 'ferry-live-runner-'));
     const workspace = join(root, 'workspace');
     await mkdir(workspace, { recursive: true });
-    const secrets = new MemorySecretStore(`eval-live-runner-${process.pid}`);
+    const secrets = new MemorySecretStore(`eval-live-runner-${String(process.pid)}`);
     const services = await createServices({
       dataDir: join(root, 'data'),
       env: {
@@ -215,7 +240,7 @@ describe('live eval harness helpers', () => {
     const client = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
     try {
       await client.hello;
-      await client.providers.setKey('groq', 'fake-eval-key');
+      await client.providers.setKey(ProviderIdSchema.parse('groq'), 'fake-eval-key');
       for (const provider of await client.providers.list())
         await client.providers.setEnabled(provider.id, provider.id === 'groq');
       const autoFreeProfile = (await client.profiles.list()).find(
@@ -248,11 +273,9 @@ describe('live eval harness helpers', () => {
       expect(reply).toMatch(/pong/i);
       const requestRows = services.db.client
         .prepare('SELECT * FROM requests WHERE session_id = ?')
-        .all(result.detail.session.id);
+        .all(result.detail.session.id) as { step_id?: string | null }[];
       const steps = new Set(
-        requestRows.map(
-          ({ step_id }: { step_id?: string | null }, index: number) => step_id ?? `row-${index}`,
-        ),
+        requestRows.map(({ step_id }, index) => step_id ?? `row-${String(index)}`),
       );
       expect(steps.size).toBeGreaterThan(0);
       expect(result.exitCode === 0 && /pong/i.test(reply)).toBe(true);
