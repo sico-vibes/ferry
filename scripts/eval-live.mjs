@@ -34,7 +34,7 @@ const usage = `Usage: pnpm eval:live [--data-dir PATH] [--profile auto-free|best
   [--allow-paid] [--roles on|off] [--yes] [--json] [--verbose]`;
 let activeSecrets = [];
 
-export async function runEvalLive(args = process.argv.slice(2)) {
+export async function runEvalLive(args = process.argv.slice(2), lifecycle = {}) {
   const options = parseEvalArgs(args);
   if (options.help) {
     console.log(usage);
@@ -86,6 +86,23 @@ export async function runEvalLive(args = process.argv.slice(2)) {
   const services = await createServices({ dataDir, env: serviceEnv, secrets: secretsStore });
   let host;
   let rpc;
+  const activeSessions = new Set();
+  let signalCode;
+  const abortController = new AbortController();
+  const onSignal = (signal) => {
+    signalCode ??= signal === 'SIGINT' ? 130 : 143;
+    abortController.abort();
+    lifecycle.onSignal?.(signalCode);
+    void cancelSessions();
+  };
+  const onSigint = () => onSignal('SIGINT');
+  const onSigterm = () => onSignal('SIGTERM');
+  const cancelSessions = async () => {
+    if (rpc) await Promise.allSettled([...activeSessions].map((id) => rpc.sessions.cancel(id)));
+  };
+  process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
+  let exitCode = 1;
   try {
     for (const [name] of secrets) {
       const providerId = name
@@ -116,7 +133,7 @@ export async function runEvalLive(args = process.argv.slice(2)) {
             .replaceAll('_', '-')
             .replace(/^opencode-zen$/, 'opencode') === limits.provider,
       );
-      if (!saved && (hasEnvKey || services.providerKeys.get(limits.provider)))
+      if ((hasEnvKey || services.providerKeys.get(limits.provider)) && (!saved || !saved.enabled))
         await invokeCore('providers.setEnabled', limits.provider, true);
     }
     await host.start();
@@ -189,9 +206,10 @@ export async function runEvalLive(args = process.argv.slice(2)) {
     if (options.json) process.stderr.write(`${redactText(estimateLine, secretValues)}\n`);
     else console.log(estimateLine);
     if (!options.yes) {
-      const answer = await askToProceed();
+      const answer = await askToProceed(abortController.signal);
       if (!answer) return 2;
     }
+    if (signalCode) return signalCode;
 
     if (options.verbose)
       process.stderr.write(
@@ -204,8 +222,19 @@ export async function runEvalLive(args = process.argv.slice(2)) {
     const report = await runHarness({
       scenarios,
       repeat: options.repeat,
+      shouldStop: () => Boolean(signalCode),
       runScenario: (scenario) =>
-        runScenario({ scenario, services, client: rpc, options, secrets: secretValues }),
+        runScenario({
+          scenario,
+          services,
+          client: rpc,
+          options,
+          secrets: secretValues,
+          activeSessions,
+          signalCode: () => signalCode,
+          onSession: lifecycle.onSession,
+          signal: abortController.signal,
+        }),
     });
     const timestamp = new Date().toISOString();
     const outDir = join(process.cwd(), 'evals', 'results');
@@ -230,18 +259,37 @@ export async function runEvalLive(args = process.argv.slice(2)) {
     if (options.json) console.log(redactText(JSON.stringify(output), secretValues));
     else console.log(markdown);
     console.log(`Results: ${jsonPath}`);
-    return report.passed === report.total ? 0 : 1;
+    exitCode = signalCode ?? (report.passed === report.total ? 0 : 1);
+    return exitCode;
   } finally {
+    lifecycle.onShutdown?.(signalCode ?? exitCode);
+    await cancelSessions();
     rpc?.close();
-    await host?.stop();
-    if (!host) await services.dispose();
-    memorySecrets.clear();
-    if (tempData)
-      await rm(dataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    try {
+      await host?.stop();
+    } finally {
+      await services.dispose();
+      memorySecrets.clear();
+      if (tempData)
+        await rm(dataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+      process.off('SIGINT', onSigint);
+      process.off('SIGTERM', onSigterm);
+      lifecycle.onCleanup?.();
+    }
   }
 }
 
-async function runScenario({ scenario, services, client, options, secrets }) {
+async function runScenario({
+  scenario,
+  services,
+  client,
+  options,
+  secrets,
+  activeSessions,
+  signalCode,
+  onSession,
+  signal,
+}) {
   const fixture = await createFixtureRepo(scenario.template);
   const before = await snapshot(fixture.path);
   const profileName = options.profile === 'auto-free' ? 'Auto-Free' : 'Best Available';
@@ -279,10 +327,16 @@ async function runScenario({ scenario, services, client, options, secrets }) {
       modelRef: options.model,
       maxSteps: options.maxSteps,
       timeoutMs: options.timeoutMs,
+      signal,
       verbose: options.verbose,
       logDirectory: services.paths.logs,
       secrets,
       onProgress: ({ kind, text, session }) => {
+        if (kind === 'session') {
+          activeSessions.add(session.id);
+          onSession?.(session);
+          if (signalCode()) void client.sessions.cancel(session.id).catch(() => undefined);
+        }
         if (!options.verbose) return;
         const message =
           kind === 'session'
@@ -290,6 +344,7 @@ async function runScenario({ scenario, services, client, options, secrets }) {
             : `[${scenario.id}] ${text}`;
         process.stderr.write(`${redactText(message, secrets)}\n`);
       },
+      onSessionFinished: (finished) => activeSessions.delete(finished.id),
     });
     const { exitCode, detail } = driven;
     const session = detail.session;
@@ -482,24 +537,41 @@ async function makeTempDir(prefix) {
   return mkdtemp(join(tmpdir(), prefix));
 }
 
-async function askToProceed() {
+async function askToProceed(signal) {
   const { createInterface } = await import('node:readline/promises');
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    return /^y(?:es)?$/i.test((await prompt.question('Proceed with this estimate? [y/N] ')).trim());
+    return /^y(?:es)?$/i.test(
+      (await prompt.question('Proceed with this estimate? [y/N] ', { signal })).trim(),
+    );
   } finally {
     prompt.close();
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  runEvalLive()
+  let fallback;
+  const armFallback = (code) => {
+    clearTimeout(fallback);
+    fallback = setTimeout(() => process.exit(code), 5000);
+    fallback.unref();
+  };
+  runEvalLive(process.argv.slice(2), {
+    onSignal: armFallback,
+    onShutdown: armFallback,
+    onCleanup: () => clearTimeout(fallback),
+  })
     .then((code) => {
-      process.exitCode = code;
+      clearTimeout(fallback);
+      process.exit(code);
     })
     .catch((error) => {
+      clearTimeout(fallback);
       const message = error instanceof Error ? error.message : String(error);
-      console.error(redactText(message, activeSecrets));
-      process.exitCode = 1;
+      const lockMessage = /already running for data directory/i.test(message)
+        ? `Another Ferry eval/core is already using this --data-dir. ${message}`
+        : message;
+      console.error(redactText(lockMessage, activeSecrets));
+      process.exit(1);
     });
 }

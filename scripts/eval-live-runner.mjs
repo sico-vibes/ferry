@@ -15,16 +15,34 @@ export async function driveEvalSession({
   logDirectory,
   secrets = [],
   onProgress,
+  onSessionFinished,
+  signal,
 }) {
   let session;
   let lastSessionEventAt = Date.now();
   let lastSessionEvent;
   const eventTail = [];
+  let sessionFinished = false;
+  const finishSession = () => {
+    if (session && !sessionFinished) {
+      sessionFinished = true;
+      onSessionFinished?.(session);
+    }
+  };
   let settleWatchdog;
   let watchdogTimer;
   let taskTimer;
   const watchdog = new Promise((_, reject) => {
     settleWatchdog = reject;
+  });
+  const interrupted = new Promise((_, reject) => {
+    if (signal?.aborted) reject(new Error('Evaluation interrupted by shutdown signal.'));
+    else
+      signal?.addEventListener(
+        'abort',
+        () => reject(new Error('Evaluation interrupted by shutdown signal.')),
+        { once: true },
+      );
   });
   const armInactivityTimer = () => {
     clearTimeout(watchdogTimer);
@@ -84,10 +102,10 @@ export async function driveEvalSession({
     },
   });
   // A watchdog can win the race while runPrompt is still unwinding a cancelled request.
-  void runPromise.catch(() => undefined);
+  void runPromise.then(finishSession, finishSession);
 
   try {
-    const exitCode = await Promise.race([runPromise, watchdog]);
+    const exitCode = await Promise.race([runPromise, watchdog, interrupted]);
     if (!session) throw new Error('CLI run completed without creating a session.');
     const detail = await client.sessions.get(session.id);
     return { exitCode, session, detail, eventTail };

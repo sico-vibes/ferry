@@ -177,10 +177,11 @@ export function diffUsageHistory(before, after) {
   );
 }
 
-export async function runHarness({ scenarios, repeat = 1, runScenario }) {
+export async function runHarness({ scenarios, repeat = 1, runScenario, shouldStop = () => false }) {
   const results = [];
   for (let repetition = 1; repetition <= repeat; repetition += 1) {
     for (const scenario of scenarios) {
+      if (shouldStop()) break;
       const startedAt = Date.now();
       try {
         const outcome = await runScenario(scenario);
@@ -219,6 +220,7 @@ export async function runHarness({ scenarios, repeat = 1, runScenario }) {
         });
       }
     }
+    if (shouldStop()) break;
   }
   return { results, passed: results.filter(({ passed }) => passed).length, total: results.length };
 }

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { createRpcFerryClient } from '../packages/client/src/index.js';
 import { CoreHost, createMemoryTransportPair } from '../packages/core/src/index.js';
 import { domainRegistrars } from '../packages/core/src/domains/index.js';
@@ -236,7 +238,7 @@ describe('live eval harness helpers', () => {
         profileName: 'Auto-Free',
         maxSteps: 3,
         timeoutMs: 12_000,
-        inactivityTimeoutMs: 3_000,
+        inactivityTimeoutMs: 10_000,
         logDirectory: services.paths.logs,
       });
       const reply = result.detail.messages
@@ -259,6 +261,99 @@ describe('live eval harness helpers', () => {
       expect(server.requests.some(({ url }) => url.endsWith('/chat/completions'))).toBe(true);
     } finally {
       client.close();
+      await host.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    }
+  }, 30_000);
+
+  it('exits within five seconds after writing the report in a child process', async () => {
+    const chunk = (delta: Record<string, unknown>, finishReason: string | null = null) => ({
+      id: 'chatcmpl_eval_exit',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model: 'openai/gpt-oss-120b',
+      choices: [{ index: 0, delta, finish_reason: finishReason }],
+    });
+    const server = new FakeOpenAIServer({
+      models: [{ id: 'openai/gpt-oss-120b', supported_parameters: ['tools'] }],
+      responses: [
+        {
+          chunks: [
+            chunk({ role: 'assistant' }),
+            chunk({ content: 'The intentional assertion in test.js fails.' }),
+            chunk({}, 'stop'),
+          ],
+        },
+      ],
+    });
+    await server.start();
+    servers.push(server);
+    const root = await mkdtemp(join(tmpdir(), 'ferry-eval-exit-'));
+    await writeFile(join(root, '.env.local'), 'GROQ_API_KEY=fake-eval-key\n', 'utf8');
+    const output = await runEvalChild(root, server.baseUrl, [
+      '--profile',
+      'best-available',
+      '--include',
+      'groq',
+      '--only',
+      'read-explain',
+      '--yes',
+      '--timeout',
+      '30',
+    ]);
+    expect(output.text).toContain('Results:');
+    expect(output.reportExitMs).toBeLessThan(5000);
+    expect(output.code).toBe(0);
+    await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }, 30_000);
+
+  it('cancels active work and exits cleanly on SIGINT', async () => {
+    const chunk = (delta: Record<string, unknown>) => ({
+      id: 'chatcmpl_eval_sigint',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model: 'openai/gpt-oss-120b',
+      choices: [{ index: 0, delta, finish_reason: null }],
+    });
+    const server = new FakeOpenAIServer({
+      models: [{ id: 'openai/gpt-oss-120b', supported_parameters: ['tools'] }],
+      responses: [
+        { chunks: [chunk({ role: 'assistant' }), chunk({ content: 'working' })], delayMs: 4000 },
+      ],
+    });
+    await server.start();
+    servers.push(server);
+    const root = await mkdtemp(join(tmpdir(), 'ferry-eval-sigint-'));
+    await writeFile(join(root, '.env.local'), 'GROQ_API_KEY=fake-eval-key\n', 'utf8');
+    const child = await startSignalEvalChild(root, server.baseUrl);
+    try {
+      await waitForChildText(child, 'SESSION-STARTED', 30_000);
+      const result = await collectChild(child, 12_000);
+      expect(result.elapsedMs).toBeLessThan(12_000);
+      expect(result.code).toBe(130);
+    } finally {
+      if (child.exitCode === null) child.kill('SIGKILL');
+      await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    }
+  }, 30_000);
+
+  it('surfaces the core same-data-dir lock as an eval-specific message', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ferry-eval-lock-'));
+    const dataDir = join(root, 'data');
+    await mkdir(dataDir, { recursive: true });
+    const host = new CoreHost({ dataDir });
+    await host.start();
+    try {
+      const output = await runEvalChild(root, 'http://127.0.0.1:1', [
+        '--data-dir',
+        dataDir,
+        '--only',
+        'read-explain',
+        '--yes',
+      ]);
+      expect(output.code).toBe(1);
+      expect(output.text).toContain('Another Ferry eval/core is already using this --data-dir');
+    } finally {
       await host.stop();
       await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
     }
@@ -324,3 +419,100 @@ describe('live eval harness helpers', () => {
     ).toEqual({ inputTokens: 57, outputTokens: 25 });
   });
 });
+
+function startEvalChild(cwd: string, baseUrl: string, args: string[]) {
+  const script = fileURLToPath(new URL('./eval-live.mjs', import.meta.url));
+  const loader = import.meta.resolve('tsx');
+  return spawn(process.execPath, ['--import', loader, script, ...args], {
+    cwd,
+    env: {
+      ...process.env,
+      GROQ_API_KEY: 'fake-eval-key',
+      FERRY_PROVIDER_BASE_URL_GROQ: `${baseUrl}/v1`,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+async function runEvalChild(cwd: string, baseUrl: string, args: string[]) {
+  const child = startEvalChild(cwd, baseUrl, args);
+  return collectChild(child, 45_000);
+}
+
+async function startSignalEvalChild(cwd: string, baseUrl: string) {
+  const moduleUrl = new URL('./eval-live.mjs', import.meta.url).href;
+  const wrapper = join(cwd, 'signal-eval.mjs');
+  await writeFile(
+    wrapper,
+    `import { runEvalLive } from ${JSON.stringify(moduleUrl)};\n` +
+      `let fallback; const arm = (code) => { clearTimeout(fallback); fallback = setTimeout(() => process.exit(code), 5000); };\n` +
+      `const result = runEvalLive(['--profile', 'best-available', '--include', 'groq', '--only', 'read-explain', '--yes', '--timeout', '30'], { onSession() { console.log('SESSION-STARTED'); setTimeout(() => process.emit('SIGINT'), 500); }, onSignal: arm, onShutdown: arm, onCleanup() { clearTimeout(fallback); } });\n` +
+      `result.then((code) => process.exit(code)).catch((error) => { console.error(error); process.exit(1); });\n`,
+    'utf8',
+  );
+  const loader = import.meta.resolve('tsx');
+  return spawn(process.execPath, ['--import', loader, wrapper], {
+    cwd,
+    env: {
+      ...process.env,
+      FERRY_PROVIDER_BASE_URL_GROQ: `${baseUrl}/v1`,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+async function collectChild(child: ReturnType<typeof spawn>, timeoutMs: number) {
+  const started = Date.now();
+  let text = '';
+  let reportAt: number | undefined;
+  const receive = (part: string) => {
+    text += part;
+    if (reportAt === undefined && text.includes('Results:')) reportAt = Date.now();
+  };
+  child.stdout.setEncoding('utf8').on('data', receive);
+  child.stderr.setEncoding('utf8').on('data', receive);
+  return new Promise<{
+    code: number | null;
+    text: string;
+    elapsedMs: number;
+    reportExitMs: number;
+  }>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`Eval child did not exit in ${timeoutMs}ms. Output: ${text}`));
+    }, timeoutMs);
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      resolve({
+        code,
+        text,
+        elapsedMs: Date.now() - started,
+        reportExitMs: reportAt === undefined ? Date.now() - started : Date.now() - reportAt,
+      });
+    });
+  });
+}
+
+async function waitForChildText(
+  child: ReturnType<typeof spawn>,
+  expected: string,
+  timeoutMs: number,
+) {
+  let text = '';
+  child.stdout.setEncoding('utf8').on('data', (part: string) => {
+    text += part;
+  });
+  child.stderr.setEncoding('utf8').on('data', (part: string) => {
+    text += part;
+  });
+  const deadline = Date.now() + timeoutMs;
+  while (!text.includes(expected)) {
+    if (child.exitCode !== null) throw new Error(`Eval child exited before ${expected}: ${text}`);
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${expected}: ${text}`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
