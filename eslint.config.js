@@ -14,6 +14,7 @@ export default tseslint.config(
       'node_modules/**',
       'design/**',
       'scripts/**',
+      '**/scripts/**',
       'packages/ui/src/__lint_fixture__/**',
       'packages/delegate/test/fixtures/**',
       '**/vendor/**',
@@ -34,7 +35,11 @@ export default tseslint.config(
   },
   {
     files: ['**/*.{js,mjs,cjs}'],
-    languageOptions: { sourceType: 'module' },
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      ...tseslint.configs.disableTypeChecked.languageOptions,
+      sourceType: 'module',
+    },
   },
   {
     plugins: { 'import-x': importPlugin },

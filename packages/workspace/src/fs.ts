@@ -66,7 +66,7 @@ export function isBinary(buffer: Buffer): boolean {
 }
 
 export class WorkspaceJail {
-  readonly root: string;
+  root: string;
   private realRoot: string | undefined;
   private ignoreMatcher = ignore();
   private ignoresLoaded = false;
@@ -75,6 +75,10 @@ export class WorkspaceJail {
   }
   async initialize(): Promise<void> {
     this.realRoot = await fs.realpath(this.root);
+    // Keep every later path operation on the same canonical root. On Windows,
+    // os.tmpdir() can return an 8.3 path while realpath returns the long path;
+    // mixing those forms makes path.relative() treat in-jail files as siblings.
+    this.root = this.realRoot;
     await this.loadIgnores();
   }
   async resolve(input: string, options: { allowMissing?: boolean } = {}): Promise<string> {

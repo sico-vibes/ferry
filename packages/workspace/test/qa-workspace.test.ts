@@ -43,7 +43,7 @@ describe('QA workspace: jail escapes', () => {
     const jail = new WorkspaceJail(root);
     await mkdir(path.join(root, 'a', 'b'), { recursive: true });
     const resolved = await jail.resolve('a/../a/b/../b');
-    expect(resolved.toLowerCase()).toBe(path.join(root, 'a', 'b').toLowerCase());
+    expect(resolved.toLowerCase()).toBe(path.join(jail.root, 'a', 'b').toLowerCase());
   });
 
   it('blocks symlink escapes for existing targets', async () => {
