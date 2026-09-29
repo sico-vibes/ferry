@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createMockFerryClient, createPlaybackRunner } from '@ferry/client';
 import { createRpcFerryClient } from '@ferry/client';
 import type { FerryClient } from '@ferry/client';
+import { canonicalizePath } from '@ferry/shared/node-paths';
 
 interface StorageAdapter {
   load(): unknown;
@@ -34,7 +35,7 @@ function fileStorage(path: string): StorageAdapter {
 export function createClient(options: ClientOptions = {}): FerryClient {
   if ((options.engine ?? 'mock') === 'local')
     throw new Error('The local engine is asynchronous; use createClientAsync instead');
-  const dataDir = options.dataDir ?? join(homedir(), '.ferry');
+  const dataDir = canonicalizePath(options.dataDir ?? join(homedir(), '.ferry'));
   return createMockFerryClient({
     storage: fileStorage(join(dataDir, 'cli-state.json')),
     behavior: 'live',
@@ -46,7 +47,7 @@ export async function createClientAsync(
   options: ClientOptions = {},
 ): Promise<FerryClient & { dispose?: () => Promise<void> }> {
   if ((options.engine ?? 'mock') === 'mock') return createClient(options);
-  const dataDir = options.dataDir ?? join(homedir(), '.ferry');
+  const dataDir = canonicalizePath(options.dataDir ?? join(homedir(), '.ferry'));
   const { createCoreHost, createMemoryTransportPair } = await import('@ferry/core');
   const [coreTransport, clientTransport] = createMemoryTransportPair();
   const host = await createCoreHost({ dataDir, transport: coreTransport });

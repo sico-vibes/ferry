@@ -1,6 +1,7 @@
 import { readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { WorkspaceIdSchema, WorkspaceSchema, newId } from '@ferry/shared';
+import { canonicalPathKey } from '@ferry/shared/node-paths';
 import type { Workspace } from '@ferry/shared';
 import { gitBranch, WorkspaceJail } from '@ferry/workspace';
 import { z } from 'zod';
@@ -62,7 +63,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       }
       let workspace = services.workspaces
         .list()
-        .find((entry) => workspacePathKey(entry.path) === workspacePathKey(absolutePath));
+        .find((entry) => canonicalPathKey(entry.path) === canonicalPathKey(absolutePath));
       if (!workspace) {
         workspace = WorkspaceSchema.parse({
           id: newId('workspace'),
@@ -114,11 +115,6 @@ export function register(host: CoreHost, services: FerryServices): void {
       });
     },
   });
-}
-
-function workspacePathKey(value: string): string {
-  const normalized = path.resolve(value);
-  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
 function mapWorkspaceFsError(error: unknown): (Error & { code: number; kind: string }) | undefined {

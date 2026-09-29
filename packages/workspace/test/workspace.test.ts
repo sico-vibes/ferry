@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -278,6 +278,19 @@ describe('permissions', () => {
 });
 
 describe('shadow checkpoints', () => {
+  it('uses one checkpoint store for canonical roots and directory aliases', async () => {
+    const root = await tempRoot();
+    const alias = path.join(path.dirname(root), `${path.basename(root)}-alias`);
+    await symlink(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    roots.push(alias);
+    const dataDir = await tempRoot();
+    const canonical = new ShadowCheckpoints(new WorkspaceJail(root), dataDir);
+    const aliased = new ShadowCheckpoints(new WorkspaceJail(alias), dataDir);
+
+    expect(aliased.id).toBe(canonical.id);
+    expect(aliased.dir).toBe(canonical.dir);
+  }, 30_000);
+
   it('snapshots, lists, diffs, and restores a non-git workspace', async () => {
     const root = await tempRoot();
     const dataDir = await tempRoot();

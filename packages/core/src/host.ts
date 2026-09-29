@@ -16,6 +16,7 @@ import {
 import { startCoreWebSocketServer, type CoreWebSocketHandle } from './websocket.js';
 import { ZodError } from 'zod';
 import { redactKnownSecrets } from '@ferry/shared';
+import { canonicalizePath } from '@ferry/shared/node-paths';
 
 const lockRecoveryGraceMs = 5_000;
 
@@ -87,7 +88,7 @@ export class CoreHost {
   #stopped = false;
 
   constructor(readonly options: CoreOptions) {
-    this.dataDir = resolve(options.dataDir);
+    this.dataDir = canonicalizePath(options.dataDir);
   }
 
   get websocket(): CoreWebSocketHandle | undefined {
@@ -430,7 +431,7 @@ export async function createCoreHost(
   ) {
     try {
       process.kill(existingLock.pid, 0);
-      throw new CoreLockError(resolve(options.dataDir));
+      throw new CoreLockError(canonicalizePath(options.dataDir));
     } catch (error) {
       if (error instanceof CoreLockError) throw error;
       // Stale lock cleanup remains owned by CoreHost.start().
@@ -520,7 +521,9 @@ async function isOlderThanRecoveryGrace(lockPath: string): Promise<boolean> {
 
 export async function readLockInfo(dataDir: string): Promise<unknown> {
   try {
-    return JSON.parse(await readFile(resolve(dataDir, 'core.lock'), 'utf8')) as unknown;
+    return JSON.parse(
+      await readFile(resolve(canonicalizePath(dataDir), 'core.lock'), 'utf8'),
+    ) as unknown;
   } catch {
     return null;
   }

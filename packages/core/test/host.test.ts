@@ -21,6 +21,7 @@ import {
   SettingsSchema,
   WorkspaceSchema,
 } from '@ferry/shared';
+import { canonicalizePath } from '@ferry/shared/node-paths';
 import { ShadowCheckpoints, WorkspaceJail } from '@ferry/workspace';
 import {
   CoreHost,
@@ -224,9 +225,11 @@ describe('core host dispatcher and lifecycle', () => {
       await rpc.checkpoints.restore(checkpointId as import('@ferry/shared').CheckpointId);
       expect(await readFile(projectFile, 'utf8')).toBe('before checkpoint\n');
       expect(await rpc.system.info()).toMatchObject({
-        dataDir: path,
         realDomains: hello.realDomains,
       });
+      expect(canonicalizePath((await rpc.system.info()).dataDir ?? '')).toBe(
+        canonicalizePath(path),
+      );
     } finally {
       rpc.close();
       await host.stop();

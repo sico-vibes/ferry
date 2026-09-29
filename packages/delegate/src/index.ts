@@ -11,6 +11,7 @@ import type {
 } from '@agentclientprotocol/sdk';
 import { Readable, Writable } from 'node:stream';
 import { DelegationRunSchema, LaneSchema, newId } from '@ferry/shared';
+import { canonicalizePath } from '@ferry/shared/node-paths';
 import type { DelegationRun, FileChange, Lane, SessionId } from '@ferry/shared';
 import type { BriefingSection } from '@ferry/router';
 
@@ -113,8 +114,8 @@ function lanesFromText(text: string, source: 'global' | 'project', trusted: bool
 export async function readLanes(options: LaneReadOptions): Promise<LaneReadResult> {
   const environment = options.environment ?? process.env;
   const configHome = environment.XDG_CONFIG_HOME
-    ? resolve(environment.XDG_CONFIG_HOME)
-    : join(environment.USERPROFILE ?? environment.HOME ?? homedir(), '.config');
+    ? canonicalizePath(resolve(environment.XDG_CONFIG_HOME))
+    : canonicalizePath(join(environment.USERPROFILE ?? environment.HOME ?? homedir(), '.config'));
   const globalPath = join(configHome, 'delegate-skills', 'config.json');
   const globalText = await readOptional(globalPath);
   const root = await (options.gitRoot ?? defaultGitRoot)(options.workspacePath);

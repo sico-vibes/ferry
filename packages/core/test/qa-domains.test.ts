@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createRpcFerryClient, RpcError, type RpcFerryClient } from '@ferry/client';
 import { ProviderIdSchema, SettingsSchema, SystemInfoSchema } from '@ferry/shared';
 import type { CheckpointId, Session, SessionId, WorkspaceId } from '@ferry/shared';
+import { canonicalizePath } from '@ferry/shared/node-paths';
 import { ShadowCheckpoints, WorkspaceJail } from '@ferry/workspace';
 import { openDatabase } from '@ferry/storage';
 import { FakeOpenAIServer } from '@ferry/testkit';
@@ -300,10 +301,14 @@ describe('QA workspaces domain', () => {
       await mkdir(join(core.dir, 'work', 'sub'), { recursive: true });
       const target = join(core.dir, 'work', 'sub');
       const opened = await core.rpc.workspaces.open(relative(process.cwd(), target));
-      expect(opened.path).toBe(target);
+      expect(canonicalizePath(opened.path)).toBe(canonicalizePath(target));
       const again = await core.rpc.workspaces.open(join(target, '.', '..', 'sub'));
       expect(again.id).toBe(opened.id);
-      expect((await core.rpc.workspaces.list()).filter((w) => w.path === target)).toHaveLength(1);
+      expect(
+        (await core.rpc.workspaces.list()).filter(
+          (workspace) => canonicalizePath(workspace.path) === canonicalizePath(target),
+        ),
+      ).toHaveLength(1);
     } finally {
       await core.close();
     }
@@ -543,7 +548,7 @@ describe('QA system domain', () => {
       const info = await core.rpc.system.info();
       SystemInfoSchema.parse(info);
       expect(info.mock).toBe(false);
-      expect(info.dataDir).toBe(core.dir);
+      expect(canonicalizePath(info.dataDir ?? '')).toBe(canonicalizePath(core.dir));
       expect(info.realDomains).toEqual(
         expect.arrayContaining(['settings', 'workspaces', 'checkpoints']),
       );

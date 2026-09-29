@@ -4,14 +4,14 @@ import { execa } from 'execa';
 import { glob as tinyGlob } from 'tinyglobby';
 import { rgPath } from '@vscode/ripgrep';
 import { z } from 'zod';
+import { normalizedPathKey } from '@ferry/shared/node-paths';
 import { DEFAULT_MAX_FILE_BYTES, decodeText, encodeText, isBinary, WorkspaceJail } from './fs.js';
 import { isProtectedWorkspacePath } from './permissions.js';
 
 const writeLocks = new Map<string, Promise<void>>();
 const renameRetryDelaysMs = [10, 20, 40, 80] as const;
 function writeLockKey(file: string): string {
-  const normalized = path.resolve(file);
-  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  return normalizedPathKey(file);
 }
 async function withRenameLock<T>(file: string, action: () => Promise<T>): Promise<T> {
   const key = writeLockKey(file);

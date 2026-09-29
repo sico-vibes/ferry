@@ -5,6 +5,7 @@ import pino, { type Logger, type LoggerOptions } from 'pino';
 import { SettingsSchema, type Settings } from '@ferry/shared';
 import { z } from 'zod';
 import { redactKnownSecretText } from '@ferry/shared';
+import { canonicalizePath } from '@ferry/shared/node-paths';
 
 export interface DataPaths {
   home: string;
@@ -47,7 +48,15 @@ export async function ensureDataPaths(paths = getDataPaths()): Promise<DataPaths
     paths.bin,
   ];
   await Promise.all(directories.map((path) => mkdir(path, { recursive: true })));
-  return paths;
+  return {
+    home: canonicalizePath(paths.home),
+    db: canonicalizePath(paths.db),
+    logs: canonicalizePath(paths.logs),
+    checkpoints: canonicalizePath(paths.checkpoints),
+    cache: canonicalizePath(paths.cache),
+    skills: canonicalizePath(paths.skills),
+    bin: canonicalizePath(paths.bin),
+  };
 }
 
 const SettingsFileSchema = z.object({

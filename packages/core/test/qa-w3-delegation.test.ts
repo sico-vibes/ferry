@@ -4,6 +4,7 @@ import { delimiter, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFixtureRepo, installFakeClis, type FixtureRepo } from '@ferry/testkit';
 import type { SessionId } from '@ferry/shared';
+import { canonicalPathKey, canonicalizePath } from '@ferry/shared/node-paths';
 import { AcpAgentDetectionSchema } from '@ferry/shared';
 import { startHarness, waitFor, type CoreHarness } from './qa-w3-harness.js';
 
@@ -132,7 +133,7 @@ describe('QA W3 delegation: trust, isolation and lifecycle', () => {
     const { h, touched } = await setupDelegation();
     try {
       // Re-open without the approval stored by setup to observe the untrusted state.
-      h.services.settings.delete(`delegate-approved:${h.workspacePath}`);
+      h.services.settings.delete(`delegate-approved:${canonicalPathKey(h.workspacePath)}`);
       const lanes = await h.rpc.delegation.lanes();
       const native = lanes.find((lane) => lane.name === 'native');
       expect(native).toMatchObject({ source: 'project', trusted: false });
@@ -155,6 +156,29 @@ describe('QA W3 delegation: trust, isolation and lifecycle', () => {
       await h.close();
     }
   }, 40_000);
+
+  it.runIf(process.platform === 'win32')(
+    'migrates an existing approval stored under the canonical path spelling',
+    async () => {
+      const { h } = await setupDelegation();
+      try {
+        const canonicalKey = `delegate-approved:${canonicalPathKey(h.workspacePath)}`;
+        const legacyKey = `delegate-approved:${canonicalizePath(h.workspacePath)}`;
+        const approval = h.services.settings.get(canonicalKey);
+        expect(approval).toEqual(expect.any(String));
+        h.services.settings.delete(canonicalKey);
+        h.services.settings.put(legacyKey, approval);
+
+        expect(
+          (await h.rpc.delegation.lanes()).find((lane) => lane.name === 'native')?.trusted,
+        ).toBe(true);
+        expect(h.services.settings.get(canonicalKey)).toBe(approval);
+      } finally {
+        await h.close();
+      }
+    },
+    30_000,
+  );
 
   it('delivers a hostile multi-line brief intact through stdin', async () => {
     const { h, capture } = await setupDelegation();

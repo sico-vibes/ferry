@@ -6,6 +6,7 @@ import simpleGit from 'simple-git';
 import { glob } from 'tinyglobby';
 import { z } from 'zod';
 import { WorkspaceJail } from './fs.js';
+import { canonicalPathKey, canonicalizePath } from '@ferry/shared/node-paths';
 
 export const GitPathInput = z.object({ path: z.string().default('.') });
 export const CheckpointInput = z.object({
@@ -39,8 +40,8 @@ export class ShadowCheckpoints {
     readonly jail: WorkspaceJail,
     dataDir: string,
   ) {
-    this.id = createHash('sha256').update(jail.root.toLowerCase()).digest('hex').slice(0, 16);
-    this.dir = path.join(dataDir, 'checkpoints', this.id);
+    this.id = createHash('sha256').update(canonicalPathKey(jail.root)).digest('hex').slice(0, 16);
+    this.dir = path.join(canonicalizePath(dataDir), 'checkpoints', this.id);
     this.indexFile = path.join(this.dir, 'index');
   }
   async snapshot(message = 'checkpoint', touchedPaths?: string[]): Promise<string> {

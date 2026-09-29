@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getDataPaths } from '@ferry/config';
 import { SkillSchema, type Skill } from '@ferry/shared';
+import { normalizedPathKey } from '@ferry/shared/node-paths';
 import { parseDocument } from 'yaml';
 import type { PromptSection, ToolDef, ToolSource } from './types.js';
 
@@ -35,8 +36,8 @@ const exists = async (path: string): Promise<boolean> =>
   );
 
 function isJailed(root: string, candidate: string): boolean {
-  const path = resolve(candidate);
-  const rel = relative(resolve(root), path);
+  const path = normalizedPathKey(candidate);
+  const rel = relative(normalizedPathKey(root), path);
   return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
 }
 

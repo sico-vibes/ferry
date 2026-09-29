@@ -6,6 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./node-paths": "./src/node-paths.ts",
     "./testing": "./src/testing/index.ts",
     "./tokens": "./src/tokens/index.ts"
   },

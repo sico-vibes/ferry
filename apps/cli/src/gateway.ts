@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { createGatewayKey, type GatewayKey } from '@ferry/gateway';
 import { openDatabase, SettingsRepository } from '@ferry/storage';
+import { canonicalizePath } from '@ferry/shared/node-paths';
 
 export interface GatewayStatusFile {
   pid: number;
@@ -13,13 +14,14 @@ export interface GatewayStatusFile {
 }
 
 export function gatewayDataDir(dataDir?: string): string {
-  return resolve(dataDir ?? join(homedir(), '.ferry'));
+  return canonicalizePath(dataDir ?? join(homedir(), '.ferry'));
 }
 
 export async function writeGatewayStatus(
   dataDir: string,
   status: Omit<GatewayStatusFile, 'pid'>,
 ): Promise<void> {
+  dataDir = canonicalizePath(dataDir);
   await mkdir(dataDir, { recursive: true });
   await writeFile(
     join(dataDir, 'gateway-status.json'),
@@ -29,13 +31,13 @@ export async function writeGatewayStatus(
 }
 
 export async function clearGatewayStatus(dataDir: string): Promise<void> {
-  await rm(join(dataDir, 'gateway-status.json'), { force: true });
+  await rm(join(canonicalizePath(dataDir), 'gateway-status.json'), { force: true });
 }
 
 async function statusFile(dataDir: string): Promise<GatewayStatusFile | undefined> {
   try {
     return JSON.parse(
-      await readFile(join(dataDir, 'gateway-status.json'), 'utf8'),
+      await readFile(join(canonicalizePath(dataDir), 'gateway-status.json'), 'utf8'),
     ) as GatewayStatusFile;
   } catch {
     return undefined;
@@ -43,6 +45,7 @@ async function statusFile(dataDir: string): Promise<GatewayStatusFile | undefine
 }
 
 export async function startGatewayDaemon(dataDir: string): Promise<GatewayStatusFile> {
+  dataDir = canonicalizePath(dataDir);
   const previous = await statusFile(dataDir);
   if (previous && (await isRunning(previous))) return previous;
   const args = [process.argv[1] ?? 'ferry', 'serve', '--gateway', '--data-dir', dataDir];
@@ -101,7 +104,7 @@ async function withSettings<T>(
   dataDir: string,
   run: (settings: SettingsRepository) => T,
 ): Promise<T> {
-  const db = await openDatabase(join(dataDir, 'db', 'ferry.sqlite'));
+  const db = await openDatabase(join(canonicalizePath(dataDir), 'db', 'ferry.sqlite'));
   try {
     return run(new SettingsRepository(db.client));
   } finally {

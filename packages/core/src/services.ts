@@ -6,6 +6,7 @@ import { loadCatalog, type Catalog } from '@ferry/catalog';
 import { QuotaEngine } from '@ferry/quota';
 import { parseOpenRouterKey } from '@ferry/providers';
 import { QuotaObservationSchema, newId } from '@ferry/shared';
+import { canonicalizePath } from '@ferry/shared/node-paths';
 import {
   CheckpointRepository,
   ProviderRepository,
@@ -71,7 +72,7 @@ export async function createServices({
   env = process.env,
   secrets,
 }: ServiceOptions): Promise<FerryServices> {
-  const home = resolve(dataDir);
+  const home = canonicalizePath(dataDir);
   const paths = getDataPaths({ ...env, FERRY_HOME: home });
   await Promise.all([
     mkdir(paths.home, { recursive: true }),

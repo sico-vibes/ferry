@@ -17,6 +17,7 @@ import {
 import { WorkspaceJail, ShadowCheckpoints, runCommand } from '@ferry/workspace';
 import { loadProjectConfig } from '@ferry/config';
 import { CheckpointIdSchema } from '@ferry/shared';
+import { canonicalPathKey } from '@ferry/shared/node-paths';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { z } from 'zod';
@@ -38,15 +39,23 @@ export function register(host: CoreHost, services: FerryServices): void {
     if (!workspace) throw rpcDomainError(-32044, 'not_found', 'Session workspace is unavailable');
     return { sessionId, session, workspace };
   };
-  const laneRead = async (workspacePath: string) =>
-    readLanes({
+  const laneRead = async (workspacePath: string) => {
+    const approvalKey = `delegate-approved:${canonicalPathKey(workspacePath)}`;
+    const approved = services.settings.get(approvalKey);
+    const legacyApproved = services.settings.get(`delegate-approved:${workspacePath}`);
+    if (typeof approved !== 'string' && typeof legacyApproved === 'string')
+      services.settings.put(approvalKey, legacyApproved);
+    return readLanes({
       workspacePath,
       environment: services.env,
       approvedProjectHash:
-        typeof services.settings.get(`delegate-approved:${workspacePath}`) === 'string'
-          ? (services.settings.get(`delegate-approved:${workspacePath}`) as string)
-          : null,
+        typeof approved === 'string'
+          ? approved
+          : typeof legacyApproved === 'string'
+            ? legacyApproved
+            : null,
     });
+  };
   const publish = (run: DelegationRun) => {
     const parsed = DelegationRunSchema.parse(run);
     services.delegations.put(parsed);
@@ -67,7 +76,10 @@ export function register(host: CoreHost, services: FerryServices): void {
       if (!workspace) return [];
       const result = await readLanes({ workspacePath: workspace.path, environment: services.env });
       if (result.projectHash)
-        services.settings.put(`delegate-approved:${workspace.path}`, result.projectHash);
+        services.settings.put(
+          `delegate-approved:${canonicalPathKey(workspace.path)}`,
+          result.projectHash,
+        );
       return (await laneRead(workspace.path)).lanes;
     },
     runs(rawSessionId: unknown) {

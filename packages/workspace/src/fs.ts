@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { canonicalizePath, normalizedPathKey } from '@ferry/shared/node-paths';
 import ignore from 'ignore';
 
 export type TextEncoding = 'utf8' | 'utf8-bom' | 'utf16le' | 'utf16be';
@@ -71,10 +72,10 @@ export class WorkspaceJail {
   private ignoreMatcher = ignore();
   private ignoresLoaded = false;
   constructor(root: string) {
-    this.root = path.resolve(root);
+    this.root = canonicalizePath(root);
   }
   async initialize(): Promise<void> {
-    this.realRoot = await fs.realpath(this.root);
+    this.realRoot = canonicalizePath(await fs.realpath(this.root));
     // Keep every later path operation on the same canonical root. On Windows,
     // os.tmpdir() can return an 8.3 path while realpath returns the long path;
     // mixing those forms makes path.relative() treat in-jail files as siblings.
@@ -154,6 +155,8 @@ export class WorkspaceJail {
   }
 }
 function inside(root: string, candidate: string): boolean {
-  const rel = path.relative(root, candidate);
+  const canonicalRoot = normalizedPathKey(root);
+  const canonicalCandidate = normalizedPathKey(candidate);
+  const rel = path.relative(canonicalRoot, canonicalCandidate);
   return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
 }
