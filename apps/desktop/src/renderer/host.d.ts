@@ -4,8 +4,19 @@ declare global {
     ferryHost?: {
       platform: string;
       versions: { app: string; electron: string };
+      channel: string;
+      commit: string;
       realDomainsFromEnvironment(): string[];
       openFolder(): Promise<string | null>;
+      getUpdateState(): Promise<import('../main/update-state.js').UpdateSnapshot>;
+      checkForUpdates(): Promise<import('../main/update-state.js').UpdateSnapshot>;
+      setAutoDownload(enabled: boolean): Promise<import('../main/update-state.js').UpdateSnapshot>;
+      installUpdate(): Promise<void>;
+      downloadUpdate(): Promise<import('../main/update-state.js').UpdateSnapshot>;
+      onUpdateState(
+        handler: (state: import('../main/update-state.js').UpdateSnapshot) => void,
+      ): () => void;
+      onOpenWorkspace(handler: (path: string) => void): () => void;
       updateTheme(theme: 'dark' | 'light'): void;
       connectCore(token: string): Promise<void>;
       getEngineStatus(): Promise<{ status: 'connected' | 'restarting'; pid: number | null }>;

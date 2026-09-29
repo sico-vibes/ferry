@@ -52,7 +52,19 @@ that every UI domain is connected to a production service.
 ## Dependency audit
 
 `pnpm audit --prod` was run by the orchestrator on 2026-09-27. It reported no
-known vulnerabilities. No npm package was added.
+known vulnerabilities at that time; the audit preceded the addition of
+`electron-updater` 6.8.9 for the beta release.
+
+## Windows release updates
+
+Ferry beta installers are unsigned. Windows may show SmartScreen warnings, and
+unsigned update packages do not provide publisher identity or signature-based
+tamper detection. Ferry's `electron-updater` client disables its code-signature
+requirement to accept these unsigned releases. Updates are fetched from the
+public `sico-vibes/ferry` GitHub Releases feed over HTTPS; GitHub release
+integrity and HTTPS remain the transport boundary. Users should install only
+from the official Releases page. Signing releases later would restore publisher
+identity and signature verification.
 
 ## Reporting vulnerabilities
 

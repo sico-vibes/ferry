@@ -5,19 +5,67 @@ const rendererWindow = globalThis as unknown as {
   location: { origin: string; protocol: string };
   postMessage(message: unknown, targetOrigin: string, transfer: unknown[]): void;
 };
+let openWorkspaceHandler: ((path: string) => void) | null = null;
+let pendingWorkspacePath: string | null = null;
+ipcRenderer.on('ferry:open-workspace', (_event, path: string) => {
+  if (openWorkspaceHandler) openWorkspaceHandler(path);
+  else pendingWorkspacePath = path;
+});
 
 contextBridge.exposeInMainWorld('ferryHost', {
   platform: process.platform,
   versions: {
-    app: process.env.npm_package_version ?? '0.1.0-mock',
+    app: process.env.npm_package_version ?? '0.9.0',
     electron: process.versions.electron,
   },
+  channel: 'beta',
+  commit: process.env.FERRY_COMMIT ?? 'unknown',
   realDomainsFromEnvironment: (): string[] =>
     process.env.FERRY_REAL_DOMAINS?.split(',')
       .map((domain) => domain.trim())
       .filter(Boolean) ?? [],
   openFolder: (): Promise<string | null> =>
     ipcRenderer.invoke('ferry:open-folder') as Promise<string | null>,
+  getUpdateState: (): Promise<import('../main/update-state.js').UpdateSnapshot> =>
+    ipcRenderer.invoke('ferry:update-state') as Promise<
+      import('../main/update-state.js').UpdateSnapshot
+    >,
+  checkForUpdates: (): Promise<import('../main/update-state.js').UpdateSnapshot> =>
+    ipcRenderer.invoke('ferry:update-check') as Promise<
+      import('../main/update-state.js').UpdateSnapshot
+    >,
+  setAutoDownload: (enabled: boolean): Promise<import('../main/update-state.js').UpdateSnapshot> =>
+    ipcRenderer.invoke('ferry:update-auto-download', enabled) as Promise<
+      import('../main/update-state.js').UpdateSnapshot
+    >,
+  installUpdate: (): Promise<void> => ipcRenderer.invoke('ferry:update-install') as Promise<void>,
+  downloadUpdate: (): Promise<import('../main/update-state.js').UpdateSnapshot> =>
+    ipcRenderer.invoke('ferry:update-download') as Promise<
+      import('../main/update-state.js').UpdateSnapshot
+    >,
+  onUpdateState: (
+    handler: (state: import('../main/update-state.js').UpdateSnapshot) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      state: import('../main/update-state.js').UpdateSnapshot,
+    ) => {
+      handler(state);
+    };
+    ipcRenderer.on('ferry:update-state', listener);
+    return () => ipcRenderer.removeListener('ferry:update-state', listener);
+  },
+  onOpenWorkspace: (handler: (path: string) => void): (() => void) => {
+    openWorkspaceHandler = handler;
+    if (pendingWorkspacePath) {
+      const path = pendingWorkspacePath;
+      pendingWorkspacePath = null;
+      handler(path);
+    }
+    return () => {
+      openWorkspaceHandler = null;
+    };
+  },
   updateTheme: (theme: 'dark' | 'light'): void => {
     ipcRenderer.send('ferry:theme', DesktopThemeSchema.parse(theme));
   },

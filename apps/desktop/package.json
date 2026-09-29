@@ -1,6 +1,6 @@
 {
   "name": "@ferry/desktop",
-  "version": "0.1.0-mock",
+  "version": "0.9.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -10,6 +10,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "dist": "node scripts/dist.mjs",
+    "install:smoke": "node scripts/install-smoke.mjs",
     "smoke:packaged": "node scripts/smoke-packaged.mjs",
     "start": "electron-vite preview",
     "dev:web": "vite --config vite.web.config.ts --host 127.0.0.1 --port 5173",
@@ -28,6 +29,7 @@
     "@vscode/ripgrep-win32-x64": "1.18.0",
     "@vscode/tree-sitter-wasm": "0.3.1",
     "better-sqlite3": "13.0.3",
+    "electron-updater": "6.8.9",
     "node-pty": "1.1.0",
     "pino": "10.3.1",
     "pino-roll": "4.0.0"

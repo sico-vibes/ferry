@@ -38,6 +38,7 @@ const copyStorageMigrations = {
 
 export default defineConfig({
   main: {
+    define: { 'process.env.FERRY_COMMIT': JSON.stringify(process.env.FERRY_COMMIT ?? 'unknown') },
     plugins: [copyStorageMigrations],
     resolve: { alias: { '@ferry/core': resolve('../../packages/core/src/index.ts') } },
     build: {
@@ -52,6 +53,7 @@ export default defineConfig({
           '@vscode/tree-sitter-wasm',
           'pino',
           'pino-roll',
+          'electron-updater',
         ],
       },
       rollupOptions: {
@@ -64,6 +66,7 @@ export default defineConfig({
     },
   },
   preload: {
+    define: { 'process.env.FERRY_COMMIT': JSON.stringify(process.env.FERRY_COMMIT ?? 'unknown') },
     build: {
       externalizeDeps: true,
       rollupOptions: {

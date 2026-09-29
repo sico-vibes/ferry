@@ -97,7 +97,7 @@ const bootstrapClient = async () => {
   ].filter((domain) => hello.realDomains.includes(domain));
   const demoDomains = FERRY_DOMAINS.filter((domain) => !domains.includes(domain));
   if (window.ferryHost && demoDomains.length)
-    console.warn(`Ferry is using Demo data for domains: ${demoDomains.join(', ')}`);
+    console.warn(`Ferry is using mock data for domains: ${demoDomains.join(', ')}`);
   const hybrid = createHybridClient(mock, rpc, domains);
   window.ferryHybrid = hybrid;
   window.ferryRpcClient = rpc;
@@ -105,7 +105,7 @@ const bootstrapClient = async () => {
 };
 const mountApp = (currentClient: FerryClient) => {
   if (window.ferryHost && currentClient === mock)
-    console.warn('Ferry is using the Demo client because the core connection failed.');
+    console.warn('Ferry is using the mock client because the core connection failed.');
   appRoot.render(
     <StrictMode>
       <FerryProvider client={currentClient}>

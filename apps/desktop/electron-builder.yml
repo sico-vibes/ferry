@@ -1,10 +1,17 @@
 appId: dev.ferry.app
 productName: Ferry
+publish:
+  provider: github
+  owner: sico-vibes
+  repo: ferry
+  releaseType: draft
+  channel: latest
 directories:
   buildResources: build
   output: release
 files:
   - out/**
+  - '!out/cli/**'
   - package.json
   - '!out/web/**'
   - '!**/*.map'
@@ -52,9 +59,13 @@ files:
   - '!node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-powershell.wasm'
   - '!node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-regex.wasm'
 asar: true
+extraResources:
+  - from: out/cli
+    to: cli
 electronLanguages:
   - en-US
 npmRebuild: false
+afterPack: scripts/after-pack.mjs
 asarUnpack:
   - '**/*.node'
   - '**/@vscode/tree-sitter-wasm/wasm/*.wasm'
@@ -62,6 +73,7 @@ asarUnpack:
   - '**/node-pty/**/winpty-agent.exe'
   - '**/node-pty/**/winpty.dll'
   - '**/node-pty/**/conpty/**'
+  - 'cli/**/*.node'
 electronDist: node_modules/electron/dist
 win:
   icon: build/icon.ico
@@ -74,7 +86,7 @@ nsis:
   oneClick: false
   perMachine: false
   allowElevation: false
-  allowToChangeInstallationDirectory: true
+  allowToChangeInstallationDirectory: false
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   shortcutName: Ferry

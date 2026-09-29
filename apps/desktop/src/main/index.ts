@@ -9,6 +9,7 @@ import {
   utilityProcess,
   type UtilityProcess,
 } from 'electron';
+import updater, { type NsisUpdater } from 'electron-updater';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { access, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -28,6 +29,9 @@ import {
 } from './window-theme.js';
 import { buildCoreEnvironment } from './core-environment.js';
 import { isTrustedRendererOrigin } from './renderer-origin.js';
+import { UpdateController, type UpdateSnapshot } from './update-state.js';
+
+const { autoUpdater } = updater;
 
 // Packaged builds use the icon embedded in the .exe by electron-builder (build/icon.ico).
 const DEV_WINDOW_ICON = join(import.meta.dirname, '../../build/icon.ico');
@@ -56,6 +60,41 @@ let restartCount = 0;
 let coreRestartTimer: NodeJS.Timeout | undefined;
 let shuttingDown = false;
 const coreConnectors: Electron.WebContents[] = [];
+const updateController = new UpdateController(autoUpdater);
+let pendingWorkspacePath: string | null = findWorkspaceArgument(process.argv);
+
+function findWorkspaceArgument(args: string[]): string | null {
+  const index = args.indexOf('--open-folder');
+  return index >= 0 ? (args[index + 1] ?? null) : null;
+}
+
+function publishWorkspacePath(path: string | null): void {
+  if (!path || !mainWindow || mainWindow.webContents.isLoading()) {
+    if (path) pendingWorkspacePath = path;
+    return;
+  }
+  pendingWorkspacePath = null;
+  mainWindow.webContents.send('ferry:open-workspace', path);
+}
+
+function publishUpdateState(state: UpdateSnapshot): void {
+  for (const window of BrowserWindow.getAllWindows())
+    window.webContents.send('ferry:update-state', state);
+}
+updateController.subscribe(publishUpdateState);
+
+const updatePreferencePath = (): string => join(app.getPath('userData'), 'updates.json');
+
+function readAutoDownloadPreference(): boolean {
+  try {
+    const value: unknown = JSON.parse(readFileSync(updatePreferencePath(), 'utf8'));
+    return typeof value === 'object' && value !== null && 'autoDownload' in value
+      ? value.autoDownload !== false
+      : true;
+  } catch {
+    return true;
+  }
+}
 
 function boundsPath(): string {
   return join(app.getPath('userData'), 'window-bounds.json');
@@ -296,6 +335,10 @@ async function createWindow(): Promise<void> {
   } else {
     await mainWindow.loadFile(join(import.meta.dirname, '../renderer/index.html'));
   }
+  publishWorkspacePath(pendingWorkspacePath);
+  mainWindow.webContents.on('did-finish-load', () => {
+    publishWorkspacePath(pendingWorkspacePath);
+  });
 }
 
 function openMainWindow(): void {
@@ -345,15 +388,59 @@ ipcMain.on('ferry:theme', (event, rawTheme: unknown) => {
   });
 });
 
-app.on('second-instance', () => {
-  if (!mainWindow) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.focus();
+app.on('second-instance', (_event, argv) => {
+  const workspacePath = findWorkspaceArgument(argv);
+  if (workspacePath) pendingWorkspacePath = workspacePath;
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    publishWorkspacePath(pendingWorkspacePath);
+  }
+});
+
+ipcMain.handle('ferry:update-state', (event, ...args: unknown[]) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  EmptyIpcArgsSchema.parse(args);
+  return updateController.getSnapshot();
+});
+ipcMain.handle('ferry:update-check', async (event, ...args: unknown[]) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  EmptyIpcArgsSchema.parse(args);
+  await updateController.check();
+  return updateController.getSnapshot();
+});
+ipcMain.handle('ferry:update-auto-download', (event, enabled: unknown) => {
+  if (!isTrustedSender(event) || typeof enabled !== 'boolean')
+    throw new Error('Invalid update preference request');
+  const snapshot = updateController.setAutoDownload(enabled);
+  writeFileSync(updatePreferencePath(), JSON.stringify({ autoDownload: enabled }), 'utf8');
+  return snapshot;
+});
+ipcMain.handle('ferry:update-install', (event, ...args: unknown[]) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  EmptyIpcArgsSchema.parse(args);
+  updateController.install();
+});
+ipcMain.handle('ferry:update-download', async (event, ...args: unknown[]) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  EmptyIpcArgsSchema.parse(args);
+  await updateController.download();
+  return updateController.getSnapshot();
 });
 
 app
   .whenReady()
   .then(async () => {
+    updateController.setAutoDownload(readAutoDownloadPreference());
+    autoUpdater.autoDownload = readAutoDownloadPreference();
+    if (app.isPackaged && !e2eUserDataPath) {
+      autoUpdater.channel = 'latest';
+      autoUpdater.allowPrerelease = true;
+      autoUpdater.autoDownload = updateController.getSnapshot().autoDownload;
+      (autoUpdater as NsisUpdater).verifyUpdateCodeSignature = () => Promise.resolve(null);
+      void updateController.check();
+      setInterval(() => void updateController.check(), 6 * 60 * 60 * 1000).unref();
+    }
     session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
       callback(false);
     });

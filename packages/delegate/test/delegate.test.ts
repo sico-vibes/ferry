@@ -230,7 +230,7 @@ describe('external CLI adapters', () => {
         await connection.agent.request('initialize', {
           protocolVersion: PROTOCOL_VERSION,
           clientCapabilities: {},
-          clientInfo: { name: 'Ferry', version: '0.1.0' },
+          clientInfo: { name: 'Ferry', version: '0.9.0' },
         });
         const session = await connection.agent.request('session/new', {
           cwd: root,
