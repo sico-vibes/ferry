@@ -163,24 +163,27 @@ describe('external CLI adapters', () => {
       signal: controller.signal,
     });
     const pidDeadline = Date.now() + 5_000;
-    let pidExists = false;
-    while (!pidExists && Date.now() < pidDeadline) {
+    let childPid: number | undefined;
+    while (childPid === undefined && Date.now() < pidDeadline) {
       try {
-        await readFile(pidFile, 'utf8');
-        pidExists = true;
+        const candidate = Number(await readFile(pidFile, 'utf8'));
+        if (Number.isSafeInteger(candidate) && candidate > 1 && candidate !== process.pid)
+          childPid = candidate;
       } catch {
-        await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+        // The agent atomically renames the complete PID file into place.
       }
+      if (childPid === undefined) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
     }
-    expect(pidExists).toBe(true);
+    expect(childPid).toBeDefined();
     controller.abort();
     await expect(running).rejects.toThrow();
-    const pid = Number(await readFile(pidFile, 'utf8'));
     const deadline = Date.now() + 3_000;
     let childAlive = true;
     while (childAlive && Date.now() < deadline) {
       try {
-        process.kill(pid, 0);
+        if (!Number.isSafeInteger(childPid) || childPid === undefined || childPid <= 1)
+          throw new Error('Invalid fake ACP child PID');
+        process.kill(childPid, 0);
         await new Promise((resolveWait) => setTimeout(resolveWait, 50));
       } catch {
         childAlive = false;
@@ -217,7 +220,7 @@ describe('external CLI adapters', () => {
         reject: false,
         windowsHide: true,
         buffer: false,
-        detached: false,
+        detached: process.platform !== 'win32',
         ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
       });
       try {
@@ -239,7 +242,20 @@ describe('external CLI adapters', () => {
         expect(session.sessionId).toBeTruthy();
         await connection.agent.notify('session/cancel', { sessionId: session.sessionId });
       } finally {
-        child.kill('SIGTERM');
+        if (process.platform === 'win32') {
+          child.kill('SIGTERM');
+        } else if (
+          Number.isSafeInteger(child.pid) &&
+          child.pid !== undefined &&
+          child.pid > 1 &&
+          child.pid !== process.pid
+        ) {
+          try {
+            process.kill(-child.pid, 'SIGTERM');
+          } catch {
+            child.kill('SIGTERM');
+          }
+        }
         if (process.platform === 'win32' && child.pid !== undefined) {
           try {
             await execa('taskkill.exe', ['/pid', String(child.pid), '/T', '/F'], {

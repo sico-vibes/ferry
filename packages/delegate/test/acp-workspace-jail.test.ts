@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { execa } from 'execa';
 import { assertAcpWorkspacePath, readLanes } from '../src/index.js';
 import { createHash } from 'node:crypto';
 
@@ -51,6 +52,50 @@ describe('ACP workspace filesystem callbacks', () => {
     }
     await expect(assertAcpWorkspacePath(workspace, 'external/secret.txt', false)).rejects.toThrow(
       /symlink/,
+    );
+  });
+
+  it('canonicalizes a workspace reached through a non-canonical directory path', async () => {
+    const workspace = await temporaryDirectory('ferry-acp-canonical-workspace-');
+    const canonicalWorkspace = await realpath(workspace);
+    let nonCanonicalWorkspace: string | undefined;
+    if (process.platform === 'win32') {
+      try {
+        const result = await execa('cmd.exe', [
+          '/d',
+          '/s',
+          '/c',
+          `for %I in ("${workspace}") do @echo %~sI`,
+        ]);
+        const shortPath = result.stdout.trim();
+        if (
+          shortPath &&
+          (await realpath(shortPath)).toLowerCase() === canonicalWorkspace.toLowerCase() &&
+          shortPath.toLowerCase() !== canonicalWorkspace.toLowerCase()
+        )
+          nonCanonicalWorkspace = shortPath;
+      } catch {
+        // Short paths can be disabled on CI volumes; use a junction below.
+      }
+    }
+    if (!nonCanonicalWorkspace && process.platform === 'win32')
+      nonCanonicalWorkspace = canonicalWorkspace.toLowerCase();
+    if (!nonCanonicalWorkspace) {
+      const alias = join(await temporaryDirectory('ferry-acp-canonical-alias-'), 'workspace-link');
+      try {
+        await symlink(workspace, alias, 'junction');
+      } catch {
+        return;
+      }
+      nonCanonicalWorkspace = alias;
+    }
+    const target = join(nonCanonicalWorkspace, 'created', 'through-alias.txt');
+    const canonicalTarget = await assertAcpWorkspacePath(nonCanonicalWorkspace, target, true);
+    expect(canonicalTarget.toLowerCase()).toContain(canonicalWorkspace.toLowerCase());
+    await mkdir(join(canonicalTarget, '..'), { recursive: true });
+    await writeFile(canonicalTarget, 'inside');
+    await expect(assertAcpWorkspacePath(nonCanonicalWorkspace, target, false)).resolves.toBe(
+      await realpath(canonicalTarget),
     );
   });
 });

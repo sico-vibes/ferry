@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/await-thenable */
 import { Readable, Writable } from 'node:stream';
 import { spawn } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
+import { rename, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { agent, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk';
 
@@ -31,7 +31,10 @@ app.onRequest('session/prompt', async ({ params, client, signal }) => {
         stdio: 'ignore',
         windowsHide: true,
       });
-      await writeFile(process.env.FAKE_ACP_CHILD_PID_FILE, String(child.pid));
+      const pidFile = process.env.FAKE_ACP_CHILD_PID_FILE;
+      const temporaryPidFile = `${pidFile}.${process.pid}.tmp`;
+      await writeFile(temporaryPidFile, String(child.pid));
+      await rename(temporaryPidFile, pidFile);
     }
     await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
     return { stopReason: 'cancelled' };

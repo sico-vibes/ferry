@@ -71,8 +71,8 @@ describe('CI workflow', () => {
     expect(workflow).toMatch(/^jobs:/m);
   });
 
-  it('runs on both windows-latest and ubuntu-latest', () => {
-    expect(workflow).toMatch(/os:\s*\[[^\]]*\bwindows-latest\b[^\]]*\]/);
+  it('runs on both a Windows runner and ubuntu-latest', () => {
+    expect(workflow).toMatch(/os:\s*\[[^\]]*\bwindows-(?:latest|20\d\d)\b[^\]]*\]/);
     expect(workflow).toMatch(/os:\s*\[[^\]]*\bubuntu-latest\b[^\]]*\]/);
     expect(workflow).toMatch(/runs-on:\s*\$\{\{\s*matrix\.os\s*\}\}/);
   });

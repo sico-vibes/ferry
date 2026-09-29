@@ -524,6 +524,21 @@ function cliArgs(name: Implementer, request: AdapterRequest, outputPath: string)
   return args;
 }
 
+function signalProcessGroup(pid: number | undefined, signal: NodeJS.Signals): boolean {
+  if (!Number.isSafeInteger(pid) || pid === undefined || pid <= 1 || pid === process.pid)
+    return false;
+  try {
+    process.kill(process.platform === 'win32' ? pid : -pid, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isTaskkillNotFound(exitCode: number | undefined, output: string): boolean {
+  return exitCode === 128 && /not found|no running instance/i.test(output);
+}
+
 function parseEvent(
   name: Implementer,
   event: Record<string, unknown>,
@@ -631,7 +646,7 @@ async function execute(
     reject: false,
     windowsHide: true,
     buffer: false,
-    detached: false,
+    detached: process.platform !== 'win32',
     ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
   });
   command.stdin.end(request.prompt);
@@ -655,11 +670,8 @@ async function execute(
     () => undefined,
   );
   const killTree = async () => {
-    try {
-      command.kill('SIGTERM');
-    } catch (error) {
-      console.warn('Delegate process termination failed', error);
-    }
+    if (process.platform === 'win32') command.kill('SIGTERM');
+    else signalProcessGroup(command.pid, 'SIGTERM');
     if (process.platform === 'win32' && command.pid !== undefined) {
       try {
         const killed = await execa('taskkill.exe', ['/pid', String(command.pid), '/T', '/F'], {
@@ -667,7 +679,10 @@ async function execute(
           windowsHide: true,
           timeout: 2_000,
         });
-        if (killed.failed)
+        if (
+          killed.failed &&
+          !isTaskkillNotFound(killed.exitCode, `${killed.stderr}${killed.stdout}`)
+        )
           console.warn(
             `Delegate process tree termination failed: ${killed.stderr || killed.stdout}`,
           );
@@ -752,7 +767,7 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
     reject: false,
     windowsHide: true,
     buffer: false,
-    detached: false,
+    detached: process.platform !== 'win32',
     ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
   });
   child.stderr.on('data', (chunk: Buffer) =>
@@ -771,7 +786,8 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
   let connection: ClientConnection | undefined;
   let killInFlight: Promise<void> | undefined;
   const killTree = async () => {
-    child.kill('SIGTERM');
+    if (process.platform === 'win32') child.kill('SIGTERM');
+    else signalProcessGroup(child.pid, 'SIGTERM');
     if (process.platform === 'win32' && child.pid !== undefined) {
       try {
         const result = await execa('taskkill.exe', ['/pid', String(child.pid), '/T', '/F'], {
@@ -779,7 +795,11 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
           windowsHide: true,
           timeout: 2_000,
         });
-        if (result.failed) console.warn('ACP process tree termination failed', result.stderr);
+        if (
+          result.failed &&
+          !isTaskkillNotFound(result.exitCode, `${result.stderr}${result.stdout}`)
+        )
+          console.warn('ACP process tree termination failed', result.stderr);
       } catch (error) {
         console.warn('ACP process tree termination failed', error);
       }
@@ -1329,8 +1349,10 @@ export async function decide(
 export const delegatePaths = {
   normalize: (path: string) => resolve(path),
   isWithin: (root: string, path: string) => {
-    const base = resolve(root);
-    const target = resolve(base, path);
+    const caseFold = (value: string) =>
+      process.platform === 'win32' ? value.toLowerCase() : value;
+    const base = caseFold(resolve(root));
+    const target = caseFold(resolve(base, path));
     const pathFromRoot = relative(base, target);
     return pathFromRoot === '' || (!pathFromRoot.startsWith('..') && !isAbsolute(pathFromRoot));
   },
@@ -1342,22 +1364,33 @@ export async function assertAcpWorkspacePath(
   writing: boolean,
 ): Promise<string> {
   const root = await realpath(resolve(workspace));
-  const absolute = isAbsolute(target) ? resolve(target) : resolve(root, target);
-  if (!delegatePaths.isWithin(root, absolute))
+  const absolute = isAbsolute(target) ? resolve(target) : resolve(workspace, target);
+  const canonical = await canonicalizeWithExistingAncestor(absolute);
+  if (!delegatePaths.isWithin(root, canonical)) {
+    if (delegatePaths.isWithin(resolve(workspace), absolute))
+      throw new Error('ACP file path escapes the delegation workspace through a symlink');
     throw new Error('ACP file path escapes the delegation workspace');
-  let probe = absolute;
+  }
+  if (writing) return canonical;
+  const actual = await realpath(absolute);
+  if (!delegatePaths.isWithin(root, actual))
+    throw new Error('ACP file path escapes the delegation workspace through a symlink');
+  return actual;
+}
+
+async function canonicalizeWithExistingAncestor(path: string): Promise<string> {
+  let probe = resolve(path);
+  const suffix: string[] = [];
   for (;;) {
     try {
       const actual = await realpath(probe);
-      if (!delegatePaths.isWithin(root, actual))
-        throw new Error('ACP file path escapes the delegation workspace through a symlink');
-      if (writing && probe !== absolute) return absolute;
-      return actual;
+      return resolve(actual, ...suffix.reverse());
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       const parent = resolve(probe, '..');
       if (parent === probe)
         throw new Error('ACP file path has no existing workspace parent', { cause: error });
+      suffix.push(probe.slice(parent.length + 1));
       probe = parent;
     }
   }
