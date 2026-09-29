@@ -27,7 +27,9 @@ Ferry is bring-your-own-key. Signup links and categories below are guidance; pla
 
 ## Subscription OAuth
 
-Opt-in integrations currently cover Claude Pro/Max, ChatGPT, and GitHub Copilot through pi-ai. These are unofficial clients. **A provider may suspend or ban an account for subscription use through Ferry; you accept that risk.** Prefer an API key or the provider's official CLI. Ferry requires an explicit warning acknowledgement for each login. OAuth tokens are held in the OS keyring. Subscription models are excluded from automatic routing unless explicitly enabled in Settings → Providers & Keys; manual selection remains available.
+Opt-in integrations exposed by the installed pi-ai OAuth loaders include Anthropic Claude Pro/Max, ChatGPT, GitHub Copilot, Kimi Code, Meta Muse, and xAI Grok. These are unofficial subscription clients. **A provider may suspend or ban an account for subscription use through Ferry; you accept that risk.** Ferry asks for a provider-specific warning acknowledgement before each first login. OAuth tokens are held in the OS keyring. Subscription models are excluded from automatic routing unless explicitly enabled in Settings → Providers & Keys; manual selection remains available.
+
+OpenRouter PKCE is an official OAuth flow. It returns a user-owned OpenRouter API key, which Ferry stores as the normal OpenRouter provider key. Radius is an advanced gateway OAuth flow and requires the gateway URL supplied by the user. Kilo, Qoder, and Cline account logins are listed as coming soon until their flows can be implemented from available documentation. Gemini CLI and Antigravity logins are unavailable: Gemini CLI was removed from pi-ai after Google ended that free login on 2026-06-18; Antigravity OAuth reuse led to bans.
 
 ## Practices Ferry does not support
 

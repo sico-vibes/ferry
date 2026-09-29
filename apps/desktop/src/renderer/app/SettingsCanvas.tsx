@@ -24,6 +24,7 @@ import type { Profile, Provider, StepKind, Tier } from '@ferry/shared';
 import type { RoutingSettings } from '@ferry/shared';
 import { Info } from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
+import { OAuthProviderRows } from './OAuthProviderRows';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
 const settingsPageCopy: Record<string, { title: string; description: string }> = {
   General: { title: 'Settings', description: 'Control how Ferry works across your workspaces.' },
@@ -179,6 +180,10 @@ export function SettingsCanvas() {
   const { data: providers = [] } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
+  });
+  const { data: oauthProviders = [] } = useQuery({
+    queryKey: ['oauth-providers'],
+    queryFn: () => client.oauth.list(),
   });
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
@@ -878,6 +883,17 @@ export function SettingsCanvas() {
               );
             })}
           </div>
+          <Section title="Subscription logins" className="mt-4">
+            <OAuthProviderRows
+              providers={oauthProviders}
+              onLogin={() => void navigate({ to: '/explore' })}
+              onLogout={(provider) =>
+                void client.oauth
+                  .logout(provider.id)
+                  .then(() => cache.invalidateQueries({ queryKey: ['oauth-providers'] }))
+              }
+            />
+          </Section>
           {providers.some((provider) => provider.tag === 'trial') && (
             <>
               <h3>Trial credits</h3>

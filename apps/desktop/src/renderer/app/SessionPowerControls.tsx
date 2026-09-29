@@ -426,6 +426,7 @@ export function ModelPickerPopover({
         body: error instanceof Error ? error.message : String(error),
       });
     } finally {
+      setOpen(false);
       if (selectionInFlight.current === ref) selectionInFlight.current = null;
     }
   };
@@ -465,7 +466,7 @@ export function ModelPickerPopover({
                   className="model-candidate auto"
                   value={`Auto ${autoModel}`}
                   onSelect={() => void select('auto')}
-                  onPointerDownCapture={() => void select('auto')}
+                  onClick={() => void select('auto')}
                 >
                   <strong>Auto (recommended)</strong>
                   <span>{autoModel} · Router’s current pick</span>
@@ -495,7 +496,7 @@ export function ModelPickerPopover({
                             key={model.ref}
                             value={`${model.name} ${model.tier} ${provider?.name ?? providerId} ${why} ${capacity === null ? '' : String(capacity)}`}
                             onSelect={() => void select(model.ref)}
-                            onPointerDownCapture={() => void select(model.ref)}
+                            onClick={() => void select(model.ref)}
                           >
                             <strong>
                               {model.name}

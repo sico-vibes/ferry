@@ -485,6 +485,7 @@ async function startSignalEvalChild(cwd: string, baseUrl: string) {
 }
 
 async function collectChild(child: ReturnType<typeof spawn>, timeoutMs: number) {
+  if (!child.stdout || !child.stderr) throw new Error('Eval child output streams are unavailable.');
   const started = Date.now();
   let text = '';
   let reportAt: number | undefined;
@@ -502,7 +503,7 @@ async function collectChild(child: ReturnType<typeof spawn>, timeoutMs: number) 
   }>((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
-      reject(new Error(`Eval child did not exit in ${timeoutMs}ms. Output: ${text}`));
+      reject(new Error(`Eval child did not exit in ${String(timeoutMs)}ms. Output: ${text}`));
     }, timeoutMs);
     child.once('error', (error) => {
       clearTimeout(timer);
@@ -525,6 +526,7 @@ async function waitForChildText(
   expected: string,
   timeoutMs: number,
 ) {
+  if (!child.stdout || !child.stderr) throw new Error('Eval child output streams are unavailable.');
   let text = '';
   child.stdout.setEncoding('utf8').on('data', (part: string) => {
     text += part;
