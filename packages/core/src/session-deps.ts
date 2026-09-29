@@ -11,7 +11,6 @@ import {
   ProviderIdSchema,
   ProviderSchema,
   RoutingSettingsSchema,
-  OAuthProviderIdSchema,
   UsageRecordSchema,
   QuotaObservationSchema,
   newId,
@@ -79,6 +78,7 @@ export function createSessionDependencies(
   providers: () => Provider[];
   apiKeys: Record<string, string>;
   providerFetch: typeof globalThis.fetch;
+  observe: (observation: RawCallObservation) => void;
 } {
   const apiKeys: Record<string, string> = {};
   const loadedApiKeys = new Set<string>();
@@ -133,6 +133,9 @@ export function createSessionDependencies(
               ? (cooldown.provenance ?? null)
               : null,
           dataUse: data_use,
+          dataUseTraining:
+            services.catalog.providers.find((item) => item.provider === provider)
+              ?.data_use_training ?? null,
           termsNote: terms_note,
           signupUrl: signup_url,
           docsUrl: docs_url,
@@ -147,7 +150,7 @@ export function createSessionDependencies(
         });
       },
     ),
-    ...OAuthProviderIdSchema.options.map((id) => {
+    ...[...new Set(oauthModelCatalog.map((model) => model.providerId))].map((id) => {
       const saved = services.providers.get(id);
       return ProviderSchema.parse({
         id,
@@ -156,7 +159,15 @@ export function createSessionDependencies(
             ? 'Anthropic Claude Pro/Max'
             : id === 'openai-codex'
               ? 'OpenAI ChatGPT'
-              : 'GitHub Copilot',
+              : id === 'github-copilot'
+                ? 'GitHub Copilot'
+                : id === 'kimi-coding'
+                  ? 'Kimi Code'
+                  : id === 'meta'
+                    ? 'Meta Muse'
+                    : id === 'xai'
+                      ? 'xAI Grok'
+                      : id,
         tag: 'subscription_oauth',
         kind: 'api',
         brand: null,
@@ -459,6 +470,7 @@ export function createSessionDependencies(
         step: stepKind,
         verifiedModelRefs,
         avoidTrainingProviders: routingSettings().avoidTrainingProviders,
+        trialOptInProviders: routingSettings().trialOptInProviders,
         textToolFallbackEnabled: routingSettings().textToolFallbackEnabled,
         now: services.clock.now().getTime(),
       });
@@ -477,6 +489,7 @@ export function createSessionDependencies(
         preferredModelRefs,
         verifiedModelRefs,
         routing: routingSettings(),
+        trialOptInProviders: routingSettings().trialOptInProviders,
         textToolFallbackEnabled: routingSettings().textToolFallbackEnabled,
         reliability: reliability(),
       });
@@ -494,7 +507,7 @@ export function createSessionDependencies(
     },
     async streamStep(req, signal) {
       const providerId = req.model.providerId;
-      if (OAuthProviderIdSchema.safeParse(providerId).success)
+      if (oauthModelCatalog.some((model) => model.providerId === providerId))
         return await streamOAuthStep(services.secrets, { ...req, signal });
       if (!loadedApiKeys.has(providerId)) {
         loadedApiKeys.add(providerId);
@@ -597,7 +610,7 @@ export function createSessionDependencies(
       }
     },
   };
-  return { gateway, usage, capacity, providers, apiKeys, providerFetch };
+  return { gateway, usage, capacity, providers, apiKeys, providerFetch, observe };
 }
 
 export function modelHintsFromRegistry(model: Pick<ModelInfo, 'capability'>): Partial<ModelHints> {

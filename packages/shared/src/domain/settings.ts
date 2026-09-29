@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { DelegationModeSchema, PermissionModeSchema, ThemeSchema } from './common.js';
-import { ProfileIdSchema } from './ids.js';
+import { ProfileIdSchema, ProviderIdSchema } from './ids.js';
 import { OptimizerTogglesSchema } from './profile.js';
 const RoutingSettingsFieldsSchema = z.object({
   stickySessions: z.boolean(),
@@ -10,6 +10,7 @@ const RoutingSettingsFieldsSchema = z.object({
   gentleQuotaRamp: z.boolean(),
   toolRejectionMemory: z.boolean(),
   carefulModelRetirement: z.boolean(),
+  trialOptInProviders: z.array(ProviderIdSchema),
   stickyTtlMinutes: z.number().int().min(1).max(1440),
   rampStart: z.number().min(0.01).max(1),
   rampFloor: z.number().min(0).max(1),
@@ -25,6 +26,7 @@ export const RoutingSettingsSchema = RoutingSettingsFieldsSchema.extend({
   toolRejectionMemory: z.boolean().default(true),
   carefulModelRetirement: z.boolean().default(true),
   avoidTrainingProviders: z.boolean().default(false),
+  trialOptInProviders: z.array(ProviderIdSchema).default([]),
   stickyTtlMinutes: z.number().int().min(1).max(1440).default(30),
   rampStart: z.number().min(0.01).max(1).default(0.2),
   rampFloor: z.number().min(0).max(1).default(0.1),

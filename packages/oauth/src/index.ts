@@ -23,7 +23,10 @@ import type { Message, ModelInfo } from '@ferry/shared';
 import { z } from 'zod';
 import type { SecretStore } from '@ferry/secrets';
 
-export type OAuthProviderId = 'anthropic' | 'openai-codex' | 'github-copilot';
+export type OAuthProviderId = string;
+export function isSupportedOAuthProvider(id: string): id is OAuthProviderId {
+  return /^[a-z0-9][a-z0-9-]*$/.test(id);
+}
 export type OAuthLoginEvent =
   | { type: 'open_url'; url: string; instructions?: string }
   | { type: 'device_code'; userCode: string; verificationUri: string; expiresInSeconds?: number }
@@ -33,12 +36,15 @@ export type OAuthLoginEvent =
 
 export interface OAuthProviderInfo {
   id: OAuthProviderId;
-  tag: 'subscription_oauth';
+  tag: 'subscription_oauth' | 'legit';
   name: string;
-  subscriptionRequired: true;
+  subscriptionRequired: boolean;
   models: string[];
-  riskLevel: 'high';
+  riskLevel: 'low' | 'medium' | 'high';
   riskText: string;
+  group: 'official' | 'subscription' | 'gateway';
+  advanced?: boolean;
+  actionAvailable: true;
 }
 
 export interface LoginOptions {
@@ -50,41 +56,94 @@ export interface LoginOptions {
   }): void;
   onProgress?(event: OAuthLoginEvent): void;
   signal?: AbortSignal;
+  gateway?: string;
 }
 
 const RISK_TEXT =
   'Unofficial subscription access may violate provider terms and lead to account suspension or a ban.';
-const loaders: Record<OAuthProviderId, () => Promise<{ auth: OAuthAuth; provider: Provider }>> = {
-  anthropic: async () => {
-    const { anthropicProvider } = await import('@earendil-works/pi-ai/providers/anthropic');
-    const provider = anthropicProvider();
-    if (!provider.auth.oauth) throw new Error('Anthropic OAuth is unavailable in pi-ai');
-    return { auth: provider.auth.oauth, provider };
-  },
-  'openai-codex': async () => {
-    const { openaiCodexProvider } = await import('@earendil-works/pi-ai/providers/openai-codex');
-    const provider = openaiCodexProvider();
-    if (!provider.auth.oauth) throw new Error('OpenAI Codex OAuth is unavailable in pi-ai');
-    return { auth: provider.auth.oauth, provider };
-  },
-  'github-copilot': async () => {
-    const { githubCopilotProvider } =
-      await import('@earendil-works/pi-ai/providers/github-copilot');
-    const provider = githubCopilotProvider();
-    if (!provider.auth.oauth) throw new Error('GitHub Copilot OAuth is unavailable in pi-ai');
-    return { auth: provider.auth.oauth, provider };
-  },
-};
-const names: Record<OAuthProviderId, string> = {
+const names: Record<string, string> = {
   anthropic: 'Anthropic Claude Pro/Max',
   'openai-codex': 'OpenAI ChatGPT',
   'github-copilot': 'GitHub Copilot',
+  openrouter: 'OpenRouter',
+  'kimi-coding': 'Kimi Code',
+  meta: 'Meta Muse',
+  xai: 'xAI Grok',
+  radius: 'Radius',
 };
-const secretKey = (id: OAuthProviderId) => `oauth:${id}`;
+type OAuthFlowLoader = (options?: { name?: string; gateway?: string }) => Promise<OAuthAuth>;
+let flowLoadersPromise: Promise<Map<string, OAuthFlowLoader>> | undefined;
+
+function providerIdFromLoaderName(name: string): string | undefined {
+  if (!/^load[A-Za-z0-9]+OAuth$/.test(name)) return undefined;
+  const flow = name.slice(4, -5);
+  const aliases: Record<string, string> = {
+    Anthropic: 'anthropic',
+    OpenAICodex: 'openai-codex',
+    GitHubCopilot: 'github-copilot',
+    OpenRouter: 'openrouter',
+    KimiCoding: 'kimi-coding',
+    Meta: 'meta',
+    Xai: 'xai',
+    Radius: 'radius',
+  };
+  return aliases[flow] ?? flow.replaceAll(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+}
+
+export function discoverOAuthFlowExports(
+  exports: Record<string, unknown>,
+): Map<string, OAuthFlowLoader> {
+  const flows = new Map<string, OAuthFlowLoader>();
+  for (const [name, loader] of Object.entries(exports)) {
+    const id = providerIdFromLoaderName(name);
+    if (id && typeof loader === 'function') flows.set(id, loader as OAuthFlowLoader);
+  }
+  return flows;
+}
+
+async function piOAuthFlowLoaders(): Promise<Map<string, OAuthFlowLoader>> {
+  flowLoadersPromise ??= (async () => {
+    const moduleUrl = new URL(
+      '../auth/oauth/load.js',
+      import.meta.resolve('@earendil-works/pi-ai/providers/all'),
+    );
+    const module = (await import(moduleUrl.href)) as Record<string, unknown>;
+    return discoverOAuthFlowExports(module);
+  })();
+  return flowLoadersPromise;
+}
+
+async function loadProvider(
+  id: string,
+  options?: { gateway?: string },
+): Promise<{ auth: OAuthAuth; provider: Provider }> {
+  const loader = (await piOAuthFlowLoaders()).get(id);
+  if (!loader) throw new Error(`Unsupported subscription OAuth provider: ${id}`);
+  const gateway = id === 'radius' ? validateRadiusGatewayUrl(options?.gateway ?? '') : undefined;
+  const auth = await loader(
+    id === 'radius' ? { name: 'Radius', gateway: gateway ?? '' } : undefined,
+  );
+  const module = (await import(`@earendil-works/pi-ai/providers/${id}`)) as Record<string, unknown>;
+  const constructor = Object.values(module).find(
+    (value): value is (options?: { gateway?: string }) => Provider =>
+      typeof value === 'function' && value.name.endsWith('Provider'),
+  );
+  if (!constructor) throw new Error(`pi-ai provider export is missing for ${id}`);
+  const provider = constructor(id === 'radius' ? { gateway: gateway ?? '' } : undefined);
+  return { auth, provider };
+}
+const secretKey = (id: OAuthProviderId) => (id === 'openrouter' ? 'openrouter' : `oauth:${id}`);
+
+export function validateRadiusGatewayUrl(gateway: string): string {
+  const url = new URL(gateway);
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
+    throw new Error('Radius gateway URL must be an HTTP(S) URL without embedded credentials');
+  return url.toString();
+}
 
 function providerId(id: string): OAuthProviderId {
-  if (Object.hasOwn(loaders, id)) return id as OAuthProviderId;
-  throw new Error(`Unsupported subscription OAuth provider: ${id}`);
+  if (isSupportedOAuthProvider(id)) return id;
+  throw new Error(`Unsupported subscription OAuth provider: ${String(id)}`);
 }
 
 function credentialStore(secrets: SecretStore): CredentialStore {
@@ -112,11 +171,13 @@ function credentialStore(secrets: SecretStore): CredentialStore {
     read,
     async list() {
       const entries = await Promise.all(
-        (Object.keys(loaders) as OAuthProviderId[]).map(async (id) =>
-          (await secrets.has(secretKey(id)))
-            ? { providerId: id, type: 'oauth' as const }
-            : undefined,
-        ),
+        [...(await piOAuthFlowLoaders()).keys()]
+          .filter((id) => id !== 'openrouter' && id !== 'radius')
+          .map(async (id) =>
+            (await secrets.has(secretKey(id)))
+              ? { providerId: id, type: 'oauth' as const }
+              : undefined,
+          ),
       );
       return entries.filter((item): item is NonNullable<typeof item> => item !== undefined);
     },
@@ -162,17 +223,42 @@ function credentialStore(secrets: SecretStore): CredentialStore {
 }
 
 export async function listOAuthProviders(): Promise<OAuthProviderInfo[]> {
+  const preferredOrder = [
+    'anthropic',
+    'openai-codex',
+    'github-copilot',
+    'openrouter',
+    'kimi-coding',
+    'meta',
+    'xai',
+    'radius',
+  ];
+  const preferredRanks = new Map(preferredOrder.map((id, index) => [id, index]));
+  const providerIds = [...(await piOAuthFlowLoaders()).keys()].sort(
+    (left, right) =>
+      (preferredRanks.get(left) ?? Number.MAX_SAFE_INTEGER) -
+        (preferredRanks.get(right) ?? Number.MAX_SAFE_INTEGER) || left.localeCompare(right),
+  );
   return await Promise.all(
-    (Object.keys(loaders) as OAuthProviderId[]).map(async (id) => {
-      const { provider } = await loaders[id]();
+    providerIds.map(async (id) => {
+      const { provider } = id === 'radius' ? { provider: undefined } : await loadProvider(id);
+      const official = id === 'openrouter';
+      const gateway = id === 'radius';
       return {
         id,
-        tag: 'subscription_oauth',
-        name: names[id],
-        subscriptionRequired: true,
-        models: provider.getModels().map((model) => model.name),
-        riskLevel: 'high',
-        riskText: RISK_TEXT,
+        tag: official ? 'legit' : 'subscription_oauth',
+        name: names[id] ?? id.replaceAll('-', ' ').replace(/^./, (letter) => letter.toUpperCase()),
+        subscriptionRequired: !official && !gateway,
+        models: provider?.getModels().map((model) => model.name) ?? [],
+        riskLevel: official ? 'low' : gateway ? 'medium' : 'high',
+        riskText: official
+          ? 'Official OpenRouter PKCE login. The user-owned API key is stored in the OS keyring.'
+          : gateway
+            ? 'Gateway OAuth uses the URL you provide. Review that gateway’s terms and trust boundary.'
+            : RISK_TEXT,
+        group: official ? 'official' : gateway ? 'gateway' : 'subscription',
+        ...(gateway ? { advanced: true } : {}),
+        actionAvailable: true,
       };
     }),
   );
@@ -228,6 +314,64 @@ export const oauthModelCatalog = [
     maxOutput: 128_000,
     reasoning: true,
   },
+  ...[
+    {
+      providerId: 'kimi-coding',
+      id: 'k3',
+      name: 'Kimi K3',
+      contextWindow: 1_048_576,
+      maxOutput: 131_072,
+    },
+    {
+      providerId: 'kimi-coding',
+      id: 'k3-256k',
+      name: 'Kimi K3-256K',
+      contextWindow: 262_144,
+      maxOutput: 131_072,
+    },
+    {
+      providerId: 'kimi-coding',
+      id: 'kimi-for-coding',
+      name: 'Kimi For Coding',
+      contextWindow: 1_048_576,
+      maxOutput: 32_768,
+    },
+    {
+      providerId: 'meta',
+      id: 'muse-spark-1.2',
+      name: 'Muse Spark 1.2',
+      contextWindow: 1_048_576,
+      maxOutput: 131_072,
+    },
+    {
+      providerId: 'meta',
+      id: 'muse-spark-1.3',
+      name: 'Muse Spark 1.3',
+      contextWindow: 1_048_576,
+      maxOutput: 131_072,
+    },
+    {
+      providerId: 'xai',
+      id: 'grok-4.5',
+      name: 'Grok 4.5',
+      contextWindow: 500_000,
+      maxOutput: 500_000,
+    },
+    {
+      providerId: 'xai',
+      id: 'grok-4.6',
+      name: 'Grok 4.6',
+      contextWindow: 500_000,
+      maxOutput: 500_000,
+    },
+    {
+      providerId: 'xai',
+      id: 'grok-4.7',
+      name: 'Grok 4.7',
+      contextWindow: 500_000,
+      maxOutput: 500_000,
+    },
+  ].map((model) => ({ ...model, reasoning: true })),
 ].map((model) =>
   ModelInfoSchema.parse({
     ref: ModelRefSchema.parse(`${model.providerId}/${model.id}`),
@@ -293,7 +437,10 @@ export async function startLoginWithAuth(
   };
   try {
     const credential = await auth.login(interaction);
-    await secrets.set(secretKey(key), JSON.stringify({ ...credential, type: 'oauth' }));
+    await secrets.set(
+      secretKey(key),
+      key === 'openrouter' ? credential.access : JSON.stringify({ ...credential, type: 'oauth' }),
+    );
     rememberSecret(credential.access);
     rememberSecret(credential.refresh);
     options.onProgress?.({ type: 'success' });
@@ -311,7 +458,10 @@ export async function startLogin(
   options: LoginOptions,
   secrets: SecretStore,
 ): Promise<void> {
-  const { auth } = await loaders[providerId(id)]();
+  const key = providerId(id);
+  const { auth } = await loadProvider(key, {
+    ...(options.gateway === undefined ? {} : { gateway: options.gateway }),
+  });
   return startLoginWithAuth(id, auth, options, secrets);
 }
 
@@ -344,27 +494,31 @@ export async function refresh(
   secrets: SecretStore,
   signal?: AbortSignal,
 ): Promise<OAuthCredential> {
-  const { auth } = await loaders[providerId(id)]();
+  const { auth } = await loadProvider(providerId(id));
   return await refreshWithAuth(id, auth, secrets, signal);
 }
 
 export async function logout(id: string, secrets: SecretStore): Promise<void> {
-  const value = await secrets.get(secretKey(providerId(id)));
+  const key = providerId(id);
+  const value = await secrets.get(secretKey(key));
   if (value) {
-    const credential = JSON.parse(value) as OAuthCredential;
-    await secrets.delete(secretKey(providerId(id)));
-    forgetSecret(credential.access);
-    forgetSecret(credential.refresh);
+    await secrets.delete(secretKey(key));
+    if (key !== 'openrouter') {
+      const credential = JSON.parse(value) as OAuthCredential;
+      forgetSecret(credential.access);
+      forgetSecret(credential.refresh);
+    }
     return;
   }
-  await secrets.delete(secretKey(providerId(id)));
+  await secrets.delete(secretKey(key));
 }
 
 /** The pi-ai streaming gateway retains native OAuth auth and tool-call events. */
 export async function createOAuthModelGateway(secrets: SecretStore) {
   const models = createModels({ credentials: credentialStore(secrets) });
-  for (const id of Object.keys(loaders) as OAuthProviderId[]) {
-    const { provider } = await loaders[id]();
+  for (const id of (await piOAuthFlowLoaders()).keys()) {
+    if (id === 'openrouter' || id === 'radius') continue;
+    const { provider } = await loadProvider(id);
     models.setProvider(provider);
   }
   return models;

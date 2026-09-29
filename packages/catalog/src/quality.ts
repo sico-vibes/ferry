@@ -200,7 +200,14 @@ export function rankFreeCodingModels(
         priors[normalizeModelId(candidate.id)] ??
         priors[normalizeModelId(`${candidate.providerId}/${candidate.id}`)] ??
         (family ? priors[`family:${normalizeModelId(family)}`] : undefined);
-      const confidence = evidence?.confidence ?? unmeasuredConfidence;
+      const confidence =
+        typeof evidence?.confidence === 'number' && Number.isFinite(evidence.confidence)
+          ? Math.min(1, Math.max(0, evidence.confidence))
+          : unmeasuredConfidence;
+      const qualityScore =
+        typeof evidence?.score === 'number' && Number.isFinite(evidence.score)
+          ? Math.min(1, Math.max(0, evidence.score))
+          : qualityBaseline;
       const penalty = qualityPenaltyForModel(`${candidate.name} ${candidate.id}`, confidence);
       const familyKey = family ?? normalizeModelId(candidate.id);
       const priorModelsInFamily = familyCounts.get(familyKey) ?? 0;
@@ -208,7 +215,7 @@ export function rankFreeCodingModels(
       const rankingPenalty = priorModelsInFamily * 0.08;
       return {
         ...candidate,
-        score: Math.max(0, (evidence?.score ?? qualityBaseline) - penalty - rankingPenalty),
+        score: Math.max(0, qualityScore - penalty - rankingPenalty),
         confidence,
         penalty,
         rankingPenalty,

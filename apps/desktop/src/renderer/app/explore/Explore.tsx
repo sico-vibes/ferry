@@ -22,6 +22,7 @@ import { useToasts } from '../../state/toasts';
 import { useUI } from '../../state/ui';
 import { ProviderKeyDialog } from '../ProviderKeyDialog';
 import { ModelQualityBadge } from '../ModelQualityBadge';
+import { OAuthProviderRows } from '../OAuthProviderRows';
 
 type ModelSort =
   | 'name'
@@ -206,21 +207,21 @@ export function ExploreCanvas() {
       {sort.key === key ? sort.ascending ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : null}
     </button>
   );
-  const loginOAuth = async () => {
-    if (!activeOAuthProvider || !riskAcknowledged) return;
+  const loginOAuth = async (provider = activeOAuthProvider, gateway?: string) => {
+    if (!provider || (provider.riskLevel === 'high' && !riskAcknowledged)) return;
     setOauthLoading(true);
     try {
       const acknowledged = settings?.subscriptionOAuthAcknowledged ?? [];
-      if (!acknowledged.includes(activeOAuthProvider.id))
+      if (provider.riskLevel === 'high' && !acknowledged.includes(provider.id))
         await client.settings.update({
-          subscriptionOAuthAcknowledged: [...acknowledged, activeOAuthProvider.id],
+          subscriptionOAuthAcknowledged: [...acknowledged, provider.id],
         });
-      await client.oauth.login(activeOAuthProvider.id);
+      await client.oauth.login(provider.id, ...(gateway ? [{ gateway }] : []));
       await cache.invalidateQueries({ queryKey: ['oauth-providers'] });
       pushToast({
         kind: 'success',
         title: 'Subscription login complete',
-        body: activeOAuthProvider.name,
+        body: provider.name,
       });
       setActiveOAuthProvider(null);
       setRiskAcknowledged(false);
@@ -233,6 +234,16 @@ export function ExploreCanvas() {
     } finally {
       setOauthLoading(false);
     }
+  };
+  const requestOAuthAction = (provider: OAuthProvider, gateway?: string) => {
+    if (provider.connected) {
+      void client.oauth
+        .logout(provider.id)
+        .then(() => cache.invalidateQueries({ queryKey: ['oauth-providers'] }));
+    } else if (provider.riskLevel === 'high') {
+      setActiveOAuthProvider(provider);
+      setRiskAcknowledged(settings?.subscriptionOAuthAcknowledged.includes(provider.id) ?? false);
+    } else void loginOAuth(provider, gateway);
   };
 
   return (
@@ -360,46 +371,12 @@ export function ExploreCanvas() {
             }}
           />
         )}
-        <Section title="Subscription (unofficial)" className="border border-warn/30 bg-warn/5">
-          <details>
-            <summary className="cursor-pointer text-label font-medium text-warn">
-              Optional subscription sign-in · account suspension risk
-            </summary>
-            <p className="my-3 text-body text-text-2">
-              Unofficial clients may violate provider terms. Your account could be suspended or
-              banned. Use an API key or the provider’s official CLI for supported access.
-            </p>
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,280px),1fr))] gap-2">
-              {oauthProviders.map((provider) => (
-                <article
-                  className="rounded-card border border-warn/20 bg-card p-3"
-                  key={provider.id}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <strong className="text-label text-text-1">{provider.name}</strong>
-                    <span className="rounded-pill bg-warn/10 px-2 py-1 text-meta text-warn">
-                      Unofficial · high risk
-                    </span>
-                  </div>
-                  <p className="my-2 text-meta text-text-3">{provider.models.join(' · ')}</p>
-                  <p className="text-meta text-warn">Account suspension or ban is possible.</p>
-                  <Pill
-                    className="mt-3"
-                    onClick={() => {
-                      setActiveOAuthProvider(provider);
-                      setRiskAcknowledged(
-                        settings?.subscriptionOAuthAcknowledged.includes(provider.id) ?? false,
-                      );
-                    }}
-                    size="sm"
-                    variant="outline"
-                  >
-                    {provider.connected ? 'Manage login' : 'Log in'}
-                  </Pill>
-                </article>
-              ))}
-            </div>
-          </details>
+        <Section title="OAuth logins">
+          <OAuthProviderRows
+            onLogin={requestOAuthAction}
+            onLogout={requestOAuthAction}
+            providers={oauthProviders}
+          />
         </Section>
         <Section title="Models" ariaLabel="Models" className="grid gap-3">
           <header className="flex flex-wrap items-end gap-3">
@@ -488,7 +465,10 @@ export function ExploreCanvas() {
                       <span className="ml-2 inline-block align-middle">
                         <ModelQualityBadge model={model} />
                       </span>
-                      {oauthProviders.some((provider) => model.providerId === provider.id) && (
+                      {oauthProviders.some(
+                        (provider) =>
+                          model.providerId === provider.id && provider.riskLevel === 'high',
+                      ) && (
                         <span
                           className="ml-2 rounded-pill bg-warn/10 px-2 py-0.5 text-meta text-warn"
                           title="Unofficial subscription access may lead to account suspension"
@@ -600,7 +580,7 @@ export function ExploreCanvas() {
         }}
       />
       <Dialog.Root
-        open={Boolean(activeOAuthProvider)}
+        open={activeOAuthProvider?.riskLevel === 'high'}
         onOpenChange={(open) => {
           if (!open) {
             setActiveOAuthProvider(null);

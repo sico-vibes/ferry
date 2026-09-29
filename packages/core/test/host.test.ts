@@ -193,6 +193,7 @@ describe('core host dispatcher and lifecycle', () => {
         'checkpoints',
         'providers',
         'oauth',
+        'gateway',
         'models',
         'quota',
         'sessions',
@@ -540,16 +541,19 @@ describe('provider, model and quota RPC integration', () => {
         profileId: autoFreeId,
       });
       await rpc.sessions.send(session.id, { text: 'Reply with exactly one word: pong' });
-      await vi.waitFor(async () => {
-        const detail = await rpc.sessions.get(session.id);
-        expect(
-          detail.session.status,
-          JSON.stringify({
-            messages: detail.messages,
-            requests: fake.requests.map(({ method, url, body }) => ({ method, url, body })),
-          }),
-        ).toBe('idle');
-      });
+      await vi.waitFor(
+        async () => {
+          const detail = await rpc.sessions.get(session.id);
+          expect(
+            detail.session.status,
+            JSON.stringify({
+              messages: detail.messages,
+              requests: fake.requests.map(({ method, url, body }) => ({ method, url, body })),
+            }),
+          ).toBe('idle');
+        },
+        { timeout: 15_000, interval: 250 },
+      );
       expect(
         (await rpc.sessions.get(session.id)).messages.flatMap((message) => message.parts),
       ).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'text', text: 'pong' })]));

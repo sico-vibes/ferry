@@ -1,0 +1,56 @@
+{
+  "model": "ferry/auto-free",
+  "stream": true,
+  "max_tokens": 4096,
+  "system": [
+    {
+      "type": "text",
+      "text": "You are Claude Code, an interactive coding assistant. Be accurate, inspect before changing, and use tools when useful."
+    },
+    {
+      "type": "text",
+      "text": "Preserve the user's existing work. Do not claim success without verification."
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "Read the project instructions and summarize the architecture." }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "Read",
+      "description": "Read a file",
+      "input_schema": {
+        "type": "object",
+        "properties": { "file_path": { "type": "string" } },
+        "required": ["file_path"]
+      }
+    },
+    {
+      "name": "Bash",
+      "description": "Run a shell command",
+      "input_schema": {
+        "type": "object",
+        "properties": { "command": { "type": "string" } },
+        "required": ["command"]
+      }
+    },
+    {
+      "name": "Edit",
+      "description": "Edit a file",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file_path": { "type": "string" },
+          "old_string": { "type": "string" },
+          "new_string": { "type": "string" }
+        },
+        "required": ["file_path", "old_string", "new_string"]
+      }
+    }
+  ]
+}

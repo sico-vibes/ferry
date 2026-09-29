@@ -25,6 +25,7 @@ import type { RoutingSettings } from '@ferry/shared';
 import type { UpdateSnapshot } from '../../main/update-state.js';
 import { Info } from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
+import { OAuthProviderRows } from './OAuthProviderRows';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
 const settingsPageCopy: Record<string, { title: string; description: string }> = {
   General: { title: 'Settings', description: 'Control how Ferry works across your workspaces.' },
@@ -35,6 +36,10 @@ const settingsPageCopy: Record<string, { title: string; description: string }> =
   'Providers & Keys': {
     title: 'Providers & Keys',
     description: 'Connect providers and review their access and data use.',
+  },
+  Gateway: {
+    title: 'Gateway',
+    description: 'Connect coding tools to Ferry’s local OpenAI and Anthropic compatible API.',
   },
   Advanced: { title: 'Advanced', description: 'Tune routing behavior, reliability, and recovery.' },
   Optimizers: {
@@ -159,6 +164,12 @@ export function SettingsCanvas() {
   const [addMcp, setAddMcp] = useState(false);
   const [mcpName, setMcpName] = useState('');
   const [mcpAddress, setMcpAddress] = useState('');
+  const [gatewayName, setGatewayName] = useState('');
+  const [gatewayProfile, setGatewayProfile] = useState('auto-free');
+  const [gatewaySecret, setGatewaySecret] = useState('');
+  const [gatewayKeyDrafts, setGatewayKeyDrafts] = useState<
+    Record<string, { allowedModels: string; rateLimit: string; profile: string }>
+  >({});
   const [benchmarkMode, setBenchmarkMode] = useState(
     () => localStorage.getItem('ferry.benchmarkMode') === 'true',
   );
@@ -192,6 +203,10 @@ export function SettingsCanvas() {
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
+  const { data: oauthProviders = [] } = useQuery({
+    queryKey: ['oauth-providers'],
+    queryFn: () => client.oauth.list(),
+  });
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
     queryFn: () => client.models.list(),
@@ -217,6 +232,42 @@ export function SettingsCanvas() {
     queryKey: ['system-info'],
     queryFn: () => client.system.info(),
   });
+  const gatewayQuery = useQuery({
+    queryKey: ['gateway-settings'],
+    queryFn: () => client.gateway.settings(),
+    enabled: section === 'Gateway',
+  });
+  const gatewayKeysQuery = useQuery({
+    queryKey: ['gateway-keys'],
+    queryFn: () => client.gateway.listKeys(),
+    enabled: section === 'Gateway',
+  });
+  const gateway = gatewayQuery.data;
+  const gatewayStatus = gateway?.status;
+  const gatewayPort = gateway?.port ?? 11435;
+  const gatewayHost = gatewayStatus?.url ?? `http://127.0.0.1:${String(gatewayPort)}`;
+  const updateGateway = async (
+    patch: Partial<{ enabled: boolean; port: number; allowLan: boolean }>,
+  ) => {
+    if (!gateway) return;
+    await client.gateway.setSettings({
+      enabled: gateway.enabled,
+      port: gateway.port,
+      allowLan: gateway.allowLan,
+      ...patch,
+    });
+    await cache.invalidateQueries({ queryKey: ['gateway-settings'] });
+  };
+  const createGatewayKey = async () => {
+    if (!gatewayName.trim()) return;
+    const created = await client.gateway.createKey({
+      name: gatewayName.trim(),
+      profile: gatewayProfile,
+    });
+    setGatewaySecret(created.secret);
+    setGatewayName('');
+    await cache.invalidateQueries({ queryKey: ['gateway-keys'] });
+  };
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
   const fallbackChain = profileDraft?.fallbackChain ?? [];
   const [chainDragIndex, setChainDragIndex] = useState<number | null>(null);
@@ -854,6 +905,55 @@ export function SettingsCanvas() {
               );
             })}
           </div>
+          <Section title="Subscription logins" className="mt-4">
+            <OAuthProviderRows
+              providers={oauthProviders}
+              onLogin={() => void navigate({ to: '/explore' })}
+              onLogout={(provider) =>
+                void client.oauth
+                  .logout(provider.id)
+                  .then(() => cache.invalidateQueries({ queryKey: ['oauth-providers'] }))
+              }
+            />
+          </Section>
+          {providers.some((provider) => provider.tag === 'trial') && (
+            <>
+              <h3>Trial credits</h3>
+              <p className="muted">
+                Trial providers are excluded from automatic routing until you opt in. Using trial
+                credits can consume a limited balance.
+              </p>
+              {providers
+                .filter((provider) => provider.tag === 'trial')
+                .map((provider) => {
+                  const optedIn =
+                    settings?.routing.trialOptInProviders.includes(provider.id) ?? false;
+                  return (
+                    <SettingRow
+                      key={provider.id}
+                      title={provider.name}
+                      helper="Allow Auto-Free, planner/editor roles, and the gateway to use this provider's trial credits."
+                    >
+                      <Switch
+                        label={`Use trial credits for ${provider.name}`}
+                        checked={optedIn}
+                        onCheckedChange={(enabled) => {
+                          if (!settings) return;
+                          const trialOptInProviders = enabled
+                            ? [...new Set([...settings.routing.trialOptInProviders, provider.id])]
+                            : settings.routing.trialOptInProviders.filter(
+                                (id) => id !== provider.id,
+                              );
+                          void update({
+                            routing: { ...settings.routing, trialOptInProviders },
+                          });
+                        }}
+                      />
+                    </SettingRow>
+                  );
+                })}
+            </>
+          )}
           <SettingRow
             title="Allow subscription OAuth models in routing"
             helper="When off, Auto-Free and Best Available never choose subscription logins. OAuth models remain available for manual selection."
@@ -870,6 +970,237 @@ export function SettingsCanvas() {
             Open in Explore
           </Pill>
         </Group>
+      );
+    if (section === 'Gateway')
+      return (
+        <>
+          <Group title="Local API gateway">
+            <p className="settings-helper">
+              Other coding tools send requests to Ferry. Ferry keeps provider credentials local and
+              applies your routing, quota, and avoid-training settings.
+            </p>
+            <SettingRow
+              title="Enable Gateway"
+              helper="Localhost only by default. LAN access makes this API reachable to other devices on your network."
+            >
+              <Switch
+                label="Enable Gateway"
+                checked={gateway?.enabled ?? false}
+                onCheckedChange={(enabled) => void updateGateway({ enabled })}
+              />
+            </SettingRow>
+            <SettingRow
+              title="Port"
+              helper={`Status: ${gatewayStatus?.running ? `Running at ${String(gatewayStatus.url)}` : 'Stopped'}${gatewayStatus?.port && gatewayStatus.port !== gatewayPort ? ` Port ${String(gatewayPort)} was busy; using ${String(gatewayStatus.port)}` : ''}`}
+            >
+              <TextField
+                label="Port"
+                value={String(gatewayPort)}
+                onChange={(value) => {
+                  const port = Number(value);
+                  if (Number.isInteger(port) && port >= 0 && port <= 65535)
+                    void updateGateway({ port });
+                }}
+              />
+            </SettingRow>
+            <SettingRow
+              title="Allow LAN connections"
+              helper="Binds on all network interfaces. Only enable this on a trusted network, and do not share gateway keys."
+            >
+              <Switch
+                label="Allow LAN connections"
+                checked={gateway?.allowLan ?? false}
+                onCheckedChange={(allowLan) => void updateGateway({ allowLan })}
+              />
+            </SettingRow>
+            <p className="settings-helper">
+              Providers’ free tiers are per person. Don’t share Ferry gateway keys.
+            </p>
+          </Group>
+          <Group title="Create a Ferry key">
+            <TextField
+              label="Key name"
+              value={gatewayName}
+              onChange={setGatewayName}
+              placeholder="OpenCode on my laptop"
+            />
+            <Select
+              label="Routing profile"
+              value={gatewayProfile}
+              onValueChange={setGatewayProfile}
+              options={[
+                { value: 'auto-free', label: 'Auto-Free' },
+                { value: 'best', label: 'Best Available' },
+                { value: 'fast', label: 'Fast' },
+                { value: 'long-context', label: 'Long Context' },
+                ...profiles
+                  .filter((profile) => !profile.builtin)
+                  .map((profile) => ({ value: profile.id, label: profile.name })),
+              ]}
+            />
+            <Pill disabled={!gatewayName.trim()} onClick={() => void createGatewayKey()}>
+              Create key
+            </Pill>
+          </Group>
+          <Group title="Gateway keys">
+            {(gatewayKeysQuery.data ?? []).map((key) => (
+              <div className="settings-row" key={key.id}>
+                <div>
+                  {(() => {
+                    const draft = gatewayKeyDrafts[key.id] ?? {
+                      allowedModels: key.allowedModels.join(', '),
+                      rateLimit: key.rateLimit === null ? '' : String(key.rateLimit),
+                      profile: key.profile,
+                    };
+                    return (
+                      <>
+                        <strong>{key.name}</strong>
+                        <p>
+                          {key.profile} · {key.usage.requests} requests ·{' '}
+                          {key.lastUsedAt
+                            ? `Last used ${new Date(key.lastUsedAt).toLocaleString()}`
+                            : 'Never used'}
+                        </p>
+                        <TextField
+                          label="Allowed model IDs (blank means all enabled models)"
+                          value={draft.allowedModels}
+                          onChange={(value) => {
+                            setGatewayKeyDrafts((current) => ({
+                              ...current,
+                              [key.id]: { ...draft, allowedModels: value },
+                            }));
+                          }}
+                        />
+                        <Select
+                          label="Routing profile"
+                          value={draft.profile}
+                          onValueChange={(profile) => {
+                            setGatewayKeyDrafts((current) => ({
+                              ...current,
+                              [key.id]: { ...draft, profile },
+                            }));
+                          }}
+                          options={[
+                            { value: 'auto-free', label: 'Auto-Free' },
+                            { value: 'best', label: 'Best Available' },
+                            { value: 'fast', label: 'Fast' },
+                            { value: 'long-context', label: 'Long Context' },
+                            ...profiles
+                              .filter((profile) => !profile.builtin)
+                              .map((profile) => ({ value: profile.id, label: profile.name })),
+                          ]}
+                        />
+                        <TextField
+                          label="Requests per minute (blank means unlimited)"
+                          value={draft.rateLimit}
+                          onChange={(value) => {
+                            setGatewayKeyDrafts((current) => ({
+                              ...current,
+                              [key.id]: { ...draft, rateLimit: value },
+                            }));
+                          }}
+                        />
+                        <Pill
+                          onClick={() => {
+                            const rateLimit = draft.rateLimit.trim()
+                              ? Number(draft.rateLimit)
+                              : null;
+                            if (
+                              rateLimit !== null &&
+                              (!Number.isInteger(rateLimit) || rateLimit < 1)
+                            )
+                              return;
+                            const allowedModels = draft.allowedModels
+                              .split(',')
+                              .map((item) => item.trim())
+                              .filter(Boolean);
+                            void client.gateway
+                              .updateKey({
+                                id: key.id,
+                                patch: { allowedModels, rateLimit, profile: draft.profile },
+                              })
+                              .then(() => {
+                                setGatewayKeyDrafts((current) => {
+                                  const { [key.id]: _removed, ...next } = current;
+                                  return next;
+                                });
+                                return cache.invalidateQueries({ queryKey: ['gateway-keys'] });
+                              });
+                          }}
+                        >
+                          Save key settings
+                        </Pill>
+                        <Switch
+                          label="Compress tool results"
+                          checked={key.compressToolResults}
+                          onCheckedChange={(compressToolResults) =>
+                            void client.gateway
+                              .updateKey({ id: key.id, patch: { compressToolResults } })
+                              .then(() => cache.invalidateQueries({ queryKey: ['gateway-keys'] }))
+                          }
+                        />
+                        <Switch
+                          label="Terse system prompt"
+                          checked={key.terseSystemPrompt}
+                          onCheckedChange={(terseSystemPrompt) =>
+                            void client.gateway
+                              .updateKey({ id: key.id, patch: { terseSystemPrompt } })
+                              .then(() => cache.invalidateQueries({ queryKey: ['gateway-keys'] }))
+                          }
+                        />
+                      </>
+                    );
+                  })()}
+                </div>
+                {!key.revokedAt && (
+                  <Pill
+                    variant="outline"
+                    onClick={() =>
+                      void client.gateway
+                        .revokeKey(key.id)
+                        .then(() => cache.invalidateQueries({ queryKey: ['gateway-keys'] }))
+                    }
+                  >
+                    Revoke
+                  </Pill>
+                )}
+              </div>
+            ))}
+            {gatewayKeysQuery.data?.length === 0 && (
+              <p className="settings-helper">No gateway keys yet.</p>
+            )}
+          </Group>
+          <Group title="Client setup">
+            <pre>
+              {JSON.stringify(
+                {
+                  $schema: 'https://opencode.ai/config.json',
+                  provider: {
+                    ferry: {
+                      npm: '@ai-sdk/openai-compatible',
+                      name: 'Ferry',
+                      options: { baseURL: `${gatewayHost}/v1`, apiKey: 'YOUR_FERRY_GATEWAY_KEY' },
+                      models: Object.fromEntries(
+                        [
+                          'ferry/auto-free',
+                          'ferry/best',
+                          'ferry/fast',
+                          'ferry/long-context',
+                          ...models.map((model) => model.ref),
+                        ].map((id) => [id, { name: id }]),
+                      ),
+                    },
+                  },
+                },
+                null,
+                2,
+              )}
+            </pre>
+            <pre>{`Aider (PowerShell):\n$env:OPENAI_API_BASE = '${gatewayHost}/v1'\n$env:OPENAI_API_KEY = 'YOUR_FERRY_GATEWAY_KEY'\naider --model ferry/auto-free`}</pre>
+            <pre>{`Cline / Roo Code / Kilo: choose OpenAI Compatible, then set Base URL ${gatewayHost}/v1, API key YOUR_FERRY_GATEWAY_KEY, and model ferry/auto-free.\n\nContinue config.yaml:\nmodels:\n  - name: Ferry Auto-Free\n    provider: openai\n    model: ferry/auto-free\n    apiBase: ${gatewayHost}/v1\n    apiKey: YOUR_FERRY_GATEWAY_KEY`}</pre>
+            <pre>{`Claude Code (PowerShell):\n$env:ANTHROPIC_BASE_URL = '${gatewayHost}'\n$env:ANTHROPIC_AUTH_TOKEN = 'YOUR_FERRY_GATEWAY_KEY'\nclaude`}</pre>
+          </Group>
+        </>
       );
     if (section === 'Advanced')
       return (
@@ -1547,6 +1878,29 @@ export function SettingsCanvas() {
               }}
             >
               Add server
+            </Pill>
+          </div>
+        </div>
+      </Dialog>
+      <Dialog
+        open={Boolean(gatewaySecret)}
+        onOpenChange={(open) => {
+          if (!open) setGatewaySecret('');
+        }}
+        title="Copy your Ferry key"
+        description="This key is shown once. Copy it into your coding tool now. Ferry stores only its hash."
+      >
+        <div className="dialog-form">
+          <pre>{gatewaySecret}</pre>
+          <div className="button-row dialog-actions">
+            <Pill onClick={() => void navigator.clipboard.writeText(gatewaySecret)}>Copy key</Pill>
+            <Pill
+              variant="blue-tint"
+              onClick={() => {
+                setGatewaySecret('');
+              }}
+            >
+              Done
             </Pill>
           </div>
         </div>

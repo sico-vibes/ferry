@@ -150,9 +150,8 @@ describe('Explore providers and models', () => {
     const user = userEvent.setup();
     setup();
     await user.click(
-      await screen.findByText(/Optional subscription sign-in · account suspension risk/),
+      await screen.findByRole('button', { name: 'Log in to Anthropic Claude Pro/Max' }),
     );
-    await user.click(await screen.findByRole('button', { name: 'Log in' }));
     const proceed = screen.getByRole('button', { name: 'Log in anyway' });
     expect(proceed.hasAttribute('disabled')).toBe(true);
     await user.click(screen.getByLabelText('I understand my account may be suspended'));

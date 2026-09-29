@@ -3,8 +3,17 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { generateText, type LanguageModel } from 'ai';
+import {
+  generateText,
+  jsonSchema,
+  streamText,
+  type FlexibleSchema,
+  type LanguageModel,
+  type ModelMessage,
+  type ToolSet,
+} from 'ai';
 import { loadCatalog } from '@ferry/catalog';
+export type { ModelMessage } from 'ai';
 import {
   ProviderIdSchema,
   ModelInfoSchema,
@@ -111,6 +120,7 @@ function createCompatible(
   const provider = createOpenAICompatible({
     name,
     baseURL,
+    includeUsage: true,
     ...(options.apiKey ? { apiKey: options.apiKey } : {}),
     headers,
     ...(options.fetch ? { fetch: options.fetch } : {}),
@@ -220,6 +230,97 @@ export function createLanguageModel(ref: ModelRef, opts: ModelFactoryOptions): L
         throw new Error(`Custom OpenAI-compatible provider ${providerId} requires baseUrl`);
       return createCompatible(providerId, modelId, opts, opts.baseUrl, headers);
   }
+}
+
+export interface ProviderChatInput {
+  model: ModelRef;
+  apiKey: string;
+  messages: ModelMessage[];
+  system?: string;
+  tools?: { name: string; description?: string; parameters: Record<string, unknown> }[];
+  toolChoice?: 'auto' | 'none' | 'required' | { name: string };
+  maxTokens?: number;
+  temperature?: number;
+  jsonMode?: boolean;
+  fetch?: typeof globalThis.fetch;
+  baseUrl?: string;
+  signal?: AbortSignal;
+  onText?: (text: string) => void;
+  onToolCall?: (call: { id: string; name: string; arguments: string }) => void;
+  onObservation?: (observation: RawCallObservation) => void;
+}
+
+/** Execute one provider chat turn and return normalized text, tools, usage, and finish state. */
+export async function streamProviderChat(input: ProviderChatInput) {
+  const model = createLanguageModel(input.model, {
+    apiKey: input.apiKey,
+    ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+    fetch: createObservedFetch(
+      input.onObservation ?? (() => undefined),
+      {
+        providerId: providerFromRef(input.model),
+        model: input.model,
+      },
+      input.fetch ?? globalThis.fetch,
+    ),
+  });
+  const sdkTools = Object.fromEntries(
+    (input.tools ?? []).map((entry) => [
+      entry.name,
+      {
+        description: entry.description,
+        inputSchema: jsonSchema(entry.parameters) as FlexibleSchema<unknown>,
+        execute: (value: unknown) => Promise.resolve(value),
+      },
+    ]),
+  ) as ToolSet;
+  const result = streamText({
+    model,
+    ...(input.system ? { system: input.system } : {}),
+    messages: input.messages,
+    ...(input.tools?.length ? { tools: sdkTools } : {}),
+    ...(input.toolChoice
+      ? {
+          toolChoice:
+            input.toolChoice === 'auto' ||
+            input.toolChoice === 'none' ||
+            input.toolChoice === 'required'
+              ? input.toolChoice
+              : { type: 'tool', toolName: input.toolChoice.name },
+        }
+      : {}),
+    ...(input.maxTokens ? { maxOutputTokens: input.maxTokens } : {}),
+    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    ...(input.jsonMode ? { responseFormat: { type: 'json' as const } } : {}),
+    ...(input.signal ? { abortSignal: input.signal } : {}),
+    maxRetries: 0,
+  });
+  let text = '';
+  const toolCalls: { id: string; name: string; arguments: string }[] = [];
+  for await (const part of result.stream) {
+    if (part.type === 'text-delta') {
+      text += part.text;
+      input.onText?.(part.text);
+    } else if (part.type === 'tool-call') {
+      const call = {
+        id: part.toolCallId,
+        name: part.toolName,
+        arguments: JSON.stringify(part.input),
+      };
+      toolCalls.push(call);
+      input.onToolCall?.(call);
+    } else if (part.type === 'error') {
+      throw part.error;
+    }
+  }
+  const [usage, finishReason] = await Promise.all([result.usage, result.finishReason]);
+  return {
+    text,
+    toolCalls,
+    inputTokens: usage.inputTokens ?? 0,
+    outputTokens: usage.outputTokens ?? 0,
+    finishReason: finishReason === 'tool-calls' ? 'tool_calls' : finishReason,
+  };
 }
 
 function isRateLimitHeader(name: string): boolean {
