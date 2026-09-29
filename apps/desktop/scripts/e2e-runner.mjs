@@ -10,6 +10,27 @@ const phases = [
 ];
 const results = [];
 
+// The Electron phases launch `out/main`; rebuild it so main/preload changes are what gets tested.
+if (process.env.FERRY_SKIP_ELECTRON_BUILD !== '1') {
+  console.log('\n=== E2E: electron-vite build ===');
+  const electronVite = join(
+    dirname(scriptsDirectory),
+    'node_modules',
+    'electron-vite',
+    'bin',
+    'electron-vite.js',
+  );
+  const build = spawnSync(process.execPath, [electronVite, 'build'], {
+    cwd: dirname(scriptsDirectory),
+    stdio: 'inherit',
+    env: process.env,
+  });
+  if (build.status !== 0) {
+    console.error('electron-vite build failed');
+    process.exit(1);
+  }
+}
+
 for (const [label, script] of phases) {
   console.log(`\n=== E2E: ${label} ===`);
   const result = spawnSync(process.execPath, [join(scriptsDirectory, script)], {
