@@ -259,6 +259,21 @@ export async function verifyScenario(id, root, before, after, explanation) {
       fileDigest(before) === fileDigest(after) &&
       /intentional|assertion|test\.js/i.test(explanation)
     );
+  if (id === 'diagnose-noisy-tests')
+    return (
+      fileDigest(before) === fileDigest(after) &&
+      /math\.test\.js/i.test(explanation) &&
+      /42/.test(explanation) &&
+      /41/.test(explanation)
+    );
+  if (id === 'diagnose-noisy-build') {
+    const paths = explanation.match(/module-\d+\.ts/gi) ?? [];
+    return (
+      fileDigest(before) === fileDigest(after) &&
+      /typescript|type error|diagnostic/i.test(explanation) &&
+      new Set(paths).size >= 2
+    );
+  }
   if (id === 'crlf-edit') {
     const bytes = await readFile(join(root, 'README.md')).catch(() => Buffer.alloc(0));
     const text = bytes.toString('utf8');

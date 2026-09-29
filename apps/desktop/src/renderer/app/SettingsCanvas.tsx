@@ -1423,10 +1423,21 @@ export function SettingsCanvas() {
             />
           </SettingRow>
           <div className="stats-summary">
-            <strong>
-              {optimizerStats?.today.savedTokens.toLocaleString() ?? '0'} tokens saved today
-            </strong>
-            <span>{optimizerStats?.today.percent ?? 0}% · demo measurement</span>
+            {!optimizerStats || optimizerStats.demo ? (
+              <>
+                <strong>No optimizer measurements yet</strong>
+                <span>Only recorded token counts appear here.</span>
+              </>
+            ) : (
+              <>
+                <strong>
+                  {optimizerStats.today.savedTokens.toLocaleString()} measured tokens saved today
+                </strong>
+                <span>
+                  {optimizerStats.today.percent}% · {optimizerStats.today.samples} recorded events
+                </span>
+              </>
+            )}
           </div>
         </Group>
       );

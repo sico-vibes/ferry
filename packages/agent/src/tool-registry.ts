@@ -11,6 +11,7 @@ import {
 import type { MessagePart, PermissionMode, TaskRecord, ToolOutput } from '@ferry/shared';
 import { CheckpointIdSchema, newId, PartIdSchema } from '@ferry/shared';
 import type { PermissionRule } from '@ferry/workspace';
+import { detectOutputKind, estimateTokens } from '@ferry/optimizer';
 
 export interface ToolContext {
   signal: AbortSignal;
@@ -51,9 +52,9 @@ export interface ToolRegistryOptions {
   permissionRules?: PermissionRule[];
   onPart(part: MessagePart): void;
   onOptimizerEvent?(event: {
-    tool: string;
-    originalTokens: number;
-    filteredTokens: number;
+    kind: string;
+    beforeTokens: number;
+    afterTokens: number;
     recoveryHandle: string | null;
   }): void;
   requestApproval(request: ApprovalRequest): Promise<'allowed_once' | 'allowed_always' | 'denied'>;
@@ -317,20 +318,22 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
           filteredTokens: estimateTokens(filtered.text),
           recoveryHandle: filtered.recoveryHandle ?? null,
         };
-        if (output.filtered)
-          options.onOptimizerEvent?.({
-            tool: definition.name,
-            originalTokens: output.originalTokens ?? estimateTokens(text),
-            filteredTokens: output.filteredTokens ?? estimateTokens(output.text),
-            recoveryHandle: output.recoveryHandle,
-          });
+        options.onOptimizerEvent?.({
+          kind:
+            definition.name === 'read_file'
+              ? 'filesystem'
+              : detectOutputKind(
+                  definition.name === 'run_command'
+                    ? (args as z.infer<typeof CommandSchema>).command
+                    : definition.name,
+                ),
+          beforeTokens: output.originalTokens ?? estimateTokens(text),
+          afterTokens: output.filteredTokens ?? estimateTokens(output.text),
+          recoveryHandle: output.recoveryHandle,
+        });
         return { value, output };
       },
     };
   };
   return { tools: defs.map(guard), workspace, guard };
-}
-
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
 }

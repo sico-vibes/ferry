@@ -3,6 +3,7 @@ import { measured, type OptimizationResult } from './measurement.js';
 import type { BlobStore } from './recovery.js';
 
 export interface ContextMessage {
+  key?: string;
   role: string;
   content: string;
   step?: number;

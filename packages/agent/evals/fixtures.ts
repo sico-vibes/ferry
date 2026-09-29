@@ -1,4 +1,5 @@
-export type AgentEvalTemplate = 'typescript' | 'crlf' | 'large' | 'monorepo';
+export type AgentEvalTemplate =
+  'typescript' | 'crlf' | 'large' | 'monorepo' | 'noisy-test' | 'noisy-build';
 
 export interface AgentEvalFixture {
   id: string;
@@ -57,6 +58,28 @@ export const AGENT_EVALS: readonly AgentEvalFixture[] = [
     prompt: 'Diagnose the failing test without making changes.',
     template: 'typescript',
     acceptance: ['correct failure diagnosis', 'working tree remains unchanged'],
+  },
+  {
+    id: 'diagnose-noisy-tests',
+    title: 'Diagnose a failing noisy test suite',
+    prompt:
+      'Run pnpm test and diagnose the failing test, assertion, and file. Do not change files.',
+    template: 'noisy-test',
+    acceptance: [
+      'identifies math.test.js and the expected 42 versus received 41 assertion',
+      'working tree remains unchanged',
+    ],
+  },
+  {
+    id: 'diagnose-noisy-build',
+    title: 'Diagnose a build with many diagnostics',
+    prompt:
+      'Run pnpm run build and summarize the failure, naming at least two affected paths. Do not change files.',
+    template: 'noisy-build',
+    acceptance: [
+      'identifies TypeScript diagnostics and at least two affected paths',
+      'working tree remains unchanged',
+    ],
   },
   {
     id: 'multi-file-refactor',

@@ -28,6 +28,19 @@ const templates: Record<string, Record<string, string>> = {
     'test.js':
       "import { result } from './packages/b/src/index.js';\nif (result !== 42) throw new Error('expected 42');\n",
   },
+  'noisy-test': {
+    'package.json':
+      '{"name":"fixture-noisy-tests","scripts":{"test":"node test.js"},"type":"module"}\n',
+    'math.test.js': 'export const actual = 41;\n',
+    'test.js':
+      "import { actual } from './math.test.js';\nconsole.log(Array.from({length: 1200}, (_, i) => `PASS src/generated-${i}.test.js > generated case ${i}`).join('\\n'));\nconsole.error('FAIL src/math.test.js > addition > returns 42');\nconsole.error('AssertionError: expected 42, received ' + actual);\nconsole.error(' at src/math.test.js:8:12');\nprocess.exitCode = 1;\n",
+  },
+  'noisy-build': {
+    'package.json':
+      '{"name":"fixture-noisy-build","scripts":{"build":"node build.js"},"type":"module"}\n',
+    'build.js':
+      "for (let i = 0; i < 180; i += 1) console.error(`src/modules/module-${i}.ts:${i + 1}:5: error TS2322: Type 'string' is not assignable to type 'number'.`);\nconsole.error('Found 180 errors in 180 files. Build failed.');\nprocess.exitCode = 2;\n",
+  },
 };
 export async function createFixtureRepo(
   template: keyof typeof templates = 'typescript',

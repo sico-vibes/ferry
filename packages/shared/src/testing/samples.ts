@@ -299,7 +299,7 @@ export const sampleDelegationRun: DelegationRun = {
 };
 export const sampleOptimizerStats: OptimizerStats = {
   demo: true,
-  today: { savedTokens: 100, percent: 5 },
+  today: { savedTokens: 100, percent: 5, samples: 1 },
   byOptimizer: [{ id: 'terse', name: 'Terse', enabled: true, savedTokens: 100, percent: 5 }],
 };
 export const sampleSettings: Settings = {

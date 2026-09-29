@@ -9,20 +9,9 @@ export function createSettings() {
     },
     optimizerStats: {
       ...sampleOptimizerStats,
-      today: { savedTokens: 182400, percent: 38 },
-      byOptimizer: [
-        ['tool-output-filters', 'Tool-output filters', true, 61],
-        ['context-hygiene', 'Context hygiene', true, 22],
-        ['terse', 'Terse output', false, 9],
-        ['recovery-handles', 'Recovery handles', true, 0],
-        ['rtk', 'RTK', false, 0],
-      ].map(([id, name, enabled, percent]) => ({
-        id: String(id),
-        name: String(name),
-        enabled: Boolean(enabled),
-        savedTokens: Math.round((182400 * Number(percent)) / 100),
-        percent: Number(percent),
-      })),
+      demo: true,
+      today: { savedTokens: 0, percent: 0, samples: 0 },
+      byOptimizer: [],
     },
   };
 }
