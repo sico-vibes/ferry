@@ -357,9 +357,16 @@ try {
   });
   process.exitCode = 1;
 } finally {
-  await rpc?.close?.().catch(() => undefined);
-  await host?.stop().catch(() => undefined);
-  await services?.dispose().catch(() => undefined);
+  // close/stop/dispose may be synchronous; never let cleanup mask the real result.
+  await Promise.resolve()
+    .then(() => rpc?.close?.())
+    .catch(() => undefined);
+  await Promise.resolve()
+    .then(() => host?.stop?.())
+    .catch(() => undefined);
+  await Promise.resolve()
+    .then(() => services?.dispose?.())
+    .catch(() => undefined);
   await rm(scratchRoot, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
   console.log('\nLive delegation results');
   console.table(rows);
