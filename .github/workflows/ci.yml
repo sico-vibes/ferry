@@ -27,7 +27,7 @@ jobs:
       - if: runner.os == 'Windows'
         uses: ./.github/actions/setup-msvc-node-gyp
       - run: pnpm install --frozen-lockfile
-      - run: pnpm turbo run typecheck lint test --continue --concurrency=50%
+      - run: pnpm run check:tasks
       - if: ${{ !cancelled() }}
         run: pnpm exec tsc --noEmit -p scripts/tsconfig.json
       - if: ${{ !cancelled() }}

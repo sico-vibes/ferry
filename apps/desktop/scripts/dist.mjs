@@ -176,6 +176,8 @@ async function buildDistribution() {
       '--win',
       'nsis',
       'portable',
+      '--publish',
+      'never',
     ],
   ]) {
     await run(process.execPath, args, packageRoot);
