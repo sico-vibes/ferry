@@ -62,6 +62,8 @@ export async function startGatewayDaemon(dataDir: string): Promise<GatewayStatus
 }
 
 async function isRunning(status: GatewayStatusFile): Promise<boolean> {
+  if (!Number.isSafeInteger(status.pid) || status.pid <= 1 || status.pid === process.pid)
+    return false;
   try {
     process.kill(status.pid, 0);
     const response = await fetch(`${status.url}/health`, { signal: AbortSignal.timeout(1_000) });
@@ -84,6 +86,8 @@ export async function stopGatewayDaemon(dataDir: string): Promise<boolean> {
     await clearGatewayStatus(dataDir);
     return false;
   }
+  if (!Number.isSafeInteger(status.pid) || status.pid <= 1 || status.pid === process.pid)
+    throw new Error('Refusing to stop an invalid gateway process ID.');
   process.kill(status.pid, 'SIGTERM');
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {

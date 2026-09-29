@@ -1,0 +1,17 @@
+name: Configure Visual Studio for node-gyp
+description: Pin node-gyp to the installed Visual Studio C++ toolchain
+runs:
+  using: composite
+  steps:
+    - name: Locate Visual Studio C++ tools
+      shell: pwsh
+      run: |
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+        if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found at $vswhere" }
+        $installationPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if ($LASTEXITCODE -ne 0 -or -not $installationPath) { throw 'Visual Studio C++ build tools were not found by vswhere.' }
+        "GYP_MSVS_OVERRIDE_PATH=$installationPath" >> $env:GITHUB_ENV
+        $productLine = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property catalog_productLineVersion
+        if (-not $productLine) { $productLine = '2022' }
+        Write-Host "Using Visual Studio $productLine at $installationPath"
+        "GYP_MSVS_VERSION=$productLine" >> $env:GITHUB_ENV

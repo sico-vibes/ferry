@@ -24,5 +24,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-msvc-node-gyp
       - run: pnpm install --frozen-lockfile
       - run: pnpm check

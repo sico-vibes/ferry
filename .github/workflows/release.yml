@@ -21,6 +21,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - uses: ./.github/actions/setup-msvc-node-gyp
       - run: pnpm install --frozen-lockfile
       - name: Verify workspace
         run: pnpm check

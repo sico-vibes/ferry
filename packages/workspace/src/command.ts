@@ -93,13 +93,13 @@ export async function runCommand(
       });
       const timeout = setTimeout(() => {
         timedOut = true;
-        killTree(child.pid, env, () => {
+        killTree(child.pid, false, env, () => {
           child.kill();
         });
       }, input.timeoutMs);
       await new Promise<void>((resolve) => {
         const abort = () => {
-          killTree(child.pid, env, () => {
+          killTree(child.pid, false, env, () => {
             child.kill();
           });
         };
@@ -129,6 +129,7 @@ export async function runCommand(
   };
 
   async function fallback(): Promise<number> {
+    const detached = process.platform !== 'win32';
     const child = execa(shell.file, shell.args(input.command), {
       cwd,
       env,
@@ -136,34 +137,26 @@ export async function runCommand(
       reject: false,
       windowsHide: true,
       buffer: false,
-      ...(process.platform === 'win32' ? {} : { detached: true }),
+      detached,
     });
     const timeout = setTimeout(() => {
       timedOut = true;
-      killTree(child.pid, env, () => {
+      killTree(child.pid, detached, env, () => {
         child.kill('SIGKILL');
       });
     }, input.timeoutMs);
-    const childSettled = child.then(
-      () => undefined,
-      () => undefined,
-    );
     let rejectAbort: ((error: Error) => void) | undefined;
     const aborted = new Promise<never>((_resolve, reject) => {
       rejectAbort = reject;
     });
     const abort = () => {
-      killTree(child.pid, env, () => {
+      if (signal) rejectAbort?.(abortReason(signal));
+      killTree(child.pid, detached, env, () => {
         child.kill('SIGKILL');
-      });
-      void Promise.race([
-        childSettled,
-        new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
-      ]).then(() => {
-        if (signal) rejectAbort?.(abortReason(signal));
       });
     };
     signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
     child.stdout.on('data', (data: Buffer) => {
       void write('stdout', data);
     });
@@ -183,26 +176,64 @@ function abortReason(signal: AbortSignal): Error {
 }
 function killTree(
   pid: number | undefined,
+  detached: boolean,
   env: Record<string, string>,
   fallback: () => void,
 ): void {
-  if (!pid) return;
-  if (process.platform === 'win32') {
-    // Close the process we own immediately. taskkill can be denied in a sandbox
-    // or take several seconds, so use it only to clean up descendants.
+  if (!Number.isSafeInteger(pid) || pid === undefined || pid <= 1 || pid === process.pid) {
     fallback();
-    void execa('taskkill', ['/PID', String(pid), '/T', '/F'], {
+    return;
+  }
+  if (process.platform === 'win32') {
+    void killWindowsProcessTree(pid, env, fallback);
+  } else {
+    killDetachedProcessGroup(pid, detached, fallback);
+  }
+}
+
+async function killWindowsProcessTree(
+  pid: number,
+  env: Record<string, string>,
+  fallback: () => void,
+): Promise<void> {
+  try {
+    // Kill descendants before the root exits, or taskkill can no longer find
+    // the original process tree after the parent is gone.
+    const taskkill = env.SYSTEMROOT
+      ? path.join(env.SYSTEMROOT, 'System32', 'taskkill.exe')
+      : 'taskkill.exe';
+    await execa(taskkill, ['/PID', String(pid), '/T', '/F'], {
       reject: false,
       windowsHide: true,
       env,
       extendEnv: false,
-    }).catch(() => undefined);
-  } else {
-    try {
-      process.kill(-pid, 'SIGKILL');
-    } catch {
-      fallback();
-    }
+      timeout: 2_000,
+    });
+  } catch {
+    // Closing the process we own remains the fallback if taskkill is denied.
+  }
+  fallback();
+}
+
+export function killDetachedProcessGroup(
+  pid: number | undefined,
+  detached: boolean,
+  fallback: () => void,
+): void {
+  if (
+    !detached ||
+    !Number.isSafeInteger(pid) ||
+    pid === undefined ||
+    pid <= 1 ||
+    pid === process.pid
+  ) {
+    fallback();
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    fallback();
   }
 }
 function chooseShell(

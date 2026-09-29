@@ -20,7 +20,7 @@
     "check:affected": "node scripts/check-affected.mjs",
     "probe:live": "tsx scripts/probe-live.mjs",
     "eval:live": "tsx scripts/eval-live.mjs",
-    "check": "turbo run typecheck lint test && tsc --noEmit -p scripts/tsconfig.json && eslint --no-ignore scripts/eval-live.test.ts && vitest run --config scripts/vitest.config.ts && node scripts/check-text.mjs && prettier --check .",
+    "check": "turbo run typecheck lint test --concurrency=50% && tsc --noEmit -p scripts/tsconfig.json && eslint --no-ignore scripts/eval-live.test.ts && vitest run --config scripts/vitest.config.ts && node scripts/check-text.mjs && prettier --check .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "catalog:sync-datasets": "node scripts/catalog-sync-datasets.mjs"

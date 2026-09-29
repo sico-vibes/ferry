@@ -423,7 +423,10 @@ export async function createCoreHost(
     typeof existingLock === 'object' &&
     existingLock !== null &&
     'pid' in existingLock &&
-    typeof existingLock.pid === 'number'
+    typeof existingLock.pid === 'number' &&
+    Number.isSafeInteger(existingLock.pid) &&
+    existingLock.pid > 1 &&
+    existingLock.pid !== process.pid
   ) {
     try {
       process.kill(existingLock.pid, 0);
@@ -498,7 +501,7 @@ async function isStaleLock(lockPath: string): Promise<boolean> {
   }
   if (typeof content === 'object' && content !== null && 'pid' in content) {
     const pid = content.pid;
-    if (typeof pid === 'number' && Number.isInteger(pid) && pid > 0) {
+    if (typeof pid === 'number' && Number.isSafeInteger(pid) && pid > 1 && pid !== process.pid) {
       try {
         process.kill(pid, 0);
         return false;

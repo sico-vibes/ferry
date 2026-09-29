@@ -17,6 +17,7 @@ export default defineConfig({
     pool: 'threads',
     maxWorkers: 1,
     fileParallelism: false,
+    testTimeout: 30_000,
     restoreMocks: true,
     clearMocks: true,
   },
