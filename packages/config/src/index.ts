@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import path from 'node:path';
 import pino, { type Logger, type LoggerOptions } from 'pino';
 import { SettingsSchema, type Settings } from '@ferry/shared';
 import { z } from 'zod';
@@ -21,19 +22,20 @@ export function getDataPaths(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): DataPaths {
+  const paths = platform === 'win32' ? path.win32 : path.posix;
   const home =
     env.FERRY_HOME ??
     (platform === 'win32'
-      ? join(env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'Ferry')
-      : join(env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'Ferry'));
+      ? paths.join(env.APPDATA ?? paths.join(homedir(), 'AppData', 'Roaming'), 'Ferry')
+      : paths.join(env.XDG_DATA_HOME ?? paths.join(homedir(), '.local', 'share'), 'Ferry'));
   return {
     home,
-    db: join(home, 'db'),
-    logs: join(home, 'logs'),
-    checkpoints: join(home, 'checkpoints'),
-    cache: join(home, 'cache'),
-    skills: join(home, 'skills'),
-    bin: join(home, 'bin'),
+    db: paths.join(home, 'db'),
+    logs: paths.join(home, 'logs'),
+    checkpoints: paths.join(home, 'checkpoints'),
+    cache: paths.join(home, 'cache'),
+    skills: paths.join(home, 'skills'),
+    bin: paths.join(home, 'bin'),
   };
 }
 

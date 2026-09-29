@@ -29,7 +29,7 @@ describe('QA config: data paths', () => {
   it('honors FERRY_HOME, XDG_DATA_HOME, and APPDATA', () => {
     expect(getDataPaths({ FERRY_HOME: 'D:/Ferry' }, 'win32').home).toBe('D:/Ferry');
     expect(getDataPaths({ XDG_DATA_HOME: '/data' }, 'linux').home).toBe(
-      path.join('/data', 'Ferry'),
+      path.posix.join('/data', 'Ferry'),
     );
     expect(getDataPaths({ APPDATA: 'C:/Users/x/AppData/Roaming' }, 'win32').home).toBe(
       path.win32.join('C:/Users/x/AppData/Roaming', 'Ferry'),
@@ -38,7 +38,7 @@ describe('QA config: data paths', () => {
 
   it('creates every data directory', async () => {
     const home = await tempDir();
-    const paths = getDataPaths({ FERRY_HOME: home }, 'win32');
+    const paths = getDataPaths({ FERRY_HOME: home }, process.platform);
     await ensureDataPaths(paths);
     const entries = await readdir(home);
     expect(entries).toEqual(

@@ -199,6 +199,15 @@ async function buildDistribution() {
   }
 }
 
+// Electron downloads its binary lazily (no postinstall), so a fresh checkout has
+// no node_modules/electron/dist until something runs it. electron-builder's
+// electronDist needs it, so fetch it up front (a no-op when already installed).
+execFileSync(process.execPath, [resolve(packageRoot, 'node_modules', 'electron', 'install.js')], {
+  cwd: packageRoot,
+  env,
+  stdio: 'inherit',
+});
+
 const releaseVersion = process.env.FERRY_RELEASE_VERSION;
 const packageFiles = [
   resolve(repositoryRoot, 'apps', 'cli', 'package.json'),

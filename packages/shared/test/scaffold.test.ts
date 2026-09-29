@@ -77,9 +77,11 @@ describe('CI workflow', () => {
     expect(workflow).toMatch(/runs-on:\s*\$\{\{\s*matrix\.os\s*\}\}/);
   });
 
-  it('installs with a frozen lockfile, runs pnpm check, and uses Node 24', () => {
+  it('installs with a frozen lockfile, runs the full check suite, and uses Node 24', () => {
     expect(workflow).toMatch(/pnpm install --frozen-lockfile/);
-    expect(workflow).toMatch(/^\s*-\s*run:\s*pnpm check\s*$/m);
+    expect(workflow).toMatch(/pnpm turbo run typecheck lint test --continue/);
+    expect(workflow).toMatch(/node scripts\/check-text\.mjs/);
+    expect(workflow).toMatch(/prettier --check \./);
     expect(workflow).toMatch(/node-version:\s*24\b/);
   });
 
