@@ -30,7 +30,81 @@ export type MockFerryClient = FerryClient & {
 export function createMockFerryClient(options: MockOptions = {}): MockFerryClient {
   const runtime = createMockStore(options);
   const { deps } = runtime;
+  let gatewaySettings = { enabled: false, port: 11435, allowLan: false };
+  const gatewayKeys: {
+    id: string;
+    name: string;
+    profile: string;
+    allowedModels: string[];
+    rateLimit: number | null;
+    compressToolResults: boolean;
+    terseSystemPrompt: boolean;
+    createdAt: string;
+    lastUsedAt: string | null;
+    revokedAt: string | null;
+    usage: { requests: number; inputTokens: number; outputTokens: number };
+  }[] = [];
   const client: FerryClient = {
+    gateway: {
+      settings: () =>
+        Promise.resolve({
+          ...gatewaySettings,
+          status: {
+            running: gatewaySettings.enabled,
+            port: gatewaySettings.enabled ? gatewaySettings.port : null,
+            host: gatewaySettings.enabled ? '127.0.0.1' : null,
+            url: gatewaySettings.enabled
+              ? `http://127.0.0.1:${String(gatewaySettings.port)}`
+              : null,
+          },
+        }),
+      setSettings: async (input) => {
+        gatewaySettings = input;
+        return client.gateway.settings();
+      },
+      listKeys: () =>
+        Promise.resolve(
+          gatewayKeys.map((key) => ({ ...key, allowedModels: [...key.allowedModels] })),
+        ),
+      createKey: (input) => {
+        const key = {
+          id: crypto.randomUUID(),
+          name: input.name,
+          profile: input.profile,
+          allowedModels: [],
+          rateLimit: null,
+          compressToolResults: true,
+          terseSystemPrompt: false,
+          createdAt: new Date().toISOString(),
+          lastUsedAt: null,
+          revokedAt: null,
+          usage: { requests: 0, inputTokens: 0, outputTokens: 0 },
+        };
+        gatewayKeys.push(key);
+        return Promise.resolve({
+          key: { id: key.id, name: key.name, profile: key.profile },
+          secret: 'ferry-gw-mock-once',
+        });
+      },
+      updateKey: ({ id, patch }) => {
+        const key = gatewayKeys.find((entry) => entry.id === id);
+        if (key) Object.assign(key, patch);
+        return Promise.resolve(key);
+      },
+      revokeKey: (id) => {
+        const key = gatewayKeys.find((entry) => entry.id === id);
+        if (key) key.revokedAt = new Date().toISOString();
+        return Promise.resolve(undefined);
+      },
+      start: async () => {
+        gatewaySettings = { ...gatewaySettings, enabled: true };
+        return client.gateway.settings();
+      },
+      stop: async () => {
+        gatewaySettings = { ...gatewaySettings, enabled: false };
+        return client.gateway.settings();
+      },
+    },
     workspaces: createWorkspacesDomain(runtime.store, deps),
     sessions: createSessionsDomain(runtime.store, deps),
     approvals: createApprovalsDomain(runtime.store, deps),

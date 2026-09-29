@@ -53,6 +53,7 @@ const settingSections = [
   'General',
   'Profiles',
   'Providers & Keys',
+  'Gateway',
   'Advanced',
   'Optimizers',
   'Delegation',

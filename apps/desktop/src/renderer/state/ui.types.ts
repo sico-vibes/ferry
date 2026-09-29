@@ -6,6 +6,7 @@ export type SettingsSection =
   | 'General'
   | 'Profiles'
   | 'Providers & Keys'
+  | 'Gateway'
   | 'Advanced'
   | 'Optimizers'
   | 'Delegation'

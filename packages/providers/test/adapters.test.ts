@@ -15,6 +15,7 @@ import {
   mapProviderError,
   mergeUsage,
   probe,
+  streamProviderChat,
 } from '../src/index.js';
 
 const servers: FakeProviderServer[] = [];
@@ -163,6 +164,43 @@ describe('provider adapters', () => {
     expect(parts.some((part) => part.type === 'tool-call')).toBe(true);
     expect(fake.requests[0]?.url).toContain('/v1/chat/completions');
   });
+
+  it('sends instructions outside the SDK messages field and requests streaming usage', async () => {
+    const fake = await new FakeOpenAIServer({
+      responses: [
+        {
+          chunks: [
+            {
+              id: 'chatcmpl_usage',
+              object: 'chat.completion.chunk',
+              choices: [
+                { index: 0, delta: { role: 'assistant', content: 'pong' }, finish_reason: null },
+              ],
+            },
+            {
+              id: 'chatcmpl_usage',
+              object: 'chat.completion.chunk',
+              choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 17, completion_tokens: 5, total_tokens: 22 },
+            },
+          ],
+        },
+      ],
+    }).start();
+    servers.push(fake);
+    const result = await streamProviderChat({
+      model: ModelRefSchema.parse('custom/fake-model'),
+      apiKey: 'fake-key',
+      baseUrl: `${fake.baseUrl}/v1`,
+      system: 'OpenCode system instruction',
+      messages: [{ role: 'user', content: 'Say pong' }],
+    });
+    expect(result).toMatchObject({ text: 'pong', inputTokens: 17, outputTokens: 5 });
+    expect(fake.requests[0]?.body).toMatchObject({
+      stream_options: { include_usage: true },
+      messages: [{ role: 'system', content: 'OpenCode system instruction' }, { role: 'user' }],
+    });
+  }, 30_000);
 
   it('sends required OpenCode attribution and session headers', async () => {
     const fake = new FakeOpenAIServer();

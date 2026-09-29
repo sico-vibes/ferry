@@ -4,6 +4,17 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { createClientAsync } from './client.js';
 import { good, muted, warn } from './colors.js';
+import {
+  clearGatewayStatus,
+  createGatewayToken,
+  gatewayDataDir,
+  getGatewayDaemonStatus,
+  listGatewayTokens,
+  revokeGatewayToken,
+  startGatewayDaemon,
+  stopGatewayDaemon,
+  writeGatewayStatus,
+} from './gateway.js';
 import { collectDoctor } from './doctor.js';
 import type { FerryClient } from '@ferry/client';
 import {
@@ -220,7 +231,10 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     const dataDir = stringFlag(flags.values['data-dir']);
     const cwd = stringFlag(flags.values.cwd) ?? process.cwd();
     const engine =
-      flags.values.engine ?? (command === 'oauth' || command === 'settings' ? 'local' : 'mock');
+      command === 'serve' && flags.values.gateway === true
+        ? 'local'
+        : (flags.values.engine ??
+          (command === 'oauth' || command === 'settings' ? 'local' : 'mock'));
     if (engine !== 'mock' && engine !== 'local')
       throw new CliError(2, 'Invalid --engine. Use mock or local.');
     if (command === 'run') validateRunArguments(flags);
@@ -235,6 +249,8 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       flags.values['i-understand-the-risk'] !== true
     )
       throw new CliError(2, 'Non-interactive OAuth login requires --i-understand-the-risk.');
+    if (command === 'gateway')
+      return await gatewayCommand(flags.positionals.slice(1), json, gatewayDataDir(dataDir));
     client = await createClientAsync({
       engine,
       ...(dataDir ? { dataDir } : {}),
@@ -269,6 +285,23 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     }
     if (command === 'resume') return await resume(client, flags.positionals[1], json);
     if (command === 'serve') {
+      if (flags.values.gateway === true) {
+        const status = await client.gateway.start();
+        const serverStatus = status as { port?: number; host?: string; url?: string };
+        await writeGatewayStatus(gatewayDataDir(dataDir), {
+          port: serverStatus.port ?? 11435,
+          host: serverStatus.host ?? '127.0.0.1',
+          url: serverStatus.url ?? 'http://127.0.0.1:11435',
+        });
+        writeResult(
+          json,
+          status,
+          `Ferry Gateway running at ${(status as { url?: string }).url ?? 'localhost'}\nPress Ctrl+C to stop.\n`,
+        );
+        await waitForShutdownSignal();
+        await clearGatewayStatus(gatewayDataDir(dataDir));
+        return 0;
+      }
       writeResult(
         json,
         { message: 'engine transport coming in B0' },
@@ -330,7 +363,20 @@ function writeResult(json: boolean, value: unknown, human: string): void {
 
 export async function main(): Promise<void> {
   const command = defineCommand({
-    meta: { name: 'ferry', version: '0.1.0', description: 'Ferry coding agent CLI' },
+    meta: {
+      name: 'ferry',
+      version: '0.1.0',
+      description: [
+        'Ferry coding agent CLI',
+        '',
+        'Commands:',
+        '  run <prompt>                                  Run a coding task',
+        '  serve --gateway                              Run Ferry core and Gateway in the foreground',
+        '  gateway start|stop|status                    Manage the local Gateway',
+        '  gateway keys create <name> [profile]         Create a Gateway key (shown once)',
+        '  gateway keys list|revoke <key-id>            List or revoke Gateway keys',
+      ].join('\n'),
+    },
     run: async () => {
       const exitCode = await runCli();
       if (process.env.FERRY_E2E_HANDLE_DIAGNOSTICS === '1') {
@@ -351,6 +397,7 @@ const CLI_COMMANDS = new Set([
   'run',
   'resume',
   'serve',
+  'gateway',
   'quota',
   'providers',
   'oauth',
@@ -364,6 +411,81 @@ const CLI_COMMANDS = new Set([
   'settings',
   'init',
 ]);
+
+async function gatewayCommand(args: string[], json: boolean, dataDir: string): Promise<number> {
+  const [action, subcommand, ...rest] = args;
+  if (action === 'start') {
+    const status = await startGatewayDaemon(dataDir);
+    writeResult(json, status, `Ferry Gateway running at ${status.url}\n`);
+    return 0;
+  }
+  if (action === 'stop') {
+    const stopped = await stopGatewayDaemon(dataDir);
+    writeResult(
+      json,
+      { running: false, stopped },
+      stopped ? 'Ferry Gateway stopped\n' : 'Ferry Gateway was not running\n',
+    );
+    return 0;
+  }
+  if (action === 'status') {
+    const status = await getGatewayDaemonStatus(dataDir);
+    writeResult(
+      json,
+      status ?? { running: false },
+      status ? `Running at ${status.url}\n` : 'Stopped\n',
+    );
+    return 0;
+  }
+  if (action === 'keys' && subcommand === 'list') {
+    const keys = await listGatewayTokens(dataDir);
+    writeResult(
+      json,
+      keys,
+      keys
+        .map(
+          (key) =>
+            `${key.id} ${key.name} ${key.profile} · ${gatewayUsageRequests(key.usage)} requests`,
+        )
+        .join('\n') + '\n',
+    );
+    return 0;
+  }
+  if (action === 'keys' && subcommand === 'create') {
+    const [name, profile = 'auto-free'] = rest;
+    if (!name) throw new CliError(2, 'Usage: ferry gateway keys create <name> [profile]');
+    const created = await createGatewayToken(dataDir, name, profile);
+    writeResult(json, created, `Key shown once; copy it now:\n${created.secret}\n`);
+    return 0;
+  }
+  if (action === 'keys' && subcommand === 'revoke') {
+    const id = rest[0];
+    if (!id) throw new CliError(2, 'Usage: ferry gateway keys revoke <id>');
+    if (!(await revokeGatewayToken(dataDir, id)))
+      throw new CliError(2, `Gateway key not found: ${id}`);
+    writeResult(json, { revoked: id }, `Revoked ${id}\n`);
+    return 0;
+  }
+  throw new CliError(2, 'Usage: ferry gateway start|stop|status|keys create|list|revoke');
+}
+
+function gatewayUsageRequests(usage: unknown): number {
+  if (!usage || typeof usage !== 'object' || !('requests' in usage)) return 0;
+  const requests = usage.requests;
+  return typeof requests === 'number' && Number.isFinite(requests) ? requests : 0;
+}
+
+async function waitForShutdownSignal(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const finish = () => {
+      process.off('SIGINT', finish);
+      process.off('SIGTERM', finish);
+      resolve();
+    };
+    process.once('SIGINT', finish);
+    process.once('SIGTERM', finish);
+  });
+}
 const VALUE_FLAGS = new Set([
   'cwd',
   'profile',

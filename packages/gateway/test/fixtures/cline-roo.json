@@ -1,0 +1,42 @@
+{
+  "model": "ferry/auto-free",
+  "stream": true,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a coding assistant working in the user's project. Use the provided tools to inspect and modify files. Summarize changes and test results."
+    },
+    { "role": "user", "content": "Find the application entry point and explain how it starts." }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": { "path": { "type": "string" } },
+          "required": ["path"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": { "path": { "type": "string" }, "content": { "type": "string" } },
+          "required": ["path", "content"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_files",
+        "parameters": { "type": "object", "properties": { "path": { "type": "string" } } }
+      }
+    }
+  ]
+}
