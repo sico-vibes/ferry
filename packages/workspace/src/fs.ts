@@ -93,7 +93,8 @@ export class WorkspaceJail {
     if (!realRoot) throw new Error('Workspace root is unavailable');
     if (
       (hasWindowsDrivePrefix(input) && !path.win32.isAbsolute(input)) ||
-      (process.platform !== 'win32' && path.win32.isAbsolute(input))
+      // On POSIX `win32.isAbsolute('/x')` is also true; only reject Windows drive/UNC forms there.
+      (process.platform !== 'win32' && path.win32.isAbsolute(input) && !input.startsWith('/'))
     )
       throw new Error('Path escapes workspace root');
     const normalizedInput =

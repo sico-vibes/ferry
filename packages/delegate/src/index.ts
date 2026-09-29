@@ -1377,7 +1377,8 @@ export async function assertAcpWorkspacePath(
 ): Promise<string> {
   if (
     (hasWindowsDrivePrefix(target) && !win32.isAbsolute(target)) ||
-    (process.platform !== 'win32' && win32.isAbsolute(target))
+    // On POSIX `win32.isAbsolute('/x')` is also true; only reject Windows drive/UNC forms there.
+    (process.platform !== 'win32' && win32.isAbsolute(target) && !target.startsWith('/'))
   )
     throw new Error('ACP file path escapes the delegation workspace');
   const root = await realpath(resolve(workspace));
