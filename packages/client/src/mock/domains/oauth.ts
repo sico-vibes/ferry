@@ -105,7 +105,7 @@ const data: Omit<OAuthProvider, 'connected'>[] = [
     models: [],
     riskLevel: 'low' as const,
     riskText: 'This login flow is not available yet.',
-    group: 'unavailable' as const,
+    group: 'coming_soon' as const,
     actionAvailable: false,
     signupUrl,
   })),

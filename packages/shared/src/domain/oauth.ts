@@ -22,6 +22,7 @@ export const OAuthProviderGroupSchema = z.enum([
   'official',
   'subscription',
   'gateway',
+  'coming_soon',
   'unavailable',
 ]);
 export const OAuthProviderSchema = z.object({

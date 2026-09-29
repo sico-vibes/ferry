@@ -848,6 +848,44 @@ export function SettingsCanvas() {
               }
             />
           </Section>
+          {providers.some((provider) => provider.tag === 'trial') && (
+            <>
+              <h3>Trial credits</h3>
+              <p className="muted">
+                Trial providers are excluded from automatic routing until you opt in. Using trial
+                credits can consume a limited balance.
+              </p>
+              {providers
+                .filter((provider) => provider.tag === 'trial')
+                .map((provider) => {
+                  const optedIn =
+                    settings?.routing.trialOptInProviders.includes(provider.id) ?? false;
+                  return (
+                    <SettingRow
+                      key={provider.id}
+                      title={provider.name}
+                      helper="Allow Auto-Free, planner/editor roles, and the gateway to use this provider's trial credits."
+                    >
+                      <Switch
+                        label={`Use trial credits for ${provider.name}`}
+                        checked={optedIn}
+                        onCheckedChange={(enabled) => {
+                          if (!settings) return;
+                          const trialOptInProviders = enabled
+                            ? [...new Set([...settings.routing.trialOptInProviders, provider.id])]
+                            : settings.routing.trialOptInProviders.filter(
+                                (id) => id !== provider.id,
+                              );
+                          void update({
+                            routing: { ...settings.routing, trialOptInProviders },
+                          });
+                        }}
+                      />
+                    </SettingRow>
+                  );
+                })}
+            </>
+          )}
           <SettingRow
             title="Allow subscription OAuth models in routing"
             helper="When off, Auto-Free and Best Available never choose subscription logins. OAuth models remain available for manual selection."

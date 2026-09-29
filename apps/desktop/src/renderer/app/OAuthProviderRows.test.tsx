@@ -30,6 +30,32 @@ const rows: OAuthProvider[] = [
     actionAvailable: true,
   },
   {
+    id: 'radius',
+    tag: 'subscription_oauth',
+    name: 'Radius',
+    subscriptionRequired: true,
+    models: ['Radius model'],
+    riskLevel: 'medium',
+    riskText: 'Gateway login.',
+    connected: false,
+    group: 'gateway',
+    actionAvailable: true,
+    advanced: true,
+  },
+  {
+    id: 'kilo',
+    tag: 'subscription_oauth',
+    name: 'Kilo',
+    subscriptionRequired: false,
+    models: [],
+    riskLevel: 'low',
+    riskText: 'Coming soon.',
+    connected: false,
+    group: 'coming_soon',
+    actionAvailable: false,
+    signupUrl: 'https://kilo.ai/',
+  },
+  {
     id: 'gemini-cli',
     tag: 'subscription_oauth',
     name: 'Gemini CLI',
@@ -58,11 +84,29 @@ describe('OAuthProviderRows', () => {
     );
     expect(screen.getByText('Official OAuth')).toBeTruthy();
     expect(screen.getByText('Subscription (unofficial)')).toBeTruthy();
+    expect(screen.getByText('Gateways')).toBeTruthy();
+    expect(screen.getByText('Coming soon', { selector: 'summary' })).toBeTruthy();
     expect(screen.getByText('Removed from pi-ai.')).toBeTruthy();
+    expect(screen.getAllByText('1 model').length).toBeGreaterThan(0);
     expect(
       screen.getByRole('button', { name: 'Log in to OpenRouter' }).hasAttribute('disabled'),
     ).toBe(false);
     expect(screen.queryByRole('button', { name: 'Log in to Gemini CLI' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Log in to Kilo' })).toBeNull();
+    await user.click(screen.getByText('Configure…'));
+    expect(screen.getByRole('textbox', { name: 'Radius gateway URL' })).toBeTruthy();
+    const radiusLogin = screen.getByRole('button', { name: 'Log in to Radius' });
+    expect(radiusLogin.hasAttribute('disabled')).toBe(true);
+    await user.type(
+      screen.getByRole('textbox', { name: 'Radius gateway URL' }),
+      'https://radius.example',
+    );
+    expect(radiusLogin.hasAttribute('disabled')).toBe(false);
+    await user.click(radiusLogin);
+    expect(onLogin).toHaveBeenCalledWith(
+      rows.find((provider) => provider.id === 'radius'),
+      'https://radius.example',
+    );
     await user.click(screen.getByRole('button', { name: 'Log in to OpenRouter' }));
     expect(onLogin).toHaveBeenCalledWith(rows[0], undefined);
     await user.type(screen.getByRole('searchbox', { name: 'Filter OAuth logins' }), 'anthropic');

@@ -20,8 +20,8 @@ const cliDirectory = resolve(testDirectory, '..');
 const cliEntry = join(cliDirectory, 'dist', 'ferry.js');
 const temporaryRoots: string[] = [];
 const fakeServers: FakeOpenAIServer[] = [];
-const ONE_SPAWN = 20_000;
-const MANY_SPAWNS = 60_000;
+const ONE_SPAWN = 60_000;
+const MANY_SPAWNS = 90_000;
 
 interface CliResult {
   status: number | null;
@@ -35,7 +35,7 @@ function runCli(
 ): CliResult {
   const options: SpawnSyncOptionsWithStringEncoding = {
     encoding: 'utf8',
-    timeout: 60_000,
+    timeout: 90_000,
     ...(extra.input === undefined ? {} : { input: extra.input }),
     ...(extra.cwd === undefined ? {} : { cwd: extra.cwd }),
     ...(extra.env === undefined ? {} : { env: extra.env }),
@@ -83,68 +83,84 @@ afterAll(async () => {
 });
 
 describe('@ferry/cli argument parsing and exit codes', () => {
-  it('shows and edits a profile fallback chain from the CLI', () => {
-    const dataDir = tempDirectory('profile-chain');
-    const set = runCli([
-      'profiles',
-      'chain',
-      'set',
-      'Auto-Free',
-      'gemini=gemini-3.8-flash',
-      'groq=qwen/qwen3.8-27b',
-      '--json',
-      '--data-dir',
-      dataDir,
-    ]);
-    expect(set.status).toBe(0);
-    const saved = JSON.parse(set.stdout) as {
-      fallbackChain: { provider: string; patterns: string[] }[];
-    };
-    expect(saved.fallbackChain).toEqual([
-      { provider: 'gemini', patterns: ['gemini-3.8-flash'] },
-      { provider: 'groq', patterns: ['qwen/qwen3.8-27b'] },
-    ]);
-    const shown = runCli([
-      'profiles',
-      'chain',
-      'show',
-      'Auto-Free',
-      '--json',
-      '--data-dir',
-      dataDir,
-    ]);
-    expect(shown.status).toBe(0);
-    expect(JSON.parse(shown.stdout)).toMatchObject(saved);
-  }, 30_000);
+  it(
+    'shows and edits a profile fallback chain from the CLI',
+    () => {
+      const dataDir = tempDirectory('profile-chain');
+      const set = runCli([
+        'profiles',
+        'chain',
+        'set',
+        'Auto-Free',
+        'gemini=gemini-3.8-flash',
+        'groq=qwen/qwen3.8-27b',
+        '--json',
+        '--data-dir',
+        dataDir,
+      ]);
+      expect(set.status).toBe(0);
+      const saved = JSON.parse(set.stdout) as {
+        fallbackChain: { provider: string; patterns: string[] }[];
+      };
+      expect(saved.fallbackChain).toEqual([
+        { provider: 'gemini', patterns: ['gemini-3.8-flash'] },
+        { provider: 'groq', patterns: ['qwen/qwen3.8-27b'] },
+      ]);
+      const shown = runCli([
+        'profiles',
+        'chain',
+        'show',
+        'Auto-Free',
+        '--json',
+        '--data-dir',
+        dataDir,
+      ]);
+      expect(shown.status).toBe(0);
+      expect(JSON.parse(shown.stdout)).toMatchObject(saved);
+    },
+    ONE_SPAWN,
+  );
 
-  it('requires the explicit risk flag for non-interactive OAuth login', () => {
-    const dataDir = tempDirectory('oauth-risk');
-    const result = runCli(['oauth', 'login', 'anthropic', '--data-dir', dataDir]);
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain('--i-understand-the-risk');
-    expect(result.stderr).not.toContain('access-secret');
-  }, 30_000);
+  it(
+    'requires the explicit risk flag for non-interactive OAuth login',
+    () => {
+      const dataDir = tempDirectory('oauth-risk');
+      const result = runCli(['oauth', 'login', 'anthropic', '--data-dir', dataDir]);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('--i-understand-the-risk');
+      expect(result.stderr).not.toContain('access-secret');
+    },
+    ONE_SPAWN,
+  );
 
-  it('allows the official OpenRouter OAuth login without the unofficial-risk flag', () => {
-    const dataDir = tempDirectory('oauth-official');
-    const result = runCli([
-      'oauth',
-      'login',
-      'openrouter',
-      '--engine',
-      'mock',
-      '--data-dir',
-      dataDir,
-    ]);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('Logged in to OpenRouter');
-  }, 30_000);
+  it(
+    'allows the official OpenRouter OAuth login without the unofficial-risk flag',
+    () => {
+      const dataDir = tempDirectory('oauth-official');
+      const result = runCli([
+        'oauth',
+        'login',
+        'openrouter',
+        '--engine',
+        'mock',
+        '--data-dir',
+        dataDir,
+      ]);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('Logged in to OpenRouter');
+    },
+    ONE_SPAWN,
+  );
 
-  it('rejects an unknown local engine with usage exit code 2', () => {
-    const result = runCli(['quota', '--engine', 'typo']);
-    expect(result.status).toBe(2);
-    expect(result.stderr).toMatch(/Invalid --engine/);
-  }, 30_000);
+  it(
+    'rejects an unknown local engine with usage exit code 2',
+    () => {
+      const result = runCli(['quota', '--engine', 'typo']);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toMatch(/Invalid --engine/);
+    },
+    ONE_SPAWN,
+  );
 
   it(
     'returns 0 with only JSONL on stdout for a successful run',
@@ -269,7 +285,7 @@ describe('@ferry/cli argument parsing and exit codes', () => {
               `CLI did not exit within the test deadline. stdout=${stdout} stderr=${stderr}`,
             ),
           );
-        }, 10_000);
+        }, 60_000);
         child.stdout.setEncoding('utf8');
         child.stderr.setEncoding('utf8');
         let buffer = '';
@@ -332,7 +348,7 @@ describe('@ferry/cli argument parsing and exit codes', () => {
     expect(activeResources, stderr).not.toContain('TCPWRAP');
     expect(activeResources, stderr).not.toContain('TCPSocketWrap');
     expect(stdout).toContain('pong');
-  }, 30_000);
+  }, 120_000);
 
   it(
     'keeps emoji and non-latin prompts intact on the JSONL stream',

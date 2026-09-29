@@ -736,11 +736,21 @@ try {
     await expect
       .poll(
         async () =>
-          await page.evaluate(
-            async (id) => (await window.ferryRpcClient.sessions.get(id)).session.status,
-            agentSession.id,
-          ),
-        { timeout: 30_000 },
+          await page.evaluate(async (id) => {
+            const detail = await window.ferryRpcClient.sessions.get(id);
+            if (detail.session.status !== 'awaiting_approval') return detail.session.status;
+            const parts = detail.messages.flatMap((message) =>
+              message.parts
+                .filter((part) => part.type === 'approval_request' && part.state === 'pending')
+                .map((part) => part.id),
+            );
+            if (!parts.length) return detail.session.status;
+            for (const approvalId of parts) {
+              await window.ferryRpcClient.approvals.respond(id, approvalId, 'allow_once');
+            }
+            return 'approvals_responded';
+          }, agentSession.id),
+        { timeout: 60_000 },
       )
       .toBe('idle');
     const handoffDetail = await page.evaluate(

@@ -64,7 +64,12 @@ import {
   ToolRepetitionDetector,
   type ModelHints,
 } from './weak-model.js';
-import { formatEditPlan, parseEditPlan, type EditPlan } from './role-plan.js';
+import {
+  formatEditPlan,
+  parseEditPlan,
+  validateEditPlanPaths,
+  type EditPlan,
+} from './role-plan.js';
 
 export type AgentEvent =
   | { type: 'session.message'; message: Message }
@@ -293,6 +298,8 @@ export class AgentLoop {
     const repetitionDetector = new ToolRepetitionDetector();
     let nativeFormatFailures = 0;
     let pendingEditPlan: EditPlan | null = null;
+    let plannerRepairHint: string | null = null;
+    const rejectedPlannerMessageIds = new Set<string>();
     let activeRole: 'planner' | 'editor' | undefined;
     let editorFailures = 0;
     const maxSteps = this.options.maxSteps ?? 40;
@@ -382,7 +389,7 @@ export class AgentLoop {
         loaded = this.options.store.load(sessionId);
         if (!loaded) throw new Error('Session disappeared during run');
         session = loaded.session;
-        messages = loaded.messages;
+        messages = loaded.messages.filter((message) => !rejectedPlannerMessageIds.has(message.id));
         taskRecord = loaded.taskRecord;
         const contextWindow =
           this.options.catalog.models.find((candidate) => candidate.ref === session.modelRef)
@@ -449,13 +456,15 @@ export class AgentLoop {
           (this.estimates(system) + messageTokens + toolSchemaTokens) * 1.15,
         );
         const routeEstimate = inputTokens;
-        const stepKind = pendingEditPlan
-          ? 'edit'
-          : classifyStep({
-              firstStep: stepCount === 0,
-              pendingEdits: taskRecord.touchedFiles.length > 0,
-              estimatedInputTokens: routeEstimate,
-            });
+        const stepKind = plannerRepairHint
+          ? 'plan'
+          : pendingEditPlan
+            ? 'edit'
+            : classifyStep({
+                firstStep: stepCount === 0,
+                pendingEdits: taskRecord.touchedFiles.length > 0,
+                estimatedInputTokens: routeEstimate,
+              });
         let requestedRole =
           rolesEnabled && (stepKind === 'plan' || stepKind === 'edit')
             ? stepKind === 'plan'
@@ -609,7 +618,7 @@ export class AgentLoop {
           model: selected,
           system:
             executionRole === 'planner' && stepKind === 'plan'
-              ? `${system}\n\nYou are the planner. Do not call tools or edit files. Return only a JSON edit plan matching this shape: {"files":[{"path":"relative/path","intent":"why this file changes"}],"changes":[{"path":"relative/path","instructions":"exact edits or a precise pseudo-diff"}]}. Include every file the editor must change.`
+              ? `${system}\n\nYou are the planner. Do not call tools or edit files. Return only a JSON edit plan matching this shape: {"files":[{"path":"relative/path","intent":"why this file changes"}],"changes":[{"path":"relative/path","instructions":"exact edits or a precise pseudo-diff"}]}. Include every file the editor must change. Paths must be workspace-relative and must not contain parent-directory segments, drive prefixes, or UNC/absolute paths.${plannerRepairHint ? `\n\nRepair required: ${plannerRepairHint}` : ''}`
               : executionRole === 'planner'
                 ? `${system}\n\nThe editor failed repeatedly. Apply the structured edit plan directly with your own tool/edit format. Keep the change within the planned files.\n\n${formatEditPlan(pendingEditPlan ?? { files: [], changes: [] })}`
                 : executionRole === 'editor' && pendingEditPlan
@@ -987,9 +996,10 @@ export class AgentLoop {
           (generated.outputTokens ?? this.estimates(generated.text ?? ''));
         stepCount++;
         if (requestedRole === 'planner' && executionRole === 'planner' && stepKind === 'plan') {
-          const plan = parseEditPlan(generated.text ?? '');
-          if (!plan) {
+          const parsedPlan = parseEditPlan(generated.text ?? '');
+          if (!parsedPlan) {
             pendingEditPlan = null;
+            plannerRepairHint = null;
             rolesEnabled = false;
             taskRecord = {
               ...taskRecord,
@@ -999,6 +1009,20 @@ export class AgentLoop {
             this.persistTask(taskRecord);
             continue;
           }
+          const validated = await validateEditPlanPaths(parsedPlan, this.options.workspace);
+          if (!validated.plan) {
+            rejectedPlannerMessageIds.add(assistant.id);
+            pendingEditPlan = null;
+            plannerRepairHint = `The previous plan contained ${String(validated.rejectedCount)} rejected or undeclared path entr${validated.rejectedCount === 1 ? 'y' : 'ies'}. Return a corrected plan using only safe workspace-relative paths.`;
+            taskRecord = {
+              ...taskRecord,
+              nextStep: 'Planner must repair unsafe or undeclared file paths before editing.',
+            };
+            this.persistTask(taskRecord);
+            continue;
+          }
+          const plan = validated.plan;
+          plannerRepairHint = null;
           pendingEditPlan = plan;
           activeRole = requestedRole;
           taskRecord = {

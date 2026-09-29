@@ -46,6 +46,8 @@ export const ProviderSchema = z.object({
     .nullable()
     .optional(),
   dataUse: z.string().nullable(),
+  /** Explicit catalog classification; null means infer from the policy text. */
+  dataUseTraining: z.boolean().nullable().optional(),
   termsNote: z.string().nullable(),
   signupUrl: z.string().nullable(),
   docsUrl: z.string().nullable(),

@@ -6,8 +6,18 @@ const groupLabels = [
   ['official', 'Official OAuth'],
   ['subscription', 'Subscription (unofficial)'],
   ['gateway', 'Gateways'],
+  ['coming_soon', 'Coming soon'],
   ['unavailable', 'Unavailable'],
 ] as const;
+
+function validGatewayUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
 
 export function OAuthProviderRows({
   providers,
@@ -73,29 +83,13 @@ export function OAuthProviderRows({
                           className="block truncate text-meta text-text-3"
                           title={provider.riskText}
                         >
-                          {provider.models.length} models{provider.advanced ? ' · Advanced' : ''}
+                          {provider.models.length}{' '}
+                          {provider.models.length === 1 ? 'model' : 'models'}
+                          {provider.advanced ? ' · Advanced' : ''}
                           {group === 'unavailable' ? ` · ${provider.riskText}` : ''}
                         </span>
                       </div>
                     </div>
-                    {provider.advanced && available && (
-                      <label className="col-span-2 flex min-w-0 items-center gap-2 text-meta text-text-3 max-sm:col-span-2">
-                        Gateway URL
-                        <input
-                          aria-label={`${provider.name} gateway URL`}
-                          className="h-8 min-w-0 flex-1 rounded-input border border-border-soft bg-input px-2 text-label text-text-1 outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                          onChange={(event) => {
-                            setGateways((current) => ({
-                              ...current,
-                              [provider.id]: event.target.value,
-                            }));
-                          }}
-                          placeholder="https://gateway.example"
-                          type="url"
-                          value={gateways[provider.id] ?? ''}
-                        />
-                      </label>
-                    )}
                     <span className="truncate text-meta text-text-2">
                       {status === 'expired'
                         ? 'Expired'
@@ -103,7 +97,9 @@ export function OAuthProviderRows({
                           ? `Connected${provider.account ? ` as ${provider.account}` : ''}`
                           : group === 'unavailable'
                             ? 'Unavailable'
-                            : 'Not connected'}
+                            : group === 'coming_soon'
+                              ? 'Coming soon'
+                              : 'Not connected'}
                     </span>
                     <span
                       className={`w-fit rounded-pill px-2 py-1 text-meta ${provider.riskLevel === 'high' ? 'bg-warn/10 text-warn' : provider.riskLevel === 'medium' ? 'bg-raised text-text-2' : 'bg-success/10 text-success'}`}
@@ -112,7 +108,45 @@ export function OAuthProviderRows({
                       {provider.riskLevel} risk
                     </span>
                     <div className="flex items-center justify-end gap-1">
-                      {provider.signupUrl && !available ? (
+                      {provider.advanced && available && !provider.connected ? (
+                        <details className="relative">
+                          <summary
+                            aria-label={`Configure ${provider.name} gateway`}
+                            className="inline-flex h-8 cursor-pointer list-none items-center rounded-pill px-2 text-meta text-text-1 hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                          >
+                            Configure…
+                          </summary>
+                          <div className="absolute right-0 top-full z-20 mt-1 grid w-72 gap-3 rounded-card border border-border-soft bg-panel p-3 shadow-[var(--highlight-top)]">
+                            <label className="grid gap-1 text-meta text-text-2">
+                              Gateway URL
+                              <input
+                                aria-label={`${provider.name} gateway URL`}
+                                className="h-8 min-w-0 rounded-input border border-border-soft bg-input px-2 text-label text-text-1 outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                                onChange={(event) => {
+                                  setGateways((current) => ({
+                                    ...current,
+                                    [provider.id]: event.target.value,
+                                  }));
+                                }}
+                                placeholder="https://gateway.example"
+                                type="url"
+                                value={gateways[provider.id] ?? ''}
+                              />
+                            </label>
+                            <button
+                              aria-label={`Log in to ${provider.name}`}
+                              className="inline-flex h-8 items-center justify-center gap-1 rounded-pill bg-raised px-3 text-meta text-text-1 disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={!validGatewayUrl(gateways[provider.id] ?? '')}
+                              onClick={() => {
+                                onLogin(provider, gateways[provider.id]);
+                              }}
+                              type="button"
+                            >
+                              <LogIn aria-hidden="true" size={14} /> Log in
+                            </button>
+                          </div>
+                        </details>
+                      ) : provider.signupUrl && !available ? (
                         <a
                           aria-label={`Learn about ${provider.name}`}
                           className="inline-flex h-8 items-center gap-1 rounded-pill px-2 text-meta text-text-2 hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"

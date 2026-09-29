@@ -326,6 +326,7 @@ export const sampleSettings: Settings = {
     toolRejectionMemory: true,
     carefulModelRetirement: true,
     avoidTrainingProviders: false,
+    trialOptInProviders: [],
     stickyTtlMinutes: 30,
     rampStart: 0.2,
     rampFloor: 0.1,
