@@ -4,6 +4,25 @@ export const name = 'accessibility';
 
 export async function run(page, { url, expect }) {
   const failures = [];
+  const audit = async (label) => {
+    const results = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+      .analyze();
+    const blocking = results.violations.filter((item) =>
+      ['serious', 'critical'].includes(item.impact),
+    );
+    if (blocking.length) {
+      failures.push(`${label}: ${blocking.map((issue) => issue.id).join(', ')}`);
+      console.error(`axe ${label}:`);
+      for (const issue of blocking) {
+        console.error(`${issue.impact} ${issue.id}: ${issue.help}`);
+        for (const node of issue.nodes.slice(0, 10))
+          console.error(`  ${node.target.join(', ')}: ${node.failureSummary}`);
+        if (issue.nodes.length > 10)
+          console.error(`  plus ${issue.nodes.length - 10} more affected nodes`);
+      }
+    }
+  };
   const scan = async (route, state = '') => {
     await page.goto(new URL(route, url).href, { waitUntil: 'domcontentloaded' });
     await page.getByRole('navigation', { name: 'Primary' }).waitFor();
@@ -15,25 +34,7 @@ export async function run(page, { url, expect }) {
       await page.getByRole('dialog').waitFor();
     }
     if (state) await page.waitForTimeout(250);
-    const results = await new AxeBuilder({ page })
-      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
-      .analyze();
-    const blocking = results.violations.filter((item) =>
-      ['serious', 'critical'].includes(item.impact),
-    );
-    if (blocking.length) {
-      failures.push(
-        `${route}${state ? ` (${state})` : ''}: ${blocking.map((issue) => issue.id).join(', ')}`,
-      );
-      console.error(`axe ${route}${state ? ` (${state})` : ''}:`);
-      for (const issue of blocking) {
-        console.error(`${issue.impact} ${issue.id}: ${issue.help}`);
-        for (const node of issue.nodes.slice(0, 10))
-          console.error(`  ${node.target.join(', ')}: ${node.failureSummary}`);
-        if (issue.nodes.length > 10)
-          console.error(`  plus ${issue.nodes.length - 10} more affected nodes`);
-      }
-    }
+    await audit(`${route}${state ? ` (${state})` : ''}`);
   };
 
   for (const route of [
@@ -47,6 +48,27 @@ export async function run(page, { url, expect }) {
   ]) {
     await scan(route);
   }
+  await page.goto(new URL('/settings', url).href, { waitUntil: 'domcontentloaded' });
+  const settingsNav = page.getByRole('navigation', { name: 'Settings sections' });
+  for (const section of [
+    'General',
+    'Profiles',
+    'Providers & Keys',
+    'Gateway',
+    'Advanced',
+    'Optimizers',
+    'Delegation',
+    'Permissions',
+    'Developer',
+    'Skills',
+    'MCP',
+    'Data & Privacy',
+    'About',
+  ]) {
+    await settingsNav.getByRole('button', { name: section, exact: true }).click();
+    await page.locator('.settings-content').waitFor();
+    await audit(`/settings (${section})`);
+  }
   await scan('/', 'palette');
   await scan('/s/session_3', 'model-picker');
   await page.goto(new URL('/s/session_3', url).href, { waitUntil: 'domcontentloaded' });
@@ -58,19 +80,6 @@ export async function run(page, { url, expect }) {
   await review.waitFor({ timeout: 15_000 });
   await review.click();
   await page.getByRole('region', { name: 'Delegation review' }).waitFor();
-  const results = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
-    .analyze();
-  const reviewViolations = results.violations.filter((item) =>
-    ['serious', 'critical'].includes(item.impact),
-  );
-  if (reviewViolations.length) {
-    failures.push(`review: ${reviewViolations.map((item) => item.id).join(', ')}`);
-    for (const issue of reviewViolations) {
-      console.error(`serious ${issue.id}: ${issue.help}`);
-      for (const node of issue.nodes.slice(0, 10))
-        console.error(`  ${node.target.join(', ')}: ${node.failureSummary}`);
-    }
-  }
+  await audit('/review');
   expect(failures.length, `Axe violations: ${failures.join('; ')}`).toBe(0);
 }

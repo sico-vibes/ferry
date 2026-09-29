@@ -43,6 +43,12 @@ try {
   await page.locator('.transcript-viewport').waitFor({ state: 'visible' });
   await page.waitForFunction(() => window.ferryPerfReady === true, null, { timeout: 30_000 });
   await page.locator('.transcript-message').first().waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    window.ferryLongTasks = [];
+    new PerformanceObserver((entries) => {
+      window.ferryLongTasks.push(...entries.getEntries().map((entry) => entry.duration));
+    }).observe({ type: 'longtask', buffered: true });
+  });
   const initial = await page.evaluate(() => {
     const viewport = document.querySelector('.transcript-viewport');
     const rows = document.querySelectorAll('.transcript-message').length;
@@ -57,6 +63,13 @@ try {
       heapBeforeBytes: performance.memory?.usedJSHeapSize ?? null,
     };
   });
+
+  const appendStarted = Date.now();
+  const appendedText = 'Append one message to this 10k session';
+  await page.getByRole('textbox', { name: 'Message Ferry' }).fill(appendedText);
+  await page.getByRole('button', { name: 'Send' }).click();
+  await page.getByText(appendedText, { exact: false }).waitFor({ timeout: 10_000 });
+  const appendMs = Date.now() - appendStarted;
 
   await page.evaluate(async () => {
     const viewport = document.querySelector('.transcript-viewport');
@@ -74,23 +87,35 @@ try {
     window.gc?.();
     return performance.memory?.usedJSHeapSize ?? null;
   });
+  const longTasks = await page.evaluate(() => window.ferryLongTasks ?? []);
   const sorted = frames.slice().sort((a, b) => a - b);
   const averageMs = frames.reduce((sum, value) => sum + value, 0) / Math.max(1, frames.length);
   const p95Ms = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0;
   const result = {
+    benchmark: 'long-transcript',
+    targetMessageCount: 10_000,
+    targetLongestTaskMs: 100,
     ...initial,
+    appendMs,
     frameSamples: frames.length,
     averageFrameMs: Number(averageMs.toFixed(2)),
     p95FrameMs: Number(p95Ms.toFixed(2)),
     framesOver33ms: frames.filter((value) => value > 33.3).length,
     heapAfterBytes,
+    longTaskCount: longTasks.length,
+    longestTaskMs: Number(Math.max(0, ...longTasks).toFixed(1)),
     heapDeltaBytes:
       initial.heapBeforeBytes !== null && heapAfterBytes !== null
         ? heapAfterBytes - initial.heapBeforeBytes
         : null,
   };
   console.log(JSON.stringify(result));
-  if (result.messageCount !== 10_000 || result.renderedRows > 40 || result.p95FrameMs > 33.3)
+  if (
+    result.messageCount !== 10_000 ||
+    result.renderedRows > 40 ||
+    result.p95FrameMs > 33.3 ||
+    result.longestTaskMs > 100
+  )
     process.exitCode = 1;
 } finally {
   await browser?.close();

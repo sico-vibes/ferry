@@ -128,7 +128,7 @@ export class WorkspaceTools {
     });
     const visible: string[] = [];
     const workspaceRoot = path.resolve(this.jail.root);
-    for (const item of files.sort()) {
+    for (const item of files) {
       const file = path.resolve(workspaceRoot, item);
       const relative = path.relative(workspaceRoot, file);
       if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))

@@ -4,6 +4,22 @@ import { describe, expect, it } from 'vitest';
 const tokens = readFileSync(new URL('./tokens.css', import.meta.url), 'utf8');
 const theme = readFileSync(new URL('./index.css', import.meta.url), 'utf8');
 const lightTokens = readFileSync(new URL('./light-tokens.css', import.meta.url), 'utf8');
+const textSurfaces = [
+  'bg-app',
+  'bg-rail-tile',
+  'bg-rail-tile-active',
+  'bg-panel',
+  'bg-canvas',
+  'bg-card',
+  'bg-raised',
+  'bg-input',
+  'bg-pill-dark',
+] as const;
+const lightColor = (name: string) => {
+  const value = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`).exec(lightTokens)?.[1];
+  if (!value) throw new Error(`Missing light color token --${name}`);
+  return value;
+};
 const color = (name: string) => {
   const value = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`).exec(tokens)?.[1];
   if (!value) throw new Error(`Missing color token --${name}`);
@@ -25,8 +41,22 @@ const contrast = (foreground: string, background: string) => {
 };
 
 describe('accessible text token contrast', () => {
-  it.each(['bg-canvas', 'bg-card', 'bg-panel'])('passes AA on --%s', (surface) => {
+  it.each(textSurfaces)('passes AA on --%s', (surface) => {
     expect(contrast(color('text-3'), color(surface))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('keeps muted text below secondary text luminance', () => {
+    expect(luminance(color('text-3'))).toBeLessThan(luminance(color('text-2')));
+  });
+});
+
+describe('light-theme accessible text token contrast', () => {
+  it.each(textSurfaces)('passes AA on --%s', (surface) => {
+    expect(contrast(lightColor('text-3'), lightColor(surface))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('keeps muted text above secondary text luminance', () => {
+    expect(luminance(lightColor('text-3'))).toBeGreaterThan(luminance(lightColor('text-2')));
   });
 });
 

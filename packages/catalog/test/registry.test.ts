@@ -114,25 +114,18 @@ describe('quality prior', () => {
     ]);
   });
 
-  it('keeps missing benchmark evidence unknown and snapshots the top 15 free coding models', async () => {
-    const [priors, capabilities, snapshot] = await Promise.all([
+  it('keeps benchmark evidence and does not display snapshot-only models as offered', async () => {
+    const [priors, capabilities, snapshotText] = await Promise.all([
       loadQualityPriors(dataDir),
       loadCapabilityRegistry(dataDir),
       readFile(join(dataDir, 'quality-top15.snapshot.json'), 'utf8'),
     ]);
     const ranked = await loadFreeCodingRanking(dataDir, capabilities, priors, 15);
+    const snapshot: unknown = JSON.parse(snapshotText);
     expect(priors['model-with-no-evidence']).toBeUndefined();
     expect(Object.keys(priors).some((key) => key.startsWith('family:'))).toBe(true);
     expect(Object.keys(capabilities).length).toBeGreaterThan(0);
-    expect(
-      ranked.map(({ providerId, id, score, confidence, sources, datasetDate, rankingPenalty }) => ({
-        id: `${providerId}/${id}`,
-        score,
-        confidence,
-        sources,
-        datasetDate,
-        rankingPenalty,
-      })),
-    ).toEqual(JSON.parse(snapshot));
+    expect(snapshot).toHaveLength(15);
+    expect(ranked).toEqual([]);
   });
 });

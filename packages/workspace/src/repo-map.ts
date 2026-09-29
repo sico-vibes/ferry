@@ -112,6 +112,7 @@ const wrapperTypes = new Set([
 ]);
 const grammarCache = new Map<string, Promise<SyntaxLanguage>>();
 const parseCache = new Map<string, CachedParse>();
+const maxCachedParses = 5_000;
 let runtimePromise: Promise<{ runtime: TreeSitterModule; wasmDir: string }> | undefined;
 
 export async function buildRepoMap(jail: WorkspaceJail, raw: unknown = {}): Promise<RepoMapResult> {
@@ -169,6 +170,11 @@ export async function buildRepoMap(jail: WorkspaceJail, raw: unknown = {}): Prom
               imports: extractImports(source, path.posix.extname(rel).toLowerCase()),
             };
             parseCache.set(key, parsed);
+            while (parseCache.size > maxCachedParses) {
+              const oldest = parseCache.keys().next().value;
+              if (oldest === undefined) break;
+              parseCache.delete(oldest);
+            }
           } finally {
             tree.delete();
           }
@@ -182,7 +188,7 @@ export async function buildRepoMap(jail: WorkspaceJail, raw: unknown = {}): Prom
     files.push({ ...parsed, path: rel.split(path.sep).join('/'), modifiedAt: stat.mtimeMs });
   }
   const inbound = rankReferences(files);
-  const newest = Math.max(...files.map((file) => file.modifiedAt), Date.now());
+  const newest = files.reduce((value, file) => Math.max(value, file.modifiedAt), Date.now());
   const ranked: RepoMapFile[] = files
     .map((file) => {
       const ageDays = Math.max(0, (newest - file.modifiedAt) / 86_400_000);

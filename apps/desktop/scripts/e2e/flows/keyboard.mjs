@@ -11,6 +11,16 @@ async function tabUntil(page, predicate, description) {
 export async function run(page, { url, expect }) {
   await page.goto(new URL('/', url).href, { waitUntil: 'domcontentloaded' });
   await page.getByRole('textbox', { name: 'Message Ferry' }).waitFor();
+  await page.keyboard.press('Control+k');
+  const palette = page.getByRole('dialog');
+  await expect(palette).toBeVisible();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await expect
+    .poll(() => palette.evaluate((dialog) => dialog.contains(document.activeElement)))
+    .toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(palette).toBeHidden();
   await tabUntil(
     page,
     () => document.activeElement?.getAttribute('aria-label') === 'Message Ferry',

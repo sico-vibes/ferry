@@ -46,7 +46,7 @@ All values live in `packages/ui/src/styles/tokens.css` as CSS variables and are 
 | `--fade-line` | `linear-gradient(90deg,transparent,rgba(255,255,255,0.12),transparent)` |
 
 ### 2.3 Text
-`--text-1: #EDEEF2` (primary) · `--text-2: #A3A6B0` (secondary) · `--text-3: #82848E` (muted/meta; ≥ 4.5:1 on canvas, card and panel surfaces) · `--text-link: #60A5FA` · `--text-on-gradient: #FFFFFF` · `--text-on-send: #0B0C0F`
+`--text-1: #EDEEF2` (primary) · `--text-2: #A3A6B0` (secondary) · `--text-3: #9C9EA7` (muted/meta; AA lift (A5.7), ≥ 4.5:1 on all nine measured solid text surfaces while remaining dimmer than secondary) · `--text-link: #60A5FA` · `--text-on-gradient: #FFFFFF` · `--text-on-send: #0B0C0F`
 
 ### 2.4 Accents
 | Token | Value | Use |
@@ -95,7 +95,7 @@ The dark palette above remains the default and visual reference. Light mode is s
 | Token group | Light values and decisions |
 |---|---|
 | App and surfaces | App `#F6F7F9`; canvas `#FAFBFD`; panels and cards white; raised and rail tiles `#EEF1F5`; capacity surfaces use a pale blue wash. |
-| Borders and text | Borders use `rgba(15,23,42,…)`; primary text `#172033`, secondary `#475569`; muted `--text-3` remains unchanged per parallel lane. |
+| Borders and text | Borders use `rgba(15,23,42,…)`; primary text `#172033`, secondary `#475569`, muted `--text-3` `#5D697D` (lighter than secondary and at least 4.5:1 on all nine measured solid text surfaces). |
 | Accent and gradients | Functional blue stays blue with deeper light-background contrast. Gradient hues remain consistent, while composer, headline, and send stops are tuned for legibility on pale surfaces. |
 | Effects and brand | Glows, dots, spotlights, circuit lines, and shadows are softened; Ferry brand ink, lilac, violet, and logo gradient retain their identity. |
 | Status and data | Semantic status, language, and chart series colors retain their hues; surface tints and blue track colors are softened for light backgrounds. |
@@ -275,7 +275,7 @@ Two densities: **comfortable** (default, reference spacing) and **compact** (row
 - **Compact Home:** after the first sessions exist, Home leads with the composer + "Continue" cards; the full hero shows on first run and empty states (setting to keep it).
 
 ### 7.7 Accessibility floor
-Body/meta text on any surface must reach 4.5:1 (AA). `--text-3` may be lifted slightly to meet it on `--bg-canvas`; decorative text (disclaimers) keeps ≥ 4.5:1 too. Every icon-only control has an `aria-label`; focus ring per §4.13.
+Body/meta text on any surface must reach 4.5:1 (AA). `--text-3` uses the AA lift (A5.7): dark `#9C9EA7` and light `#5D697D`, with both themes checked against all nine solid text surfaces; decorative text (disclaimers) keeps ≥ 4.5:1 too. Every icon-only control has an `aria-label`; focus ring per §4.13.
 
 ### 7.8 CLI translation
 The CLI reuses the palette via truecolor: blue accent, §7.2 status colors, muted gray for secondary; the signature gradient appears only in the startup banner; the capacity ring becomes `≈ 420 steps ▰▰▰▰▰▰▱▱▱ 64%`.
