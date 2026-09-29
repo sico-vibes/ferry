@@ -22,6 +22,7 @@ import {
   RoutingSettingsSchema,
   type MessagePart,
   type Profile,
+  type Provider,
   type Session,
 } from '@ferry/shared';
 
@@ -233,8 +234,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     const engine =
       command === 'serve' && flags.values.gateway === true
         ? 'local'
-        : (flags.values.engine ??
-          (command === 'oauth' || command === 'settings' ? 'local' : 'mock'));
+        : (flags.values.engine ?? (process.env.FERRY_ENGINE === 'mock' ? 'mock' : 'local'));
     if (engine !== 'mock' && engine !== 'local')
       throw new CliError(2, 'Invalid --engine. Use mock or local.');
     if (command === 'run') validateRunArguments(flags);
@@ -266,6 +266,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       return 0;
     }
     if (command === 'run') {
+      if (engine === 'local') await assertLocalProvidersConfigured(client);
       const prompt = flags.positionals.slice(1).join(' ');
       const code = await runPrompt(
         client,
@@ -337,6 +338,16 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       if (flags.values.providers === true) return await doctorProviders(client, json);
       return await doctor(dataDir, undefined, json);
     }
+    if (command === 'status') {
+      const providers = await client.providers.list();
+      const configured = providers.some(isProviderConfigured);
+      writeResult(
+        json,
+        { engine, providersConfigured: configured },
+        `Engine: ${engine}\nProviders configured: ${configured ? 'yes' : 'no'}\n`,
+      );
+      return 0;
+    }
     if (command === 'keys') return await keys(client, flags.positionals.slice(1), json);
     if (command === 'settings')
       return await routingSettings(client, flags.positionals.slice(1), json);
@@ -368,6 +379,23 @@ class CliError extends Error {
   }
 }
 
+async function assertLocalProvidersConfigured(client: FerryClient): Promise<void> {
+  const providers = await client.providers.list();
+  const configured = providers.some(isProviderConfigured);
+  if (!configured)
+    throw new CliError(
+      1,
+      'No providers configured — run `ferry` setup / add a key in the Ferry app.',
+    );
+}
+
+function isProviderConfigured(provider: Provider): boolean {
+  return (
+    provider.enabled &&
+    (provider.keyStatus !== 'missing' || (!provider.keyRequired && provider.modelCount > 0))
+  );
+}
+
 function writeResult(json: boolean, value: unknown, human: string): void {
   process.stdout.write(json ? `${JSON.stringify(value)}\n` : human);
 }
@@ -379,9 +407,11 @@ export async function main(): Promise<void> {
       version: process.env.FERRY_RELEASE_VERSION ?? '0.9.0',
       description: [
         'Ferry coding agent CLI',
+        `Active engine: ${process.env.FERRY_ENGINE === 'mock' ? 'mock' : 'local'} (override with --engine mock|local)`,
         '',
         'Commands:',
         '  run <prompt>                                  Run a coding task',
+        '  status                                        Show engine and provider status',
         '  serve --gateway                              Run Ferry core and Gateway in the foreground',
         '  gateway start|stop|status                    Manage the local Gateway',
         '  gateway keys create <name> [profile]         Create a Gateway key (shown once)',
@@ -421,6 +451,7 @@ const CLI_COMMANDS = new Set([
   'keys',
   'settings',
   'init',
+  'status',
 ]);
 
 async function gatewayCommand(args: string[], json: boolean, dataDir: string): Promise<number> {

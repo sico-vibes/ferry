@@ -27,6 +27,7 @@ function runCli(args: string[], extra: { input?: string } = {}): CliResult {
   const options: SpawnSyncOptionsWithStringEncoding = {
     encoding: 'utf8',
     timeout: 60_000,
+    env: { ...process.env, FERRY_ENGINE: 'mock' },
     ...(extra.input === undefined ? {} : { input: extra.input }),
   };
   const result = spawnSync(process.execPath, [cliEntry, ...args], options);

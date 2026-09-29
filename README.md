@@ -23,10 +23,11 @@ Free capacity is modest and volatile. Daily requests (RPD) and per-model limits 
 ```sh
 ferry --help
 ferry doctor --providers
-ferry run "Explain this project" --engine local
+ferry status
+ferry run "Explain this project"
 ```
 
-See [CLI commands and flags](docs/CLI.md), [routing](docs/ROUTING.md), and [troubleshooting](docs/TROUBLESHOOTING.md). The default CLI engine may be a mock in development; use `--engine local` for the local engine where available.
+The CLI uses the local engine by default. Add a provider key in the Ferry app or complete `ferry` setup before running a task. Use `--engine mock` only when you explicitly want the demo engine. See [CLI commands and flags](docs/CLI.md), [routing](docs/ROUTING.md), and [troubleshooting](docs/TROUBLESHOOTING.md).
 
 ## Privacy
 

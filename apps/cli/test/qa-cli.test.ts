@@ -38,7 +38,11 @@ function runCli(
     timeout: 90_000,
     ...(extra.input === undefined ? {} : { input: extra.input }),
     ...(extra.cwd === undefined ? {} : { cwd: extra.cwd }),
-    ...(extra.env === undefined ? {} : { env: extra.env }),
+    env: {
+      ...process.env,
+      ...extra.env,
+      FERRY_ENGINE: extra.env?.FERRY_ENGINE ?? 'mock',
+    },
   };
   const result = spawnSync(process.execPath, [cliEntry, ...args], options);
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
@@ -88,9 +92,30 @@ describe('@ferry/cli argument parsing and exit codes', () => {
     () => {
       const result = runCli(['--help']);
       expect(result.status).toBe(0);
+      expect(result.stdout).toContain('Active engine: mock');
       expect(result.stdout).toContain('serve --gateway');
       expect(result.stdout).toContain('gateway start|stop|status');
       expect(result.stdout).toContain('gateway keys create <name> [profile]');
+    },
+    ONE_SPAWN,
+  );
+
+  it(
+    'reports local as the default engine and fails clearly when no provider is configured',
+    () => {
+      const dataDir = tempDirectory('local-default');
+      const env = { ...process.env, FERRY_ENGINE: '' };
+      const status = runCli(['status', '--json', '--data-dir', dataDir], { env });
+      expect(status.status).toBe(0);
+      expect(JSON.parse(status.stdout)).toMatchObject({
+        engine: 'local',
+        providersConfigured: false,
+      });
+
+      const run = runCli(['run', 'hello', '--data-dir', dataDir], { env });
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('No providers configured');
+      expect(run.stderr).toContain('run `ferry` setup / add a key in the Ferry app');
     },
     ONE_SPAWN,
   );
@@ -178,7 +203,15 @@ describe('@ferry/cli argument parsing and exit codes', () => {
     'returns 0 with only JSONL on stdout for a successful run',
     () => {
       const dataDir = tempDirectory('run-ok');
-      const result = runCli(['run', 'hello from the qa suite', '--json', '--data-dir', dataDir]);
+      const result = runCli([
+        'run',
+        'hello from the qa suite',
+        '--engine',
+        'mock',
+        '--json',
+        '--data-dir',
+        dataDir,
+      ]);
       expect(result.status).toBe(0);
       expect(result.stderr).toBe('');
       const events = jsonLines(result.stdout) as { type?: unknown }[];
@@ -596,8 +629,17 @@ describe('@ferry/cli abort handling', () => {
       const dataDir = tempDirectory('abort');
       const child = spawn(
         process.execPath,
-        [cliEntry, 'run', 'hello from the qa suite', '--json', '--data-dir', dataDir],
-        { stdio: ['ignore', 'pipe', 'pipe'] },
+        [
+          cliEntry,
+          'run',
+          'hello from the qa suite',
+          '--engine',
+          'mock',
+          '--json',
+          '--data-dir',
+          dataDir,
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FERRY_ENGINE: 'mock' } },
       );
       try {
         const producedOutput = new Promise<boolean>((resolve) => {

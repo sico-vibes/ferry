@@ -36,6 +36,32 @@ if (
   );
 console.log('Packaged Gateway CLI works');
 const userDataDirectory = await mkdtemp(join(tmpdir(), 'ferry-packaged-smoke-'));
+const cliDataDirectory = join(userDataDirectory, 'cli-data');
+const cliStatus = spawnSync(cliShim, ['status', '--json', '--data-dir', cliDataDirectory], {
+  encoding: 'utf8',
+  shell: true,
+  timeout: 30_000,
+  windowsHide: true,
+  env: { ...process.env, FERRY_ENGINE: '' },
+});
+if (cliStatus.error || cliStatus.status !== 0) {
+  await rm(userDataDirectory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  throw new Error(
+    `Packaged CLI default-engine smoke failed: ${cliStatus.error?.message ?? cliStatus.stderr ?? cliStatus.status}`,
+  );
+}
+let cliStatusValue;
+try {
+  cliStatusValue = JSON.parse(cliStatus.stdout);
+} catch {
+  await rm(userDataDirectory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  throw new Error(`Packaged CLI status returned invalid JSON: ${cliStatus.stdout}`);
+}
+if (cliStatusValue.engine !== 'local') {
+  await rm(userDataDirectory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  throw new Error(`Packaged CLI default engine is not local: ${JSON.stringify(cliStatusValue)}`);
+}
+console.log('Packaged CLI defaults to the local engine');
 const coreLogPath = join(userDataDirectory, 'engine', 'logs', 'ferry.log');
 const smokeStartedAt = new Date();
 const portServer = createServer();

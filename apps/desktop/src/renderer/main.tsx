@@ -125,14 +125,24 @@ if (demoMode === 'long' || demoMode === 'exhausted') {
     mountApp(mock);
   });
 } else if (window.ferryHost) {
-  mountApp(mock);
   void bootstrapClient()
     .then((currentClient) => {
       queryClient.clear();
       mountApp(currentClient);
     })
     .catch((error: unknown) => {
-      console.error('Core connection failed, continuing with mock client', error);
+      console.error('Core connection failed; the desktop app will not use mock data', error);
+      appRoot.render(
+        <main className="flex min-h-screen items-center justify-center bg-background p-8 text-foreground">
+          <section className="max-w-lg space-y-3">
+            <h1 className="text-xl font-semibold">Ferry core could not start</h1>
+            <p className="text-muted-foreground">
+              Restart the Ferry app. Your workspace data is safe, and Ferry will reconnect to its
+              local engine when it starts successfully.
+            </p>
+          </section>
+        </main>,
+      );
     });
 } else
   void bootstrapClient()

@@ -1,6 +1,6 @@
 # CLI
 
-The parser in `apps/cli/src/main.tsx` is the current source of truth. Run `ferry --help` for the packaged build's live help. (Command help output is being expanded.) The default engine is `mock` for most commands in this development checkout; `oauth` and `settings` default to `local`. `--engine local` requires the local engine to be available.
+The parser in `apps/cli/src/main.tsx` is the current source of truth. Run `ferry --help` for the packaged build's live help. The default engine is `local`; `--engine mock` or `FERRY_ENGINE=mock` explicitly selects the demo engine. `ferry --help` and `ferry status` show the active engine. A local run requires at least one configured provider; add a key in the Ferry app or run `ferry` setup.
 
 ## Commands
 
@@ -9,6 +9,7 @@ The parser in `apps/cli/src/main.tsx` is the current source of truth. Run `ferry
 | `ferry` | Interactive terminal UI |
 | `ferry run <prompt>` | Start a prompt/session |
 | `ferry resume <sessionId>` | Resume a session |
+| `ferry status` | Show the active engine and provider configuration |
 | `ferry serve` | Placeholder; reports that engine transport is coming in B0 |
 | `ferry quota [--watch]` | Show quotas or watch updates |
 | `ferry providers [list\|probe\|enable\|disable ...]` | Inspect/manage configured providers |
@@ -33,8 +34,8 @@ Examples:
 
 ```sh
 ferry doctor --providers --json
-ferry run "Summarize this repository" --cwd . --engine local --permission ask
-ferry run "Inspect the failing tests" --max-steps 5 --json
+ferry run "Summarize this repository" --cwd . --permission ask
+ferry run "Inspect the failing tests" --engine mock --max-steps 5 --json
 ferry profiles chain show Auto-Free
 ```
 
