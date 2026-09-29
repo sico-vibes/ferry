@@ -1,0 +1,37 @@
+name: Install smoke
+
+# Clean-VM install → upgrade → uninstall test of the Windows installer (B11).
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/desktop/**'
+      - '.github/workflows/install-smoke.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: install-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-install-smoke:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: ./.github/actions/setup-msvc-node-gyp
+      - run: pnpm install --frozen-lockfile
+      - name: Build installer
+        run: pnpm --filter @ferry/desktop dist
+      - name: Install, upgrade and uninstall on a clean runner
+        run: pnpm --filter @ferry/desktop install:smoke
