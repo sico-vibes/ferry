@@ -357,7 +357,7 @@ describe('external CLI adapters', () => {
     await expect(cancelled).rejects.toThrow();
   }, 20_000);
 
-  it.skipIf(process.platform !== 'win32')(
+  it.runIf(process.platform === 'win32')(
     'detects a CMD shim under a path containing spaces',
     async () => {
       const root = await tempRoot();
@@ -375,10 +375,7 @@ describe('external CLI adapters', () => {
     10_000,
   );
 
-  it('reports a watchdog timeout as a timeout (QA: pre-existing, fails on Windows)', async () => {
-    // BUG: execute() rejects with "Delegate timed out" only after killTree()
-    // resolves, but on Windows the killed process settles the execa promise
-    // first, so the watchdog surfaces as "CLI exited with code 1" instead.
+  it('reports a watchdog timeout as a timeout', async () => {
     const root = await tempRoot();
     const slow = await installFakeClis(join(root, 'slow'), { delayBeforeEventsMs: 100 });
     await expect(
@@ -408,6 +405,21 @@ describe('external CLI adapters', () => {
     expect(await readStringArray(captureArgsPath)).toContain('--version');
     expect(await readStringArray(captureArgsPath)).not.toContain('login');
   }, 20_000);
+
+  it.runIf(process.platform !== 'win32')(
+    'surfaces CLI spawn errors with the operating system error and command',
+    async () => {
+      const root = await tempRoot();
+      const executable = join(root, 'missing-fake-cli');
+      await expect(
+        runAdapter('codex', {
+          prompt: 'cannot start',
+          cwd: root,
+          executable,
+        }),
+      ).rejects.toThrow(/Failed to start CLI \((?:ENOENT|EACCES)\):.*missing-fake-cli/);
+    },
+  );
 });
 
 describe('lane reader and delegation brief', () => {

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export type FakeCliName = 'codex' | 'opencode' | 'claude';
@@ -86,11 +86,22 @@ export async function installFakeClis(
     const events = JSON.stringify(
       options.events ?? stream(name, options.finalText ?? 'Fake delegate completed.'),
     );
-    const script = `import { appendFile, writeFile } from 'node:fs/promises';\nimport { resolve, join } from 'node:path';\nconst args = process.argv.slice(2);\nif (${JSON.stringify(options.processIdPath ?? '')}) await writeFile(${JSON.stringify(options.processIdPath ?? '')}, String(process.pid));\nif (${JSON.stringify(options.readyMarkerPath ?? '')}) await writeFile(${JSON.stringify(options.readyMarkerPath ?? '')}, 'ready');\nlet stdin = '';\nif (!args.includes('--version') && !['login','auth'].includes(args[0])) for await (const chunk of process.stdin) stdin += chunk;\nconst target = process.env.FAKE_CLI_TARGET ?? ${JSON.stringify(options.targetDir ?? '')};\nif (target) { await appendFile(join(resolve(target), 'FAKE_CLI_TOUCHED.txt'), ${JSON.stringify(`${name} executed\n`)}); }\nif (${JSON.stringify(options.captureArgsPath ?? '')}) await writeFile(${JSON.stringify(options.captureArgsPath ?? '')}, JSON.stringify([...args, ...(stdin ? [stdin] : [])]));\nif (args.includes('--version')) { process.stdout.write(${JSON.stringify(`${name} fake 1.0`)}); process.exit(0); }\nif (['login','auth'].includes(args[0])) { process.stdout.write('Logged in'); process.exit(0); }\nawait new Promise(resolve => setTimeout(resolve, ${String(options.delayBeforeEventsMs ?? 0)}));\nconst events = ${events};\nfor (const event of events) process.stdout.write(JSON.stringify(event) + '\\n');\nawait new Promise(resolve => setTimeout(resolve, ${String(options.holdOpenMs ?? 0)}));\n`;
+    const script = `${process.platform === 'win32' ? '' : '#!/usr/bin/env node\n'}import { appendFile, writeFile } from 'node:fs/promises';\nimport { resolve, join } from 'node:path';\nconst args = process.argv.slice(2);\nif (${JSON.stringify(options.processIdPath ?? '')}) await writeFile(${JSON.stringify(options.processIdPath ?? '')}, String(process.pid));\nif (${JSON.stringify(options.readyMarkerPath ?? '')}) await writeFile(${JSON.stringify(options.readyMarkerPath ?? '')}, 'ready');\nlet stdin = '';\nif (!args.includes('--version') && !['login','auth'].includes(args[0])) for await (const chunk of process.stdin) stdin += chunk;\nconst target = process.env.FAKE_CLI_TARGET ?? ${JSON.stringify(options.targetDir ?? '')};\nif (target) { await appendFile(join(resolve(target), 'FAKE_CLI_TOUCHED.txt'), ${JSON.stringify(`${name} executed\n`)}); }\nif (${JSON.stringify(options.captureArgsPath ?? '')}) await writeFile(${JSON.stringify(options.captureArgsPath ?? '')}, JSON.stringify([...args, ...(stdin ? [stdin] : [])]));\nif (args.includes('--version')) { process.stdout.write(${JSON.stringify(`${name} fake 1.0`)}); process.exit(0); }\nif (['login','auth'].includes(args[0])) { process.stdout.write('Logged in'); process.exit(0); }\nawait new Promise(resolve => setTimeout(resolve, ${String(options.delayBeforeEventsMs ?? 0)}));\nconst events = ${events};\nfor (const event of events) process.stdout.write(JSON.stringify(event) + '\\n');\nawait new Promise(resolve => setTimeout(resolve, ${String(options.holdOpenMs ?? 0)}));\n`;
     await writeFile(scriptPath, script, 'utf8');
-    const shim = join(binDir, `${name}.cmd`);
-    await writeFile(shim, `@echo off\r\nnode "%~dp0\\${name}-fake.mjs" %*\r\n`, 'utf8');
-    paths[name] = shim;
+    if (process.platform === 'win32') {
+      const shim = join(binDir, `${name}.cmd`);
+      await writeFile(shim, `@echo off\r\nnode "%~dp0\\${name}-fake.mjs" %*\r\n`, 'utf8');
+      paths[name] = shim;
+    } else {
+      const launcher = join(binDir, name);
+      await writeFile(
+        launcher,
+        `#!/bin/sh\nexec node "$(dirname "$0")/${name}-fake.mjs" "$@"\n`,
+        'utf8',
+      );
+      await chmod(launcher, 0o755);
+      paths[name] = launcher;
+    }
   }
   return paths;
 }

@@ -78,25 +78,29 @@ describe('QA delegate: argument safety', () => {
     }).not.toThrow();
   });
 
-  it('preserves a multi-line brief as a single argument through the .cmd shim', async () => {
-    // BUG: on Windows the .cmd shim goes through cmd.exe, which splits the
-    // command line at embedded newlines. Every generated delegation brief is
-    // multi-line markdown, but only the first line reaches the CLI (verified:
-    // captured args contain "Goal:" and drop the rest).
-    const root = await tempRoot();
-    const captureArgsPath = join(root, 'args.json');
-    const paths = await installFakeClis(join(root, 'bin'), { captureArgsPath });
-    const prompt = 'Goal:\n  do the thing\n  then stop';
-    await runAdapter('opencode', {
-      prompt,
-      cwd: root,
-      executable: paths.opencode,
-      model: 'acme/model-1',
-    });
-    const parsed: unknown = JSON.parse(await readFile(captureArgsPath, 'utf8'));
-    expect(parsed).toContain('acme/model-1');
-    expect(parsed).toContain(prompt);
-  }, 30_000);
+  it.runIf(process.platform === 'win32')(
+    'preserves a multi-line brief as a single argument through the .cmd shim',
+    async () => {
+      // BUG: on Windows the .cmd shim goes through cmd.exe, which splits the
+      // command line at embedded newlines. Every generated delegation brief is
+      // multi-line markdown, but only the first line reaches the CLI (verified:
+      // captured args contain "Goal:" and drop the rest).
+      const root = await tempRoot();
+      const captureArgsPath = join(root, 'args.json');
+      const paths = await installFakeClis(join(root, 'bin'), { captureArgsPath });
+      const prompt = 'Goal:\n  do the thing\n  then stop';
+      await runAdapter('opencode', {
+        prompt,
+        cwd: root,
+        executable: paths.opencode,
+        model: 'acme/model-1',
+      });
+      const parsed: unknown = JSON.parse(await readFile(captureArgsPath, 'utf8'));
+      expect(parsed).toContain('acme/model-1');
+      expect(parsed).toContain(prompt);
+    },
+    30_000,
+  );
 });
 
 describe('QA delegate: lane trust', () => {

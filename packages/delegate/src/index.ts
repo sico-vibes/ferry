@@ -725,6 +725,13 @@ async function execute(
     ]);
     if (watchdog.timedOut) throw new Error(`Delegate timed out after ${String(timeout)}ms`);
     if (stdoutTail.trim()) onProgress(stdoutTail);
+    if (outcome.failed && outcome.exitCode === undefined && typeof outcome.code === 'string') {
+      const details =
+        (typeof outcome.shortMessage === 'string' && outcome.shortMessage) ||
+        (typeof outcome.message === 'string' && outcome.message) ||
+        `could not start ${invocation.file}`;
+      throw new Error(`Failed to start CLI (${outcome.code}): ${details}`, { cause: outcome });
+    }
     if (outcome.failed)
       throw new Error(stderr || `CLI exited with code ${String(outcome.exitCode)}`);
     return { stdout, stderr };
