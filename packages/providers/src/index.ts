@@ -52,6 +52,7 @@ export interface MappedProviderError {
   kind: ProviderErrorKind;
   retryAfterMs: number | null;
   message: string;
+  retryable: boolean;
 }
 
 export interface ParsedQuotaWindow {
@@ -806,7 +807,14 @@ function providerErrorMessage(record: Record<string, unknown>, error: unknown): 
 }
 
 export function mapProviderError(error: unknown): MappedProviderError {
-  const record = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+  const outer = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+  // The AI SDK wraps errors raised while consuming a stream. Classify the
+  // provider cause instead of treating the wrapper's generic message as an
+  // unrelated request failure.
+  const record =
+    outer.name === 'AI_StreamProviderError' && outer.cause && typeof outer.cause === 'object'
+      ? (outer.cause as Record<string, unknown>)
+      : outer;
   const response =
     record.response && typeof record.response === 'object'
       ? (record.response as Record<string, unknown>)
@@ -860,7 +868,12 @@ export function mapProviderError(error: unknown): MappedProviderError {
   else if (status >= 500) kind = 'server';
   else if (status >= 400) kind = 'request_scoped_client';
   else kind = 'network';
-  return { kind, retryAfterMs, message: safeProviderMessage(message, kind, retryAfterMs) };
+  return {
+    kind,
+    retryAfterMs,
+    message: safeProviderMessage(message, kind, retryAfterMs),
+    retryable: ['network', 'timeout', 'server', 'rate_limit', 'quota_exhausted'].includes(kind),
+  };
 }
 
 function safeProviderMessage(
@@ -1233,7 +1246,12 @@ export async function discoverProviderModels(
       ? metadataSupportsTools
       : (registrySupportsTools ?? (isPreferredToolModel(providerId, normalizedId) ? true : null));
     const free =
-      (providerId === 'openrouter' && /:free(?:$|:)/i.test(normalizedId)) || (known?.free ?? false);
+      providerId === 'openrouter'
+        ? /:free(?:$|:)/i.test(normalizedId)
+        : providerId === 'kilo'
+          ? /:free(?:$|:)/i.test(normalizedId) ||
+            (known?.priceInPerM === 0 && known.priceOutPerM === 0)
+          : (known?.free ?? false);
     const contextWindow = known?.contextWindow ?? 8192;
     const model = ModelInfoSchema.safeParse({
       ref: `${providerId}/${normalizedId}`,

@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -7,8 +7,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from '@playwright/test';
 
 const packageRoot = resolve(import.meta.dirname, '..');
-const executable = join(packageRoot, 'release', 'win-unpacked', 'Ferry.exe');
-const cliShim = join(packageRoot, 'release', 'win-unpacked', 'resources', 'cli', 'ferry.cmd');
+const executable =
+  process.env.FERRY_SMOKE_EXECUTABLE ?? join(packageRoot, 'release', 'win-unpacked', 'Ferry.exe');
+const cliShim =
+  process.env.FERRY_SMOKE_CLI ??
+  join(packageRoot, 'release', 'win-unpacked', 'resources', 'cli', 'ferry.cmd');
 const cliResult = spawnSync(cliShim, ['--help'], {
   encoding: 'utf8',
   shell: true,
@@ -35,7 +38,9 @@ if (
     `Packaged Gateway CLI smoke failed: ${gatewayResult.error?.message ?? gatewayResult.stderr ?? gatewayResult.status}`,
   );
 console.log('Packaged Gateway CLI works');
-const userDataDirectory = await mkdtemp(join(tmpdir(), 'ferry-packaged-smoke-'));
+const userDataDirectory =
+  process.env.FERRY_SMOKE_DATA_DIR ?? (await mkdtemp(join(tmpdir(), 'ferry-packaged-smoke-')));
+const preserveSmokeData = process.env.FERRY_SMOKE_PRESERVE_DATA === 'true';
 const cliDataDirectory = join(userDataDirectory, 'cli-data');
 const cliStatus = spawnSync(cliShim, ['status', '--json', '--data-dir', cliDataDirectory], {
   encoding: 'utf8',
@@ -130,7 +135,7 @@ const finish = async (error) => {
   let cleanupError;
   for (let attempt = 0; attempt < 20; attempt += 1) {
     try {
-      await rm(userDataDirectory, { recursive: true, force: true });
+      if (!preserveSmokeData) await rm(userDataDirectory, { recursive: true, force: true });
       cleanupError = undefined;
       break;
     } catch (error) {
@@ -199,9 +204,23 @@ async function waitForRendererLoad() {
               };
             });
             if (
-              !['providers', 'models', 'quota'].every((domain) =>
-                domains.realDomains.includes(domain),
-              ) ||
+              ![
+                'workspaces',
+                'checkpoints',
+                'sessions',
+                'approvals',
+                'providers',
+                'oauth',
+                'quota',
+                'models',
+                'profiles',
+                'settings',
+                'skills',
+                'mcp',
+                'optimizer',
+                'delegation',
+                'gateway',
+              ].every((domain) => domains.realDomains.includes(domain)) ||
               domains.providers === 0 ||
               !domains.modelsAreArray ||
               typeof domains.capacity.percentRemaining !== 'number'
@@ -210,6 +229,31 @@ async function waitForRendererLoad() {
             console.log(
               `Packaged real client connected with ${String(domains.realDomains.length)} domains`,
             );
+            if (process.env.FERRY_SMOKE_SEED_DATA === 'true') {
+              const fixturePath = join(userDataDirectory, 'workspace');
+              await mkdir(fixturePath, { recursive: true });
+              await writeFile(
+                join(fixturePath, 'README.md'),
+                '# Installer persistence smoke\n',
+                'utf8',
+              );
+              const persisted = await page.evaluate(async (workspacePath) => {
+                const client = window.ferryRpcClient;
+                if (!client) throw new Error('RPC client unavailable for persistence check');
+                const settings = await client.settings.update({ theme: 'light' });
+                const workspace = await client.workspaces.open(workspacePath);
+                const session = await client.sessions.create({
+                  workspaceId: workspace.id,
+                  title: 'Installer persistence smoke',
+                });
+                return { theme: settings.theme, sessionId: session.id };
+              }, fixturePath);
+              await writeFile(
+                process.env.FERRY_SMOKE_STATE_FILE,
+                JSON.stringify(persisted),
+                'utf8',
+              );
+            }
             console.log(`Packaged app became interactive after ${String(interactiveMs)} ms`);
             if (interactiveMs > 2_000)
               console.warn(`Packaged app TTI exceeded 2000 ms: ${String(interactiveMs)} ms`);

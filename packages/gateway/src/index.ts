@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { mapProviderError } from '@ferry/providers';
+import { classifyProviderError } from '@ferry/router';
 
 export type GatewayProfile = string;
 export interface GatewayKey {
@@ -164,9 +165,22 @@ function mappedFailure(error: unknown) {
       message: error instanceof Error ? error.message : 'Invalid request',
     };
   }
+  const outer = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+  const record =
+    outer.name === 'AI_StreamProviderError' && outer.cause && typeof outer.cause === 'object'
+      ? (outer.cause as Record<string, unknown>)
+      : outer;
   const mapped = mapProviderError(error);
-  const record = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
-  const rawStatus = Number(record.statusCode ?? record.status ?? 0);
+  const classified = classifyProviderError({
+    status: record.status,
+    statusCode: record.statusCode,
+    code: record.code,
+    type: record.type,
+    message: record.message,
+    responseBody: record.data ?? record.responseBody,
+    ...(record.response instanceof Response ? { headers: record.response.headers } : {}),
+  });
+  const rawStatus = Number(classified.status ?? record.statusCode ?? record.status ?? 0);
   const status =
     rawStatus >= 400 && rawStatus <= 599
       ? rawStatus
@@ -189,7 +203,13 @@ function mappedFailure(error: unknown) {
           : status >= 500
             ? 'server_error'
             : 'invalid_request_error';
-  return { status, type, code: mapped.kind, message: mapped.message };
+  return {
+    status,
+    type,
+    code: classified.family,
+    message: mapped.message,
+    retryable: classified.retryable,
+  };
 }
 function textContent(value: unknown, field: string): string {
   if (typeof value === 'string') return value;

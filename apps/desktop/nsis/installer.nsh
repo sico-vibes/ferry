@@ -2,10 +2,21 @@
 !include "nsDialogs.nsh"
 !include "WinMessages.nsh"
 !include "StrFunc.nsh"
+!include "FileFunc.nsh"
 
 !ifndef BUILD_UNINSTALLER
 Var AddToPathCheckbox
 Var ExplorerCheckbox
+Var ForceAddToPath
+
+!macro customInit
+  StrCpy $ForceAddToPath 0
+  ${GetParameters} $0
+  ${GetOptions} $0 "/ADD_TO_PATH" $1
+  ${IfNot} $1 == ""
+    StrCpy $ForceAddToPath 1
+  ${EndIf}
+!macroend
 
 !macro customWelcomePage
   Page custom FerryInstallOptionsPage
@@ -28,6 +39,9 @@ FunctionEnd
 
 !macro customInstall
   ${NSD_GetState} $AddToPathCheckbox $0
+  ${If} $ForceAddToPath == 1
+    StrCpy $0 ${BST_CHECKED}
+  ${EndIf}
   ${If} $0 == ${BST_CHECKED}
     WriteRegDWORD HKCU "Software\Ferry" "AddToPath" 1
     ReadRegStr $1 HKCU "Environment" "Path"
@@ -54,9 +68,16 @@ FunctionEnd
 !ifdef BUILD_UNINSTALLER
 ${UnStrRep}
 Var DeleteUserDataCheckbox
+Var ForceDeleteUserData
 
 !macro customUnInit
   StrCpy $DeleteUserDataCheckbox 0
+  StrCpy $ForceDeleteUserData 0
+  ${GetParameters} $0
+  ${GetOptions} $0 "/REMOVE_DATA" $1
+  ${IfNot} $1 == ""
+    StrCpy $ForceDeleteUserData 1
+  ${EndIf}
 !macroend
 
 !macro customUnWelcomePage
@@ -69,7 +90,6 @@ Function un.DeleteUserDataPage
   ${If} $0 == error
     Abort
   ${EndIf}
-
   ${NSD_CreateLabel} 0 0 100% 24u "Your local settings and workspace data are kept unless you choose to delete them."
   Pop $0
   ${NSD_CreateCheckbox} 0 34u 100% 14u "Delete Ferry user data from this PC"
@@ -94,6 +114,9 @@ FunctionEnd
   ${EndIf}
   DeleteRegKey HKCU "Software\Ferry"
   ${NSD_GetState} $DeleteUserDataCheckbox $0
+  ${If} $ForceDeleteUserData == 1
+    StrCpy $0 ${BST_CHECKED}
+  ${EndIf}
   ${If} $0 == ${BST_CHECKED}
     RMDir /r "$APPDATA\@ferry\desktop"
     RMDir /r "$APPDATA\Ferry"

@@ -63,6 +63,58 @@ const task: TaskRecord = {
 };
 
 describe('step classification and routing', () => {
+  it('only routes Kilo models labeled free or priced at zero through Auto-Free', () => {
+    const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
+    if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
+    const kilo: Provider = { ...provider, id: 'kilo' as Provider['id'] };
+    const models: ModelInfo[] = [
+      {
+        ...model,
+        ref: 'kilo/deepseek/deepseek-v4-pro' as ModelInfo['ref'],
+        providerId: kilo.id,
+        free: true,
+        priceInPerM: null,
+        priceOutPerM: null,
+      },
+      {
+        ...model,
+        ref: 'kilo/qwen/qwen3.6-27b' as ModelInfo['ref'],
+        providerId: kilo.id,
+        free: false,
+        priceInPerM: 0.2,
+        priceOutPerM: 0.4,
+      },
+      {
+        ...model,
+        ref: 'kilo/deepseek/deepseek-v4-flash:free' as ModelInfo['ref'],
+        providerId: kilo.id,
+        free: false,
+        priceInPerM: null,
+        priceOutPerM: null,
+      },
+      {
+        ...model,
+        ref: 'kilo/local-zero' as ModelInfo['ref'],
+        providerId: kilo.id,
+        free: false,
+        priceInPerM: 0,
+        priceOutPerM: 0,
+      },
+    ];
+    const candidates = scoreModels({
+      models,
+      providers: [kilo],
+      capacity: { providers: [kilo], now: '2026-09-29T12:00:00.000Z' },
+      profile: autoFree,
+      step: 'edit',
+      estimate: { inputTokens: 100, requiresTools: true },
+    });
+    expect(candidates.map(({ ref }) => ref)).toEqual([
+      'kilo/deepseek/deepseek-v4-flash:free',
+      'kilo/local-zero',
+    ]);
+  });
+
   it('keeps missing quality neutral and keeps quality weight independent of reliability', () => {
     const input = {
       models: [model],

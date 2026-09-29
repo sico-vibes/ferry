@@ -15,7 +15,16 @@ function classified(
   scope: ResilienceScope,
   retryAfterMs: number | null = null,
 ): ClassifiedProviderError {
-  return { family, status: null, retryAfterMs, message: 'fixture failure', scope };
+  return {
+    family,
+    status: null,
+    retryAfterMs,
+    message: 'fixture failure',
+    scope,
+    retryable: ['server', 'timeout', 'stream_failure', 'rate_limit', 'quota_exhausted'].includes(
+      family,
+    ),
+  };
 }
 
 describe('QA adv: typed error classifier', () => {
@@ -35,6 +44,24 @@ describe('QA adv: typed error classifier', () => {
     );
   });
 
+  it('classifies paid-required as a permanent model exclusion for this session', () => {
+    expect(
+      classifyProviderError({ status: 402, code: 'paid_required', message: 'paid_required' }),
+    ).toMatchObject({ family: 'paid_required', scope: 'model', retryable: false });
+    const ledger = new ResilienceLedger();
+    const failure = classifyProviderError({
+      status: 402,
+      code: 'paid_required',
+      message: 'paid_required',
+    });
+    ledger.recordFailure(failure, 'kilo/deepseek/deepseek-v4-pro', 'kilo', 1_000);
+    expect(ledger.active('model', 'kilo/deepseek/deepseek-v4-pro', 1_000_000_000)).toMatchObject({
+      permanentNonFree: true,
+      lastFamily: 'paid_required',
+    });
+    expect(ledger.availableModelRefs(['kilo/deepseek/deepseek-v4-pro'], 1_000_000_000)).toEqual([]);
+    expect(ResilienceEntrySchema.safeParse(ledger.snapshot()[0]).success).toBe(true);
+  });
   it('lets a declared sub-hour window force the short rate-limit path', () => {
     const short = classifyProviderError({
       status: 429,

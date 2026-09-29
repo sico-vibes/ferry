@@ -308,6 +308,42 @@ describe('Ferry gateway', () => {
     );
   }, 30_000);
 
+  it('returns an OpenAI-compatible classified error chunk when a provider fails mid-stream', async () => {
+    const failingRuntime: GatewayRuntime = {
+      ...runtime,
+      complete: (input) => {
+        input.onText?.('partial');
+        return Promise.reject(
+          Object.assign(
+            new Error('stream wrapper failed', {
+              cause: Object.assign(new Error('upstream unavailable'), { statusCode: 503 }),
+            }),
+            { name: 'AI_StreamProviderError' },
+          ),
+        );
+      },
+    };
+    const handle = await startGateway({ runtime: failingRuntime, port: 0 });
+    stop = () => handle.close();
+    const response = await fetch(`http://127.0.0.1:${String(handle.port)}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        messages: [{ role: 'user', content: 'test' }],
+        stream: true,
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    const errorLine = body.split('\n').find((line) => line.startsWith('data: {"error"'));
+    expect(errorLine).toBeDefined();
+    if (!errorLine) throw new Error('Expected an OpenAI-compatible SSE error event');
+    expect(JSON.parse(errorLine.slice(6))).toMatchObject({
+      error: { type: 'server_error', code: 'server', message: 'upstream unavailable' },
+    });
+    expect(body).toContain('data: [DONE]');
+  }, 30_000);
   it('enforces optional per-key requests per minute', async () => {
     const url = await server();
     created.key.rateLimit = 1;

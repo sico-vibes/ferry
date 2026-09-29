@@ -77,7 +77,11 @@ export async function run(page, { url, expect }) {
   await page.keyboard.press('Enter');
   await expect(page.getByRole('dialog', { name: 'Configuration' })).toBeVisible();
   await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Configuration' })).toBeHidden();
 
+  const modelPicker = page.locator('button[aria-haspopup="dialog"]').filter({ hasText: 'Auto' });
+  await expect(modelPicker).toBeVisible();
+  await expect(modelPicker).toBeEnabled();
   await tabUntil(
     page,
     () =>

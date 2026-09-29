@@ -513,9 +513,11 @@ export function register(host: CoreHost, services: FerryServices): void {
               .array(ResilienceEntrySchema)
               .safeParse(services.settings.get('routing-resilience')).data;
             return (
-              parsed?.map(({ cooldownActive, ...entry }) =>
-                cooldownActive === undefined ? entry : { ...entry, cooldownActive },
-              ) ?? []
+              parsed?.map(({ cooldownActive, permanentNonFree, ...entry }) => ({
+                ...entry,
+                ...(cooldownActive === undefined ? {} : { cooldownActive }),
+                ...(permanentNonFree === undefined ? {} : { permanentNonFree }),
+              })) ?? []
             );
           })(),
           onResilienceState: (entries) => {

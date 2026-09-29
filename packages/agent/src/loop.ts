@@ -818,7 +818,9 @@ export class AgentLoop {
               avoidTrainingProviders: routing?.avoidTrainingProviders ?? false,
               providerDataUse: providerPolicy?.dataUse ?? null,
             });
-            const badCredentialStatus = [401, 402, 403].includes(classified.status ?? 0);
+            const badCredentialStatus =
+              [401, 402, 403].includes(classified.status ?? 0) &&
+              classified.family !== 'paid_required';
             if (badCredentialStatus) this.sessionBadKeys.get(sessionId)?.add(model.providerId);
             if (!localQuotaReservation && !badCredentialStatus && routingFailure.scope !== 'none') {
               this.resilience.recordFailure(routingFailure, model.ref, model.providerId);
@@ -2049,7 +2051,12 @@ async function runWithStepWatchdog(
 
 function errorInput(error: unknown): Parameters<typeof classifyProviderError>[0] {
   if (!error || typeof error !== 'object') return { message: String(error) };
-  const candidate = error as Record<string, unknown> & {
+  const outer = error as Record<string, unknown>;
+  const candidate = (
+    outer.name === 'AI_StreamProviderError' && outer.cause && typeof outer.cause === 'object'
+      ? outer.cause
+      : outer
+  ) as Record<string, unknown> & {
     response?: { status?: unknown; headers?: Headers };
     data?: { error?: { code?: unknown; type?: unknown; message?: unknown } };
   };

@@ -18,7 +18,8 @@ export type ErrorFamily =
   | 'timeout'
   | 'request_scoped_client'
   | 'request_too_large'
-  | 'stream_failure';
+  | 'stream_failure'
+  | 'paid_required';
 
 export interface ClassifiedProviderError {
   family: ErrorFamily;
@@ -26,6 +27,7 @@ export interface ClassifiedProviderError {
   retryAfterMs: number | null;
   message: string;
   scope: 'model' | 'key' | 'provider' | 'none';
+  retryable: boolean;
 }
 
 export interface ProviderErrorInput {
@@ -171,6 +173,10 @@ export function classifyProviderError(input: ProviderErrorInput): ClassifiedProv
     /free (?:models|tier).{0,60}(?:open.?code|zen)|only work inside open.?code/i.test(message)
   )
     family = 'unsupported_free_tier';
+  else if (
+    /paid[_ -]required|payment required|requires? (?:a )?paid (?:plan|account|model)/i.test(message)
+  )
+    family = 'paid_required';
   else if (status === 402 || status === 403) family = 'quota_exhausted';
   else if (status === 429 || /resource_exhausted|rate.?limit|too many requests/i.test(message)) {
     const shortDeclaredWindow = retryAfterMs !== null && retryAfterMs < 3_600_000;
@@ -185,12 +191,13 @@ export function classifyProviderError(input: ProviderErrorInput): ClassifiedProv
   else if (status !== null && status >= 500) family = 'server';
   else family = status === null ? 'stream_failure' : 'server';
   const scope =
-    family === 'quota_exhausted'
-      ? 'key'
-      : family === 'model_not_found' ||
-          family === 'tools_unsupported' ||
-          family === 'context_overflow'
-        ? 'model'
+    family === 'paid_required' ||
+    family === 'model_not_found' ||
+    family === 'tools_unsupported' ||
+    family === 'context_overflow'
+      ? 'model'
+      : family === 'quota_exhausted'
+        ? 'key'
         : family === 'server' || family === 'timeout' || family === 'stream_failure'
           ? 'provider'
           : family === 'rate_limit'
@@ -202,6 +209,9 @@ export function classifyProviderError(input: ProviderErrorInput): ClassifiedProv
     retryAfterMs,
     message: message || lower || 'Provider request failed',
     scope,
+    retryable: ['server', 'timeout', 'stream_failure', 'rate_limit', 'quota_exhausted'].includes(
+      family,
+    ),
   };
 }
 
@@ -212,6 +222,7 @@ export interface ResilienceEntry {
   failures: number;
   expiresAt: string;
   cooldownActive?: boolean;
+  permanentNonFree?: boolean;
   lastFamily: ErrorFamily;
   strikes: number;
   strikeWindowEndsAt: string;
@@ -222,6 +233,7 @@ export const ResilienceEntrySchema = z.object({
   failures: z.number().int().nonnegative(),
   expiresAt: z.iso.datetime(),
   cooldownActive: z.boolean().optional(),
+  permanentNonFree: z.boolean().optional(),
   lastFamily: z.enum([
     'rate_limit',
     'quota_exhausted',
@@ -236,6 +248,7 @@ export const ResilienceEntrySchema = z.object({
     'request_scoped_client',
     'request_too_large',
     'stream_failure',
+    'paid_required',
   ]),
   strikes: z.number().int().nonnegative(),
   strikeWindowEndsAt: z.iso.datetime(),
@@ -253,6 +266,7 @@ export class ResilienceLedger {
   active(scope: ResilienceScope, key: string, now = Date.now()): ResilienceEntry | undefined {
     const id = `${scope}:${key}`;
     const entry = this.entries.get(id);
+    if (entry?.permanentNonFree) return entry;
     if (entry && Date.parse(entry.expiresAt) <= now) {
       this.entries.delete(id);
       return undefined;
@@ -269,6 +283,20 @@ export class ResilienceLedger {
     providerId: string,
     now = Date.now(),
   ): void {
+    if (error.family === 'paid_required') {
+      this.entries.set(`model:${modelRef}`, {
+        scope: 'model',
+        key: modelRef,
+        failures: 1,
+        expiresAt: '9999-12-31T23:59:59.999Z',
+        cooldownActive: true,
+        permanentNonFree: true,
+        lastFamily: error.family,
+        strikes: 1,
+        strikeWindowEndsAt: '9999-12-31T23:59:59.999Z',
+      });
+      return;
+    }
     if (error.scope === 'none') return;
     const scope = error.scope;
     const key = scope === 'model' ? modelRef : scope === 'key' ? providerId : providerId;

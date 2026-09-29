@@ -320,9 +320,34 @@ describe('provider error mapping', () => {
     [{ statusCode: 400, message: 'maximum context length exceeded' }, 'context_overflow'],
     [{ statusCode: 400, message: 'invalid parameter' }, 'request_scoped_client'],
     [{ statusCode: 503, message: 'unavailable' }, 'server'],
+    [
+      {
+        name: 'AI_StreamProviderError',
+        message: 'generic wrapper',
+        cause: { statusCode: 503, message: 'unavailable' },
+      },
+      'server',
+    ],
     [{ code: 'ECONNRESET', message: 'socket reset' }, 'network'],
     [{ code: 'ETIMEDOUT', message: 'timeout' }, 'timeout'],
   ] as const)('maps %o to %s', (error, kind) => {
     expect(mapProviderError(error).kind).toBe(kind);
+  });
+
+  it('unwraps AI SDK stream provider causes and preserves retryability', () => {
+    expect(
+      mapProviderError({
+        name: 'AI_StreamProviderError',
+        message: 'stream failed',
+        cause: { statusCode: 503, message: 'upstream unavailable' },
+      }),
+    ).toMatchObject({ kind: 'server', retryable: true, message: 'upstream unavailable' });
+    expect(
+      mapProviderError({
+        name: 'AI_StreamProviderError',
+        message: 'stream failed',
+        cause: { statusCode: 400, message: 'invalid request' },
+      }),
+    ).toMatchObject({ kind: 'request_scoped_client', retryable: false });
   });
 });

@@ -1,7 +1,7 @@
 import { streamProviderChat } from '@ferry/providers';
 import type { ModelMessage } from '@ferry/providers';
 import { genericFilter, terseSystemText } from '@ferry/optimizer';
-import { BUILTIN_PROFILES } from '@ferry/router';
+import { BUILTIN_PROFILES, classifyProviderError } from '@ferry/router';
 import {
   type GatewayRuntime,
   startGateway,
@@ -309,9 +309,30 @@ export function createGatewayController(services: FerryServices) {
             )
           )
             throw error;
-          const rawMessage = error instanceof Error ? error.message : 'Provider request failed';
+          const outer =
+            error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+          const providerError =
+            outer.name === 'AI_StreamProviderError' &&
+            outer.cause &&
+            typeof outer.cause === 'object'
+              ? (outer.cause as Record<string, unknown>)
+              : outer;
+          const typed = classifyProviderError({
+            status: providerError.status,
+            statusCode: providerError.statusCode,
+            code: providerError.code,
+            type: providerError.type,
+            message: providerError.message,
+            responseBody: providerError.data ?? providerError.responseBody,
+            ...(providerError.response instanceof Response
+              ? { headers: providerError.response.headers }
+              : {}),
+          });
+          const rawMessage =
+            typed.message || (error instanceof Error ? error.message : 'Provider request failed');
           lastError = new Error(rawMessage.replaceAll(key, '[REDACTED]'));
-          if (outputState.started) throw error;
+          const canFallback = typed.scope !== 'none' || typed.retryable;
+          if (outputState.started || !canFallback) throw error;
         }
       }
       throw lastError instanceof Error

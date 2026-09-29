@@ -626,6 +626,8 @@ function isFreeForRouting(
     return !provider.billingEnabled && trialOptInProviders.includes(provider.id);
   // OpenRouter's free label is model-specific even when the account has credits.
   if (provider.id === 'openrouter') return /:free(?:$|:)/i.test(model.ref);
+  if (provider.id === 'kilo')
+    return /:free(?:$|:)/i.test(model.ref) || (model.priceInPerM === 0 && model.priceOutPerM === 0);
   if (provider.billingEnabled) return false;
   if (provider.keyRequired === false) return true;
   if (['paid', 'credits'].includes(provider.tag)) return false;

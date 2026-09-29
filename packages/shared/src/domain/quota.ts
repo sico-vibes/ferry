@@ -20,6 +20,7 @@ export const ProviderErrorKindSchema = z.enum([
   'request_scoped_client',
   'request_too_large',
   'stream_failure',
+  'paid_required',
 ]);
 export const ProviderFailureFamilySchema = z.enum([
   'rate_limit',
@@ -35,6 +36,7 @@ export const ProviderFailureFamilySchema = z.enum([
   'request_scoped_client',
   'request_too_large',
   'stream_failure',
+  'paid_required',
 ]);
 export type ProviderFailureFamily = z.infer<typeof ProviderFailureFamilySchema>;
 export type ProviderErrorKind = z.infer<typeof ProviderErrorKindSchema>;
