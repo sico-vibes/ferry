@@ -10,6 +10,8 @@ Ferry is a Windows-first desktop and CLI coding agent that can route requests ac
 
 Download the **Ferry-Setup** installer or **portable** build from [Ferry Releases](https://github.com/sico-vibes/ferry/releases). The installer is per-user and can add the bundled `ferry` CLI to your PATH. Windows may show a SmartScreen warning because beta installers are unsigned. Select **More info → Run anyway** only when the file came from the official Ferry Releases page. The portable build runs without installing Ferry.
 
+Every code merge to `main` publishes a public `0.9.0-beta.N` pre-release. Installed beta builds check for updates at startup and every six hours; automatic downloads are enabled by default and can be changed in Settings > About.
+
 ## First run
 
 Open **Providers & Keys**, choose a provider, and add your own API key. Ferry stores provider secrets in the operating system keyring; they are not kept in the project files. Some providers need an account, billing setup, phone verification, or an active trial. You are responsible for their terms and charges. Choose a routing profile and start a session.

@@ -212,9 +212,10 @@ export function SegmentedControl({
 }: {
   value: string;
   onValueChange: (value: string) => void;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; disabled?: boolean }[];
   label?: string;
 }) {
+  const enabledOptions = options.filter((option) => !option.disabled);
   return (
     <div
       aria-label={label}
@@ -224,17 +225,24 @@ export function SegmentedControl({
       onKeyDown={(event) => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
         event.preventDefault();
-        const current = options.findIndex((option) => option.value === value);
+        if (enabledOptions.length === 0) return;
+        const current = enabledOptions.findIndex((option) => option.value === value);
         const next =
           event.key === 'Home'
             ? 0
             : event.key === 'End'
-              ? options.length - 1
-              : (current + (event.key === 'ArrowRight' ? 1 : -1) + options.length) % options.length;
-        const option = options[next];
+              ? enabledOptions.length - 1
+              : (Math.max(0, current) +
+                  (event.key === 'ArrowRight' ? 1 : -1) +
+                  enabledOptions.length) %
+                enabledOptions.length;
+        const option = enabledOptions[next];
         if (option) {
           onValueChange(option.value);
-          event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus();
+          const enabledButtons = event.currentTarget.querySelectorAll<HTMLButtonElement>(
+            '[role="radio"]:not(:disabled)',
+          );
+          enabledButtons[next]?.focus();
         }
       }}
     >
@@ -243,10 +251,11 @@ export function SegmentedControl({
           type="button"
           key={option.value}
           aria-checked={value === option.value}
+          disabled={option.disabled}
           role="radio"
           tabIndex={value === option.value ? 0 : -1}
           onClick={() => {
-            onValueChange(option.value);
+            if (!option.disabled) onValueChange(option.value);
           }}
           className={cn('ferry-segment', control, value === option.value && 'is-active')}
         >

@@ -11,6 +11,11 @@ export default defineConfig({
   platform: 'node',
   target: 'node22',
   bundle: true,
+  define: {
+    'process.env.FERRY_RELEASE_VERSION': JSON.stringify(
+      process.env.FERRY_RELEASE_VERSION ?? '0.9.0',
+    ),
+  },
   noExternal: [/@ferry\//],
   splitting: false,
   clean: false,

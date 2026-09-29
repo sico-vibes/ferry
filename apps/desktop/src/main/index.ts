@@ -30,8 +30,12 @@ import {
 import { buildCoreEnvironment } from './core-environment.js';
 import { isTrustedRendererOrigin } from './renderer-origin.js';
 import { UpdateController, type UpdateSnapshot } from './update-state.js';
+import { releaseChannelForVersion } from '../../scripts/release-config.mjs';
 
 const { autoUpdater } = updater;
+const releaseChannel = releaseChannelForVersion(
+  process.env.FERRY_RELEASE_VERSION ?? app.getVersion(),
+);
 
 // Packaged builds use the icon embedded in the .exe by electron-builder (build/icon.ico).
 const DEV_WINDOW_ICON = join(import.meta.dirname, '../../build/icon.ico');
@@ -434,8 +438,8 @@ app
     updateController.setAutoDownload(readAutoDownloadPreference());
     autoUpdater.autoDownload = readAutoDownloadPreference();
     if (app.isPackaged && !e2eUserDataPath) {
-      autoUpdater.channel = 'latest';
-      autoUpdater.allowPrerelease = true;
+      autoUpdater.channel = releaseChannel.updaterChannel;
+      autoUpdater.allowPrerelease = releaseChannel.allowPrerelease;
       autoUpdater.autoDownload = updateController.getSnapshot().autoDownload;
       (autoUpdater as NsisUpdater).verifyUpdateCodeSignature = () => Promise.resolve(null);
       void updateController.check();

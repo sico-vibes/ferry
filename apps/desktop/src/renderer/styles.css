@@ -2122,6 +2122,10 @@ body {
   color: var(--text-1);
   box-shadow: var(--highlight-top);
 }
+.ferry-segment:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 .ferry-tab {
   height: 28px;
   border: 1px solid transparent;

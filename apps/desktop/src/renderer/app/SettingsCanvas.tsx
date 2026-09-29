@@ -1684,6 +1684,20 @@ export function SettingsCanvas() {
         {window.ferryHost && (
           <>
             <SettingRow
+              title="Update channel"
+              helper="Beta receives the latest pre-release builds. Stable will be available after its first release."
+            >
+              <SegmentedControl
+                label="Update channel"
+                value={window.ferryHost.channel}
+                onValueChange={() => undefined}
+                options={[
+                  { value: 'beta', label: 'Beta' },
+                  { value: 'stable', label: 'Stable', disabled: true },
+                ]}
+              />
+            </SettingRow>
+            <SettingRow
               title="Automatic downloads"
               helper="Download updates when they are available. Restart Ferry to finish installing."
             >

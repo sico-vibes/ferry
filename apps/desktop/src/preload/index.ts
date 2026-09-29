@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { CoreHandoffTokenSchema, DesktopThemeSchema } from '@ferry/shared';
+import { releaseChannelForVersion } from '../../scripts/release-config.mjs';
+
+const releaseVersion =
+  process.env.FERRY_RELEASE_VERSION ?? process.env.npm_package_version ?? '0.9.0';
 
 const rendererWindow = globalThis as unknown as {
   location: { origin: string; protocol: string };
@@ -15,10 +19,10 @@ ipcRenderer.on('ferry:open-workspace', (_event, path: string) => {
 contextBridge.exposeInMainWorld('ferryHost', {
   platform: process.platform,
   versions: {
-    app: process.env.npm_package_version ?? '0.9.0',
+    app: releaseVersion,
     electron: process.versions.electron,
   },
-  channel: 'beta',
+  channel: releaseChannelForVersion(releaseVersion).displayChannel,
   commit: process.env.FERRY_COMMIT ?? 'unknown',
   realDomainsFromEnvironment: (): string[] =>
     process.env.FERRY_REAL_DOMAINS?.split(',')

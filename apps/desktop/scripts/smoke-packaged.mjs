@@ -20,6 +20,21 @@ if (cliResult.error || cliResult.status !== 0 || !cliResult.stdout?.includes('fe
     `Packaged CLI smoke failed: ${cliResult.error?.message ?? cliResult.stderr ?? cliResult.status}`,
   );
 console.log('Packaged CLI shim works');
+const gatewayResult = spawnSync(cliShim, ['gateway', '--help'], {
+  encoding: 'utf8',
+  shell: true,
+  timeout: 15_000,
+  windowsHide: true,
+});
+if (
+  gatewayResult.error ||
+  gatewayResult.status !== 0 ||
+  !gatewayResult.stdout?.includes('gateway start|stop|status')
+)
+  throw new Error(
+    `Packaged Gateway CLI smoke failed: ${gatewayResult.error?.message ?? gatewayResult.stderr ?? gatewayResult.status}`,
+  );
+console.log('Packaged Gateway CLI works');
 const userDataDirectory = await mkdtemp(join(tmpdir(), 'ferry-packaged-smoke-'));
 const coreLogPath = join(userDataDirectory, 'engine', 'logs', 'ferry.log');
 const smokeStartedAt = new Date();

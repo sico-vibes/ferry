@@ -5,6 +5,8 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'electron-vite';
 
+const releaseVersion = process.env.FERRY_RELEASE_VERSION ?? '0.9.0';
+
 const bundledWorkspacePackages = [
   '@ferry/core',
   '@ferry/config',
@@ -38,7 +40,10 @@ const copyStorageMigrations = {
 
 export default defineConfig({
   main: {
-    define: { 'process.env.FERRY_COMMIT': JSON.stringify(process.env.FERRY_COMMIT ?? 'unknown') },
+    define: {
+      'process.env.FERRY_COMMIT': JSON.stringify(process.env.FERRY_COMMIT ?? 'unknown'),
+      'process.env.FERRY_RELEASE_VERSION': JSON.stringify(releaseVersion),
+    },
     plugins: [copyStorageMigrations],
     resolve: { alias: { '@ferry/core': resolve('../../packages/core/src/index.ts') } },
     build: {
@@ -66,7 +71,10 @@ export default defineConfig({
     },
   },
   preload: {
-    define: { 'process.env.FERRY_COMMIT': JSON.stringify(process.env.FERRY_COMMIT ?? 'unknown') },
+    define: {
+      'process.env.FERRY_COMMIT': JSON.stringify(process.env.FERRY_COMMIT ?? 'unknown'),
+      'process.env.FERRY_RELEASE_VERSION': JSON.stringify(releaseVersion),
+    },
     build: {
       externalizeDeps: true,
       rollupOptions: {
