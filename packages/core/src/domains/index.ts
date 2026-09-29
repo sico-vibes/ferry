@@ -13,6 +13,7 @@ import { register as registerDelegation } from './delegation.js';
 import { register as registerSettings } from './settings.js';
 import { register as registerWorkspaces } from './workspaces.js';
 import { register as registerOAuth } from './oauth.js';
+import { register as registerGateway } from './gateway.js';
 
 export type DomainRegistrar = (host: CoreHost, services: FerryServices) => void;
 export const domainRegistrars: DomainRegistrar[] = [
@@ -21,6 +22,7 @@ export const domainRegistrars: DomainRegistrar[] = [
   registerCheckpoints,
   registerProviders,
   registerOAuth,
+  registerGateway,
   registerModels,
   registerQuota,
   registerSessions,

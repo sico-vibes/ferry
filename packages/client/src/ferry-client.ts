@@ -35,6 +35,47 @@ import type {
 import type { FerryEvents } from './events.js';
 
 export interface FerryClient {
+  gateway: {
+    settings(): Promise<{
+      enabled: boolean;
+      port: number;
+      allowLan: boolean;
+      status: { running: boolean; port: number | null; host: string | null; url: string | null };
+    }>;
+    setSettings(input: { enabled: boolean; port: number; allowLan: boolean }): Promise<unknown>;
+    listKeys(): Promise<
+      {
+        id: string;
+        name: string;
+        profile: string;
+        allowedModels: string[];
+        rateLimit: number | null;
+        compressToolResults: boolean;
+        terseSystemPrompt: boolean;
+        createdAt: string;
+        lastUsedAt: string | null;
+        revokedAt: string | null;
+        usage: { requests: number; inputTokens: number; outputTokens: number };
+      }[]
+    >;
+    createKey(input: {
+      name: string;
+      profile: string;
+    }): Promise<{ key: { id: string; name: string; profile: string }; secret: string }>;
+    updateKey(input: {
+      id: string;
+      patch: {
+        profile?: string;
+        allowedModels?: string[];
+        rateLimit?: number | null;
+        compressToolResults?: boolean;
+        terseSystemPrompt?: boolean;
+      };
+    }): Promise<unknown>;
+    revokeKey(id: string): Promise<unknown>;
+    start(): Promise<unknown>;
+    stop(): Promise<unknown>;
+  };
   workspaces: {
     list(): Promise<Workspace[]>;
     open(path: string): Promise<Workspace>;

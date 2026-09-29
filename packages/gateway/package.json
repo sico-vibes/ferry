@@ -1,0 +1,23 @@
+{
+  "name": "@ferry/gateway",
+  "version": "0.0.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ferry/providers": "workspace:*",
+    "@ferry/router": "workspace:*",
+    "@ferry/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@ferry/testkit": "workspace:*"
+  }
+}

@@ -79,6 +79,7 @@ export function createSessionDependencies(
   providers: () => Provider[];
   apiKeys: Record<string, string>;
   providerFetch: typeof globalThis.fetch;
+  observe: (observation: RawCallObservation) => void;
 } {
   const apiKeys: Record<string, string> = {};
   const loadedApiKeys = new Set<string>();
@@ -597,7 +598,7 @@ export function createSessionDependencies(
       }
     },
   };
-  return { gateway, usage, capacity, providers, apiKeys, providerFetch };
+  return { gateway, usage, capacity, providers, apiKeys, providerFetch, observe };
 }
 
 export function modelHintsFromRegistry(model: Pick<ModelInfo, 'capability'>): Partial<ModelHints> {

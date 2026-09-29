@@ -13,6 +13,7 @@ export {
 export type { CoreOptions, CoreTransport, RpcHandler } from './host.js';
 export { runNativeSelfTest } from './native-self-test.js';
 export { createServices } from './services.js';
+export { createGatewayController } from './gateway.js';
 export type { FerryClock, FerryServices, ServiceOptions } from './services.js';
 export { domainRegistrars } from './domains/index.js';
 export { startCoreWebSocketServer } from './websocket.js';

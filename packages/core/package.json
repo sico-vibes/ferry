@@ -19,6 +19,7 @@
     "@ferry/config": "workspace:*",
     "@ferry/delegate": "workspace:*",
     "@ferry/extensions": "workspace:*",
+    "@ferry/gateway": "workspace:*",
     "@ferry/oauth": "workspace:*",
     "@ferry/optimizer": "workspace:*",
     "@ferry/providers": "workspace:*",

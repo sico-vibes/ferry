@@ -62,9 +62,15 @@ importers:
       '@ferry/delegate':
         specifier: workspace:*
         version: link:../../packages/delegate
+      '@ferry/gateway':
+        specifier: workspace:*
+        version: link:../../packages/gateway
       '@ferry/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@ferry/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@napi-rs/keyring':
         specifier: 2.1.0
         version: 2.1.0
@@ -383,6 +389,9 @@ importers:
       '@ferry/extensions':
         specifier: workspace:*
         version: link:../extensions
+      '@ferry/gateway':
+        specifier: workspace:*
+        version: link:../gateway
       '@ferry/oauth':
         specifier: workspace:*
         version: link:../oauth
@@ -496,6 +505,22 @@ importers:
       fast-check:
         specifier: 4.10.2
         version: 4.10.2
+
+  packages/gateway:
+    dependencies:
+      '@ferry/providers':
+        specifier: workspace:*
+        version: link:../providers
+      '@ferry/router':
+        specifier: workspace:*
+        version: link:../router
+      '@ferry/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@ferry/testkit':
+        specifier: workspace:*
+        version: link:../testkit
 
   packages/providers:
     dependencies:

@@ -1,0 +1,87 @@
+# Ferry Gateway
+
+Ferry Gateway exposes Ferry's configured providers through a local OpenAI-compatible API and an Anthropic Messages endpoint. It uses the provider accounts configured in Ferry; a `ferry-gw-…` key only authenticates a local client and does not represent pooled provider access.
+
+## Start and create a key
+
+In Ferry, open **Settings → Gateway**, enable the gateway, and create a named key. The secret is shown once. Ferry stores its SHA-256 hash in its local SQLite settings table; the provider credentials remain in Ferry's secret store.
+
+The default listener is `127.0.0.1:11435`. If that port is busy, Ferry selects an available local port and shows the chosen URL. LAN binding is off by default. Enabling it binds all interfaces, so use it only on a trusted network. `/health` returns service status and never returns a key or provider data.
+
+Available profile aliases are `ferry/auto-free`, `ferry/best`, `ferry/fast`, and `ferry/long-context`. Enabled concrete model IDs use `provider/model`. `/v1/models` advertises the profile aliases even when no concrete model is currently available. A key can be limited to selected model IDs and requests per minute.
+
+## OpenCode
+
+Add a provider entry to `opencode.json` (replace the port and key with the values shown by Ferry):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "ferry": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ferry",
+      "options": {
+        "baseURL": "http://127.0.0.1:11435/v1",
+        "apiKey": "YOUR_FERRY_GATEWAY_KEY"
+      },
+      "models": {
+        "ferry/auto-free": { "name": "Ferry Auto-Free" },
+        "ferry/best": { "name": "Ferry Best" },
+        "ferry/fast": { "name": "Ferry Fast" },
+        "ferry/long-context": { "name": "Ferry Long Context" }
+      }
+    }
+  }
+}
+```
+
+For OpenAI-compatible clients such as Cline, Roo Code, or Kilo, select the OpenAI-compatible provider, use `http://127.0.0.1:11435/v1`, enter the Ferry key, and choose a profile alias. Aider can use:
+
+```powershell
+$env:OPENAI_API_BASE = 'http://127.0.0.1:11435/v1'
+$env:OPENAI_API_KEY = 'YOUR_FERRY_GATEWAY_KEY'
+aider --model ferry/auto-free
+```
+
+Continue's OpenAI-compatible provider uses the same base URL, key, and model ID.
+
+## Claude Code
+
+Claude Code uses the Anthropic-compatible `/v1/messages` route:
+
+```powershell
+$env:ANTHROPIC_BASE_URL = 'http://127.0.0.1:11435'
+$env:ANTHROPIC_AUTH_TOKEN = 'YOUR_FERRY_GATEWAY_KEY'
+claude
+```
+
+Both bearer authorization and `x-api-key` are accepted. OpenAI chat requests support non-streaming and SSE responses, function tools, parallel tool calls, JSON mode, and final-chunk usage. Anthropic Messages supports streaming, text blocks, `tool_use`, and `tool_result`. The Codex `/v1/responses` API is not implemented; point clients that require Responses elsewhere.
+
+## CLI
+
+```sh
+ferry gateway start
+ferry gateway status
+ferry gateway keys create "OpenCode" auto-free
+ferry gateway keys list
+ferry gateway keys revoke <key-id>
+ferry gateway stop
+ferry serve --gateway
+```
+
+`ferry serve --gateway` starts the core and gateway in the foreground until Ctrl+C. Start/stop/status and key operations use the local Ferry core.
+
+## Routing and limits
+
+Ferry routes through configured provider models, existing profile eligibility, quota-aware scoring, cooldown handling, avoid-training policy, and provider adapters. A request-level `x-ferry-session` or `x-session-id` header keeps a route sticky for 30 minutes; absent either header, Ferry uses a hash of the first message. Gateway calls do not run Ferry's planner/editor loop, since the connected coding client owns its tool loop. Per-key tool-result compression is enabled by default and uses inline notice text when it filters a result; recovery storage is disabled. The terse system instruction is off by default. Neither option rewrites code or tool arguments.
+
+Ferry may retry another eligible model only before any streamed text or tool call has been emitted. Once output starts, an error is returned as an OpenAI error chunk or Anthropic error event. A client may need to retry the whole operation. The gateway does not execute client tools; tool calls are passed back to the client.
+
+## Security
+
+- Keep the gateway disabled until a client needs it. Bind to loopback by default.
+- Treat keys like local passwords. They are shown only at creation, hashed at rest, and can be revoked. Never share them: provider free-tier allowances belong to the provider account owner.
+- LAN mode opens the endpoint to devices able to reach the host. Ferry gateway keys are bearer credentials; use a trusted network and revoke keys you no longer need.
+- `GET /health` is unauthenticated and reports only whether the service is responding. Model and inference routes require an active Ferry key.
+- Prompts go from Ferry to the configured upstream provider. Ferry's provider-specific data-use notes and account terms still apply.

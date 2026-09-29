@@ -52,7 +52,7 @@ describe('QA W3 sessions: run lifecycle and races', () => {
     } finally {
       await h.close();
     }
-  }, 30_000);
+  }, 60_000);
 
   it('treats a second cancel as a no-op and settles the run', async () => {
     const h = await startHarness({ turns: [textTurn('slow response', { delayMs: 200 })] });

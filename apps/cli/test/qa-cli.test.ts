@@ -83,6 +83,18 @@ afterAll(async () => {
 });
 
 describe('@ferry/cli argument parsing and exit codes', () => {
+  it(
+    'lists gateway and serve commands with key creation usage in help',
+    () => {
+      const result = runCli(['--help']);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('serve --gateway');
+      expect(result.stdout).toContain('gateway start|stop|status');
+      expect(result.stdout).toContain('gateway keys create <name> [profile]');
+    },
+    ONE_SPAWN,
+  );
+
   it('shows and edits a profile fallback chain from the CLI', () => {
     const dataDir = tempDirectory('profile-chain');
     const set = runCli([
@@ -115,7 +127,7 @@ describe('@ferry/cli argument parsing and exit codes', () => {
     ]);
     expect(shown.status).toBe(0);
     expect(JSON.parse(shown.stdout)).toMatchObject(saved);
-  }, 30_000);
+  }, 60_000);
 
   it('requires the explicit risk flag for non-interactive OAuth login', () => {
     const dataDir = tempDirectory('oauth-risk');

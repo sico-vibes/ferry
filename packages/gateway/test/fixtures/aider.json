@@ -1,0 +1,11 @@
+{
+  "model": "ferry/auto-free",
+  "stream": true,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an expert software developer. Make precise edits that satisfy the request. Explain the change and tests."
+    },
+    { "role": "user", "content": "Describe what this project does." }
+  ]
+}

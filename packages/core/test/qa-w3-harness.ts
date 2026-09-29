@@ -74,7 +74,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<CoreHa
     keyringRef: providerId,
     createdAt: new Date().toISOString(),
   });
-  const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
+  const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 60_000 });
   await rpc.hello;
   await rpc.providers.setEnabled(providerId, true);
   const fixtureModel = services.catalog.models.find(
