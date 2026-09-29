@@ -14,6 +14,7 @@ import { appMounts } from './mounts';
 import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
 import { ConfigurationSheet } from './ConfigurationSheet';
 import type { SessionId } from '@ferry/shared';
+import type { UpdateSnapshot } from '../../main/update-state.js';
 
 export function AppFrame({ children }: { children: React.ReactNode }) {
   const client = useFerryClient();
@@ -21,6 +22,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const cache = useQueryClient();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [engineRestarting, setEngineRestarting] = useState(false);
+  const [updateState, setUpdateState] = useState<UpdateSnapshot | null>(null);
   useFerryEvents();
   useEffect(() => {
     if (!window.ferryHost) return;
@@ -40,6 +42,28 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       offConnected();
     };
   }, []);
+  useEffect(() => {
+    if (!window.ferryHost) return;
+    let active = true;
+    void window.ferryHost.getUpdateState().then((state) => {
+      if (active) setUpdateState(state);
+    });
+    const off = window.ferryHost.onUpdateState(setUpdateState);
+    return () => {
+      active = false;
+      off();
+    };
+  }, []);
+  useEffect(() => {
+    if (!window.ferryHost) return;
+    return window.ferryHost.onOpenWorkspace((path) => {
+      void client.workspaces.open(path).then(async (workspace) => {
+        useUI.getState().setSelectedWorkspace(workspace.id);
+        await cache.invalidateQueries({ queryKey: keys.workspaces });
+        await navigate({ to: '/' });
+      });
+    });
+  }, [cache, client, navigate]);
   const { data: sessions = [] } = useSessions();
   const { data: settings } = useSettings();
   useEffect(() => {
@@ -348,12 +372,25 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           </div>
           {((settings?.developer.injectErrors ?? false) || simulatedOffline) && (
             <div className="offline-warning" role="status">
-              Offline · showing saved demo data
+              Offline · showing saved local data
             </div>
           )}
           {engineRestarting && (
             <div className="engine-restarting" role="status">
               Engine restarting…
+            </div>
+          )}
+          {updateState?.status === 'downloaded' && (
+            <div className="update-banner" role="status">
+              <span>Update available{updateState.version ? ` · ${updateState.version}` : ''}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  void window.ferryHost?.installUpdate();
+                }}
+              >
+                Restart to update
+              </button>
             </div>
           )}
           <div className="canvas-slot">{children}</div>

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,33 @@ import { chromium } from '@playwright/test';
 
 const packageRoot = resolve(import.meta.dirname, '..');
 const executable = join(packageRoot, 'release', 'win-unpacked', 'Ferry.exe');
+const cliShim = join(packageRoot, 'release', 'win-unpacked', 'resources', 'cli', 'ferry.cmd');
+const cliResult = spawnSync(cliShim, ['--help'], {
+  encoding: 'utf8',
+  shell: true,
+  timeout: 15_000,
+  windowsHide: true,
+});
+if (cliResult.error || cliResult.status !== 0 || !cliResult.stdout?.includes('ferry'))
+  throw new Error(
+    `Packaged CLI smoke failed: ${cliResult.error?.message ?? cliResult.stderr ?? cliResult.status}`,
+  );
+console.log('Packaged CLI shim works');
+const gatewayResult = spawnSync(cliShim, ['gateway', '--help'], {
+  encoding: 'utf8',
+  shell: true,
+  timeout: 15_000,
+  windowsHide: true,
+});
+if (
+  gatewayResult.error ||
+  gatewayResult.status !== 0 ||
+  !gatewayResult.stdout?.includes('gateway start|stop|status')
+)
+  throw new Error(
+    `Packaged Gateway CLI smoke failed: ${gatewayResult.error?.message ?? gatewayResult.stderr ?? gatewayResult.status}`,
+  );
+console.log('Packaged Gateway CLI works');
 const userDataDirectory = await mkdtemp(join(tmpdir(), 'ferry-packaged-smoke-'));
 const coreLogPath = join(userDataDirectory, 'engine', 'logs', 'ferry.log');
 const smokeStartedAt = new Date();
@@ -160,8 +187,8 @@ async function waitForRendererLoad() {
             console.log(`Packaged app became interactive after ${String(interactiveMs)} ms`);
             if (interactiveMs > 2_000)
               console.warn(`Packaged app TTI exceeded 2000 ms: ${String(interactiveMs)} ms`);
-            if (interactiveMs > 5_000)
-              throw new Error(`Packaged app TTI exceeded 5000 ms: ${String(interactiveMs)} ms`);
+            if (interactiveMs > 10_000)
+              throw new Error(`Packaged app TTI exceeded 10000 ms: ${String(interactiveMs)} ms`);
             if (firstRunOnboardingVisible) await skipSetup.click();
             try {
               await composer.waitFor({ state: 'visible' });

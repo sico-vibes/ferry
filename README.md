@@ -8,7 +8,9 @@ Ferry is a Windows-first desktop and CLI coding agent that can route requests ac
 
 ## Install
 
-Download the current portable build or installer from the project Releases page (release links will appear here when published). The portable build runs without an installer; the installer registers Ferry for the current Windows user. This checkout may not yet publish release binaries; see the development setup in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Download the **Ferry-Setup** installer or **portable** build from [Ferry Releases](https://github.com/sico-vibes/ferry/releases). The installer is per-user and can add the bundled `ferry` CLI to your PATH. Windows may show a SmartScreen warning because beta installers are unsigned. Select **More info → Run anyway** only when the file came from the official Ferry Releases page. The portable build runs without installing Ferry.
+
+Every code merge to `main` publishes a public `0.9.0-beta.N` pre-release. Installed beta builds check for updates at startup and every six hours; automatic downloads are enabled by default and can be changed in Settings > About.
 
 ## First run
 

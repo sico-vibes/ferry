@@ -22,6 +22,7 @@ import {
 import { FERRY_DOMAINS } from '@ferry/shared';
 import type { Profile, Provider, StepKind, Tier } from '@ferry/shared';
 import type { RoutingSettings } from '@ferry/shared';
+import type { UpdateSnapshot } from '../../main/update-state.js';
 import { Info } from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
 import { OAuthProviderRows } from './OAuthProviderRows';
@@ -175,6 +176,27 @@ export function SettingsCanvas() {
   const [logRetention, setLogRetention] = useState(
     () => localStorage.getItem('ferry.logRetention') ?? '30',
   );
+  const [updateState, setUpdateState] = useState<UpdateSnapshot>({
+    status: 'idle',
+    version: null,
+    error: null,
+    autoDownload: true,
+  });
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  useEffect(() => {
+    if (section !== 'About' || !window.ferryHost) return;
+    let active = true;
+    void window.ferryHost.getUpdateState().then((state) => {
+      if (active) setUpdateState(state);
+    });
+    const off = window.ferryHost.onUpdateState((state) => {
+      setUpdateState(state);
+    });
+    return () => {
+      active = false;
+      off();
+    };
+  }, [section]);
   const { data: settings } = useSettings();
   const { data: profiles = [] } = useProfiles();
   const { data: providers = [] } = useQuery({
@@ -1627,7 +1649,7 @@ export function SettingsCanvas() {
                 toast({
                   kind: 'success',
                   title: 'Export prepared',
-                  body: 'Demo data export is ready.',
+                  body: 'Export is ready.',
                 });
               }}
             >
@@ -1645,19 +1667,103 @@ export function SettingsCanvas() {
         </Group>
       );
     return (
-      <Group title="About">
+      <Group title="About Ferry">
         <div className="about-card">
           <div className="ferry-mark-large">
             <FerryMark variant="icon" size={48} />
           </div>
           <div>
             <strong>Ferry</strong>
+            <p>Version {window.ferryHost?.versions.app ?? info?.version ?? '0.9.0'}</p>
             <p>
-              Version {info?.version ?? '…'} · {info?.mock ? 'Demo client' : 'Connected'}
+              Channel {window.ferryHost?.channel ?? 'beta'} · Commit{' '}
+              {window.ferryHost?.commit ?? 'unknown'}
             </p>
-            <p>This build runs on simulated data. No real models are called.</p>
           </div>
         </div>
+        {window.ferryHost && (
+          <>
+            <SettingRow
+              title="Update channel"
+              helper="Beta receives the latest pre-release builds. Stable will be available after its first release."
+            >
+              <SegmentedControl
+                label="Update channel"
+                value={window.ferryHost.channel}
+                onValueChange={() => undefined}
+                options={[
+                  { value: 'beta', label: 'Beta' },
+                  { value: 'stable', label: 'Stable', disabled: true },
+                ]}
+              />
+            </SettingRow>
+            <SettingRow
+              title="Automatic downloads"
+              helper="Download updates when they are available. Restart Ferry to finish installing."
+            >
+              <Switch
+                label="Automatically download updates"
+                checked={updateState.autoDownload}
+                onCheckedChange={(enabled) => {
+                  void window.ferryHost?.setAutoDownload(enabled).then(setUpdateState);
+                }}
+              />
+            </SettingRow>
+            <SettingRow
+              title="Updates"
+              helper={
+                updateState.error ??
+                (updateState.status === 'not-available'
+                  ? 'Ferry is up to date.'
+                  : updateState.status === 'available'
+                    ? `Version ${updateState.version ?? 'new'} is downloading.`
+                    : updateState.status === 'downloaded'
+                      ? `Version ${updateState.version ?? 'new'} is ready to install.`
+                      : 'Check the public Ferry Releases page for the latest beta.')
+              }
+            >
+              <div className="button-row">
+                <Pill
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setCheckingUpdates(true);
+                    void window.ferryHost
+                      ?.checkForUpdates()
+                      .then(setUpdateState)
+                      .finally(() => {
+                        setCheckingUpdates(false);
+                      });
+                  }}
+                >
+                  {checkingUpdates ? 'Checking…' : 'Check for updates'}
+                </Pill>
+                {updateState.status === 'available' && !updateState.autoDownload && (
+                  <Pill
+                    size="sm"
+                    variant="blue-tint"
+                    onClick={() => {
+                      void window.ferryHost?.downloadUpdate().then(setUpdateState);
+                    }}
+                  >
+                    Download update
+                  </Pill>
+                )}
+              </div>
+            </SettingRow>
+            {updateState.status === 'downloaded' && (
+              <Pill
+                size="sm"
+                variant="blue-tint"
+                onClick={() => {
+                  void window.ferryHost?.installUpdate();
+                }}
+              >
+                Restart to update
+              </Pill>
+            )}
+          </>
+        )}
         <h3>Notices</h3>
         <div className="notice-list">
           <span>React Bits · MIT + Commons Clause</span>
@@ -1742,7 +1848,7 @@ export function SettingsCanvas() {
                 toast({
                   kind: 'success',
                   title: 'Local data cleared',
-                  body: 'Demo data remains available after refresh.',
+                  body: 'Changes remain available after refresh.',
                 });
             }}
           >

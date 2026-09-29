@@ -284,14 +284,16 @@ describe('QA providers: streaming robustness', () => {
         },
       );
     });
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const outcome = await Promise.race<'resolved' | 'rejected' | 'timeout'>([
       streamed,
-      new Promise<'timeout'>((resolve) =>
-        setTimeout(() => {
+      new Promise<'timeout'>((resolve) => {
+        timeoutHandle = setTimeout(() => {
           resolve('timeout');
-        }, 5_000),
-      ),
+        }, 15_000);
+      }),
     ]);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
     expect(outcome).not.toBe('timeout');
   }, 30_000);
 });

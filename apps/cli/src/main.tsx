@@ -376,7 +376,7 @@ export async function main(): Promise<void> {
   const command = defineCommand({
     meta: {
       name: 'ferry',
-      version: '0.1.0',
+      version: process.env.FERRY_RELEASE_VERSION ?? '0.9.0',
       description: [
         'Ferry coding agent CLI',
         '',

@@ -7,7 +7,7 @@ export function createSystemDomain(_store: MockStore, deps: MockDeps): FerryClie
     async info() {
       await deps.before();
       return {
-        version: '0.1.0-mock',
+        version: '0.9.0',
         mock: true,
         platform: navigator.userAgent.includes('Windows') ? 'win32' : 'web',
         dataDir: null,

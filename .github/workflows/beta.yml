@@ -1,0 +1,84 @@
+name: Beta release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'design/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ferry-beta-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-beta:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify workspace
+        run: pnpm check
+        env:
+          TURBO_CONCURRENCY: 2
+      - name: Stamp and package beta
+        shell: pwsh
+        run: |
+          $version = node apps/desktop/scripts/beta-version.mjs $env:GITHUB_RUN_NUMBER
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:FERRY_RELEASE_VERSION = $version
+          "FERRY_RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+          "FERRY_RELEASE_TAG=v$version" >> $env:GITHUB_ENV
+          pnpm --filter @ferry/desktop dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Generate notes since the previous beta
+        id: release-notes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const betaReleases = releases
+              .filter((release) => /^v0\.9\.0-beta\.\d+$/.test(release.tag_name))
+              .sort((left, right) => {
+                const number = (tag) => Number(tag.match(/beta\.(\d+)$/)?.[1] ?? 0);
+                return number(right.tag_name) - number(left.tag_name);
+              });
+            const previous = betaReleases[0]?.tag_name;
+            const result = await github.rest.repos.generateReleaseNotes({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: process.env.FERRY_RELEASE_TAG,
+              ...(previous ? { previous_tag_name: previous } : {}),
+            });
+            core.setOutput('body', result.data.body);
+      - name: Publish beta prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ env.FERRY_RELEASE_TAG }}
+          name: Ferry ${{ env.FERRY_RELEASE_TAG }}
+          prerelease: true
+          draft: false
+          make_latest: false
+          body: ${{ steps.release-notes.outputs.body }}
+          files: |
+            apps/desktop/release/Ferry-Setup-*.exe
+            apps/desktop/release/Ferry-*-portable.exe
+            apps/desktop/release/beta.yml
+            apps/desktop/release/*.blockmap

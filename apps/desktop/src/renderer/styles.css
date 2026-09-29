@@ -563,6 +563,27 @@ body {
     background-position: -200% 0;
   }
 }
+.update-banner {
+  display: flex;
+  min-height: 32px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-item);
+  background: var(--bg-raised);
+  padding: 4px 12px;
+  color: var(--text-2);
+  font-size: 11px;
+}
+.update-banner button {
+  border: 0;
+  background: transparent;
+  color: var(--text-link);
+  cursor: pointer;
+  font: inherit;
+}
 @media (prefers-reduced-motion: reduce) {
   .skeleton-row {
     animation: none;
@@ -2100,6 +2121,10 @@ body {
   background: var(--bg-raised);
   color: var(--text-1);
   box-shadow: var(--highlight-top);
+}
+.ferry-segment:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 .ferry-tab {
   height: 28px;

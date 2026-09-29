@@ -872,7 +872,7 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
       const initialized = await activeConnection.agent.request('initialize', {
         protocolVersion: PROTOCOL_VERSION,
         clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
-        clientInfo: { name: 'Ferry', version: '0.1.0' },
+        clientInfo: { name: 'Ferry', version: '0.9.0' },
       });
       const methods = (initialized.authMethods ?? []).map((method) => ({
         id: method.id,

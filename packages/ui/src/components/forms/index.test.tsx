@@ -97,6 +97,31 @@ describe('form and overlay controls', () => {
     await user.keyboard('{ArrowRight}');
     expect(screen.getByRole('radio', { name: 'Two' }).getAttribute('aria-checked')).toBe('true');
   });
+  it('skips disabled segmented choices during keyboard navigation', async () => {
+    const user = userEvent.setup();
+    function Example() {
+      const [value, setValue] = useState('beta');
+      return (
+        <SegmentedControl
+          label="Update channel"
+          value={value}
+          onValueChange={setValue}
+          options={[
+            { value: 'beta', label: 'Beta' },
+            { value: 'stable', label: 'Stable', disabled: true },
+          ]}
+        />
+      );
+    }
+    render(<Example />);
+    const beta = screen.getByRole('radio', { name: 'Beta' });
+    const stable = screen.getByRole('radio', { name: 'Stable' });
+    beta.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(beta.getAttribute('aria-checked')).toBe('true');
+    expect(stable.hasAttribute('disabled')).toBe(true);
+    expect(document.activeElement).toBe(beta);
+  });
   it('toggles a switch from the keyboard', async () => {
     const user = userEvent.setup();
     function Example() {

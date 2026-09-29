@@ -4,7 +4,7 @@ This is a desktop demo. It uses simulated data and does not call real models.
 
 ## Install
 
-1. Download `Ferry-Setup-0.1.0-mock.exe` for the guided per-user installation, or `Ferry-0.1.0-mock-portable.exe` to run Ferry without installing it.
+1. Download `Ferry-Setup-0.9.0.exe` for the guided per-user installation, or `Ferry-0.9.0-portable.exe` to run Ferry without installing it.
 2. If Windows SmartScreen appears, choose **More info** → **Run anyway**. This unsigned demo build has no code signing certificate.
 3. For the installer, keep the per-user option, choose an install folder if desired, and finish setup. Ferry adds desktop and Start menu shortcuts.
 

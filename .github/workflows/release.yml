@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+      - '!v*-beta.*'
 
 permissions:
   contents: write
@@ -21,11 +22,35 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @ferry/desktop dist
-      - name: Upload installer and portable build to draft release
+      - name: Verify workspace
+        run: pnpm check
+        env:
+          TURBO_CONCURRENCY: 2
+      - name: Build packages and run packaged smoke
+        run: pnpm --filter @ferry/desktop dist
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+      - name: Collect release notes from the changelog
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $lines = Get-Content CHANGELOG.md
+          $start = -1
+          for ($i = 0; $i -lt $lines.Length; $i++) {
+            if ($lines[$i] -match ('^## \[' + [regex]::Escape($version) + '\]')) { $start = $i; break }
+          }
+          if ($start -lt 0) { throw "CHANGELOG.md has no entry for $version" }
+          $end = $start + 1
+          while ($end -lt $lines.Length -and $lines[$end] -notmatch '^## \[') { $end++ }
+          $lines[$start..($end - 1)] | Set-Content -Encoding utf8 release-notes.md
+      - name: Upload release artifacts as a draft
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           draft: true
+          body_path: release-notes.md
           files: |
             apps/desktop/release/Ferry-Setup-*.exe
             apps/desktop/release/Ferry-*-portable.exe
+            apps/desktop/release/latest.yml
+            apps/desktop/release/*.blockmap
