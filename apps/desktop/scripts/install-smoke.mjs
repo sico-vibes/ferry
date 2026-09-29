@@ -44,7 +44,9 @@ function run(command, commandArgs, options = {}) {
   return result.stdout.trim();
 }
 function powershell(script) {
-  return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+  // Read-only queries: unreadable registry subkeys set a failing status even with
+  // -ErrorAction SilentlyContinue (seen on clean GitHub runners), so exit 0 explicitly.
+  return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `${script}; exit 0`], {
     timeout: 30_000,
   });
 }
