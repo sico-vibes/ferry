@@ -36,6 +36,12 @@ describe('ACP workspace filesystem callbacks', () => {
     await expect(
       assertAcpWorkspacePath(workspace, '../ferry-acp-outside-x', false),
     ).rejects.toThrow(/escapes/);
+    await expect(assertAcpWorkspacePath(workspace, '..\\..\\secret.txt', false)).rejects.toThrow(
+      /escapes/,
+    );
+    await expect(assertAcpWorkspacePath(workspace, 'C:secret.txt', false)).rejects.toThrow(
+      /escapes/,
+    );
     await expect(
       assertAcpWorkspacePath(workspace, resolve(outside, 'secret.txt'), false),
     ).rejects.toThrow(/escapes/);

@@ -1,11 +1,16 @@
 import { createHash } from 'node:crypto';
 import { access, readFile, readdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getDataPaths } from '@ferry/config';
 import { SkillSchema, type Skill } from '@ferry/shared';
-import { normalizedPathKey } from '@ferry/shared/node-paths';
+import {
+  hasParentPathSegment,
+  hasWindowsDrivePrefix,
+  normalizePathSeparators,
+  normalizedPathKey,
+} from '@ferry/shared/node-paths';
 import { parseDocument } from 'yaml';
 import type { PromptSection, ToolDef, ToolSource } from './types.js';
 
@@ -212,7 +217,15 @@ export class SkillManager {
     if (toolName !== 'read_skill_file') throw new Error(`Unknown skill tool: ${toolName}`);
     if (typeof values.path !== 'string' || !values.path.trim())
       throw new Error('Skill file path is required');
-    const path = resolve(skill.directory, values.path);
+    const requestedPath = values.path;
+    if (
+      hasParentPathSegment(requestedPath) ||
+      isAbsolute(requestedPath) ||
+      win32.isAbsolute(requestedPath) ||
+      hasWindowsDrivePrefix(requestedPath)
+    )
+      throw new Error('Skill file path escapes the skill directory');
+    const path = resolve(skill.directory, normalizePathSeparators(requestedPath));
     if (!isJailed(skill.directory, path))
       throw new Error('Skill file path escapes the skill directory');
     const root = await realpath(skill.directory);

@@ -63,7 +63,14 @@ describe('QA W3 skills: read_skill_file jail', () => {
     await writeFile(secret, 'top secret', 'utf8');
     const manager = new SkillManager({ projectPath: project, bundledPath: bundled });
     await manager.load();
-    for (const path of ['../secret.txt', '..\\..\\secret.txt', secret]) {
+    for (const path of [
+      '../secret.txt',
+      '..\\..\\secret.txt',
+      secret,
+      'C:\\Windows\\win.ini',
+      '\\server\\share\\secret.txt',
+      'C:secret.txt',
+    ]) {
       await expect(
         manager.callSkillTool('read_skill_file', { name: 'docs', path }),
       ).rejects.toThrow(/escapes the skill directory/);

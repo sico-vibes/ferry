@@ -71,6 +71,7 @@ describe('workspace filesystem', () => {
     const outside = await tempRoot();
     const jail = new WorkspaceJail(root);
     await expect(jail.resolve('../secret')).rejects.toThrow(/escapes/);
+    await expect(jail.resolve('..\\..\\secret')).rejects.toThrow(/escapes/);
     await writeFile(path.join(outside, 'secret'), 'private');
     try {
       await import('node:fs/promises').then(({ symlink }) =>

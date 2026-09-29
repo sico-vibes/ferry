@@ -1,6 +1,11 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { canonicalizePath, normalizedPathKey } from '@ferry/shared/node-paths';
+import {
+  canonicalizePath,
+  hasWindowsDrivePrefix,
+  normalizePathSeparators,
+  normalizedPathKey,
+} from '@ferry/shared/node-paths';
 import ignore from 'ignore';
 
 export type TextEncoding = 'utf8' | 'utf8-bom' | 'utf16le' | 'utf16be';
@@ -86,13 +91,18 @@ export class WorkspaceJail {
     if (!this.realRoot) await this.initialize();
     const realRoot = this.realRoot;
     if (!realRoot) throw new Error('Workspace root is unavailable');
+    if (
+      (hasWindowsDrivePrefix(input) && !path.win32.isAbsolute(input)) ||
+      (process.platform !== 'win32' && path.win32.isAbsolute(input))
+    )
+      throw new Error('Path escapes workspace root');
     const normalizedInput =
       process.platform === 'win32'
         ? input
             .split(/[\\/]/)
             .map((part) => (part === '.' || part === '..' ? part : part.replace(/[ .]+$/g, '')))
             .join(path.sep)
-        : input;
+        : normalizePathSeparators(input);
     const candidate = path.resolve(this.root, normalizedInput);
     if (!inside(this.root, candidate)) throw new Error('Path escapes workspace root');
     let checked: string;

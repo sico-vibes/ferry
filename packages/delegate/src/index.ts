@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { access, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { delimiter, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { delimiter, extname, isAbsolute, join, relative, resolve, win32 } from 'node:path';
 import { execa } from 'execa';
 import { client as acpClient, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk';
 import type {
@@ -11,7 +11,11 @@ import type {
 } from '@agentclientprotocol/sdk';
 import { Readable, Writable } from 'node:stream';
 import { DelegationRunSchema, LaneSchema, newId } from '@ferry/shared';
-import { canonicalizePath } from '@ferry/shared/node-paths';
+import {
+  canonicalizePath,
+  hasWindowsDrivePrefix,
+  normalizePathSeparators,
+} from '@ferry/shared/node-paths';
 import type { DelegationRun, FileChange, Lane, SessionId } from '@ferry/shared';
 import type { BriefingSection } from '@ferry/router';
 
@@ -1371,8 +1375,16 @@ export async function assertAcpWorkspacePath(
   target: string,
   writing: boolean,
 ): Promise<string> {
+  if (
+    (hasWindowsDrivePrefix(target) && !win32.isAbsolute(target)) ||
+    (process.platform !== 'win32' && win32.isAbsolute(target))
+  )
+    throw new Error('ACP file path escapes the delegation workspace');
   const root = await realpath(resolve(workspace));
-  const absolute = isAbsolute(target) ? resolve(target) : resolve(workspace, target);
+  const normalizedTarget = normalizePathSeparators(target);
+  const absolute = isAbsolute(normalizedTarget)
+    ? resolve(normalizedTarget)
+    : resolve(workspace, normalizedTarget);
   const canonical = await canonicalizeWithExistingAncestor(absolute);
   if (!delegatePaths.isWithin(root, canonical)) {
     if (delegatePaths.isWithin(resolve(workspace), absolute))

@@ -36,3 +36,18 @@ export function normalizedPathKey(value: string): string {
   const normalized = path.resolve(value);
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
+
+/** Recognize drive-prefixed Windows paths, including drive-relative forms such as `C:file`. */
+export function hasWindowsDrivePrefix(value: string): boolean {
+  return /^[a-z]:/i.test(value);
+}
+
+/** Detect parent traversal independent of the host platform's path separator. */
+export function hasParentPathSegment(value: string): boolean {
+  return value.split(/[\\/]/).includes('..');
+}
+
+/** Normalize either slash style to the host platform's path separator. */
+export function normalizePathSeparators(value: string): string {
+  return value.replace(/[\\/]/g, path.sep);
+}
