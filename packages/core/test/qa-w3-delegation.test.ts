@@ -116,6 +116,43 @@ async function createSession(h: CoreHarness): Promise<SessionId> {
 }
 
 describe('QA W3 delegation: trust, isolation and lifecycle', () => {
+  it('runs explicitly approved workspace gates after delegation and rework', async () => {
+    const { h, repo, capture } = await setupDelegation();
+    try {
+      await mkdir(join(repo.path, 'test'), { recursive: true });
+      await writeFile(
+        join(repo.path, 'test', 'ferry-gate.test.mjs'),
+        "import { test } from 'node:test';\ntest('approved gate runs', () => {});\n",
+        'utf8',
+      );
+      const gate = 'node --test test/ferry-gate.test.mjs';
+      await h.rpc.workspaces.update(h.workspaceId, { gateCommands: [gate] });
+      const sessionId = await createSession(h);
+      const run = await h.rpc.delegation.start({ sessionId, lane: 'native', brief: 'add a test' });
+      await waitFor(async () => {
+        const current = (await h.rpc.delegation.runs(sessionId)).find((item) => item.id === run.id);
+        if (current?.status === 'failed')
+          throw new Error(current.finalMessage ?? 'delegation failed');
+        return current?.status === 'completed' && current.gateResults.length > 0;
+      });
+      let current = (await h.rpc.delegation.runs(sessionId)).find((item) => item.id === run.id);
+      if (!current) throw new Error('Completed delegation run is missing');
+      expect(current.gateResults).toMatchObject([{ command: gate, ok: true }]);
+
+      current = await h.rpc.delegation.decide(
+        run.id,
+        'rework',
+        'Add one more assertion to the test file.',
+      );
+      expect(current.status).toBe('completed');
+      expect(current.gateResults).toMatchObject([{ command: gate, ok: true }]);
+      const capturedArgs = JSON.parse(await readFile(capture, 'utf8')) as unknown[];
+      expect(capturedArgs).toContain('fake-codex-session-001');
+    } finally {
+      await h.close();
+    }
+  }, 40_000);
+
   it('detects ACP agents over the delegation RPC with registry metadata', async () => {
     const { h } = await setupDelegation();
     try {

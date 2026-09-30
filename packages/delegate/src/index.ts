@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { access, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { delimiter, extname, isAbsolute, join, relative, resolve, win32 } from 'node:path';
+import { delimiter, dirname, extname, isAbsolute, join, relative, resolve, win32 } from 'node:path';
 import { execa } from 'execa';
 import { client as acpClient, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk';
 import type {
@@ -29,6 +29,7 @@ export interface LaneReadOptions {
   ferryLanes?: readonly NativeLane[];
   approvedProjectHash?: string | null;
   environment?: NodeJS.ProcessEnv;
+  opencodeEnvironment?: NodeJS.ProcessEnv;
   gitRoot?: (workspacePath: string) => Promise<string | null>;
 }
 export interface LaneReadResult {
@@ -61,6 +62,132 @@ const readOptional = async (path: string): Promise<string | null> => {
     throw error;
   }
 };
+
+function stripJsonComments(source: string): string {
+  let output = '';
+  let quoted = false;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index] ?? '';
+    const next = source[index + 1] ?? '';
+    if (lineComment) {
+      if (character === '\n' || character === '\r') {
+        lineComment = false;
+        output += character;
+      } else output += ' ';
+    } else if (blockComment) {
+      if (character === '*' && next === '/') {
+        blockComment = false;
+        output += '  ';
+        index += 1;
+      } else output += character === '\n' || character === '\r' ? character : ' ';
+    } else if (quoted) {
+      output += character;
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') quoted = false;
+    } else if (character === '"') {
+      quoted = true;
+      output += character;
+    } else if (character === '/' && next === '/') {
+      lineComment = true;
+      output += '  ';
+      index += 1;
+    } else if (character === '/' && next === '*') {
+      blockComment = true;
+      output += '  ';
+      index += 1;
+    } else output += character;
+  }
+  let json = '';
+  quoted = false;
+  escaped = false;
+  for (let index = 0; index < output.length; index += 1) {
+    const character = output[index] ?? '';
+    if (quoted) {
+      json += character;
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') quoted = false;
+    } else if (character === '"') {
+      quoted = true;
+      json += character;
+    } else if (character === ',') {
+      let next = index + 1;
+      while (/\s/.test(output[next] ?? '')) next += 1;
+      if (output[next] !== '}' && output[next] !== ']') json += character;
+    } else json += character;
+  }
+  return json;
+}
+
+function configuredOpenCodeModel(text: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(stripJsonComments(text));
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    const model = (parsed as Record<string, unknown>).model;
+    return typeof model === 'string' && model.trim() ? model.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function configuredModelFromFile(path: string): Promise<string | null> {
+  try {
+    const text = await readFile(path, 'utf8');
+    return configuredOpenCodeModel(text);
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve the user/project OpenCode default from config files only; never inspect auth stores. */
+export async function readOpenCodeDefaultModel(
+  cwd: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<string | null> {
+  const home = environment.USERPROFILE ?? environment.HOME ?? homedir();
+  const configHome = environment.XDG_CONFIG_HOME ?? join(home, '.config');
+  let model: string | null = null;
+  const readConfig = async (base: string, name: string) => {
+    for (const extension of ['.json', '.jsonc']) {
+      const next = await configuredModelFromFile(join(base, `${name}${extension}`));
+      if (next) model = next;
+    }
+  };
+  await readConfig(join(configHome, 'opencode'), 'opencode');
+  if (environment.OPENCODE_CONFIG) {
+    const customConfig = resolve(cwd, environment.OPENCODE_CONFIG);
+    const customModel = await configuredModelFromFile(customConfig);
+    if (customModel) model = customModel;
+  }
+  const directories = [resolve(cwd)];
+  let cursor = directories[0] ?? resolve(cwd);
+  let foundGitRoot = false;
+  while (dirname(cursor) !== cursor) {
+    try {
+      await access(join(cursor, '.git'));
+      foundGitRoot = true;
+      break;
+    } catch {
+      const parent = dirname(cursor);
+      directories.push(parent);
+      cursor = parent;
+    }
+  }
+  if (foundGitRoot) {
+    for (const directory of directories.reverse()) await readConfig(directory, 'opencode');
+  } else {
+    await readConfig(resolve(cwd), 'opencode');
+  }
+  if (environment.OPENCODE_CONFIG_CONTENT) {
+    const inlineModel = configuredOpenCodeModel(environment.OPENCODE_CONFIG_CONTENT);
+    if (inlineModel) model = inlineModel;
+  }
+  return model;
+}
 
 function lanesFromText(text: string, source: 'global' | 'project', trusted: boolean): Lane[] {
   let data: FleetFile;
@@ -135,6 +262,20 @@ export async function readLanes(options: LaneReadOptions): Promise<LaneReadResul
       LaneSchema.parse({ ...lane, source: 'ferry', trusted: true }),
     ),
   ];
+  if (lanes.some((lane) => lane.implementer === 'opencode' && !lane.model?.trim())) {
+    const model = await readOpenCodeDefaultModel(
+      options.workspacePath,
+      options.opencodeEnvironment ?? process.env,
+    );
+    if (model)
+      return {
+        lanes: lanes.map((lane) =>
+          lane.implementer === 'opencode' && !lane.model?.trim() ? { ...lane, model } : lane,
+        ),
+        projectHash,
+        projectConfigPath,
+      };
+  }
   return { lanes, projectHash, projectConfigPath };
 }
 
@@ -199,6 +340,7 @@ export function buildDelegationBrief(input: BriefInput): EditableBrief {
 
 export interface AdapterRequest {
   prompt: string;
+  promptFilePath?: string;
   cwd: string;
   model?: string;
   effort?: string;
@@ -496,10 +638,27 @@ export function assertSafeArguments(args: readonly string[]): void {
   }
 }
 
-function cliArgs(name: Implementer, request: AdapterRequest, outputPath: string): string[] {
+export function buildCliArgs(
+  name: Implementer,
+  request: AdapterRequest,
+  outputPath: string,
+  codexVersion?: string,
+): string[] {
   const args: string[] = [...(request.args ?? [])];
   if (name === 'codex') {
     args.push('exec');
+    if (request.resumeId && usesCodexResumeV159Syntax(codexVersion)) {
+      args.push(
+        'resume',
+        '--json',
+        '--output-last-message',
+        outputPath,
+        request.resumeId,
+        request.prompt,
+      );
+      assertSafeArguments(args);
+      return args;
+    }
     if (request.resumeId) args.push('resume', request.resumeId);
     args.push('--json', '-o', outputPath);
     if (request.model) args.push('-m', request.model);
@@ -517,8 +676,10 @@ function cliArgs(name: Implementer, request: AdapterRequest, outputPath: string)
     if (request.model) args.push('--model', request.model);
     if (request.mode) args.push('--agent', request.mode);
     if (request.variant) args.push('--variant', request.variant);
-    if (request.mode === 'build') args.push('--yolo');
-    args.push('--format', 'json');
+    if (!request.promptFilePath) throw new Error('OpenCode prompt file path is required');
+    args.push('--file', request.promptFilePath, '--dir', request.cwd);
+    if (request.mode === 'build') args.push('--auto');
+    args.push('--format', 'json', 'Follow the task in the attached brief file.');
   } else {
     args.push('-p', '--output-format', 'stream-json', '--verbose');
     if (request.model) args.push('--model', request.model);
@@ -527,6 +688,74 @@ function cliArgs(name: Implementer, request: AdapterRequest, outputPath: string)
   }
   assertSafeArguments(args);
   return args;
+}
+
+function summarizeOpenCodeEvent(event: Record<string, unknown>): Record<string, unknown> {
+  const part =
+    typeof event.part === 'object' && event.part !== null
+      ? (event.part as Record<string, unknown>)
+      : undefined;
+  const error =
+    typeof event.error === 'object' && event.error !== null
+      ? (event.error as Record<string, unknown>)
+      : undefined;
+  const info =
+    typeof event.info === 'object' && event.info !== null
+      ? (event.info as Record<string, unknown>)
+      : undefined;
+  const model =
+    typeof info?.model === 'object' && info.model !== null
+      ? (info.model as Record<string, unknown>)
+      : typeof event.model === 'object' && event.model !== null
+        ? (event.model as Record<string, unknown>)
+        : undefined;
+  const summary: Record<string, unknown> = {};
+  if (typeof event.type === 'string') summary.type = event.type;
+  if (typeof event.sessionID === 'string') summary.sessionID = event.sessionID;
+  const providerID = event.providerID ?? info?.providerID ?? model?.providerID;
+  const modelID = event.modelID ?? model?.modelID ?? model?.id;
+  if (typeof providerID === 'string') summary.providerID = providerID;
+  if (typeof modelID === 'string') summary.modelID = modelID;
+  else if (typeof event.model === 'string') summary.modelID = event.model;
+  if (typeof event.tool === 'string' || typeof part?.tool === 'string')
+    summary.tool = event.tool ?? part?.tool;
+  if (typeof part?.type === 'string') summary.partType = part.type;
+  if (typeof part?.text === 'string') summary.text = part.text.slice(0, 1_000);
+  if (typeof error?.message === 'string') summary.error = error.message.slice(0, 1_000);
+  const state =
+    typeof part?.state === 'object' && part.state !== null
+      ? (part.state as Record<string, unknown>)
+      : undefined;
+  if (typeof state?.status === 'string') summary.toolStatus = state.status;
+  return summary;
+}
+
+function usesCodexResumeV159Syntax(versionOutput: string | undefined): boolean {
+  const match = versionOutput?.match(/codex-cli\s+(\d+)\.(\d+)\.(\d+)/i);
+  if (!match) return false;
+  const version = match.slice(1).map(Number);
+  return (
+    (version[0] ?? 0) > 0 ||
+    ((version[0] ?? 0) === 0 &&
+      ((version[1] ?? 0) > 159 || ((version[1] ?? 0) === 159 && (version[2] ?? 0) >= 0)))
+  );
+}
+
+async function readCliVersion(name: Implementer, request: AdapterRequest): Promise<string | null> {
+  try {
+    const executable = await executablePath(name, request.executable);
+    const invocation = commandInvocation(executable, ['--version']);
+    const result = await execa(invocation.file, invocation.args, {
+      cwd: request.cwd,
+      reject: false,
+      windowsHide: true,
+      timeout: 10_000,
+      ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
+    });
+    return result.failed ? null : result.stdout.trim();
+  } catch {
+    return null;
+  }
 }
 
 function signalProcessGroup(pid: number | undefined, signal: NodeJS.Signals): boolean {
@@ -584,8 +813,10 @@ function parseEvent(
   } else if (name === 'opencode') {
     if (typeof event.sessionID === 'string') state.threadId = event.sessionID;
     const part = event.part as Record<string, unknown> | undefined;
-    if (event.type === 'tool' && typeof event.tool === 'string') onProgress(`Tool: ${event.tool}`);
-    if (event.type === 'text' && typeof part?.text === 'string') state.final += part.text;
+    const tool = typeof event.tool === 'string' ? event.tool : part?.tool;
+    if (event.type === 'tool' && typeof tool === 'string') onProgress(`Tool: ${tool}`);
+    const text = typeof part?.text === 'string' ? part.text : event.text;
+    if (event.type === 'text' && typeof text === 'string') state.final += text;
     const tokens = event.tokens as Record<string, unknown> | undefined;
     if (tokens) {
       state.input += Number(tokens.input ?? 0);
@@ -641,6 +872,7 @@ async function execute(
   args: string[],
   request: AdapterRequest,
   onProgress: (text: string) => void,
+  promptOnStdin: boolean,
 ): Promise<{ stdout: string; stderr: string }> {
   const executable = await executablePath(name, request.executable);
   const invocation = commandInvocation(executable, args);
@@ -648,13 +880,14 @@ async function execute(
   const launchArgs = invocation.args;
   const command = execa(launchFile, launchArgs, {
     cwd: request.cwd,
+    env: { ...process.env, ...request.env },
     reject: false,
     windowsHide: true,
     buffer: false,
     detached: process.platform !== 'win32',
     ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
   });
-  command.stdin.end(request.prompt);
+  command.stdin.end(promptOnStdin ? request.prompt : undefined);
   let stdout = '';
   let stderr = '';
   let stdoutTail = '';
@@ -1134,18 +1367,58 @@ export async function runAdapter(
     request.onProgress?.(text);
   };
   try {
-    const args = cliArgs(name, request, outputPath);
-    await execute(name, args, request, (line) => {
-      let event: unknown;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        progress(line);
-        return;
-      }
-      if (typeof event === 'object' && event !== null)
-        parseEvent(name, event as Record<string, unknown>, state, progress);
-    });
+    const requestedOpenCodeModel = request.model?.trim();
+    const openCodeModel =
+      name === 'opencode'
+        ? requestedOpenCodeModel && requestedOpenCodeModel.length > 0
+          ? requestedOpenCodeModel
+          : await readOpenCodeDefaultModel(request.cwd, { ...process.env, ...request.env })
+        : undefined;
+    if (name === 'opencode' && !openCodeModel)
+      throw new Error(
+        'Choose a model for OpenCode in Settings \u2192 Delegation, or set a default model in your OpenCode config.',
+      );
+    const openCodePromptPath = name === 'opencode' ? join(artifactsDir, 'brief.md') : undefined;
+    if (openCodePromptPath) await writeFile(openCodePromptPath, request.prompt, 'utf8');
+    const cliRequest = {
+      ...request,
+      ...(openCodeModel ? { model: openCodeModel } : {}),
+      ...(openCodePromptPath ? { promptFilePath: openCodePromptPath } : {}),
+    };
+    const codexVersion =
+      name === 'codex' && request.resumeId ? await readCliVersion(name, request) : undefined;
+    const args = buildCliArgs(name, cliRequest, outputPath, codexVersion ?? undefined);
+    let openCodeEventCount = 0;
+    const codexResumePromptIsArgument =
+      name === 'codex' && request.resumeId && usesCodexResumeV159Syntax(codexVersion ?? undefined);
+    const execution = await execute(
+      name,
+      args,
+      cliRequest,
+      (line) => {
+        let event: unknown;
+        try {
+          event = JSON.parse(line);
+        } catch {
+          progress(line);
+          return;
+        }
+        if (typeof event === 'object' && event !== null) {
+          const parsed = event as Record<string, unknown>;
+          if (name === 'opencode') {
+            openCodeEventCount += 1;
+            progress(`[OpenCode JSON] ${JSON.stringify(summarizeOpenCodeEvent(parsed))}`);
+          }
+          parseEvent(name, parsed, state, progress);
+        }
+      },
+      !codexResumePromptIsArgument && name !== 'opencode',
+    );
+    if (execution.stderr.trim()) progress(`[CLI stderr tail] ${execution.stderr.slice(-4_000)}`);
+    if (name === 'opencode' && !state.final.trim())
+      throw new Error(
+        `OpenCode exited without assistant text (received ${String(openCodeEventCount)} JSON events${state.threadId ? `; session ${state.threadId}` : ''}). Check its configured default model or set a lane model.`,
+      );
     if (name === 'codex') {
       const saved = await readOptional(outputPath);
       if (saved) state.final = saved;
@@ -1255,6 +1528,7 @@ export function startDelegation(input: StartDelegationInput): DelegationHandle {
         },
       );
       threadId = result.threadId;
+      if (threadId) update(`Delegate session id: ${threadId}`);
       run.status = 'completed';
       run.finalMessage = result.finalMessage;
       run.usage = result.usage;
@@ -1314,6 +1588,8 @@ export function startDelegation(input: StartDelegationInput): DelegationHandle {
           },
         },
       );
+      threadId = resumed.threadId ?? threadId;
+      if (threadId) update(`Delegate session id: ${threadId}`);
       run.brief = brief;
       run.finalMessage = resumed.finalMessage;
       run.usage = resumed.usage;
@@ -1351,6 +1627,7 @@ export async function decide(
     run.finalMessage = resumed.finalMessage;
     run.usage = resumed.usage;
     run.touchedFiles = resumed.touchedFiles;
+    run.gateResults = resumed.gateResults;
     run.status = resumed.status;
     run.finishedAt = resumed.finishedAt;
   }

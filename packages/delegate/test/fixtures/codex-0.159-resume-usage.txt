@@ -1,0 +1,5 @@
+tip: to pass '--sandbox' as a value, use '-- --sandbox'
+
+Usage: codex exec resume --json --output-last-message <FILE> <SESSION_ID> [PROMPT]
+
+For more information, try '--help'.

@@ -13,6 +13,8 @@ import {
   newId,
   type DelegationRun,
   type RunId,
+  type Workspace,
+  type GateResult,
 } from '@ferry/shared';
 import { WorkspaceJail, ShadowCheckpoints, runCommand } from '@ferry/workspace';
 import { loadProjectConfig } from '@ferry/config';
@@ -28,6 +30,30 @@ const StartSchema = z.object({
   brief: z.string().min(1),
 });
 const DecisionSchema = z.enum(['accepted', 'rejected', 'rework']);
+
+async function configuredGateCommands(
+  workspace: Workspace,
+  env: NodeJS.ProcessEnv,
+): Promise<string[]> {
+  const projectCommands = (await loadProjectConfig(workspace.path, env)).gateCommands;
+  return workspace.settings.gateCommands.length ? workspace.settings.gateCommands : projectCommands;
+}
+
+async function executeGateCommands(
+  jail: WorkspaceJail,
+  commands: readonly string[],
+): Promise<GateResult[]> {
+  const results: GateResult[] = [];
+  for (const command of commands) {
+    const result = await runCommand(jail, { command, cwd: '.', pty: false, timeoutMs: 120_000 });
+    results.push({
+      command,
+      ok: result.exitCode === 0 && !result.timedOut,
+      outputTail: `${result.stdout}\n${result.stderr}`.trim().slice(-4000),
+    });
+  }
+  return results;
+}
 
 export function register(host: CoreHost, services: FerryServices): void {
   const handles = new Map<string, DelegationHandle>();
@@ -99,10 +125,20 @@ export function register(host: CoreHost, services: FerryServices): void {
       if (!lane) throw rpcDomainError(-32044, 'not_found', `Lane not found: ${input.lane}`);
       if (!lane.trusted)
         throw rpcDomainError(-32045, 'permission_denied', 'Project delegation lanes need approval');
+      if (lane.implementer === 'opencode' && !lane.model?.trim())
+        throw rpcDomainError(
+          -32010,
+          'validation',
+          'Choose a model for OpenCode in Settings \u2192 Delegation, or set a default model in your OpenCode config.',
+        );
       const jail = new WorkspaceJail(workspace.path);
       const shadow = new ShadowCheckpoints(jail, services.paths.home);
       const beforeId = await shadow.snapshot(`Before delegation ${input.lane}`);
-      const gateCommands = (await loadProjectConfig(workspace.path, services.env)).gateCommands;
+      const projectGateCommands = (await loadProjectConfig(workspace.path, services.env))
+        .gateCommands;
+      const gateCommands = workspace.settings.gateCommands.length
+        ? workspace.settings.gateCommands
+        : projectGateCommands;
       const now = services.clock.now().toISOString();
       const runId = newId('run') as RunId;
       const initial = DelegationRunSchema.parse({
@@ -154,22 +190,8 @@ export function register(host: CoreHost, services: FerryServices): void {
       handles.set(initial.id, handle);
       void handle.run
         .then(async (completed) => {
-          const gateResults: DelegationRun['gateResults'] = [];
-          if (completed.status === 'completed') {
-            for (const command of gateCommands) {
-              const result = await runCommand(jail, {
-                command,
-                cwd: '.',
-                pty: false,
-                timeoutMs: 120_000,
-              });
-              gateResults.push({
-                command,
-                ok: result.exitCode === 0 && !result.timedOut,
-                outputTail: `${result.stdout}\n${result.stderr}`.trim().slice(-4000),
-              });
-            }
-          }
+          const gateResults =
+            completed.status === 'completed' ? await executeGateCommands(jail, gateCommands) : [];
           const updated = DelegationRunSchema.parse({
             ...completed,
             gateResults,
@@ -196,6 +218,8 @@ export function register(host: CoreHost, services: FerryServices): void {
       const handle = handles.get(id);
       const workspace = workspaceForSession(run.sessionId).workspace;
       const shadow = new ShadowCheckpoints(new WorkspaceJail(workspace.path), services.paths.home);
+      const jail = new WorkspaceJail(workspace.path);
+      const gateCommands = await configuredGateCommands(workspace, services.env);
       const updated = await decide(
         run,
         decision,
@@ -214,7 +238,13 @@ export function register(host: CoreHost, services: FerryServices): void {
           },
           resumeSession: async (brief) => {
             if (!handle) throw new Error('Delegation process cannot be resumed after restart');
-            return await handle.resume(brief);
+            const resumed = await handle.resume(brief);
+            const gateResults = await executeGateCommands(jail, gateCommands);
+            return DelegationRunSchema.parse({
+              ...resumed,
+              gateResults,
+              ...(gateResults.some((result) => !result.ok) ? { status: 'failed' } : {}),
+            });
           },
         },
       );

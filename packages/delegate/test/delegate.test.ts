@@ -21,6 +21,8 @@ import {
   detectAcpAgent,
   resolveAcpCommand,
   startDelegation,
+  buildCliArgs,
+  readOpenCodeDefaultModel,
 } from '../src/index.js';
 import { sampleDelegationRun } from '@ferry/shared/testing';
 
@@ -284,6 +286,7 @@ describe('external CLI adapters', () => {
         prompt,
         cwd: root,
         executable: paths[name],
+        ...(name === 'opencode' ? { model: 'openai/gpt-test' } : {}),
         onProgress: (line) => progress.push(line),
       });
       expect(result.finalMessage).toBe('Fake delegate completed.');
@@ -292,11 +295,102 @@ describe('external CLI adapters', () => {
       expect(result.usage.outputTokens).toBeGreaterThan(0);
       expect(result.usage.provider).toBe('subscription_cli');
       expect(progress.length).toBeGreaterThan(0);
-      expect(await readStringArray(captureArgsPath)).toContain(prompt);
+      if (name === 'opencode')
+        expect(progress.some((line) => line.startsWith('[OpenCode JSON]'))).toBe(true);
+      const captured = await readStringArray(captureArgsPath);
+      if (name === 'opencode') {
+        const fileIndex = captured.indexOf('--file');
+        const promptFile = captured[fileIndex + 1];
+        expect(fileIndex).toBeGreaterThanOrEqual(0);
+        expect(promptFile).toBeDefined();
+        expect(captured).not.toContain(prompt);
+        expect(captured).toContain('Follow the task in the attached brief file.');
+        if (!promptFile) throw new Error('OpenCode prompt file argument missing');
+        expect(await readFile(promptFile, 'utf8')).toBe(prompt);
+      } else expect(captured).toContain(prompt);
       await rm(result.artifactsDir, { recursive: true, force: true });
     },
     20_000,
   );
+
+  it('uses the Codex 0.159 resume syntax from its installed version and usage fixture', async () => {
+    const root = await tempRoot();
+    const usage = await readFile(
+      new URL('./fixtures/codex-0.159-resume-usage.txt', import.meta.url),
+      'utf8',
+    );
+    expect(usage).toContain(
+      'Usage: codex exec resume --json --output-last-message <FILE> <SESSION_ID> [PROMPT]',
+    );
+    const captureArgsPath = join(root, 'args.json');
+    const paths = await installFakeClis(join(root, 'bin'), {
+      captureArgsPath,
+      versions: { codex: 'codex-cli 0.159.0' },
+    });
+    const prompt = 'Continue this session';
+    const outputPath = join(root, 'final.txt');
+    const result = await runAdapter('codex', {
+      prompt,
+      cwd: root,
+      executable: paths.codex,
+      resumeId: 'codex-session-159',
+      model: 'inherited-model',
+      effort: 'high',
+    });
+    expect(await readStringArray(captureArgsPath)).toEqual([
+      'exec',
+      'resume',
+      '--json',
+      '--output-last-message',
+      expect.stringMatching(/codex-final\.txt$/),
+      'codex-session-159',
+      prompt,
+    ]);
+    expect(
+      buildCliArgs(
+        'codex',
+        { prompt, cwd: root, resumeId: 'old-session', model: 'old-model' },
+        outputPath,
+        'codex-cli 0.158.0',
+      ),
+    ).toContain('--sandbox');
+    await rm(result.artifactsDir, { recursive: true, force: true });
+  }, 20_000);
+
+  it('fails clearly when OpenCode exits without assistant text', async () => {
+    const root = await tempRoot();
+    const paths = await installFakeClis(join(root, 'bin'), {
+      events: [{ type: 'session', sessionID: 'fake-opencode-empty-session' }],
+    });
+    await expect(
+      runAdapter('opencode', {
+        prompt: 'Return a tiny test',
+        cwd: root,
+        executable: paths.opencode,
+        model: 'openai/gpt-test',
+        mode: 'build',
+      }),
+    ).rejects.toThrow(/OpenCode exited without assistant text.*1 JSON events/);
+  }, 20_000);
+
+  it('keeps OpenCode and Claude resume argument forms supported by their CLIs', () => {
+    const request = {
+      prompt: 'Continue',
+      cwd: 'C:\\fixture',
+      resumeId: 'session-1',
+      promptFilePath: 'C:\\fixture\\brief.md',
+    };
+    const opencode = buildCliArgs('opencode', request, 'output.txt');
+    expect(opencode).toContain('--session');
+    expect(opencode).toContain('--dir');
+    expect(opencode).toContain('C:\\fixture\\brief.md');
+    expect(opencode).not.toContain(request.prompt);
+    expect(opencode).toContain('Follow the task in the attached brief file.');
+    expect(opencode).toContain('session-1');
+    const claude = buildCliArgs('claude', request, 'output.txt');
+    expect(claude).toContain('--resume');
+    expect(claude).toContain('session-1');
+  });
 
   it('resumes a CLI session and rejects shell metacharacters in arguments', async () => {
     const root = await tempRoot();
@@ -318,27 +412,95 @@ describe('external CLI adapters', () => {
   it('detects installed and authenticated CLIs and keeps OpenCode plan mode unapproved', async () => {
     const root = await tempRoot();
     const captureArgsPath = join(root, 'args.json');
-    const paths = await installFakeClis(join(root, 'bin'), { captureArgsPath });
+    const captureCwdPath = join(root, 'cwd.txt');
+    const paths = await installFakeClis(join(root, 'bin'), { captureArgsPath, captureCwdPath });
     const detected = await detectCli('codex', { executable: paths.codex, cwd: root });
     expect(detected).toMatchObject({
       available: true,
       authenticated: true,
       version: 'codex fake 1.0',
     });
-    await runAdapter('opencode', {
+    const planRun = await runAdapter('opencode', {
       prompt: 'Plan',
       cwd: root,
       executable: paths.opencode,
+      model: 'openai/gpt-test',
       mode: 'plan',
     });
-    expect(await readStringArray(captureArgsPath)).not.toContain('--yolo');
-    await runAdapter('opencode', {
+    expect(await readStringArray(captureArgsPath)).not.toContain('--auto');
+    const buildRun = await runAdapter('opencode', {
       prompt: 'Build',
       cwd: root,
       executable: paths.opencode,
+      model: 'openai/gpt-test',
       mode: 'build',
     });
-    expect(await readStringArray(captureArgsPath)).toContain('--yolo');
+    const buildArgs = await readStringArray(captureArgsPath);
+    expect(buildArgs).toContain('--auto');
+    expect(buildArgs).toContain('--dir');
+    expect(buildArgs).toContain(root);
+    expect(buildArgs).toContain('--model');
+    expect(buildArgs).toContain('openai/gpt-test');
+    const briefIndex = buildArgs.indexOf('--file');
+    const briefPath = buildArgs[briefIndex + 1];
+    expect(briefIndex).toBeGreaterThanOrEqual(0);
+    expect(briefPath).toBeDefined();
+    expect(buildArgs).not.toContain('Build');
+    expect(buildArgs).toContain('Follow the task in the attached brief file.');
+    if (!briefPath) throw new Error('OpenCode prompt file argument missing');
+    expect(await readFile(briefPath, 'utf8')).toBe('Build');
+    expect(await readFile(captureCwdPath, 'utf8')).toBe(root);
+    await Promise.all([
+      rm(planRun.artifactsDir, { recursive: true, force: true }),
+      rm(buildRun.artifactsDir, { recursive: true, force: true }),
+    ]);
+  }, 20_000);
+  it('reads the configured OpenCode model and gives a clear error when none exists', async () => {
+    const root = await tempRoot();
+    const configHome = join(root, 'config');
+    await mkdir(join(configHome, 'opencode'), { recursive: true });
+    await writeFile(join(configHome, 'opencode', 'opencode.jsonc'), '{"model":"provider/model",}');
+    expect(
+      await readOpenCodeDefaultModel(root, { USERPROFILE: root, XDG_CONFIG_HOME: configHome }),
+    ).toBe('provider/model');
+
+    const laneConfigHome = join(root, 'ferry-config');
+    await mkdir(join(laneConfigHome, 'delegate-skills'), { recursive: true });
+    await writeFile(
+      join(laneConfigHome, 'delegate-skills', 'config.json'),
+      JSON.stringify({
+        version: 'delegate-fleet.v1',
+        lanes: { opencode: { implementer: 'opencode' } },
+      }),
+    );
+    const lanes = await readLanes({
+      workspacePath: root,
+      environment: { XDG_CONFIG_HOME: laneConfigHome },
+      opencodeEnvironment: { USERPROFILE: root, XDG_CONFIG_HOME: configHome },
+      gitRoot: () => Promise.resolve(null),
+    });
+    expect(lanes.lanes[0]?.model).toBe('provider/model');
+
+    const captureArgsPath = join(root, 'args.json');
+    const paths = await installFakeClis(join(root, 'bin'), { captureArgsPath });
+    await runAdapter('opencode', {
+      prompt: 'Use the configured model',
+      cwd: root,
+      executable: paths.opencode,
+      env: { USERPROFILE: root, XDG_CONFIG_HOME: configHome },
+    });
+    const args = await readStringArray(captureArgsPath);
+    expect(args).toContain('--model');
+    expect(args).toContain('provider/model');
+
+    await expect(
+      runAdapter('opencode', {
+        prompt: 'Run without a selected model',
+        cwd: root,
+        executable: paths.opencode,
+        env: { USERPROFILE: root, XDG_CONFIG_HOME: join(root, 'empty-config') },
+      }),
+    ).rejects.toThrow(/Choose a model for OpenCode in Settings/);
   }, 20_000);
 
   it('cancels a delayed process', async () => {
@@ -383,6 +545,7 @@ describe('external CLI adapters', () => {
         prompt: 'timeout',
         cwd: root,
         executable: slow.opencode,
+        model: 'openai/gpt-test',
         timeoutMs: 30,
       }),
     ).rejects.toThrow(/timed out/);

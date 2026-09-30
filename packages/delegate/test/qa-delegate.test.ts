@@ -81,23 +81,36 @@ describe('QA delegate: argument safety', () => {
   it.runIf(process.platform === 'win32')(
     'preserves a multi-line brief as a single argument through the .cmd shim',
     async () => {
-      // BUG: on Windows the .cmd shim goes through cmd.exe, which splits the
-      // command line at embedded newlines. Every generated delegation brief is
-      // multi-line markdown, but only the first line reaches the CLI (verified:
-      // captured args contain "Goal:" and drop the rest).
+      // The full brief must stay out of .cmd arguments; its attached file must
+      // preserve the multiline text exactly.
       const root = await tempRoot();
       const captureArgsPath = join(root, 'args.json');
       const paths = await installFakeClis(join(root, 'bin'), { captureArgsPath });
       const prompt = 'Goal:\n  do the thing\n  then stop';
-      await runAdapter('opencode', {
+      const result = await runAdapter('opencode', {
         prompt,
         cwd: root,
         executable: paths.opencode,
         model: 'acme/model-1',
       });
-      const parsed: unknown = JSON.parse(await readFile(captureArgsPath, 'utf8'));
+      const parsedValue: unknown = JSON.parse(await readFile(captureArgsPath, 'utf8'));
+      if (
+        !Array.isArray(parsedValue) ||
+        !parsedValue.every((value): value is string => typeof value === 'string')
+      )
+        throw new Error('Expected the fake CLI to record an argument array');
+      const parsed = parsedValue;
       expect(parsed).toContain('acme/model-1');
-      expect(parsed).toContain(prompt);
+      expect(parsed).not.toContain(prompt);
+      expect(parsed).toContain('Follow the task in the attached brief file.');
+      expect(parsed.every((argument) => !argument.includes(String.fromCharCode(10)))).toBe(true);
+      const fileIndex = parsed.indexOf('--file');
+      const promptFile = parsed[fileIndex + 1];
+      expect(fileIndex).toBeGreaterThanOrEqual(0);
+      expect(promptFile).toBeDefined();
+      if (typeof promptFile !== 'string') throw new Error('OpenCode prompt file argument missing');
+      expect(await readFile(promptFile, 'utf8')).toBe(prompt);
+      await rm(result.artifactsDir, { recursive: true, force: true });
     },
     30_000,
   );

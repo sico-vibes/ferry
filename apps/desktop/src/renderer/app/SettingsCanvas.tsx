@@ -1462,6 +1462,12 @@ export function SettingsCanvas() {
               </span>
             </div>
           ))}
+          {lanes.some((lane) => lane.implementer === 'opencode' && !lane.model?.trim()) && (
+            <p className="muted" role="status">
+              Choose a model for the OpenCode lane in its lane configuration, or set a default model
+              in your OpenCode config. Delegation cannot start without one.
+            </p>
+          )}
           <h3>CLI detection</h3>
           {providers
             .filter((provider) => provider.kind === 'cli')
