@@ -850,7 +850,12 @@ export function mapProviderError(error: unknown): MappedProviderError {
     asOfflineError(error) ||
     asOfflineError(record.cause)
   )
-    return { kind: 'offline', retryAfterMs: null, message: friendlyError('offline', null) };
+    return {
+      kind: 'offline',
+      retryAfterMs: null,
+      retryable: true,
+      message: friendlyError('offline', null),
+    };
   const rawRetry =
     record.retryAfter ?? readRetryAfter(response.headers) ?? readRetryAfter(record.responseHeaders);
   const retry = Number(rawRetry);

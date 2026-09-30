@@ -662,8 +662,11 @@ export function buildCliArgs(
     args.push('--json', '-o', outputPath);
     if (request.model) args.push('-m', request.model);
     if (request.effort) args.push('-c', `model_reasoning_effort=${request.effort}`);
-    // Codex CLI 0.159's exec-resume subcommand does not accept --sandbox or --cd.
-    if (!request.resumeId)
+    // Codex 0.159+ resumes returned above. New sessions and known pre-0.159 resumes take
+    // --sandbox/--cd; an unknown-version resume omits them (newer CLIs reject them and the
+    // resumed session keeps its original sandbox).
+    const knownCodexVersion = /codex-cli\s+\d+\.\d+\.\d+/i.test(codexVersion ?? '');
+    if (!request.resumeId || knownCodexVersion)
       args.push(
         '--sandbox',
         request.mode === 'plan' ? 'read-only' : 'workspace-write',
