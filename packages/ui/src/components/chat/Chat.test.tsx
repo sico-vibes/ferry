@@ -102,6 +102,9 @@ describe('transcript components', () => {
         />
       </>,
     );
+    const approvalCard = screen.getByText('Run tests?').closest('section');
+    expect(approvalCard?.className).toContain('flex-col');
+    expect(approvalCard?.className).toContain('gap-3');
     expect(screen.queryByText('Inspect the flaky timer.')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Thinking/ }));
     expect(screen.getByText('Inspect the flaky timer.')).toBeTruthy();

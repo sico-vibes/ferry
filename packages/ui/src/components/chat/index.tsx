@@ -404,7 +404,7 @@ export function ApprovalCard({
 }) {
   const resolved = state !== 'pending';
   return (
-    <section className="space-y-3 rounded-xl border border-warn/30 bg-warn/5 p-3.5">
+    <section className="flex flex-col gap-3 rounded-xl border border-warn/30 bg-warn/5 p-3.5">
       <div className="flex items-center gap-2">
         <ShieldAlert size={16} className="text-warn" />
         <span className="text-label font-medium">{summary}</span>

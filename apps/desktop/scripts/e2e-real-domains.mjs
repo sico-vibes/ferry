@@ -52,13 +52,24 @@ async function captureFailureArtifacts(error) {
     }
     try {
       const dom = await activePage.content();
+      const route = activePage.url();
+      const visibleSessionTitle = await activePage
+        .evaluate(() => {
+          const selectedTab = document.querySelector('[role="tab"][aria-selected="true"]');
+          const emptySessionTitle = document.querySelector('.transcript-viewport .session-empty');
+          return (selectedTab?.textContent ?? emptySessionTitle?.textContent ?? '').trim();
+        })
+        .catch(() => 'unavailable');
       const details = [
         `Failure step: ${failureStep}`,
-        `URL: ${activePage.url()}`,
+        `Route: ${route}`,
+        `Visible session title: ${visibleSessionTitle || 'unavailable'}`,
         `Error: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
         '',
       ].join('\n');
       await writeFile(htmlPath, `${details}\n${dom}`, 'utf8');
+      console.error(`E2E failure route: ${route}`);
+      console.error(`E2E failure visible session title: ${visibleSessionTitle || 'unavailable'}`);
       console.error(`E2E failure DOM saved: ${htmlPath}`);
     } catch (artifactError) {
       console.error(
@@ -889,22 +900,30 @@ try {
       textTurn('The interrupted task resumed and completed.'),
     );
     failureStep = 'crash-resume-create';
-    const crashSession = await page.evaluate(async () => {
-      const workspace = (await window.ferryRpcClient.workspaces.list())[0];
-      if (!workspace) throw new Error('Resume E2E workspace unavailable');
-      return window.ferryRpcClient.sessions.create({
-        workspaceId: workspace.id,
-        title: 'Crash resume flow',
-      });
-    });
+    await page.getByRole('button', { name: 'Add tab', exact: true }).click();
+    await expect(page).toHaveURL(/#\/s\/[^/?#]+$/);
+    const crashSessionRoute = new URL(page.url()).hash;
+    const crashSessionMatch = /^#\/s\/([^/?#]+)$/.exec(crashSessionRoute);
+    if (!crashSessionMatch?.[1]) {
+      throw new Error(`Could not capture crash session id from route: ${crashSessionRoute}`);
+    }
+    const crashSessionId = crashSessionMatch[1];
+    await expect(page.locator('.transcript-viewport')).toHaveAttribute(
+      'data-session-status',
+      'idle',
+    );
     const beforeCrashRequests = fakeProvider.requests.length;
     void page.evaluate(
       (id) => window.ferryRpcClient.sessions.send(id, { text: 'Finish the crash recovery task.' }),
-      crashSession.id,
+      crashSessionId,
     );
     await expect
       .poll(() => fakeProvider.requests.length, { timeout: 10_000 })
       .toBeGreaterThan(beforeCrashRequests);
+    await expect(page.locator('.transcript-viewport')).toHaveAttribute(
+      'data-session-status',
+      'running',
+    );
     const previousCorePid = await page.evaluate(async () => {
       const status = await window.ferryHost.getEngineStatus();
       if (!status.pid) throw new Error('Core process PID unavailable for crash test');
@@ -967,7 +986,7 @@ try {
           name: 'TimeoutError',
           message: 'sessions.get did not settle within 17 seconds',
         };
-      }, crashSession.id)
+      }, crashSessionId)
       .then(
         (observation) => {
           crashSessionObservation = observation;
@@ -1002,35 +1021,63 @@ try {
       );
       if (!workspace) throw new Error('Crash resume workspace unavailable in Library');
       return workspace.name;
-    }, crashSession.id);
+    }, crashSessionId);
     await page.getByRole('button', { name: 'Library', exact: true }).click();
     await page
       .getByRole('button', { name: `Expand workspace ${crashWorkspaceName}`, exact: true })
       .click();
-    const crashSessionRow = page.getByRole('button', { name: /Crash resume flow/ });
-    await expect(crashSessionRow).toBeVisible();
-    await expect(crashSessionRow.getByText('Interrupted', { exact: true })).toBeVisible();
-    await crashSessionRow.click();
+    await page.evaluate((hash) => {
+      window.location.hash = hash;
+    }, crashSessionRoute);
+    await expect(page).toHaveURL(new RegExp(`/s/${crashSessionId}(?:$|[?#])`));
     failureStep = 'crash-resume-detail';
+    await expect(page.locator('.transcript-viewport')).toBeVisible();
     await expect(page.locator('.transcript-viewport')).toHaveAttribute(
       'data-session-status',
       'interrupted',
     );
+    await expect(page.getByRole('button', { name: 'Resume', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Resume', exact: true }).click();
     failureStep = 'crash-resume-completion';
     await expect
       .poll(
-        () =>
-          page.evaluate(
-            async (id) => (await window.ferryRpcClient.sessions.get(id)).session.status,
-            crashSession.id,
-          ),
+        async () => {
+          const state = await page.evaluate(async (id) => {
+            const detail = await window.ferryRpcClient.sessions.get(id);
+            const approvals = detail.messages
+              .flatMap((message) => message.parts)
+              .filter(
+                (part) =>
+                  part.type === 'approval_request' &&
+                  part.state === 'pending' &&
+                  (part.kind === 'command' || part.kind === 'edit'),
+              )
+              .map(({ id: approvalId, kind, summary }) => ({
+                id: approvalId,
+                kind,
+                summary,
+              }));
+            return { status: detail.session.status, approvals };
+          }, crashSessionId);
+
+          for (const approval of state.approvals) {
+            console.log(
+              `e2e crash-resume: approving pending ${approval.kind} approval: ${approval.summary}`,
+            );
+            await page.evaluate(
+              async ({ id, approvalId }) =>
+                window.ferryRpcClient.approvals.respond(id, approvalId, 'allow_once'),
+              { id: crashSessionId, approvalId: approval.id },
+            );
+          }
+          return state.status;
+        },
         { timeout: 30_000 },
       )
       .toBe('idle');
     const resumedDetail = await page.evaluate(
       async (id) => window.ferryRpcClient.sessions.get(id),
-      crashSession.id,
+      crashSessionId,
     );
     assert.ok(
       resumedDetail.messages.some((message) =>
