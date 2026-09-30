@@ -1,0 +1,33 @@
+{
+  "capturedAt": "2026-09-30T04:56:54.359Z",
+  "provider": "gemini",
+  "model": "gemini-3.6-flash",
+  "format": "none exposed (Gemini OpenAI-compat)",
+  "request": {
+    "method": "POST",
+    "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "body": {
+      "model": "gemini-3.6-flash",
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Think step by step: what is 17*23? Answer briefly."
+        }
+      ],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    }
+  },
+  "response": {
+    "contentType": "text/event-stream",
+    "reasoningChars": 0,
+    "reasoningTokens": 0,
+    "firstReasoningDeltaMs": null,
+    "firstAnswerDeltaMs": 2730,
+    "sample": "data: {\"choices\":[{\"delta\":{\"content\":\"Here is the step-by-step calculation:\\n\\n1. Break down 23 into 2\",\"role\":\"assistant\"},\"index\":0}],\"created\":1790744140,\"id\":\"Spa8aqK5D8HjxN8PmpWO6Qk\",\"model\":\"gemini-3.6-flash\",\"object\":\"chat.completion.chunk\",\"usage\":{\"completion_tokens\":21,\"prompt_tokens\":18,\"total_tokens\":421}}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"0 and 3: \\n   $17 \\\\times 23 = 17 \\\\times (2\",\"role\":\"assistant\"},\"index\":0}],\"created\":1790744140,\"id\":\"Spa8aqK5D8HjxN8PmpWO6Qk\",\"model\":\"gemini-3.6-flash\",\"object\":\"chat.completion.chunk\",\"usage\":{\"completion_tokens\":45,\"prompt_tokens\":18,\"total_tokens\":445}}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"0 + 3)$\\n\\n2. Multiply 17 by each part:\\n   * $17 \\\\times \",\"role\":\"assistant\"},\"index\":0}],\"created\":1790744140,\"id\":\"Spa8aqK5D8HjxN8PmpWO6Qk\",\"model\":\"gemini-3.6-flash\",\"object\":\"chat.completion.chunk\",\"usage\":{\"completion_tokens\":70,\"prompt_tokens\":18,\"total_tokens\":470}}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"20 = 340$\\n   * $17 \\\\times 3 = 51$\\n\\n\",\"role\":\"assistant\"},\"index\":0}],\"created\":1790744140,\"id\":\"Spa8aqK5D8HjxN8PmpWO6Qk\",\"model\":\"gemini-3.6-flash\",\"object\":\"chat.completion.chunk\",\"usage\":{\"completion_tokens\":94,\"prompt_tokens\":18,\"total_tokens\":494}}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"3. Add the results together:\\n   * $340 + 51 = 391$\\n\\n**Answer:**\",\"role\":\"assistant\"},\"index\":0}],\"created\":1790744140,\"id\":\"Spa8aqK5D8HjxN8PmpWO6Qk\",\"model\":\"gemini-3.6-flash\",\"object\":\"chat.completion.chunk\",\"usage\":{\"completion_tokens\":122,\"prompt_tokens\":18,\"total_tokens\":522}}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" 391\",\"role\":\"assistant\"},\"index\":0}],\"created\":1790744140,\"id\":\"Spa8aqK5D8HjxN8PmpWO6Qk\",\"model\":\"gemini-3.6-flash\",\"object\":\"chat.completion.chunk\",\"usage\":{\"completion_tokens\":126,\"prompt_tokens\":18,\"total_tokens\":526}}\n\ndata: {\"choices\":[{\"delta\":{\"extra_content\":{\"google\":{\"thought_signature\":\"Et4JCtsJAWkUfRP9l/pCwVl8a+DkbcLQa5wvsjg3HwPYX1wbrZRVcLmblPIXRcKVBroO8m0y/7Tdgtk9Cd9g8vvR6RN1V72Ot0A6TDSmAHNsrrQ1G9h5825+pjGDw974JXWg8dvZmaNIjO1ajpf1DlJ6WPGVKxBdHQe7N0i9g44tq+fkqTzkzCQojuR1tHUYJ869IgeGrPDFBKeax/fzLOV3qX0n94gI/C4Pyax13rRLacBwnWJvWkhZzKNQoriqmGT+HpZ6sQKn+LhWgNXyTy8by8/TLjHMhX8bg+DtJD0kyrRV8N79g4Ss2sbzQyY5pDgnPRoWWP12pJNQIGGXsS05tb9inCHzHdfjK14+cgL7NmJhr+fO0i6fZXn0JGR3dNICHga4rwZBi9wcwmG6XCrAgp0LsO0qwdWGr+3YStyjzXQhVssqJAFGaf15DnfxWf1aHHK51ukWAnHaPmCOKJzsyiDud38VoFvEFiBNm7xKGDuyVyN+e647odhxeh+WCecYl4x/YYLqXY5FGGKgMyPNw9vSjgrxx925+1A7HtSeTTzx+EWScRpry5vgCtOxrPwZ4Oa/YS1XWkp7euYCgJqdhaVqrJLQQ/65NNE/W08jGaPzGHd48QNB8BLupWzFnkEXUHp7Ey9NT1WPigwG0WHca8HD5t+NXCAXkTU4SEImHJ4bd2d7zz566fF6jU4GvYogbWSuqxx/eZ0PoRcatzAJd4E8biIrv6BxQcV1qHqXvfi4TarthJQghsK+ngMAJ9AaTLrNsw+yzshLJ13HgFx0tmWrfOfwGACf6uqTDICBMQ8zw5acYeD4vEe12uXmh8XY7VCJVxzzkPLSsVYos6Tad6i7GfXseA7eHnPZdgCyo9mk8/x9b4SWaDmQLPp3ft8RD4yetluP9Te8p/nVDUX1rsejtVfoxKF5VAzzOk1ihRA65ARQ/8+Y8u9NZeON+AJaGsLCslmNHBWWHZ63Inja4mPT8oQwvlnAtw8mf/BZyuTCEfY6g0UlxHUWBFs/IfsU3Qle7vqiDhKX2Evhu4XIzNk3cdE06p1MDRjQqMBJeguTWHwnODhML3RRpOemW9pb3Iemwzu8OQ6Qbxl4OFL2Zm+dyOhUtY3fBqYUQGeMTVjey7BngcuewZtd0PpE9STVjUC1FFCNJ33CKGGoMUZNVqD0ETQ3mMrUHYzMlVshbnOyX+fIzE3Md+LzxliD8dT2wzUub2Zs4K8Hkk18NK5LnGS96RCT6yO9YdbJt92KgOkqMXilYgpxl5cN+t6EcZV91EX8cGv/Qdal+M+WlsqHnXS1Km4V9em954zMM0pMq7ScUuUYJnln88HIISXdDk6cfhD8HuYKufhFSSe3zpOERaiMlZvBntaJQT3wjAf9WSGzAwfEZpvpnazq5u37oiRlQckP9D4vrx7f8ckcxuJm4Hv7uK3tnE2qXlydeZK0WAhReou5M7rTO33DxY1voIyvpv5UTF/2+CwJc8D/QmJWB4Kwf/Mz5WEBqnhiGh1QmaxvmlO+6M/tdGEJL7nS6D7Na4Wi3CTXN9oc399k+Zf4tglRkZ0MT1Jq6RBz66Tv3yYLcFDWNYEnIjGhFo0gTw5qVSZDJLl3WBgNFhuL2I2s9Hv8xzruLGb4+ytoEpwjaNoR0AaKV4tloErw0NFbGw==\"}},\"role\":\"assistant\"},\"finish_reason\":\"stop\",\"index\":0}],\"created\":1790744140,\"id\":\"Spa8aqK5D8HjxN8PmpWO6Qk\",\"model\":\"gemini-3.6-flash\",\"object\":\"chat.completion.chunk\",\"usage\":{\"completion_tokens\":126,\"prompt_tokens\":18,\"total_tokens\":526}}\n\ndata: [DONE]"
+  },
+  "notes": "Gemini's OpenAI-compat endpoint does not expose thought text. The final chunk carries delta.extra_content.google.thought_signature only. Reasoning is therefore invisible to Ferry on this lane unless it switches to the native API."
+}

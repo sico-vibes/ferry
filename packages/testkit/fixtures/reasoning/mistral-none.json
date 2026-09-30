@@ -1,0 +1,33 @@
+{
+  "capturedAt": "2026-09-30T04:56:54.359Z",
+  "provider": "mistral",
+  "model": "codestral-latest",
+  "format": "none (OpenAI-compatible)",
+  "request": {
+    "method": "POST",
+    "url": "https://api.mistral.ai/v1/chat/completions",
+    "body": {
+      "model": "codestral-latest",
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Think step by step: what is 17*23? Answer briefly."
+        }
+      ],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    }
+  },
+  "response": {
+    "contentType": "text/event-stream",
+    "reasoningChars": 0,
+    "reasoningTokens": 0,
+    "firstReasoningDeltaMs": null,
+    "firstAnswerDeltaMs": 238,
+    "sample": "data: {\"id\":\"ea4361f55f23400e90a36a93b1f736f4\",\"object\":\"chat.completion.chunk\",\"created\":1790743858,\"model\":\"codestral-latest\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"ea4361f55f23400e90a36a93b1f736f4\",\"object\":\"chat.completion.chunk\",\"created\":1790743858,\"model\":\"codestral-latest\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"To\"},\"finish_reason\":null}],\"p\":\"abcdefghijklmnopqrstuvw\"}\n\ndata: {\"id\":\"ea4361f55f23400e90a36a93b1f736f4\",\"object\":\"chat.completion.chunk\",\"created\":1790743858,\"model\":\"codestral-latest\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" calculate\"},\"finish_reason\":null}],\"p\":\"abcdefghijklmnopqrstuvwxyz01\"}\n\ndata: {\"id\":\"ea4361f55f23400e90a36a93b1f736f4\",\"object\":\"chat.completion.chunk\",\"created\":1790743858,\"model\":\"codestral-latest\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" \\\\(\"},\"finish_reason\":null}],\"p\":\"abcdefghi\"}\n\ndata: {\"id\":\"ea4361f55f23400e90a36a93b1f736f4\",\"object\":\"chat.completion.chunk\",\"created\":1790743858,\"model\":\"codestral-latest\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"1\"},\"finish_reason\":null}],\"p\":\"abcd\"}\n\ndata: {\"id\":\"ea4361f55f23400e90a36a93b1f736f4\",\"object\":\"chat.completion.chunk\",\"created\":1790743858,\"model\":\"codestral-latest\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"7\"},\"finish_reason\":null}],\"p\":\"abcdefghijklmnopqrstuv\"}\n\ndata: {\"id\":\"ea4361f55f23400e90a36a93b1f736f4\",\"object\":\"chat.completion.chunk\",\"created\":1790743858,\"model\":\"codestral-latest\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" \\\\\"},\"finish_reason\":null}],\"p\":\"abcdefghijklmnopqrstuvwxyz012\"}\n\ndata: {\"id\":\"ea4361f55f23400e90a36a93b1f736f4\",\"object\":\"chat.completion.chunk\",\"created\":1790743858,\"model\":\"codestral-latest\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"times\"},\"finish_reason\":null}],\"p\":\"abcdefghijklmnopqrstuvwxyz0123\"}\n\ndata: {\"id\":\"ea4361f55f23400e90a36a93b1f736f4\",\"object\":\"chat.completion.chunk\",\"created\":1790743858,\"model\":\"codestral-latest\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" \"},\"finish_reason\":null}],\"p\":\"abcdefg\"}\n\ndata: {\"id\":\"ea4361f55f23400e90a36a93b1f736f4\",\"object\":\"chat.completion.chunk\",\"created\":1790743858,\"model\":\"codestral-latest\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"2\"},\"finish_reason\":null}],\"p\":\"abcdefghijklmnopqrstuvwxyz012345678\"}\n\ndata: {\"id\":\"ea4361f55f23400e90a36a93b1f736f4\",\"object\":\"chat.completion.chunk\",\"created\":1790743858,\"model\":\"codestral-latest\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"3\"},\"finish_reason\":null}],\"p\":\"abcdefghijklmnopqrstu\"}\n\ndata: {\"id\":\"ea4361f55f23400e90a36a93b1f736f4\",\"object\":\"chat.completion.chunk\",\"created\":1790743858,\"model\":\"codestral-latest\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\\\),\"},\"finish_reason\":null}],\"p\":\"abcdefghij\"}"
+  },
+  "notes": "codestral/mistral-medium return no reasoning field. Mistral magistral-medium (a reasoning model) could not be sampled: the free tier returned HTTP 429 with x-ratelimit-limit-req-minute: 0."
+}

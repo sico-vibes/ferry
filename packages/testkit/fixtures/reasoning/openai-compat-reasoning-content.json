@@ -1,0 +1,33 @@
+{
+  "capturedAt": "2026-09-30T04:56:54.359Z",
+  "provider": "nvidia",
+  "model": "nvidia/nemotron-3-super-120b-a12b",
+  "format": "reasoning_content string field (OpenAI-compatible)",
+  "request": {
+    "method": "POST",
+    "url": "https://integrate.api.nvidia.com/v1/chat/completions",
+    "body": {
+      "model": "nvidia/nemotron-3-super-120b-a12b",
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Think step by step: what is 17*23? Answer briefly."
+        }
+      ],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    }
+  },
+  "response": {
+    "contentType": "text/event-stream",
+    "reasoningChars": 71,
+    "reasoningTokens": 0,
+    "firstReasoningDeltaMs": 462,
+    "firstAnswerDeltaMs": 696,
+    "sample": "data: {\"id\":\"chatcmpl-1250c1bc-ecf6-47c5-a15a-758ad0d312f1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"We\"},\"finish_reason\":null,\"logprobs\":null}],\"created\":1790743767,\"model\":\"nvidia/nemotron-3-super-120b-a12b\",\"service_tier\":null,\"system_fingerprint\":null,\"object\":\"chat.completion.chunk\",\"usage\":null}\n\ndata: {\"id\":\"chatcmpl-1250c1bc-ecf6-47c5-a15a-758ad0d312f1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" need to compute \"},\"finish_reason\":null,\"logprobs\":null}],\"created\":1790743767,\"model\":\"nvidia/nemotron-3-super-120b-a12b\",\"service_tier\":null,\"system_fingerprint\":null,\"object\":\"chat.completion.chunk\",\"usage\":null}\n\ndata: {\"id\":\"chatcmpl-1250c1bc-ecf6-47c5-a15a-758ad0d312f1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"17*2\"},\"finish_reason\":null,\"logprobs\":null}],\"created\":1790743767,\"model\":\"nvidia/nemotron-3-super-120b-a12b\",\"service_tier\":null,\"system_fingerprint\":null,\"object\":\"chat.completion.chunk\",\"usage\":null}\n\ndata: {\"id\":\"chatcmpl-1250c1bc-ecf6-47c5-a15a-758ad0d312f1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"3 =\"},\"finish_reason\":null,\"logprobs\":null}],\"created\":1790743767,\"model\":\"nvidia/nemotron-3-super-120b-a12b\",\"service_tier\":null,\"system_fingerprint\":null,\"object\":\"chat.completion.chunk\",\"usage\":null}\n\ndata: {\"id\":\"chatcmpl-1250c1bc-ecf6-47c5-a15a-758ad0d312f1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" (\"},\"finish_reason\":null,\"logprobs\":null}],\"created\":1790743767,\"model\":\"nvidia/nemotron-3-super-120b-a12b\",\"service_tier\":null,\"system_fingerprint\":null,\"object\":\"chat.completion.chunk\",\"usage\":null}\n\ndata: {\"id\":\"chatcmpl-1250c1bc-ecf6-47c5-a15a-758ad0d312f1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"10\"},\"finish_reason\":null,\"logprobs\":null}],\"created\":1790743767,\"model\":\"nvidia/nemotron-3-super-120b-a12b\",\"service_tier\":null,\"system_fingerprint\":null,\"object\":\"chat.completion.chunk\",\"usage\":null}\n\ndata: {\"id\":\"chatcmpl-1250c1bc-ecf6-47c5-a15a-758ad0d312f1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"*23\"},\"finish_reason\":null,\"logprobs\":null}],\"created\":1790743767,\"model\":\"nvidia/nemotron-3-super-120b-a12b\",\"service_tier\":null,\"system_fingerprint\":null,\"object\":\"chat.completion.chunk\",\"usage\":null}\n\ndata: {\"id\":\"chatcmpl-1250c1bc-ecf6-47c5-a15a-758ad0d312f1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\")+(7*2\"},\"finish_reason\":null,\"logprobs\":null}],\"created\":1790743767,\"model\":\"nvidia/nemotron-3-super-120b-a12b\",\"service_tier\":null,\"system_fingerprint\":null,\"object\":\"chat.completion.chunk\",\"usage\":null}\n\ndata: {\"id\":\"chatcmpl-1250c1bc-ecf6-47c5-a15a-758ad0d312f1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"3)=23\"},\"finish_reason\":null,\"logprobs\":null}],\"created\":1790743767,\"model\":\"nvidia/nemotron-3-super-120b-a12b\",\"service_tier\":null,\"system_fingerprint\":null,\"object\":\"chat.completion.chunk\",\"usage\":null}\n\ndata: {\"id\":\"chatcmpl-1250c1bc-ecf6-47c5-a15a-758ad0d312f1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"0+16\"},\"finish_reason\":null,\"logprobs\":null}],\"created\":1790743767,\"model\":\"nvidia/nemotron-3-super-120b-a12b\",\"service_tier\":null,\"system_fingerprint\":null,\"object\":\"chat.completion.chunk\",\"usage\":null}\n\ndata: {\"id\":\"chatcmpl-1250c1bc-ecf6-47c5-a15a-758ad0d312f1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"1=39\"},\"finish_reason\":null,\"logprobs\":null}],\"created\":1790743767,\"model\":\"nvidia/nemotron-3-super-120b-a12b\",\"service_tier\":null,\"system_fingerprint\":null,\"object\":\"chat.completion.chunk\",\"usage\":null}\n\ndata: {\"id\":\"chatcmpl-1250c1bc-ecf6-47c5-a15a-758ad0d312f1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"1. Answer briefly\"},\"finish_reason\":null,\"logprobs\":null}],\"created\":1790743767,\"model\":\"nvidia/nemotron-3-super-120b-a12b\",\"service_tier\":null,\"system_fingerprint\":null,\"object\":\"chat.completion.chunk\",\"usage\":null}"
+  },
+  "notes": "NVIDIA NIM sends `delta.reasoning_content`, the DeepSeek-style field, on its own before `delta.content`. Usage.reasoning_tokens is 0 even though reasoning text is streamed (see matrix)."
+}

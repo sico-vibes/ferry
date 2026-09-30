@@ -1,0 +1,37 @@
+{
+  "capturedAt": "2026-09-30T04:56:54.359Z",
+  "provider": "gemini-native",
+  "model": "gemini-flash-latest",
+  "format": "Gemini native thought parts (thought: true)",
+  "request": {
+    "method": "POST",
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?alt=sse",
+    "body": {
+      "contents": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "Think step by step: what is 17*23? Answer briefly."
+            }
+          ]
+        }
+      ],
+      "generationConfig": {
+        "maxOutputTokens": 1024,
+        "thinkingConfig": {
+          "includeThoughts": true
+        }
+      }
+    }
+  },
+  "response": {
+    "contentType": "text/event-stream",
+    "reasoningChars": 355,
+    "reasoningTokens": null,
+    "firstReasoningDeltaMs": 8865,
+    "firstAnswerDeltaMs": null,
+    "sample": "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"**Initiating Calculation Process**\\n\\nI'm breaking down the calculation of 17 multiplied by 23 step-by-step. I'm focusing on brief delivery and considering algebraic identities for an efficient solution. The target is an algebraic approach, perhaps using the distributive property to simplify the mental math. I'm working on a brief answer, as requested.\\n\\n\\n\",\"thought\": true}],\"role\": \"model\"},\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 18,\"totalTokenCount\": 18,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 18}],\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-3.8-flash\",\"responseId\": \"UJa8aq6cPKX0xN8PgoaY4A8\"}\r\n\r\ndata: {\"error\": {\"code\": 503,\"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\"status\": \"UNAVAILABLE\"}}\r\n\r\n{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}"
+  },
+  "notes": "Native v1beta streamGenerateContent with thinkingConfig.includeThoughts=true returns candidates[0].content.parts[] entries carrying {text, thought:true}. Ferry does NOT use this endpoint (it uses the OpenAI-compat endpoint), so this format is only relevant if Ferry ever adds a native Gemini lane. The capture is partial: a 503 arrived mid-stream after the first thought part."
+}

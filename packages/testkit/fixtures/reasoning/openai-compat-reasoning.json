@@ -1,0 +1,33 @@
+{
+  "capturedAt": "2026-09-30T04:56:54.359Z",
+  "provider": "groq",
+  "model": "openai/gpt-oss-120b",
+  "format": "reasoning string field (OpenAI-compatible)",
+  "request": {
+    "method": "POST",
+    "url": "https://api.groq.com/openai/v1/chat/completions",
+    "body": {
+      "model": "openai/gpt-oss-120b",
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Think step by step: what is 17*23? Answer briefly."
+        }
+      ],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    }
+  },
+  "response": {
+    "contentType": "text/event-stream",
+    "reasoningChars": 79,
+    "reasoningTokens": 24,
+    "firstReasoningDeltaMs": 350,
+    "firstAnswerDeltaMs": 412,
+    "sample": "data: {\"id\":\"chatcmpl-c22c2bee-8a9c-4774-9829-fa3d37ea16a2\",\"object\":\"chat.completion.chunk\",\"created\":1790743766,\"model\":\"openai/gpt-oss-120b\",\"system_fingerprint\":\"fp_27194a498a\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"logprobs\":null,\"finish_reason\":null}],\"x_groq\":{\"id\":\"req_01m3raarxke4h9451ykdzahp7y\",\"seed\":2020045813}}\n\ndata: {\"id\":\"chatcmpl-c22c2bee-8a9c-4774-9829-fa3d37ea16a2\",\"object\":\"chat.completion.chunk\",\"created\":1790743766,\"model\":\"openai/gpt-oss-120b\",\"system_fingerprint\":\"fp_27194a498a\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\"The\",\"channel\":\"analysis\"},\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-c22c2bee-8a9c-4774-9829-fa3d37ea16a2\",\"object\":\"chat.completion.chunk\",\"created\":1790743766,\"model\":\"openai/gpt-oss-120b\",\"system_fingerprint\":\"fp_27194a498a\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\" user\",\"channel\":\"analysis\"},\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-c22c2bee-8a9c-4774-9829-fa3d37ea16a2\",\"object\":\"chat.completion.chunk\",\"created\":1790743766,\"model\":\"openai/gpt-oss-120b\",\"system_fingerprint\":\"fp_27194a498a\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\" asks\",\"channel\":\"analysis\"},\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-c22c2bee-8a9c-4774-9829-fa3d37ea16a2\",\"object\":\"chat.completion.chunk\",\"created\":1790743766,\"model\":\"openai/gpt-oss-120b\",\"system_fingerprint\":\"fp_27194a498a\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\" for\",\"channel\":\"analysis\"},\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-c22c2bee-8a9c-4774-9829-fa3d37ea16a2\",\"object\":\"chat.completion.chunk\",\"created\":1790743766,\"model\":\"openai/gpt-oss-120b\",\"system_fingerprint\":\"fp_27194a498a\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\" step\",\"channel\":\"analysis\"},\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-c22c2bee-8a9c-4774-9829-fa3d37ea16a2\",\"object\":\"chat.completion.chunk\",\"created\":1790743766,\"model\":\"openai/gpt-oss-120b\",\"system_fingerprint\":\"fp_27194a498a\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\"-by\",\"channel\":\"analysis\"},\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-c22c2bee-8a9c-4774-9829-fa3d37ea16a2\",\"object\":\"chat.completion.chunk\",\"created\":1790743766,\"model\":\"openai/gpt-oss-120b\",\"system_fingerprint\":\"fp_27194a498a\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\"-step\",\"channel\":\"analysis\"},\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-c22c2bee-8a9c-4774-9829-fa3d37ea16a2\",\"object\":\"chat.completion.chunk\",\"created\":1790743766,\"model\":\"openai/gpt-oss-120b\",\"system_fingerprint\":\"fp_27194a498a\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\",\",\"channel\":\"analysis\"},\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-c22c2bee-8a9c-4774-9829-fa3d37ea16a2\",\"object\":\"chat.completion.chunk\",\"created\":1790743766,\"model\":\"openai/gpt-oss-120b\",\"system_fingerprint\":\"fp_27194a498a\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\" brief\",\"channel\":\"analysis\"},\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-c22c2bee-8a9c-4774-9829-fa3d37ea16a2\",\"object\":\"chat.completion.chunk\",\"created\":1790743766,\"model\":\"openai/gpt-oss-120b\",\"system_fingerprint\":\"fp_27194a498a\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\" answer\",\"channel\":\"analysis\"},\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-c22c2bee-8a9c-4774-9829-fa3d37ea16a2\",\"object\":\"chat.completion.chunk\",\"created\":1790743766,\"model\":\"openai/gpt-oss-120b\",\"system_fingerprint\":\"fp_27194a498a\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\":\",\"channel\":\"analysis\"},\"logprobs\":null,\"finish_reason\":null}]}"
+  },
+  "notes": "Groq sends `delta.reasoning` and also `delta.channel:\"analysis\"`. Cerebras gpt-oss-120b uses the same `reasoning` field (no channel) and interleaves reasoning and content in one delta object. OpenAI-compatible delta otherwise standard."
+}
