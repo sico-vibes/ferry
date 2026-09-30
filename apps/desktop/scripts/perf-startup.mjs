@@ -71,16 +71,116 @@ async function launchAndMeasure(label, completeFirstRun) {
       await delay(100);
     }
     if (!page) throw new Error(`${label} launch did not open the Ferry renderer.`);
-    await page.waitForLoadState('domcontentloaded', { timeout: 15_000 });
-    const composer = page.getByRole('textbox', { name: 'Message Ferry' });
+    const pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    const describePage = async () =>
+      page.evaluate(() => ({
+        url: location.href,
+        hash: location.hash,
+        title: document.title,
+        readyState: document.readyState,
+        hasFerryHost: Boolean(window.ferryHost),
+        hasEngineHello: Boolean(window.ferryEngineHello),
+        hasHybridClient: Boolean(window.ferryHybrid),
+        body: document.body?.innerText?.slice(0, 1_200) ?? '',
+        textareas: [...document.querySelectorAll('textarea')].map((element) => ({
+          ariaLabel: element.getAttribute('aria-label'),
+          placeholder: element.getAttribute('placeholder'),
+          visible: Boolean(element.getClientRects().length),
+        })),
+        buttons: [...document.querySelectorAll('button')]
+          .filter((element) => element.getClientRects().length)
+          .slice(0, 30)
+          .map((element) => element.innerText || element.getAttribute('aria-label') || ''),
+      }));
+    try {
+      await page.waitForLoadState('domcontentloaded', { timeout: 15_000 });
+    } catch (error) {
+      const diagnostic = { page: await describePage(), pageErrors };
+      console.error(
+        JSON.stringify({ benchmark: 'packaged-startup-readiness-timeout', label, ...diagnostic }),
+      );
+      throw new Error(
+        `${label} renderer did not reach DOMContentLoaded: ${JSON.stringify(diagnostic)}`,
+        {
+          cause: error,
+        },
+      );
+    }
+    try {
+      await page.waitForFunction(
+        () => Boolean(window.ferryHost && window.ferryEngineHello && window.ferryHybrid),
+        null,
+        { timeout: 30_000 },
+      );
+    } catch (error) {
+      const diagnostic = { page: await describePage(), pageErrors };
+      console.error(
+        JSON.stringify({ benchmark: 'packaged-startup-engine-timeout', label, ...diagnostic }),
+      );
+      throw new Error(
+        `${label} packaged app did not connect to its local engine: ${JSON.stringify(diagnostic)}`,
+        { cause: error },
+      );
+    }
+    // The packaged window can open on a non-Home screen. Startup TTI measures
+    // the interactive Home composer, so navigate there explicitly.
+    await page.evaluate(() => {
+      if (location.hash !== '#/') location.hash = '#/';
+    });
+    const composer = page.locator('textarea[aria-label="Message Ferry"]');
+    const getStarted = page.getByRole('button', { name: /Get started/i });
     const skipSetup = page.getByRole('button', { name: 'Skip setup' });
-    await Promise.race([
-      composer.waitFor({ state: 'visible', timeout: 30_000 }),
-      skipSetup.waitFor({ state: 'visible', timeout: 30_000 }),
-    ]);
-    if (completeFirstRun && (await skipSetup.isVisible())) {
-      await skipSetup.click();
-      await composer.waitFor({ state: 'visible', timeout: 15_000 });
+    try {
+      await page.waitForFunction(
+        () => {
+          const visible = (element) =>
+            element instanceof HTMLElement && element.getClientRects().length > 0;
+          return (
+            visible(document.querySelector('textarea[aria-label="Message Ferry"]')) ||
+            [...document.querySelectorAll('button')].some(
+              (button) =>
+                visible(button) && /^(get started|skip setup)$/i.test(button.innerText.trim()),
+            )
+          );
+        },
+        null,
+        { timeout: 30_000 },
+      );
+    } catch (error) {
+      const diagnostic = { page: await describePage(), pageErrors };
+      console.error(
+        JSON.stringify({ benchmark: 'packaged-startup-readiness-timeout', label, ...diagnostic }),
+      );
+      throw new Error(
+        `${label} renderer did not expose onboarding or the composer: ${JSON.stringify(diagnostic)}`,
+        {
+          cause: error,
+        },
+      );
+    }
+    try {
+      if (completeFirstRun && !(await composer.isVisible())) {
+        if (await getStarted.isVisible().catch(() => false)) {
+          await getStarted.click();
+          await page.getByRole('button', { name: 'Continue', exact: true }).click();
+          await page.getByRole('button', { name: 'Continue', exact: true }).click();
+          await page.getByRole('button', { name: 'Finish setup', exact: true }).click();
+        } else if (await skipSetup.isVisible().catch(() => false)) {
+          await skipSetup.click();
+        }
+        await composer.waitFor({ state: 'visible', timeout: 30_000 });
+      }
+      if (!(await composer.isVisible()))
+        throw new Error(`${label} launch did not reach an interactive composer.`);
+    } catch (error) {
+      const diagnostic = { page: await describePage(), pageErrors };
+      console.error(
+        JSON.stringify({ benchmark: 'packaged-startup-interaction-failure', label, ...diagnostic }),
+      );
+      throw new Error(`${label} launch did not become interactive: ${JSON.stringify(diagnostic)}`, {
+        cause: error,
+      });
     }
     const interactiveMs = Number((performance.now() - startedAt).toFixed(1));
     return { interactiveMs, firstRun: await skipSetup.isVisible().catch(() => false) };

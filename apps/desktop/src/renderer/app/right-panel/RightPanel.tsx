@@ -313,10 +313,16 @@ function ChangesPanel({ detail }: { detail: ReturnType<typeof useSessionDetail>[
     queryFn: () => (detail ? client.delegation.runs(detail.session.id) : Promise.resolve([])),
     enabled: Boolean(detail?.session.id),
   });
-  const changes =
-    detail?.messages.flatMap((message) =>
-      message.parts.flatMap((part) => (part.type === 'tool_call' ? part.changes : [])),
-    ) ?? [];
+  const { data: changes = [] } = useQuery({
+    queryKey: ['session-changes', detail?.session.id],
+    queryFn: () =>
+      Promise.resolve(
+        detail?.messages.flatMap((message) =>
+          message.parts.flatMap((part) => (part.type === 'tool_call' ? part.changes : [])),
+        ) ?? [],
+      ),
+    enabled: Boolean(detail?.session.id),
+  });
   const delegated = runs.flatMap((run) =>
     run.touchedFiles.map((file) => ({
       path: file.path,

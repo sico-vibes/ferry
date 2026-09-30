@@ -224,13 +224,17 @@ describe('workspace filesystem', () => {
     await writeFile(path.join(root, '.gitignore'), 'ignored/\n');
     await writeFile(path.join(root, '.ferryignore'), 'private.txt\n');
     await mkdir(path.join(root, 'ignored'));
-    await writeFile(path.join(root, 'ignored/a'), 'x');
+    await writeFile(path.join(root, 'ignored/a'), 'secret');
     await writeFile(path.join(root, 'private.txt'), 'secret');
     await writeFile(path.join(root, 'visible.txt'), 'ok');
     expect(await tools.listDir({ path: '.', depth: 3 })).toEqual([
       '.ferryignore',
       '.gitignore',
       'visible.txt',
+    ]);
+    await expect(tools.grep({ pattern: 'secret' })).resolves.toEqual([]);
+    await expect(tools.grep({ pattern: 'ok' })).resolves.toMatchObject([
+      { path: 'visible.txt', line: 1, text: 'ok' },
     ]);
   });
   it('applies a conventional unified diff hunk', async () => {

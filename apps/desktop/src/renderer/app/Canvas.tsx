@@ -865,16 +865,28 @@ export function SessionCanvas() {
   const [newOutputCount, setNewOutputCount] = useState(0);
   const [atBottom, setAtBottom] = useState(true);
   const messages = data?.messages ?? [];
-  const streamingMessageId = useMemo(
-    () => [...messages].reverse().find((message) => message.role === 'assistant')?.id,
-    [messages.length, sessionId],
+  const getTranscriptScrollElement = useCallback(() => viewport.current, []);
+  const estimateTranscriptMessageSize = useCallback(() => 248, []);
+  const measureTranscriptMessage = useCallback(
+    (element: Element) => element.getBoundingClientRect().height,
+    [],
   );
+  const streamingMessageId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message?.role === 'assistant') return message.id;
+    }
+    return undefined;
+  }, [messages.length, sessionId]);
   const virtualizer = useVirtualizer({
     count: messages.length,
-    getScrollElement: () => viewport.current,
+    getScrollElement: getTranscriptScrollElement,
     paddingStart: 40,
-    estimateSize: (index) => (messages[index]?.parts.length ?? 0) * 76 + 96,
-    measureElement: (element) => element.getBoundingClientRect().height,
+    // Keep the estimate callback stable. TanStack uses its identity when it
+    // rebuilds measurements; closing over the live message array invalidated
+    // all 10k cached row sizes after each transcript update.
+    estimateSize: estimateTranscriptMessageSize,
+    measureElement: measureTranscriptMessage,
     overscan: 5,
   });
   useEffect(() => {
@@ -1133,7 +1145,6 @@ export function SessionCanvas() {
     try {
       await client.sessions.send(sessionId, { text });
       setPrompt('');
-      await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
     } catch (error) {
       pushToast({
         kind: 'error',

@@ -46,7 +46,18 @@ try {
   await page.evaluate(() => {
     window.ferryLongTasks = [];
     new PerformanceObserver((entries) => {
-      window.ferryLongTasks.push(...entries.getEntries().map((entry) => entry.duration));
+      window.ferryLongTasks.push(
+        ...entries.getEntries().map((entry) => ({
+          startTime: Number(entry.startTime.toFixed(1)),
+          duration: Number(entry.duration.toFixed(1)),
+          attribution: (entry.attribution ?? []).map((item) => ({
+            containerType: item.containerType,
+            containerName: item.containerName,
+            containerId: item.containerId,
+            containerSrc: item.containerSrc,
+          })),
+        })),
+      );
     }).observe({ type: 'longtask', buffered: true });
   });
   const initial = await page.evaluate(() => {
@@ -64,12 +75,16 @@ try {
     };
   });
 
-  const appendStarted = Date.now();
+  const appendStarted = performance.now();
   const appendedText = 'Append one message to this 10k session';
   await page.getByRole('textbox', { name: 'Message Ferry' }).fill(appendedText);
   await page.getByRole('button', { name: 'Send' }).click();
-  await page.getByText(appendedText, { exact: false }).waitFor({ timeout: 10_000 });
-  const appendMs = Date.now() - appendStarted;
+  await page
+    .locator('.transcript-message')
+    .filter({ hasText: appendedText })
+    .first()
+    .waitFor({ state: 'visible', timeout: 10_000 });
+  const appendMs = Number((performance.now() - appendStarted).toFixed(1));
 
   await page.evaluate(async () => {
     const viewport = document.querySelector('.transcript-viewport');
@@ -94,6 +109,7 @@ try {
   const result = {
     benchmark: 'long-transcript',
     targetMessageCount: 10_000,
+    targetAppendMs: 100,
     targetLongestTaskMs: 100,
     ...initial,
     appendMs,
@@ -103,7 +119,8 @@ try {
     framesOver33ms: frames.filter((value) => value > 33.3).length,
     heapAfterBytes,
     longTaskCount: longTasks.length,
-    longestTaskMs: Number(Math.max(0, ...longTasks).toFixed(1)),
+    longestTaskMs: Number(Math.max(0, ...longTasks.map((entry) => entry.duration)).toFixed(1)),
+    longTasks,
     heapDeltaBytes:
       initial.heapBeforeBytes !== null && heapAfterBytes !== null
         ? heapAfterBytes - initial.heapBeforeBytes
@@ -113,6 +130,7 @@ try {
   if (
     result.messageCount !== 10_000 ||
     result.renderedRows > 40 ||
+    result.appendMs >= result.targetAppendMs ||
     result.p95FrameMs > 33.3 ||
     result.longestTaskMs > 100
   )

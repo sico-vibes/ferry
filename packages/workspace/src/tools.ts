@@ -108,9 +108,11 @@ export class WorkspaceTools {
       for (const entry of entries) {
         if (entry.name === '.git' || entry.name === 'node_modules') continue;
         const target = path.join(dir, entry.name);
-        if (isProtectedWorkspacePath(this.jail.relative(target))) continue;
-        if (await this.jail.isIgnored(target)) continue;
-        result.push(this.jail.relative(target));
+        const relative = this.jail.relative(target);
+        if (isProtectedWorkspacePath(relative)) continue;
+        if (await this.jail.isIgnoredRelative(entry.isDirectory() ? `${relative}/` : relative))
+          continue;
+        result.push(relative);
         if (entry.isDirectory() && depth < input.depth) await visit(target, depth + 1);
       }
     };
@@ -158,6 +160,7 @@ export class WorkspaceTools {
       : (await this.jail.initialize(), this.jail.root);
     await this.assertVisible(base);
     const args = [
+      '--no-config',
       '--json',
       '--line-number',
       '--color',
@@ -175,6 +178,13 @@ export class WorkspaceTools {
       String(this.maxBytes),
     ];
     if (input.glob) args.push('--glob', input.glob);
+    args.push('--glob', '!.git/**', '--glob', '!node_modules/**');
+    try {
+      await fs.access(path.join(this.jail.root, '.ferryignore'));
+      args.push('--ignore-file', path.join(this.jail.root, '.ferryignore'));
+    } catch {
+      // The Ferry-specific ignore file is optional.
+    }
     args.push('--', input.pattern, base);
     const child = execa(rgPath, args, {
       cwd: this.jail.root,
@@ -248,6 +258,7 @@ export class WorkspaceTools {
     const result = await child;
     if (!reachedLimit && (result.exitCode ?? 1) > 1)
       throw new Error(result.stderr || 'ripgrep failed');
+    if (input.context === 0) return matches;
     const lineCache = new Map<string, string[]>();
     for (const match of matches) {
       let lines = lineCache.get(match.path);

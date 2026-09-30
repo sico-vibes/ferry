@@ -1,9 +1,26 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import type { MessagePart, SessionDetail } from '@ferry/shared';
 import { keys } from './queries';
 import { useFerryClient } from './client';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
+
+type SessionFileChange = Extract<MessagePart, { type: 'tool_call' }>['changes'][number];
+
+function patchSessionChanges(
+  cache: ReturnType<typeof useQueryClient>,
+  sessionId: string,
+  changes: readonly SessionFileChange[],
+): void {
+  if (!changes.length) return;
+  cache.setQueryData<SessionFileChange[]>(['session-changes', sessionId], (current) => {
+    if (!current) return current;
+    const byPath = new Map(current.map((change) => [change.path, change]));
+    for (const change of changes) byPath.set(change.path, change);
+    return [...byPath.values()];
+  });
+}
 
 export function useFerryEvents(): void {
   const client = useFerryClient();
@@ -14,13 +31,27 @@ export function useFerryEvents(): void {
       client.on('quota.updated', (capacity) => cache.setQueryData(keys.capacity, capacity)),
       client.on('session.updated', (session) => {
         void cache.invalidateQueries({ queryKey: keys.sessions });
-        void cache.invalidateQueries({ queryKey: keys.session(session.id) });
+        const key = keys.session(session.id);
+        const current = cache.getQueryData<SessionDetail>(key);
+        if (current) cache.setQueryData(key, { ...current, session });
       }),
-      client.on(
-        'session.message',
-        ({ sessionId }) => void cache.invalidateQueries({ queryKey: keys.session(sessionId) }),
-      ),
+      client.on('session.message', ({ sessionId, message }) => {
+        patchSessionChanges(
+          cache,
+          sessionId,
+          message.parts.flatMap((part) => (part.type === 'tool_call' ? part.changes : [])),
+        );
+        const key = keys.session(sessionId);
+        const current = cache.getQueryData<SessionDetail>(key);
+        if (!current) {
+          void cache.invalidateQueries({ queryKey: key });
+          return;
+        }
+        if (current.messages.some((item) => item.id === message.id)) return;
+        cache.setQueryData(key, { ...current, messages: [...current.messages, message] });
+      }),
       client.on('session.part', ({ sessionId, messageId, part }) => {
+        if (part.type === 'tool_call') patchSessionChanges(cache, sessionId, part.changes);
         const key = keys.session(sessionId);
         const current = cache.getQueryData<import('@ferry/shared').SessionDetail>(key);
         if (!current) {
@@ -39,12 +70,17 @@ export function useFerryEvents(): void {
                     parts: message.parts.map((item) => (item.id === part.id ? part : item)),
                   }
                 : { ...message, parts: [...message.parts, part] };
-              const messages = current.messages.map((item, index) =>
-                index === messageIndex ? updatedMessage : item,
-              );
+              const messages = current.messages.slice();
+              messages[messageIndex] = updatedMessage;
               cache.setQueryData(key, { ...current, messages });
             }
           }
+        }
+        // Checkpoint rows are queried separately from the session transcript.
+        // Refresh only that lightweight panel query; never refetch the 10k-message
+        // session detail just because an agent made a checkpoint.
+        if (part.type === 'checkpoint') {
+          void cache.invalidateQueries({ queryKey: ['checkpoints', sessionId] });
         }
         if (
           part.type === 'approval_request' &&
@@ -85,13 +121,15 @@ export function useFerryEvents(): void {
               )
             : [...message.parts, { type: 'text' as const, id: partId, text: textDelta }],
         };
-        const messages = current.messages.map((item, index) =>
-          index === messageIndex ? updatedMessage : item,
-        );
+        const messages = current.messages.slice();
+        messages[messageIndex] = updatedMessage;
         cache.setQueryData(key, { ...current, messages });
       }),
       client.on('task.updated', (task) => {
-        void cache.invalidateQueries({ queryKey: keys.session(task.sessionId) });
+        const key = keys.session(task.sessionId);
+        const current = cache.getQueryData<SessionDetail>(key);
+        if (current) cache.setQueryData(key, { ...current, taskRecord: task });
+        else void cache.invalidateQueries({ queryKey: key });
       }),
       client.on('provider.updated', (provider) => {
         void cache.invalidateQueries({ queryKey: ['providers'] });

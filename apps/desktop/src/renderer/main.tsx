@@ -116,6 +116,20 @@ const mountApp = (currentClient: FerryClient) => {
     </StrictMode>,
   );
 };
+const showEngineConnectionError = (error: unknown) => {
+  console.error('Core connection failed; the desktop app will not use mock data', error);
+  appRoot.render(
+    <main className="flex min-h-screen items-center justify-center bg-background p-8 text-foreground">
+      <section className="max-w-lg space-y-3">
+        <h1 className="text-xl font-semibold">Ferry core could not start</h1>
+        <p className="text-muted-foreground">
+          Restart the Ferry app. Your workspace data is safe, and Ferry will reconnect to its local
+          engine when it starts successfully.
+        </p>
+      </section>
+    </main>,
+  );
+};
 const demoMode = new URLSearchParams(location.search).get('demo');
 if (demoMode === 'long' || demoMode === 'exhausted') {
   void import('./perf-demo').then(({ seedExhaustedSession, seedLongTranscript }) => {
@@ -130,20 +144,9 @@ if (demoMode === 'long' || demoMode === 'exhausted') {
       queryClient.clear();
       mountApp(currentClient);
     })
-    .catch((error: unknown) => {
-      console.error('Core connection failed; the desktop app will not use mock data', error);
-      appRoot.render(
-        <main className="flex min-h-screen items-center justify-center bg-background p-8 text-foreground">
-          <section className="max-w-lg space-y-3">
-            <h1 className="text-xl font-semibold">Ferry core could not start</h1>
-            <p className="text-muted-foreground">
-              Restart the Ferry app. Your workspace data is safe, and Ferry will reconnect to its
-              local engine when it starts successfully.
-            </p>
-          </section>
-        </main>,
-      );
-    });
+    .catch(showEngineConnectionError);
+} else if (location.protocol === 'file:') {
+  showEngineConnectionError(new Error('The desktop preload bridge is unavailable'));
 } else
   void bootstrapClient()
     .then((currentClient) => {
