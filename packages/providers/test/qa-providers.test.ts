@@ -50,6 +50,11 @@ describe('QA providers: quota parser robustness', () => {
   });
 
   it('never throws for arbitrary Gemini/OpenRouter/error bodies', () => {
+    const counterexample = [{ toString: false }];
+    expect(() => parseGeminiQuota(counterexample, now, 429)).not.toThrow();
+    expect(() => parseOpenRouterKey(counterexample, now)).not.toThrow();
+    expect(() => mapProviderError(counterexample)).not.toThrow();
+
     fc.assert(
       fc.property(fc.anything(), (body) => {
         assertWindows(parseGeminiQuota(body, now, 429));

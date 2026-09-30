@@ -1434,6 +1434,9 @@ export class AgentLoop {
     previous: ModelRef | null,
     sessionId: string,
   ): ModelInfo | undefined {
+    // A manual pin applies to every model request, including planner and editor steps.
+    if (this.options.pinnedModelRef)
+      return this.selectModel(step, inputTokens, previous, sessionId);
     const configured =
       role === 'planner'
         ? this.options.profile.roles.plannerModelRef

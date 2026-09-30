@@ -38,6 +38,19 @@ describe('QA testkit: fake provider server', () => {
     expect(server.requests).toHaveLength(3);
   });
 
+  it('replaces scripted responses and resets the queue cursor', async () => {
+    const server = new FakeOpenAIServer({ responses: [{ body: { n: 1 } }, { body: { n: 2 } }] });
+    await start(server);
+    for (const expected of [1, 2]) {
+      const response = await fetch(`${server.baseUrl}/v1/chat/completions`, { method: 'POST' });
+      expect(((await response.json()) as { n: number }).n).toBe(expected);
+    }
+
+    server.setResponses([{ body: { n: 3 } }]);
+    const replacement = await fetch(`${server.baseUrl}/v1/chat/completions`, { method: 'POST' });
+    expect(((await replacement.json()) as { n: number }).n).toBe(3);
+  }, 30_000);
+
   it('emits malformed tool-call arguments when asked', async () => {
     // BUG: FakeOpenAIServer.responseFor() builds the broken arguments string but
     // then omits tool_calls entirely when malformed, so malformedToolCall can

@@ -56,11 +56,26 @@ export class OfflineProviderError extends Error {
     this.name = 'OfflineProviderError';
   }
 }
+function safeString(value: unknown, fallback = ''): string {
+  try {
+    return String(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function safeNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'string') return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function asOfflineError(error: unknown, depth = 0): OfflineProviderError | undefined {
   const record = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
   if (error instanceof OfflineProviderError) return error;
   const code = typeof record.code === 'string' ? record.code : '';
-  const message = error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : safeString(error);
   if (
     /^(ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|ENOTFOUND)$/i.test(code) ||
     /failed to fetch|network error|fetch failed|network is unreachable/i.test(message)
@@ -619,13 +634,13 @@ function parseGeminiQuotaUnsafe(
     (detail) =>
       detail &&
       typeof detail === 'object' &&
-      String((detail as Record<string, unknown>)['@type']).includes('RetryInfo'),
+      safeString((detail as Record<string, unknown>)['@type']).includes('RetryInfo'),
   ) as Record<string, unknown> | undefined;
   const quota = details.find(
     (detail) =>
       detail &&
       typeof detail === 'object' &&
-      String((detail as Record<string, unknown>)['@type']).includes('QuotaFailure'),
+      safeString((detail as Record<string, unknown>)['@type']).includes('QuotaFailure'),
   ) as Record<string, unknown> | undefined;
   const violations = Array.isArray(quota?.violations) ? quota.violations : [];
   const candidateMetric =
@@ -841,7 +856,7 @@ export function mapProviderError(error: unknown): MappedProviderError {
     record.response && typeof record.response === 'object'
       ? (record.response as Record<string, unknown>)
       : {};
-  const status = Number(record.statusCode ?? record.status ?? response.status ?? 0);
+  const status = safeNumber(record.statusCode ?? record.status ?? response.status);
   const message = providerErrorMessage(record, error);
   const code = typeof record.code === 'string' ? record.code.toLowerCase() : '';
   if (
@@ -858,7 +873,7 @@ export function mapProviderError(error: unknown): MappedProviderError {
     };
   const rawRetry =
     record.retryAfter ?? readRetryAfter(response.headers) ?? readRetryAfter(record.responseHeaders);
-  const retry = Number(rawRetry);
+  const retry = safeNumber(rawRetry, Number.NaN);
   const retryAfterMs =
     Number.isFinite(retry) && retry > 0
       ? retry * 1000
@@ -1128,7 +1143,7 @@ async function probeWithSignal(
             ...(latestObservation?.statusCode ? { statusCode: latestObservation.statusCode } : {}),
           }
         : latestObservation?.statusCode
-          ? { statusCode: latestObservation.statusCode, retryAfter, message: String(error) }
+          ? { statusCode: latestObservation.statusCode, retryAfter, message: safeString(error) }
           : error;
     const classified = mapProviderError(
       error && typeof error === 'object' && 'cause' in error
@@ -1282,6 +1297,24 @@ export async function discoverProviderModels(
       (model) => model.providerId === providerId && model.ref.endsWith(`/${normalizedId}`),
     );
     const supportedParameters = (item as Record<string, unknown>).supported_parameters;
+    const rawPricing = (item as Record<string, unknown>).pricing;
+    const pricing =
+      rawPricing && typeof rawPricing === 'object'
+        ? (rawPricing as Record<string, unknown>)
+        : undefined;
+    // OpenRouter reports per-token prices; Ferry stores prices per million tokens.
+    const explicitInputPrice =
+      typeof pricing?.prompt === 'string' &&
+      Number.isFinite(Number(pricing.prompt)) &&
+      Number(pricing.prompt) >= 0
+        ? Number(pricing.prompt) * 1_000_000
+        : undefined;
+    const explicitOutputPrice =
+      typeof pricing?.completion === 'string' &&
+      Number.isFinite(Number(pricing.completion)) &&
+      Number(pricing.completion) >= 0
+        ? Number(pricing.completion) * 1_000_000
+        : undefined;
     const metadataSupportsTools =
       Array.isArray(supportedParameters) && supportedParameters.includes('tools');
     const registryToolSupport = known?.capability?.toolCall;
@@ -1320,8 +1353,8 @@ export async function discoverProviderModels(
       ...(known?.qualityDate ? { qualityDate: known.qualityDate } : {}),
       reasoning: known?.reasoning ?? false,
       free,
-      priceInPerM: free ? 0 : (known?.priceInPerM ?? null),
-      priceOutPerM: free ? 0 : (known?.priceOutPerM ?? null),
+      priceInPerM: free ? 0 : (explicitInputPrice ?? known?.priceInPerM ?? null),
+      priceOutPerM: free ? 0 : (explicitOutputPrice ?? known?.priceOutPerM ?? null),
     });
     return model.success ? [model.data] : [];
   });

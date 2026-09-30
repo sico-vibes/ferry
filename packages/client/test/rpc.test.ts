@@ -203,6 +203,104 @@ describe('RPC client', () => {
     replacement.port2.close();
   });
 
+  it('keeps event listeners and routes RPC calls to the replacement port', async () => {
+    const initial = new MessageChannel();
+    const replacement = new MessageChannel();
+    const requestsOnReplacement: unknown[] = [];
+    const diagnostics: import('../src/rpc.js').MessagePortTransportDiagnostic[] = [];
+    let restart: (() => void) | undefined;
+    let resolveReconnected: (() => void) | undefined;
+    const reconnected = new Promise<void>((resolve) => {
+      resolveReconnected = resolve;
+    });
+    const initialHello = new Promise<void>((resolve) => {
+      initial.port2.addEventListener('message', (event) => {
+        const request = event.data as { id: number; method: string };
+        expect(request.method).toBe('system.hello');
+        initial.port2.postMessage({
+          jsonrpc: '2.0',
+          id: request.id,
+          result: {
+            protocol: 'ferry/1',
+            capabilities: [],
+            realDomains: [],
+            implementedMethods: [],
+          },
+        });
+        resolve();
+      });
+      initial.port2.start();
+    });
+    replacement.port2.addEventListener('message', (event) => {
+      const request = event.data as { id: number; method: string };
+      requestsOnReplacement.push(request);
+      if (request.method === 'approvals.respond')
+        replacement.port2.postMessage({
+          jsonrpc: '2.0',
+          method: 'session.delta',
+          params: {
+            sessionId: 's1',
+            messageId: 'm1',
+            partId: 'p1',
+            textDelta: 'after restart',
+          },
+        });
+      replacement.port2.postMessage({ jsonrpc: '2.0', id: request.id, result: null });
+    });
+    replacement.port2.start();
+    const transport = createMessagePortTransport(
+      { port: initial.port1, portId: 'port-old' },
+      {
+        reconnect: () => Promise.resolve({ port: replacement.port1, portId: 'port-new' }),
+        onRestarting: (handler) => {
+          restart = handler;
+          return () => {
+            restart = undefined;
+          };
+        },
+        onReconnected: () => resolveReconnected?.(),
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      },
+    );
+    const client = createRpcFerryClient(transport, { reconnectAttempts: 1 });
+    await initialHello;
+    await client.hello;
+    let receivedDelta = '';
+    client.on('session.delta', (event) => {
+      receivedDelta = event.textDelta;
+    });
+
+    restart?.();
+    await reconnected;
+    await client.approvals.respond(
+      's1' as import('@ferry/shared').SessionId,
+      'p1' as import('@ferry/shared').PartId,
+      'allow_once',
+    );
+
+    expect(requestsOnReplacement).toHaveLength(1);
+    expect(requestsOnReplacement[0]).toMatchObject({ method: 'approvals.respond' });
+    expect(receivedDelta).toBe('after restart');
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: 'received',
+          generation: 2,
+          portId: 'port-new',
+          method: 'approvals.respond',
+        }),
+        expect.objectContaining({
+          event: 'received',
+          generation: 2,
+          portId: 'port-new',
+          method: 'session.delta',
+        }),
+      ]),
+    );
+    client.close();
+    initial.port2.close();
+    replacement.port2.close();
+  });
   it('routes requested domains to RPC and leaves the rest mocked', async () => {
     const mock = createMockFerryClient({ behavior: 'test' });
     const fake = fakeTransport();

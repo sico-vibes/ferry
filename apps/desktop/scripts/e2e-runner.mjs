@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 const scriptsDirectory = dirname(fileURLToPath(import.meta.url));
 const phases = [
   ['web UI flows', 'e2e.mjs'],
-  ['real domains UI flow', 'e2e-real-domains.mjs'],
+  ['real domains: core flows', 'e2e-real-domains.mjs', 'core-flows'],
+  ['real domains: crash resume', 'e2e-real-domains.mjs', 'crash-resume'],
+  ['real domains: paid guardrails', 'e2e-real-domains.mjs', 'paid-guardrails'],
   ['Electron core smoke', 'e2e-electron.mjs'],
 ];
 const results = [];
@@ -31,12 +33,12 @@ if (process.env.FERRY_SKIP_ELECTRON_BUILD !== '1') {
   }
 }
 
-for (const [label, script] of phases) {
+for (const [label, script, phase] of phases) {
   console.log(`\n=== E2E: ${label} ===`);
   const result = spawnSync(process.execPath, [join(scriptsDirectory, script)], {
     cwd: dirname(scriptsDirectory),
     stdio: 'inherit',
-    env: process.env,
+    env: phase ? { ...process.env, FERRY_E2E_ONLY: phase } : process.env,
   });
   results.push({ label, status: result.status, error: result.error });
 }

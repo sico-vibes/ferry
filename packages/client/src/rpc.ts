@@ -224,6 +224,7 @@ export function createMessagePortTransport(
   let reconnecting = false;
   let reconnectPromise: Promise<void> | undefined;
   const queuedMessages: unknown[] = [];
+  const requestMethods = new Map<number, string>();
   const messageHandlers = new Set<(message: unknown) => void>();
   const closeHandlers = new Set<(reason?: RpcError) => void>();
   const markRestarting = () => {
@@ -245,13 +246,23 @@ export function createMessagePortTransport(
     candidate.port.start();
     candidate.port.addEventListener('message', (event) => {
       const message = event.data as { id?: unknown; method?: unknown } | null;
-      if (typeof message?.id === 'number')
+      const requestId = typeof message?.id === 'number' ? message.id : undefined;
+      const method =
+        typeof message?.method === 'string'
+          ? message.method
+          : requestId === undefined
+            ? undefined
+            : requestMethods.get(requestId);
+      if (requestId !== undefined || method !== undefined) {
         options.onDiagnostic?.({
           event: 'received',
           generation,
           portId: connection.portId,
-          requestId: message.id,
+          ...(requestId !== undefined ? { requestId } : {}),
+          ...(method !== undefined ? { method } : {}),
         });
+        if (requestId !== undefined) requestMethods.delete(requestId);
+      }
       for (const handler of messageHandlers) handler(event.data);
     });
     candidate.port.addEventListener('messageerror', markRestarting);
@@ -266,6 +277,8 @@ export function createMessagePortTransport(
         ...(typeof request?.id === 'number' ? { requestId: request.id } : {}),
         ...(typeof request?.method === 'string' ? { method: request.method } : {}),
       };
+      if (typeof request?.id === 'number' && typeof request.method === 'string')
+        requestMethods.set(request.id, request.method);
       if (reconnecting) {
         queuedMessages.push(message);
         options.onDiagnostic?.({

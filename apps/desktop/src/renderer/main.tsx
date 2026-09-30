@@ -102,7 +102,7 @@ const bootstrapClient = async () => {
         onRestarting: (handler) =>
           window.ferryHost?.onEngineRestarting(handler) ?? (() => undefined),
         onReconnected: () => {
-          refreshSessionQueries();
+          void queryClient.invalidateQueries();
         },
         ...(window.ferryHost.e2eDiagnosticsEnabled
           ? {

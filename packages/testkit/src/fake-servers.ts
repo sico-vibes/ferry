@@ -13,12 +13,17 @@ export interface FakeResponse {
   body?: unknown;
   chunks?: unknown[];
   delayMs?: number;
+  holdOpen?: boolean;
   malformedToolCall?: boolean;
   disconnectAfterChunks?: number;
 }
 export interface FakeServerOptions {
   responses?: FakeResponse[];
-  models?: { id: string; supported_parameters?: string[] }[];
+  models?: {
+    id: string;
+    supported_parameters?: string[];
+    pricing?: { prompt: string; completion: string };
+  }[];
   responseHeaders?: Record<string, string>;
   slowMs?: number;
 }
@@ -31,6 +36,10 @@ export class FakeProviderServer {
   readonly options: FakeServerOptions;
   constructor(options: FakeServerOptions = {}) {
     this.options = options;
+  }
+  setResponses(responses: FakeResponse[]): void {
+    this.options.responses = responses;
+    this.cursor = 0;
   }
   protected matches(_url: string): boolean {
     return true;
@@ -115,6 +124,10 @@ export class FakeProviderServer {
             return;
           }
         }
+      }
+      if (scripted.holdOpen) {
+        if (!res.destroyed) await new Promise<void>((resolve) => res.once('close', resolve));
+        return;
       }
       if (!res.destroyed) res.end('data: [DONE]\n\n');
     } else res.end(JSON.stringify(payload));

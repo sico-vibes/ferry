@@ -30,7 +30,6 @@ import {
   canSpend,
   estimateSpend,
   isFreeForRouting,
-  requiresConfirmation,
   type SpendState,
 } from '@ferry/router';
 import { createSkillManager } from './skills.js';
@@ -873,8 +872,13 @@ export function register(host: CoreHost, services: FerryServices): void {
                 day: today,
                 month: thisMonth,
               });
+            const firstPaidCallNeedsConfirmation =
+              monetaryPaid &&
+              profile.paidAllowed &&
+              !profile.paidConfirmation.preauthorize &&
+              state.paidCallsThisSession === 0;
             if (
-              requiresConfirmation(profile, state, amountUsd) ||
+              firstPaidCallNeedsConfirmation ||
               (laneNeedsConfirmation &&
                 !profile.paidConfirmation.preauthorize &&
                 state.paidCallsThisSession === 0)

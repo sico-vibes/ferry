@@ -246,6 +246,38 @@ describe('QA final: planner output confinement', () => {
     }
   }, 30_000);
 
+  it('honors a manual model pin during planner and editor role selection', async () => {
+    const state = await setup();
+    try {
+      const pinned = model('openai/pinned');
+      const planner = model('openai/planner');
+      const editor = model('groq/editor');
+      const groq = ProviderSchema.parse({ ...state.provider, id: 'groq', name: 'Groq' });
+      const calls: string[] = [];
+      const loop = makeLoop(state, routedSettings({ stickySessions: false }), {
+        profile: roleProfile(),
+        catalog: { ...state.catalog, models: [pinned, planner, editor] },
+        pinnedModelRef: pinned.ref,
+        capacity: () => ({ providers: [state.provider, groq] }),
+        generator: async ({ model: selected }) => {
+          calls.push(selected.ref);
+          return { text: 'Completed on the pinned model.', finishReason: 'stop' };
+        },
+      });
+
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.status).toBe('completed');
+      expect(calls).toEqual([pinned.ref]);
+      expect(
+        state.store
+          .load(state.session.id)
+          ?.messages.filter((message) => message.role === 'assistant')
+          .map((message) => message.agentRole),
+      ).toEqual([undefined]);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
   it('disables the roles split and continues in single-model mode after malformed planner JSON', async () => {
     const state = await setup();
     try {

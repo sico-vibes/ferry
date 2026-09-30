@@ -193,6 +193,68 @@ describe('paid-call guardrails', () => {
     }
   }, 30_000);
 
+  it.each([
+    { priceInPerM: 0.5, priceOutPerM: 1 },
+    { priceInPerM: 0, priceOutPerM: 0 },
+  ])(
+    'requires confirmation before the first request for a pinned non-free OpenRouter model',
+    async ({ priceInPerM, priceOutPerM }) => {
+      const h = await startHarness({ turns: [textTurn('Pinned paid answer')] });
+      try {
+        await h.rpc.providers.setBillingEnabled(ProviderIdSchema.parse('openrouter'), true);
+        const catalogModel = h.services.catalog.models.find(
+          (item) => item.providerId === 'openrouter' && !item.free && item.toolCalling,
+        );
+        expect(catalogModel).toBeDefined();
+        if (!catalogModel) return;
+        const model = Object.assign(catalogModel, {
+          free: false,
+          priceInPerM,
+          priceOutPerM,
+        });
+        const profile = BUILTIN_PROFILES.find((item) => item.name === 'Best Available');
+        expect(profile).toBeDefined();
+        if (!profile) return;
+        const session = await h.rpc.sessions.create({
+          workspaceId: h.workspaceId,
+          profileId: profile.id,
+        });
+        await h.rpc.models.select(session.id, model.ref);
+        await h.rpc.sessions.send(session.id, { text: 'use the pinned paid model' });
+        await waitFor(async () => {
+          const detail = await h.rpc.sessions.get(session.id);
+          return detail.messages.some((message) =>
+            message.parts.some(
+              (part) => part.type === 'approval_request' && part.kind === 'paid_model',
+            ),
+          );
+        });
+
+        const paidRequests = () =>
+          h.server.requests.filter((request) => request.url.endsWith('/chat/completions'));
+        expect(paidRequests()).toHaveLength(0);
+        const detail = await h.rpc.sessions.get(session.id);
+        expect(detail.session.pinnedModelRef).toBe(model.ref);
+        const approval = detail.messages
+          .flatMap((message) => message.parts)
+          .find(
+            (part): part is Extract<MessagePart, { type: 'approval_request' }> =>
+              part.type === 'approval_request' && part.kind === 'paid_model',
+          );
+        expect(approval?.summary).toContain(model.name);
+        if (!approval) return;
+        await h.rpc.approvals.respond(session.id, approval.id, 'allow_once');
+        await waitFor(async () => (await h.rpc.sessions.get(session.id)).session.status === 'idle');
+        expect(paidRequests()).toHaveLength(1);
+        expect(paidRequests()[0]?.method).toBe('POST');
+        expect(paidRequests()[0]?.url.endsWith('/chat/completions')).toBe(true);
+        expect(requestModel(paidRequests()[0]?.body)).toBe(model.ref.replace(/^openrouter\//, ''));
+      } finally {
+        await h.close();
+      }
+    },
+    30_000,
+  );
   it('records the approved preflight estimate when a paid stream omits token usage', async () => {
     const h = await startHarness({ turns: [textTurn('Paid stream without usage')] });
     try {

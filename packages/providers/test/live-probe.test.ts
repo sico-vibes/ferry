@@ -39,6 +39,11 @@ describe('live probe runner', () => {
               { id: 'vendor/no-tools:free', supported_parameters: ['temperature'] },
               { id: 'vendor/antigravity-preview:free' },
               { id: 'vendor/unlisted-coder:free' },
+              {
+                id: 'vendor/priced-model',
+                supported_parameters: ['tools'],
+                pricing: { prompt: '0.0000005', completion: '0.000001' },
+              },
             ],
           }),
         ),
@@ -48,10 +53,18 @@ describe('live probe runner', () => {
       ['openrouter/vendor/no-tools:free', false],
       ['openrouter/vendor/antigravity-preview:free', true],
       ['openrouter/vendor/unlisted-coder:free', true],
+      ['openrouter/vendor/priced-model', true],
     ]);
     expect(
       discovered.find((model) => model.ref === 'openrouter/vendor/unlisted-coder:free'),
     ).not.toHaveProperty('capability');
+    expect(
+      discovered.find((model) => model.ref === 'openrouter/vendor/priced-model'),
+    ).toMatchObject({
+      free: false,
+      priceInPerM: 0.5,
+      priceOutPerM: 1,
+    });
   });
 
   it('uses the neutral tool assumption for discovered models without registry evidence', async () => {
