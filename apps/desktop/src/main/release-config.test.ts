@@ -21,6 +21,15 @@ describe('release build configuration', () => {
     expect(manifest.version).toBe('0.9.0');
   });
 
+  it('accepts later stable and beta versions and rejects malformed ones', () => {
+    const manifest = { name: '@ferry/desktop', version: '0.9.0' };
+    expect(packageManifestWithVersion(manifest, '0.9.1').version).toBe('0.9.1');
+    expect(packageManifestWithVersion(manifest, '0.10.0-beta.3').version).toBe('0.10.0-beta.3');
+    expect(releaseChannelForVersion('0.10.0-beta.3').updaterChannel).toBe('beta');
+    expect(() => packageManifestWithVersion(manifest, '0.9')).toThrow(/Unsupported/);
+    expect(() => packageManifestWithVersion(manifest, '0.9.0-rc.1')).toThrow(/Unsupported/);
+  });
+
   it('selects beta prereleases for beta builds and latest for stable builds', () => {
     expect(releaseChannelForVersion('0.9.0-beta.4')).toEqual({
       displayChannel: 'beta',

@@ -6,14 +6,17 @@ export function betaVersionForRunNumber(runNumber) {
   return `${RELEASE_BASE_VERSION}-beta.${String(runNumber)}`;
 }
 
+// Stable x.y.z or beta x.y.z-beta.N (the install smoke stamps a higher patch for its upgrade build).
+const RELEASE_VERSION = /^\d+\.\d+\.\d+(?:-beta\.\d+)?$/;
+
 export function packageManifestWithVersion(manifest, version) {
-  if (!/^0\.9\.0(?:-beta\.\d+)?$/.test(version))
+  if (!RELEASE_VERSION.test(version))
     throw new Error(`Unsupported Ferry release version: ${version}`);
   return { ...manifest, version };
 }
 
 export function releaseChannelForVersion(version) {
-  const beta = /^0\.9\.0-beta\.\d+$/.test(version);
+  const beta = /^\d+\.\d+\.\d+-beta\.\d+$/.test(version);
   return {
     displayChannel: beta ? 'beta' : 'stable',
     updaterChannel: beta ? 'beta' : 'latest',
