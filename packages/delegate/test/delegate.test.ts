@@ -23,11 +23,51 @@ import {
   startDelegation,
   buildCliArgs,
   readOpenCodeDefaultModel,
+  mapCliEvent,
+  mapAcpUpdate,
 } from '../src/index.js';
 import { sampleDelegationRun } from '@ferry/shared/testing';
 
 const roots: string[] = [];
 const fakeAcpAgent = fileURLToPath(new URL('./fixtures/fake-acp-agent.mjs', import.meta.url));
+
+describe('recorded native agent event fixtures', () => {
+  it.each(['codex', 'claude', 'opencode'] as const)(
+    '%s JSONL maps to normalized events',
+    async (name) => {
+      const path = new URL(`../../testkit/fixtures/agent-events/${name}.jsonl`, import.meta.url);
+      const lines = (await readFile(path, 'utf8')).trim().split(/\r?\n/);
+      const events = lines.flatMap((line) =>
+        mapCliEvent(name, JSON.parse(line) as Record<string, unknown>),
+      );
+      expect(events.some((event) => event.type === 'text')).toBe(true);
+      if (name === 'codex') expect(events.map((event) => event.type)).toContain('tool_use');
+      if (name === 'claude') {
+        expect(events.map((event) => event.type)).toContain('thinking');
+        expect(events.map((event) => event.type)).toContain('tool_result');
+      }
+      if (name === 'opencode') {
+        expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(1);
+        expect(events.some((event) => event.type === 'usage')).toBe(true);
+      }
+    },
+  );
+  it('maps recorded ACP session/update kinds', async () => {
+    const path = new URL('../../testkit/fixtures/agent-events/acp.jsonl', import.meta.url);
+    const rows = (await readFile(path, 'utf8'))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as unknown);
+    const events = rows.flatMap(mapAcpUpdate);
+    expect(events.map((event) => event.type)).toEqual([
+      'text',
+      'thinking',
+      'tool_use',
+      'tool_result',
+      'status',
+    ]);
+  });
+});
 async function tempRoot() {
   const root = await mkdtemp(join(tmpdir(), 'ferry-delegate-test-'));
   roots.push(root);
@@ -282,12 +322,14 @@ describe('external CLI adapters', () => {
       const paths = await installFakeClis(join(root, 'bin'), { captureArgsPath });
       const prompt = 'Goal\nImplement a small change.';
       const progress: string[] = [];
+      const events: import('@ferry/shared').AgentEvent[] = [];
       const result = await runAdapter(name, {
         prompt,
         cwd: root,
         executable: paths[name],
         ...(name === 'opencode' ? { model: 'openai/gpt-test' } : {}),
         onProgress: (line) => progress.push(line),
+        onEvent: (event) => events.push(event),
       });
       expect(result.finalMessage).toBe('Fake delegate completed.');
       expect(result.threadId).toBe(`fake-${name}-session-001`);
@@ -295,8 +337,15 @@ describe('external CLI adapters', () => {
       expect(result.usage.outputTokens).toBeGreaterThan(0);
       expect(result.usage.provider).toBe('subscription_cli');
       expect(progress.length).toBeGreaterThan(0);
-      if (name === 'opencode')
-        expect(progress.some((line) => line.startsWith('[OpenCode JSON]'))).toBe(true);
+      if (name === 'opencode') {
+        expect(events.map((event) => event.type)).toEqual(
+          expect.arrayContaining(['text', 'tool_use', 'tool_result', 'usage']),
+        );
+        expect(events.find((event) => event.type === 'tool_use')).toMatchObject({
+          callId: 'call_fake',
+          tool: 'bash',
+        });
+      }
       const captured = await readStringArray(captureArgsPath);
       if (name === 'opencode') {
         const fileIndex = captured.indexOf('--file');

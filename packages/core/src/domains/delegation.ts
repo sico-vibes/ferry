@@ -183,6 +183,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         startedAt: now,
         finishedAt: null,
         progress: [],
+        events: [],
         finalMessage: null,
         touchedFiles: [],
         gateResults: [],

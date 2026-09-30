@@ -18,16 +18,13 @@ import * as schema from './schema.js';
 import { redactKnownSecretText } from '@ferry/shared';
 
 export { schema };
-const migrationPath = join(
-  dirname(fileURLToPath(import.meta.url)),
-  'migrations',
+const migrationsDirectory = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+const storageMigrations = [
   '0001_initial.sql',
-);
-const recoveryMigrationPath = join(
-  dirname(fileURLToPath(import.meta.url)),
-  'migrations',
   '0002_interrupted_sessions.sql',
-);
+  '0003_agent_events.sql',
+].map((filename) => join(migrationsDirectory, filename));
+export const STORAGE_SCHEMA_VERSION = storageMigrations.length;
 export interface DatabaseConnection {
   client: Database.Database;
   orm: BetterSQLite3Database<typeof schema>;
@@ -42,20 +39,13 @@ export async function openDatabase(path: string): Promise<DatabaseConnection> {
     client.pragma('busy_timeout = 5000');
     client.pragma('foreign_keys = ON');
     const current = Number(client.pragma('user_version', { simple: true }));
-    if (current < 1) {
+    for (const [index, migrationPath] of storageMigrations.entries()) {
+      const targetVersion = index + 1;
+      if (current >= targetVersion) continue;
       const sql = await readFile(migrationPath, 'utf8');
       const migrate = client.transaction(() => {
         client.exec(sql);
-        client.pragma('user_version = 1');
-      });
-      migrate();
-    }
-    const migrated = Number(client.pragma('user_version', { simple: true }));
-    if (migrated < 2) {
-      const sql = await readFile(recoveryMigrationPath, 'utf8');
-      const migrate = client.transaction(() => {
-        client.exec(sql);
-        client.pragma('user_version = 2');
+        client.pragma(`user_version = ${String(targetVersion)}`);
       });
       migrate();
     }

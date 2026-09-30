@@ -1,0 +1,5 @@
+{"format":"ai-sdk-reasoning-part","type":"reasoning","text":"native reasoning"}
+{"format":"inline-think","type":"text-delta","text":"visible<think>private thought</think>answer"}
+{"format":"gemini-thought","type":"text-delta","thought":true,"text":"Gemini thought"}
+{"format":"reasoning-content","type":"text-delta","reasoning_content":"Provider reasoning payload"}
+{"format":"openai-reasoning-delta","type":"reasoning-delta","delta":"Reasoning delta"}

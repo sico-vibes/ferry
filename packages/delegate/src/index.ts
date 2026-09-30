@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { isProtectedWorkspacePath } from '@ferry/shared';
+import { isProtectedWorkspacePath, summarizeAgentEvent } from '@ferry/shared';
 import { access, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, extname, isAbsolute, join, relative, resolve, win32 } from 'node:path';
@@ -17,7 +17,7 @@ import {
   hasWindowsDrivePrefix,
   normalizePathSeparators,
 } from '@ferry/shared/node-paths';
-import type { DelegationRun, FileChange, Lane, SessionId } from '@ferry/shared';
+import type { AgentEvent, DelegationRun, FileChange, Lane, SessionId } from '@ferry/shared';
 import type { BriefingSection } from '@ferry/router';
 
 export type Implementer = 'codex' | 'opencode' | 'claude' | 'acp';
@@ -364,6 +364,7 @@ export interface AdapterRequest {
   authMethodId?: string;
   signal?: AbortSignal;
   onProgress?: (text: string) => void;
+  onEvent?: (event: AgentEvent) => void;
 }
 export interface AdapterResult {
   finalMessage: string;
@@ -375,6 +376,7 @@ export interface AdapterResult {
     provider: 'subscription_cli';
   };
   progress: string[];
+  events: AgentEvent[];
   artifactsDir: string;
 }
 export interface CliDetection {
@@ -398,6 +400,18 @@ export interface AcpAgentDefinition {
   verifiedAt: string | null;
   caution: boolean;
   cautionNote: string | null;
+}
+
+function boundEventOutput(event: AgentEvent, artifactsDir: string): AgentEvent {
+  if (event.type !== 'tool_result' || event.output.length <= 16_000) return event;
+  const recoveryHandle = join(artifactsDir, `${event.id}.txt`);
+  void writeFile(recoveryHandle, event.output, 'utf8').catch(() => undefined);
+  return {
+    ...event,
+    output: `${event.output.slice(0, 16_000)}\n[Output truncated]`,
+    truncated: true,
+    recoveryHandle,
+  };
 }
 export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
   {
@@ -694,46 +708,6 @@ export function buildCliArgs(
   return args;
 }
 
-function summarizeOpenCodeEvent(event: Record<string, unknown>): Record<string, unknown> {
-  const part =
-    typeof event.part === 'object' && event.part !== null
-      ? (event.part as Record<string, unknown>)
-      : undefined;
-  const error =
-    typeof event.error === 'object' && event.error !== null
-      ? (event.error as Record<string, unknown>)
-      : undefined;
-  const info =
-    typeof event.info === 'object' && event.info !== null
-      ? (event.info as Record<string, unknown>)
-      : undefined;
-  const model =
-    typeof info?.model === 'object' && info.model !== null
-      ? (info.model as Record<string, unknown>)
-      : typeof event.model === 'object' && event.model !== null
-        ? (event.model as Record<string, unknown>)
-        : undefined;
-  const summary: Record<string, unknown> = {};
-  if (typeof event.type === 'string') summary.type = event.type;
-  if (typeof event.sessionID === 'string') summary.sessionID = event.sessionID;
-  const providerID = event.providerID ?? info?.providerID ?? model?.providerID;
-  const modelID = event.modelID ?? model?.modelID ?? model?.id;
-  if (typeof providerID === 'string') summary.providerID = providerID;
-  if (typeof modelID === 'string') summary.modelID = modelID;
-  else if (typeof event.model === 'string') summary.modelID = event.model;
-  if (typeof event.tool === 'string' || typeof part?.tool === 'string')
-    summary.tool = event.tool ?? part?.tool;
-  if (typeof part?.type === 'string') summary.partType = part.type;
-  if (typeof part?.text === 'string') summary.text = part.text.slice(0, 1_000);
-  if (typeof error?.message === 'string') summary.error = error.message.slice(0, 1_000);
-  const state =
-    typeof part?.state === 'object' && part.state !== null
-      ? (part.state as Record<string, unknown>)
-      : undefined;
-  if (typeof state?.status === 'string') summary.toolStatus = state.status;
-  return summary;
-}
-
 function usesCodexResumeV159Syntax(versionOutput: string | undefined): boolean {
   const match = versionOutput?.match(/codex-cli\s+(\d+)\.(\d+)\.(\d+)/i);
   if (!match) return false;
@@ -775,6 +749,199 @@ function signalProcessGroup(pid: number | undefined, signal: NodeJS.Signals): bo
 
 function isTaskkillNotFound(exitCode: number | undefined, output: string): boolean {
   return exitCode === 128 && /not found|no running instance/i.test(output);
+}
+
+function valueString(value: unknown, fallback = ''): string {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return fallback;
+  return JSON.stringify(value);
+}
+
+export function mapCliEvent(name: Implementer, event: Record<string, unknown>): AgentEvent[] {
+  const at = new Date().toISOString();
+  const make = (value: Record<string, unknown>): AgentEvent =>
+    ({ ...value, id: newId('event'), timestamp: at }) as AgentEvent;
+  const text = (type: 'text' | 'thinking', content: unknown): AgentEvent[] =>
+    typeof content === 'string' && content.length ? [make({ type, content })] : [];
+  if (name === 'codex') {
+    const item =
+      typeof event.item === 'object' && event.item !== null
+        ? (event.item as Record<string, unknown>)
+        : {};
+    const type = valueString(event.type);
+    const kind = valueString(item.type);
+    if (type === 'item.agentMessage.delta') return text('text', event.delta);
+    if (type === 'item.completed' && kind === 'agentMessage' && Array.isArray(item.content))
+      return item.content.flatMap((raw) =>
+        raw && typeof raw === 'object' ? text('text', (raw as Record<string, unknown>).text) : [],
+      );
+    if (type.includes('reasoning') && type.endsWith('.delta')) return text('thinking', event.delta);
+    if (
+      type === 'item.started' &&
+      ['commandExecution', 'command_execution', 'mcpToolCall', 'mcp_tool_call'].includes(kind)
+    )
+      return [
+        make({
+          type: 'tool_use',
+          callId: valueString(item.id, newId('call')),
+          tool: kind.startsWith('command') ? 'shell' : valueString(item.tool, 'tool'),
+          input: item.command ?? item.arguments ?? {},
+        }),
+      ];
+    if (
+      type === 'item.completed' &&
+      ['commandExecution', 'command_execution', 'mcpToolCall', 'mcp_tool_call'].includes(kind)
+    )
+      return [
+        make({
+          type: 'tool_result',
+          callId: valueString(item.id, newId('call')),
+          output: valueString(item.aggregatedOutput ?? item.result),
+          truncated: item.outputTruncated === true,
+        }),
+      ];
+    if (type === 'turn.completed' && typeof event.usage === 'object' && event.usage !== null) {
+      const usage = event.usage as Record<string, unknown>;
+      return [
+        make({
+          type: 'usage',
+          inputTokens: Number(usage.input_tokens ?? 0),
+          outputTokens: Number(usage.output_tokens ?? 0),
+        }),
+      ];
+    }
+    return [];
+  }
+  if (name === 'opencode') {
+    const part =
+      typeof event.part === 'object' && event.part !== null
+        ? (event.part as Record<string, unknown>)
+        : {};
+    const kind = valueString(event.type);
+    if (kind === 'text') return text('text', part.text ?? event.text);
+    if (kind === 'reasoning') return text('thinking', part.text ?? event.text);
+    const state =
+      typeof part.state === 'object' && part.state !== null
+        ? (part.state as Record<string, unknown>)
+        : {};
+    const callId = valueString(part.callID ?? part.id ?? event.callID, newId('call'));
+    if (kind === 'tool')
+      return state.status === 'completed' || state.status === 'error'
+        ? [
+            make({
+              type: 'tool_result',
+              callId,
+              output: valueString(state.output ?? state.error),
+              truncated: state.truncated === true,
+            }),
+          ]
+        : [
+            make({
+              type: 'tool_use',
+              callId,
+              tool: valueString(part.tool ?? event.tool, 'tool'),
+              input: state.input ?? {},
+            }),
+          ];
+    if (
+      (kind === 'step_finish' || kind === 'step-finish') &&
+      typeof event.tokens === 'object' &&
+      event.tokens !== null
+    ) {
+      const tokens = event.tokens as Record<string, unknown>;
+      return [
+        make({
+          type: 'usage',
+          inputTokens: Number(tokens.input ?? 0),
+          outputTokens: Number(tokens.output ?? 0),
+        }),
+      ];
+    }
+    if (kind === 'error')
+      return [
+        make({
+          type: 'error',
+          message: valueString(event.message ?? event.error, 'OpenCode error'),
+        }),
+      ];
+    return [];
+  }
+  const message =
+    typeof event.message === 'object' && event.message !== null
+      ? (event.message as Record<string, unknown>)
+      : {};
+  const blocks = Array.isArray(message.content) ? message.content : [];
+  const result: AgentEvent[] = [];
+  if (event.type === 'stream_event' && typeof event.event === 'object' && event.event !== null) {
+    const streamEvent = event.event as Record<string, unknown>;
+    const delta =
+      typeof streamEvent.delta === 'object' && streamEvent.delta !== null
+        ? (streamEvent.delta as Record<string, unknown>)
+        : {};
+    if (delta.type === 'text_delta') result.push(...text('text', delta.text));
+    else if (delta.type === 'thinking_delta') result.push(...text('thinking', delta.thinking));
+    else if (
+      streamEvent.type === 'content_block_start' &&
+      typeof streamEvent.content_block === 'object' &&
+      streamEvent.content_block !== null
+    ) {
+      const block = streamEvent.content_block as Record<string, unknown>;
+      if (block.type === 'tool_use')
+        result.push(
+          make({
+            type: 'tool_use',
+            callId: valueString(block.id, newId('call')),
+            tool: valueString(block.name, 'tool'),
+            input: block.input ?? {},
+          }),
+        );
+    }
+  }
+  for (const raw of blocks) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const block = raw as Record<string, unknown>;
+    if (block.type === 'text') result.push(...text('text', block.text));
+    else if (block.type === 'thinking')
+      result.push(...text('thinking', block.thinking ?? block.text));
+    else if (block.type === 'tool_use')
+      result.push(
+        make({
+          type: 'tool_use',
+          callId: valueString(block.id, newId('call')),
+          tool: valueString(block.name, 'tool'),
+          input: block.input ?? {},
+        }),
+      );
+    else if (block.type === 'tool_result')
+      result.push(
+        make({
+          type: 'tool_result',
+          callId: valueString(block.tool_use_id ?? block.id, newId('call')),
+          output:
+            typeof block.content === 'string' ? block.content : JSON.stringify(block.content ?? ''),
+          truncated: block.is_error === true,
+        }),
+      );
+  }
+  if (event.type === 'result' && typeof event.usage === 'object' && event.usage !== null) {
+    const usage = event.usage as Record<string, unknown>;
+    result.push(
+      make({
+        type: 'usage',
+        inputTokens: Number(usage.input_tokens ?? 0),
+        outputTokens: Number(usage.output_tokens ?? 0),
+        costUsd: typeof event.total_cost_usd === 'number' ? event.total_cost_usd : null,
+      }),
+    );
+  }
+  if (event.type === 'error')
+    result.push(
+      make({
+        type: 'error',
+        message: valueString(event.error ?? event.message, 'Claude CLI error'),
+      }),
+    );
+  return result;
 }
 
 function parseEvent(
@@ -1004,6 +1171,61 @@ function acpUpdateText(update: import('@agentclientprotocol/sdk').SessionUpdate)
   }
 }
 
+export function mapAcpUpdate(value: unknown): AgentEvent[] {
+  if (!value || typeof value !== 'object') return [];
+  const update = value as Record<string, unknown>;
+  const kind = valueString(update.sessionUpdate ?? update.type);
+  const content = update.content as Record<string, unknown> | undefined;
+  const text = typeof content?.text === 'string' ? content.text : undefined;
+  const at = new Date().toISOString();
+  const event = (fields: Record<string, unknown>): AgentEvent =>
+    ({ ...fields, id: newId('event'), timestamp: at }) as AgentEvent;
+  const callId = valueString(update.toolCallId ?? update.callId ?? update.id, newId('call'));
+  if (kind === 'agent_message_chunk' || kind === 'agentMessageChunk')
+    return text ? [event({ type: 'text', content: text })] : [];
+  if (kind === 'agent_thought_chunk' || kind === 'agentThoughtChunk')
+    return text ? [event({ type: 'thinking', content: text })] : [];
+  if (kind === 'tool_call' || kind === 'toolCall')
+    return [
+      event({
+        type: 'tool_use',
+        callId,
+        tool: valueString(update.title, 'tool'),
+        input: update.rawInput ?? {},
+      }),
+    ];
+  if (kind === 'tool_call_update' || kind === 'toolCallUpdate') {
+    const status = valueString(update.status, 'running');
+    if (['completed', 'failed', 'cancelled'].includes(status))
+      return [
+        event({
+          type: 'tool_result',
+          callId,
+          output: valueString(update.output ?? update.content, status),
+          truncated: update.truncated === true,
+        }),
+      ];
+    return [event({ type: 'status', status, message: valueString(update.title, 'Tool running') })];
+  }
+  if (kind === 'usage_update' || kind === 'usageUpdate')
+    return [
+      event({
+        type: 'usage',
+        inputTokens: Number(update.inputTokens ?? update.input_tokens ?? 0),
+        outputTokens: Number(update.outputTokens ?? update.output_tokens ?? 0),
+      }),
+    ];
+  if (kind === 'plan' || kind === 'plan_update' || kind === 'planUpdate')
+    return [
+      event({
+        type: 'status',
+        status: kind,
+        message: acpUpdateText(value as import('@agentclientprotocol/sdk').SessionUpdate),
+      }),
+    ];
+  return [event({ type: 'status', status: kind || 'unknown', message: JSON.stringify(update) })];
+}
+
 async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
   const artifactsDir = await mkdtemp(join(tmpdir(), 'ferry-delegate-acp-'));
   const executable = await executablePath('acp', request.executable);
@@ -1027,6 +1249,7 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
     Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
   );
   const progress: string[] = [];
+  const events: AgentEvent[] = [];
   let final = '';
   let inputTokens = 0;
   let outputTokens = 0;
@@ -1068,9 +1291,14 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
         .catch(() => undefined);
     killInFlight = killTree();
   };
-  const report = (text: string) => {
-    if (!text) return;
+  const reportEvent = (event: AgentEvent) => {
+    const bounded = boundEventOutput(event, artifactsDir);
+    events.push(bounded);
+    if (events.length > 2_000) events.shift();
+    request.onEvent?.(bounded);
+    const text = summarizeAgentEvent(bounded);
     progress.push(text);
+    if (progress.length > 2_000) progress.shift();
     request.onProgress?.(text);
   };
   const client = acpClient({ name: 'Ferry' })
@@ -1115,7 +1343,7 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
         : { outcome: { outcome: 'cancelled' as const } };
     })
     .onNotification('session/update', ({ params }) => {
-      const message = acpUpdateText(params.update);
+      for (const event of mapAcpUpdate(params.update)) reportEvent(event);
       if (
         params.update.sessionUpdate === 'agent_message_chunk' &&
         'content' in params.update &&
@@ -1132,7 +1360,6 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
         outputTokens = usage.outputTokens ?? outputTokens;
         costUsd = usage.costUsd ?? costUsd;
       }
-      report(message);
     });
   const timeout = request.timeoutMs ?? 10 * 60_000;
   let timer: NodeJS.Timeout | undefined;
@@ -1241,6 +1468,7 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
       threadId,
       usage: { inputTokens, outputTokens, costUsd, provider: 'subscription_cli' },
       progress,
+      events,
       artifactsDir,
     };
   } catch (error) {
@@ -1367,6 +1595,7 @@ export async function runAdapter(
   const artifactsDir = await mkdtemp(join(tmpdir(), 'ferry-delegate-'));
   const outputPath = join(artifactsDir, 'codex-final.txt');
   const raw: string[] = [];
+  const events: AgentEvent[] = [];
   const state = {
     threadId: null as string | null,
     final: '',
@@ -1375,8 +1604,19 @@ export async function runAdapter(
     cost: null as number | null,
   };
   const progress = (text: string) => {
+    if (!text) return;
     raw.push(text);
+    if (raw.length > 2_000) raw.shift();
     request.onProgress?.(text);
+  };
+  const emitEvent = (event: AgentEvent) => {
+    const bounded = boundEventOutput(event, artifactsDir);
+    events.push(bounded);
+    if (events.length > 2_000) events.shift();
+    raw.push(summarizeAgentEvent(bounded));
+    if (raw.length > 2_000) raw.shift();
+    request.onEvent?.(bounded);
+    request.onProgress?.(summarizeAgentEvent(bounded));
   };
   try {
     const requestedOpenCodeModel = request.model?.trim();
@@ -1419,9 +1659,9 @@ export async function runAdapter(
           const parsed = event as Record<string, unknown>;
           if (name === 'opencode') {
             openCodeEventCount += 1;
-            progress(`[OpenCode JSON] ${JSON.stringify(summarizeOpenCodeEvent(parsed))}`);
           }
           parseEvent(name, parsed, state, progress);
+          for (const event of mapCliEvent(name, parsed)) emitEvent(event);
         }
       },
       !codexResumePromptIsArgument && name !== 'opencode',
@@ -1445,6 +1685,7 @@ export async function runAdapter(
         provider: 'subscription_cli',
       },
       progress: raw,
+      events,
       artifactsDir,
     };
   } catch (error) {
@@ -1485,6 +1726,7 @@ export function startDelegation(input: StartDelegationInput): DelegationHandle {
     startedAt: new Date().toISOString(),
     finishedAt: null,
     progress: [],
+    events: [],
     finalMessage: null,
     touchedFiles: [],
     gateResults: [],
@@ -1492,8 +1734,22 @@ export function startDelegation(input: StartDelegationInput): DelegationHandle {
     decision: null,
   });
   let threadId: string | null = null;
+  let lastEventProgress: string | undefined;
   const update = (text?: string) => {
-    if (text) run.progress.push({ at: new Date().toISOString(), text });
+    if (text && text === lastEventProgress) {
+      lastEventProgress = undefined;
+      return;
+    }
+    if (text) {
+      run.progress = [...run.progress, { at: new Date().toISOString(), text }].slice(-2_000);
+    }
+    input.onUpdate?.(structuredClone(run));
+  };
+  const updateEvent = (event: AgentEvent) => {
+    run.events = [...run.events, event].slice(-2_000);
+    const summary = summarizeAgentEvent(event);
+    lastEventProgress = summary;
+    run.progress = [...run.progress, { at: event.timestamp, text: summary }].slice(-2_000);
     input.onUpdate?.(structuredClone(run));
   };
   const runPromise = (async () => {
@@ -1537,6 +1793,7 @@ export function startDelegation(input: StartDelegationInput): DelegationHandle {
           onProgress: (text) => {
             update(text);
           },
+          onEvent: updateEvent,
         },
       );
       threadId = result.threadId;
@@ -1546,12 +1803,25 @@ export function startDelegation(input: StartDelegationInput): DelegationHandle {
       run.usage = result.usage;
       run.touchedFiles = await input.checkpointDiff();
       run.finishedAt = new Date().toISOString();
+      updateEvent({
+        id: newId('event'),
+        type: 'status',
+        status: 'completed',
+        message: 'Delegate completed.',
+        timestamp: run.finishedAt,
+      });
       update();
       return run;
     } catch (error) {
       run.status = controller.signal.aborted ? 'cancelled' : 'failed';
       run.finalMessage = error instanceof Error ? error.message : String(error);
       run.finishedAt = new Date().toISOString();
+      updateEvent({
+        id: newId('event'),
+        type: 'error',
+        message: run.finalMessage,
+        timestamp: run.finishedAt,
+      });
       update();
       return run;
     }
@@ -1598,6 +1868,7 @@ export function startDelegation(input: StartDelegationInput): DelegationHandle {
           onProgress: (text) => {
             update(text);
           },
+          onEvent: updateEvent,
         },
       );
       threadId = resumed.threadId ?? threadId;
@@ -1608,6 +1879,13 @@ export function startDelegation(input: StartDelegationInput): DelegationHandle {
       run.status = 'completed';
       run.finishedAt = new Date().toISOString();
       run.touchedFiles = await input.checkpointDiff();
+      updateEvent({
+        id: newId('event'),
+        type: 'status',
+        status: 'completed',
+        message: 'Delegate rework completed.',
+        timestamp: run.finishedAt,
+      });
       update();
       return structuredClone(run);
     },
@@ -1635,7 +1913,8 @@ export async function decide(
       throw new Error('Rework requires a CLI session resume callback');
     const resumed = await dependencies.resumeSession(deltaBrief);
     run.brief = `${run.brief}\n\n## Rework\n${deltaBrief}`;
-    run.progress = [...run.progress, ...resumed.progress];
+    run.events = [...run.events, ...resumed.events].slice(-2_000);
+    run.progress = [...run.progress, ...resumed.progress].slice(-2_000);
     run.finalMessage = resumed.finalMessage;
     run.usage = resumed.usage;
     run.touchedFiles = resumed.touchedFiles;

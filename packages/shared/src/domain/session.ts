@@ -10,6 +10,7 @@ import {
   WorkspaceIdSchema,
 } from './ids.js';
 import { ProviderFailureFamilySchema } from './quota.js';
+import { AgentEventSchema } from './agent-event.js';
 export const SessionStatusSchema = z.enum([
   'idle',
   'running',
@@ -34,6 +35,7 @@ export const SessionSchema = z.object({
   inFlight: z.boolean().optional(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
+  agentEvents: z.array(AgentEventSchema).default([]),
 });
 export type Session = z.infer<typeof SessionSchema>;
 export const FileChangeSchema = z.object({

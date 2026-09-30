@@ -86,6 +86,7 @@ export const FERRY_EVENTS = [
   'session.message',
   'session.part',
   'session.delta',
+  'agent.event',
   'routing.explain',
   'task.updated',
   'quota.updated',

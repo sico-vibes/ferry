@@ -7,6 +7,7 @@ import {
   type Message,
   type Session,
   type TaskRecord,
+  type AgentEvent as StructuredAgentEvent,
   type WorkspaceId,
 } from '@ferry/shared';
 import type { MessageRepository, SessionRepository, TaskRepository } from '@ferry/storage';
@@ -173,6 +174,18 @@ export class SessionStore {
       ...current,
       ...update,
       updatedAt: new Date().toISOString(),
+    });
+    this.repositories.sessions.put(next);
+    return next;
+  }
+
+  appendAgentEvent(sessionId: string, event: StructuredAgentEvent): Session | undefined {
+    const current = this.repositories.sessions.get(sessionId);
+    if (!current) return undefined;
+    const next = SessionSchema.parse({
+      ...current,
+      agentEvents: [...current.agentEvents, event].slice(-2_000),
+      updatedAt: new Date(event.timestamp).toISOString(),
     });
     this.repositories.sessions.put(next);
     return next;

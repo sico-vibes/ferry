@@ -1,4 +1,5 @@
 import { MockNotFoundError } from '../errors.js';
+import { newId } from '@ferry/shared';
 import type { DelegationRun, RunId } from '@ferry/shared';
 import type { FerryClient } from '../../ferry-client.js';
 import type { MockDeps } from './deps.js';
@@ -94,6 +95,7 @@ export function createDelegationDomain(
         startedAt: clock.now().toISOString(),
         finishedAt: null,
         progress: [],
+        events: [],
         finalMessage: null,
         touchedFiles: [],
         gateResults: [],
@@ -125,7 +127,18 @@ export function createDelegationDomain(
       if (decision === 'rework') {
         r.status = 'running';
         r.finishedAt = null;
-        r.progress.push({ at: clock.now().toISOString(), text: 'Applying requested rework' });
+        const at = clock.now().toISOString();
+        r.events = [
+          ...r.events,
+          {
+            id: newId('event'),
+            type: 'status' as const,
+            status: 'Applying requested rework',
+            message: 'Applying requested rework',
+            timestamp: at,
+          },
+        ].slice(-2_000);
+        r.progress.push({ at, text: 'Applying requested rework' });
         clock.setTimeout(() => {
           finishRun(r);
         }, 800);

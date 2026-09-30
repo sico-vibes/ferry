@@ -66,6 +66,7 @@ export const sampleSession: Session = {
   status: 'idle',
   createdAt: '2026-09-23T10:00:00.000Z',
   updatedAt: '2026-09-23T10:00:00.000Z',
+  agentEvents: [],
 };
 export const sampleFileChange: FileChange = {
   path: 'src/index.ts',
@@ -292,6 +293,7 @@ export const sampleDelegationRun: DelegationRun = {
   startedAt: '2026-09-23T10:00:00.000Z',
   finishedAt: '2026-09-23T10:01:00.000Z',
   progress: [{ at: '2026-09-23T10:00:30.000Z', text: 'Working' }],
+  events: [],
   finalMessage: 'Done',
   touchedFiles: [sampleFileChange],
   gateResults: [sampleGateResult],

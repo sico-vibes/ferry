@@ -199,6 +199,7 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
         startedAt: clock.now().toISOString(),
         finishedAt: null,
         progress: [],
+        events: [],
         finalMessage: null,
         touchedFiles: [],
         gateResults: [],
@@ -299,21 +300,29 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
     clock.setTimeout(() => {
       if (r.status !== 'queued') return;
       r.status = 'running';
-      r.progress.push({ at: clock.now().toISOString(), text: 'Agent started' });
+      appendMockRunEvent(r, 'Agent started');
       emit('delegation.updated', r);
       persist();
       for (let i = 1; i <= 3; i++)
         clock.setTimeout(() => {
           if (r.status !== 'running') return;
-          r.progress.push({
-            at: clock.now().toISOString(),
-            text: ['Inspecting task', 'Implementing changes', 'Running checks'][i - 1] ?? 'Working',
-          });
+          appendMockRunEvent(
+            r,
+            ['Inspecting task', 'Implementing changes', 'Running checks'][i - 1] ?? 'Working',
+          );
           emit('delegation.updated', r);
           persist();
           if (i === 3) finishRun(r);
         }, i * 800);
     }, 400);
+  }
+  function appendMockRunEvent(r: DelegationRun, text: string) {
+    const at = clock.now().toISOString();
+    r.events = [
+      ...r.events,
+      { id: newId('event'), type: 'status' as const, status: text, message: text, timestamp: at },
+    ].slice(-2_000);
+    r.progress = [...r.progress, { at, text }].slice(-2_000);
   }
   function finishRun(r: DelegationRun) {
     if (r.status !== 'running') return;

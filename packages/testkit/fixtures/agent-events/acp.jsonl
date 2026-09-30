@@ -1,0 +1,5 @@
+{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ACP answer"}}
+{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"ACP thought"}}
+{"sessionUpdate":"tool_call","toolCallId":"call-acp","title":"read","rawInput":{"path":"README.md"}}
+{"sessionUpdate":"tool_call_update","toolCallId":"call-acp","status":"completed","output":"file contents"}
+{"sessionUpdate":"plan","entries":[{"content":"Inspect files","priority":"high","status":"in_progress"}]}

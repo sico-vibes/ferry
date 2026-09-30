@@ -485,6 +485,7 @@ export function register(host: CoreHost, services: FerryServices): void {
               partId: PartIdSchema.parse(event.partId),
               textDelta: event.text,
             });
+          else if (event.type === 'agent.event') host.emit('agent.event', event);
           else if (event.type === 'session.part') {
             host.emit('session.part', event);
             if (event.part.type === 'approval_request' && event.part.state === 'pending')

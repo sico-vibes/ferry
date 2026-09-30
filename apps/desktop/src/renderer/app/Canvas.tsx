@@ -409,7 +409,7 @@ export function HomeCanvas() {
   );
 }
 
-function PartView({
+export function PartView({
   part,
   sessionId,
   canRetry,

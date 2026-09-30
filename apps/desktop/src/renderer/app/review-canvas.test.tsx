@@ -24,6 +24,7 @@ function run(overrides: Partial<DelegationRun> = {}): DelegationRun {
     startedAt: '2026-09-23T10:00:00.000Z',
     finishedAt: '2026-09-23T10:01:00.000Z',
     progress: [],
+    events: [],
     finalMessage: 'Done',
     touchedFiles: [],
     gateResults: [{ command: 'pnpm check', ok: true, outputTail: 'ok' }],

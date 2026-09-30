@@ -8,6 +8,7 @@ export * from './domain/quota.js';
 export * from './domain/profile.js';
 export * from './domain/integrations.js';
 export * from './domain/delegation.js';
+export * from './domain/agent-event.js';
 export * from './domain/optimizer.js';
 export * from './domain/settings.js';
 export * from './security/secrets.js';
