@@ -1116,6 +1116,37 @@ export function SessionCanvas() {
       });
     });
   };
+  const resumeInterrupted = async () => {
+    if (data?.session.status !== 'interrupted') return;
+    try {
+      await client.sessions.resume(sessionId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to resume this session.';
+      if (!message.includes('Confirm before retrying this tool')) {
+        pushToast({ kind: 'error', title: 'Resume failed', body: message });
+        return;
+      }
+      if (
+        !window.confirm(
+          message +
+            '\n\nRetry this interrupted tool? It may have completed before the core stopped.',
+        )
+      )
+        return;
+      try {
+        await client.sessions.resume(sessionId, { retryInterruptedTool: true });
+      } catch (retryError) {
+        pushToast({
+          kind: 'error',
+          title: 'Resume failed',
+          body: retryError instanceof Error ? retryError.message : message,
+        });
+        return;
+      }
+    }
+    await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+    await cache.invalidateQueries({ queryKey: keys.sessions });
+  };
   const send = async () => {
     const text = prompt.trim();
     if (!text || !data) return;
@@ -1224,6 +1255,7 @@ export function SessionCanvas() {
         className="transcript-viewport"
         data-at-bottom={atBottom}
         data-new-output-count={newOutputCount}
+        data-session-status={data?.session.status ?? 'loading'}
         ref={viewport}
         style={{ visibility: initialTailReady ? 'visible' : 'hidden' }}
         onWheel={(event) => {
@@ -1295,6 +1327,16 @@ export function SessionCanvas() {
         >
           Jump to latest{newOutputCount > 0 ? ` · ${String(newOutputCount)} new` : ''}
         </button>
+      )}
+      {data?.session.status === 'interrupted' && (
+        <div className="session-resume-banner" role="status">
+          <span>
+            Session stopped before the task finished. Durable steps and tool results are saved.
+          </span>
+          <button type="button" onClick={() => void resumeInterrupted()}>
+            Resume
+          </button>
+        </div>
       )}
       <Composer
         value={prompt}

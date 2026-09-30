@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
+import { createMockFerryClient, createPlaybackRunner } from '@ferry/client';
 import { FakeOpenAIServer } from '@ferry/testkit';
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
@@ -498,8 +499,31 @@ describe('@ferry/cli argument parsing and exit codes', () => {
 
   it(
     'resumes a stored session as JSON',
-    () => {
+    async () => {
       const dataDir = tempDirectory('resume-json');
+      const statePath = join(dataDir, 'cli-state.json');
+      const mock = createMockFerryClient({
+        behavior: 'live',
+        scenarioRunner: createPlaybackRunner(),
+        storage: {
+          load() {
+            try {
+              return JSON.parse(readFileSync(statePath, 'utf8')) as unknown;
+            } catch {
+              return undefined;
+            }
+          },
+          save(value) {
+            mkdirSync(dataDir, { recursive: true });
+            writeFileSync(statePath, JSON.stringify(value), 'utf8');
+          },
+        },
+      });
+      const session = mock.__state().sessions.find((item) => item.id === 'session_2');
+      expect(session).toBeDefined();
+      if (!session) throw new Error('Mock fixture session is unavailable');
+      session.status = 'interrupted';
+      await mock.sessions.rename(session.id, session.title);
       const result = runCli(['resume', 'session_2', '--json', '--data-dir', dataDir]);
       expect(result.status).toBe(0);
       const event = JSON.parse(result.stdout) as { type: string; messages: unknown[] };

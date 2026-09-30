@@ -48,6 +48,27 @@ export interface ModelFactoryOptions {
   sessionId?: string;
 }
 
+export class OfflineProviderError extends Error {
+  readonly code = 'FERRY_OFFLINE';
+  readonly kind = 'offline' as const;
+  constructor(options?: { cause?: unknown }) {
+    super('No network connection. Provider requests will retry when the network returns.', options);
+    this.name = 'OfflineProviderError';
+  }
+}
+function asOfflineError(error: unknown, depth = 0): OfflineProviderError | undefined {
+  const record = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+  if (error instanceof OfflineProviderError) return error;
+  const code = typeof record.code === 'string' ? record.code : '';
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    /^(ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|ENOTFOUND)$/i.test(code) ||
+    /failed to fetch|network error|fetch failed|network is unreachable/i.test(message)
+  )
+    return new OfflineProviderError({ cause: error });
+  return depth < 5 && 'cause' in record ? asOfflineError(record.cause, depth + 1) : undefined;
+}
+
 export interface MappedProviderError {
   kind: ProviderErrorKind;
   retryAfterMs: number | null;
@@ -374,6 +395,7 @@ export function createObservedFetch(
       );
       return response;
     } catch (error) {
+      const providerError = asOfflineError(error) ?? error;
       onObservation(
         RawCallObservationSchema.parse({
           providerId: ProviderIdSchema.parse(providerId),
@@ -383,10 +405,10 @@ export function createObservedFetch(
           statusCode: null,
           requestBytes: requestSize(input, init),
           rateLimitHeaders: {},
-          errorKind: mapProviderError(error).kind,
+          errorKind: mapProviderError(providerError).kind,
         }),
       );
-      throw error;
+      throw providerError;
     }
   };
 }
@@ -814,6 +836,13 @@ export function mapProviderError(error: unknown): MappedProviderError {
   const status = Number(record.statusCode ?? record.status ?? response.status ?? 0);
   const message = providerErrorMessage(record, error);
   const code = typeof record.code === 'string' ? record.code.toLowerCase() : '';
+  if (
+    record.kind === 'offline' ||
+    code === 'ferry_offline' ||
+    asOfflineError(error) ||
+    asOfflineError(record.cause)
+  )
+    return { kind: 'offline', retryAfterMs: null, message: friendlyError('offline', null) };
   const rawRetry =
     record.retryAfter ?? readRetryAfter(response.headers) ?? readRetryAfter(record.responseHeaders);
   const retry = Number(rawRetry);
@@ -868,7 +897,8 @@ function safeProviderMessage(
   kind: ProviderErrorKind,
   retryAfterMs: number | null,
 ): string {
-  if (kind === 'network' || kind === 'timeout') return friendlyError(kind, retryAfterMs);
+  if (kind === 'network' || kind === 'offline' || kind === 'timeout')
+    return friendlyError(kind, retryAfterMs);
   const cleaned = message.replace(
     /(?:Bearer\s+)?(?:sk|key|token)[-_][A-Za-z0-9._-]{8,}/gi,
     '[REDACTED]',
@@ -902,6 +932,7 @@ function friendlyError(kind: ProviderErrorKind, retryAfterMs: number | null): st
   if (kind === 'forbidden') return 'Provider denied access';
   if (kind === 'not_found') return 'Provider resource was not found';
   if (kind === 'gone') return 'Provider resource is no longer available';
+  if (kind === 'offline') return 'No network connection';
   if (kind === 'network') return 'Could not reach provider';
   if (kind === 'server') return 'Provider is unavailable';
   return 'Provider rejected the request';
@@ -1081,7 +1112,15 @@ async function probeWithSignal(
         : latestObservation?.statusCode
           ? { statusCode: latestObservation.statusCode, retryAfter, message: String(error) }
           : error;
-    const mapped = mapProviderError(enrichedError);
+    const classified = mapProviderError(
+      error && typeof error === 'object' && 'cause' in error
+        ? { ...(enrichedError as Record<string, unknown>), cause: error.cause }
+        : enrichedError,
+    );
+    const mapped =
+      latestObservation?.errorKind === 'offline'
+        ? { ...classified, kind: 'offline' as const, message: friendlyError('offline', null) }
+        : classified;
     const catalog = await providerCatalog();
     const status =
       latestObservation?.statusCode ??

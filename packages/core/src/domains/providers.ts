@@ -80,9 +80,17 @@ function saveProvider(services: FerryServices, provider: Provider): Provider {
   return provider;
 }
 
+const probeBackoff = new WeakMap<
+  FerryServices,
+  Map<string, { failures: number; retryAt: number }>
+>();
 export function register(host: CoreHost, services: FerryServices): void {
+  const providerProbeBackoff =
+    probeBackoff.get(services) ?? new Map<string, { failures: number; retryAt: number }>();
+  probeBackoff.set(services, providerProbeBackoff);
   const modelDiscovery = getModelDiscovery(host, services);
   let healthRecoveryTimer: ReturnType<typeof setInterval> | undefined;
+  let offlineRecoveryTimer: ReturnType<typeof setInterval> | undefined;
   host.onStart(async () => {
     const testProviderId = services.env.FERRY_E2E_PROVIDER_ID;
     const testProviderKey = services.env.FERRY_E2E_PROVIDER_KEY;
@@ -116,6 +124,23 @@ export function register(host: CoreHost, services: FerryServices): void {
       if (key || (saved?.enabled && limits?.key_required === false))
         void modelDiscovery.refreshIfStale(id);
     });
+    if (!offlineRecoveryTimer) {
+      offlineRecoveryTimer = setInterval(() => {
+        const now = services.clock.now().getTime();
+        for (const [id, backoff] of providerProbeBackoff) {
+          if (backoff.retryAt > now) continue;
+          void host
+            .dispatch({
+              jsonrpc: '2.0',
+              id: 'offline-recovery',
+              method: 'providers.probe',
+              params: [id],
+            })
+            .catch(() => undefined);
+        }
+      }, 1_000);
+      offlineRecoveryTimer.unref();
+    }
     if (!healthRecoveryTimer) {
       healthRecoveryTimer = setInterval(
         () => {
@@ -136,7 +161,9 @@ export function register(host: CoreHost, services: FerryServices): void {
   });
   host.onShutdown(async () => {
     if (healthRecoveryTimer) clearInterval(healthRecoveryTimer);
+    if (offlineRecoveryTimer) clearInterval(offlineRecoveryTimer);
     healthRecoveryTimer = undefined;
+    offlineRecoveryTimer = undefined;
     await modelDiscovery.dispose();
   });
   host.registerDomain('providers', {
@@ -193,6 +220,19 @@ export function register(host: CoreHost, services: FerryServices): void {
       const id = ProviderIdInput.parse(rawId);
       const current = providerRecord(services, id);
       const key = await services.secrets.get(id);
+      const backoff = providerProbeBackoff.get(id);
+      const nowMs = services.clock.now().getTime();
+      if (backoff && backoff.retryAt > nowMs) {
+        return ProbeResultSchema.parse({
+          ok: false,
+          keyValid: true,
+          latencyMs: null,
+          message: 'Provider probe paused while offline; retrying automatically.',
+          windows: [],
+          models: [],
+          errorKind: 'offline',
+        });
+      }
       if (!key) {
         const result = ProbeResultSchema.parse({
           ok: false,
@@ -210,6 +250,13 @@ export function register(host: CoreHost, services: FerryServices): void {
       const result = ProbeResultSchema.parse(
         await probe(id, key, { ...(baseUrl ? { baseUrl } : {}) }),
       );
+      if (result.errorKind === 'offline') {
+        const failures = (providerProbeBackoff.get(id)?.failures ?? 0) + 1;
+        providerProbeBackoff.set(id, {
+          failures,
+          retryAt: nowMs + Math.min(60_000, 2_000 * 2 ** Math.min(failures - 1, 5)),
+        });
+      } else if (result.ok) providerProbeBackoff.delete(id);
       let discovered: Awaited<ReturnType<typeof discoverProviderModels>> = [];
       let discoverySucceeded = false;
       if (result.ok) {

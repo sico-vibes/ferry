@@ -17,7 +17,7 @@ describe('@ferry/storage', () => {
     dirs.push(dir);
     const db = await openDatabase(join(dir, 'ferry.sqlite'));
     try {
-      expect(db.client.pragma('user_version', { simple: true })).toBe(1);
+      expect(db.client.pragma('user_version', { simple: true })).toBe(2);
       const repo = new SessionRepository(db.client);
       const session = {
         id: 's1',

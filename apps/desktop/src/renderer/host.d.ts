@@ -6,6 +6,7 @@ declare global {
       versions: { app: string; electron: string };
       channel: string;
       commit: string;
+      e2eDiagnosticsEnabled?: boolean;
       realDomainsFromEnvironment(): string[];
       openFolder(): Promise<string | null>;
       getUpdateState(): Promise<import('../main/update-state.js').UpdateSnapshot>;
@@ -19,7 +20,7 @@ declare global {
       onOpenWorkspace(handler: (path: string) => void): () => void;
       updateTheme(theme: 'dark' | 'light'): void;
       connectCore(token: string): Promise<void>;
-      getEngineStatus(): Promise<{ status: 'connected' | 'restarting'; pid: number | null }>;
+      getEngineStatus(): Promise<{ status: 'connected' | 'restarting'; pid?: number | null }>;
       onEngineRestarting(handler: () => void): () => void;
       onEngineConnected(handler: () => void): () => void;
     };

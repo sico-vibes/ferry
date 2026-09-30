@@ -101,6 +101,21 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const [simulatedOffline, setSimulatedOffline] = useState(
     () => localStorage.getItem('ferry.simulateOffline') === 'true',
   );
+  const [networkOnline, setNetworkOnline] = useState(() => navigator.onLine);
+  useEffect(() => {
+    const online = () => {
+      setNetworkOnline(true);
+    };
+    const offline = () => {
+      setNetworkOnline(false);
+    };
+    window.addEventListener('online', online);
+    window.addEventListener('offline', offline);
+    return () => {
+      window.removeEventListener('online', online);
+      window.removeEventListener('offline', offline);
+    };
+  }, []);
   const labels = useMemo(
     () => new Map(sessions.map((session) => [session.id, session.title])),
     [sessions],
@@ -370,9 +385,9 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
               }
             />
           </div>
-          {((settings?.developer.injectErrors ?? false) || simulatedOffline) && (
+          {(!networkOnline || simulatedOffline) && (
             <div className="offline-warning" role="status">
-              Offline · showing saved local data
+              Offline - local work is saved. Provider requests will retry when the network returns.
             </div>
           )}
           {engineRestarting && (

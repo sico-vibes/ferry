@@ -685,6 +685,21 @@ body {
 .home-content-compact .home-disclaimer-slot {
   order: 4;
 }
+.session-resume-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-card);
+  background: var(--bg-raised);
+  color: var(--text-2);
+  font-size: 12px;
+}
+.session-resume-banner button {
+  flex: 0 0 auto;
+}
 .session-canvas {
   padding: 16px 24px 14px;
   container-type: inline-size;

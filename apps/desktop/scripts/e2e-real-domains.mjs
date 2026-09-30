@@ -31,6 +31,46 @@ const gitIdentity = {
 let application;
 let browser;
 let fakeProvider;
+let activePage;
+let failureStep = 'startup';
+
+async function captureFailureArtifacts(error) {
+  if (!activePage || activePage.isClosed()) return;
+  const artifactDirectory = join(appDirectory, '..', '..', '.dev');
+  const step = failureStep.replace(/[^a-z0-9_-]/gi, '-');
+  const screenshotPath = join(artifactDirectory, `e2e-failure-${step}.png`);
+  const htmlPath = join(artifactDirectory, `e2e-failure-${step}.html`);
+  try {
+    await mkdir(artifactDirectory, { recursive: true });
+    try {
+      await activePage.screenshot({ path: screenshotPath, fullPage: true, timeout: 10_000 });
+      console.error(`E2E failure screenshot saved: ${screenshotPath}`);
+    } catch (artifactError) {
+      console.error(
+        `Could not save E2E failure screenshot: ${artifactError instanceof Error ? artifactError.message : String(artifactError)}`,
+      );
+    }
+    try {
+      const dom = await activePage.content();
+      const details = [
+        `Failure step: ${failureStep}`,
+        `URL: ${activePage.url()}`,
+        `Error: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+        '',
+      ].join('\n');
+      await writeFile(htmlPath, `${details}\n${dom}`, 'utf8');
+      console.error(`E2E failure DOM saved: ${htmlPath}`);
+    } catch (artifactError) {
+      console.error(
+        `Could not save E2E failure DOM: ${artifactError instanceof Error ? artifactError.message : String(artifactError)}`,
+      );
+    }
+  } catch (artifactError) {
+    console.error(
+      `Could not prepare E2E failure artifacts: ${artifactError instanceof Error ? artifactError.message : String(artifactError)}`,
+    );
+  }
+}
 
 function toolTurn(name, input, content = '') {
   return {
@@ -185,6 +225,7 @@ async function startEmbeddedCore() {
     },
   );
   let output = '';
+  let traceBuffer = '';
   let resolveReady;
   let rejectReady;
   const ready = new Promise((resolve, reject) => {
@@ -200,6 +241,12 @@ async function startEmbeddedCore() {
     const text = chunk.toString();
     if (text.includes('E2E approval')) console.log(text.trim());
     output += text;
+    traceBuffer += text;
+    const lines = traceBuffer.split(/\r?\n/);
+    traceBuffer = lines.pop() ?? '';
+    for (const line of lines)
+      if (/FERRY_(HANDOFF|PRELOAD|RENDERER|RPC|CORE_EXIT|UTILITY_SPAWN|CORE_READY)/.test(line))
+        console.log(`[E2E_MAIN] ${line}`);
     const match = output.match(/FERRY_CORE_READY (.+)/);
     if (!match) return;
     const details = JSON.parse(match[1]);
@@ -247,6 +294,11 @@ async function startEmbeddedCore() {
     const context = browser.contexts()[0];
     assert.ok(context, 'Electron did not expose a browser context');
     const page = context.pages()[0] ?? (await context.newPage());
+    activePage = page;
+    page.on('console', (message) => {
+      const text = message.text();
+      if (/FERRY_(PRELOAD|RENDERER|RPC)/.test(text)) console.log(`[E2E_RENDERER] ${text}`);
+    });
     const getStarted = page.getByRole('button', { name: /Get started/ });
     await expect(getStarted.or(page.getByRole('button', { name: 'Explore' })).first()).toBeVisible({
       timeout: 20_000,
@@ -293,6 +345,12 @@ async function stopEmbeddedCore(core) {
   await core.browser.close().catch(() => undefined);
   if (browser === core.browser) browser = undefined;
   application = undefined;
+}
+
+function hardKillCore(pid) {
+  if (process.platform === 'win32')
+    execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+  else process.kill(pid, 'SIGKILL');
 }
 
 async function openRenderer(page) {
@@ -373,6 +431,8 @@ try {
   try {
     let core = await startEmbeddedCore();
     let page = core.page;
+    activePage = page;
+    failureStep = 'real-domains-ui';
     await openRenderer(page);
     await expect(page.getByText('Demo data', { exact: true })).toHaveCount(0);
 
@@ -418,6 +478,7 @@ try {
 
     core = await startEmbeddedCore();
     page = core.page;
+    activePage = page;
     await openRenderer(page);
     await expect(page.getByRole('heading', { name: fixtureRepoName }).last()).toBeVisible();
     await page.waitForFunction(
@@ -767,7 +828,195 @@ try {
       ),
     ).toBe(true);
     console.log('e2e real domains: rate-limit recovery emits a handoff marker OK');
+
+    const crashResponses = fakeProvider.options.responses;
+    fakeProvider.cursor = crashResponses.length;
+    crashResponses.push(
+      {
+        chunks: [
+          {
+            id: 'chatcmpl_crash',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'fixture',
+            choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+          },
+          {
+            id: 'chatcmpl_crash',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'fixture',
+            choices: [{ index: 0, delta: { content: 'slow provider step' }, finish_reason: null }],
+          },
+          {
+            id: 'chatcmpl_crash',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'fixture',
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          },
+        ],
+        delayMs: 5_000,
+      },
+      textTurn('The interrupted task resumed and completed.'),
+    );
+    failureStep = 'crash-resume-create';
+    const crashSession = await page.evaluate(async () => {
+      const workspace = (await window.ferryRpcClient.workspaces.list())[0];
+      if (!workspace) throw new Error('Resume E2E workspace unavailable');
+      return window.ferryRpcClient.sessions.create({
+        workspaceId: workspace.id,
+        title: 'Crash resume flow',
+      });
+    });
+    const beforeCrashRequests = fakeProvider.requests.length;
+    void page.evaluate(
+      (id) => window.ferryRpcClient.sessions.send(id, { text: 'Finish the crash recovery task.' }),
+      crashSession.id,
+    );
+    await expect
+      .poll(() => fakeProvider.requests.length, { timeout: 10_000 })
+      .toBeGreaterThan(beforeCrashRequests);
+    const previousCorePid = await page.evaluate(async () => {
+      const status = await window.ferryHost.getEngineStatus();
+      if (!status.pid) throw new Error('Core process PID unavailable for crash test');
+      return status.pid;
+    });
+    hardKillCore(previousCorePid);
+    page = core.page;
+    activePage = page;
+    await page.waitForFunction(
+      async (oldPid) => {
+        const status = await window.ferryHost.getEngineStatus();
+        return status.status === 'connected' && status.pid !== oldPid;
+      },
+      previousCorePid,
+      { timeout: 30_000 },
+    );
+    let crashSessionObservation = { kind: 'pending' };
+    const crashSessionRead = page
+      .evaluate(async (id) => {
+        let retriedAfterRestart = false;
+        const deadline = Date.now() + 17_000;
+        while (Date.now() < deadline) {
+          let timeout;
+          try {
+            const detail = await Promise.race([
+              window.ferryRpcClient.sessions.get(id),
+              new Promise((_, reject) => {
+                timeout = window.setTimeout(
+                  () => reject(new Error('sessions.get did not settle within 17 seconds')),
+                  Math.max(1, deadline - Date.now()),
+                );
+              }),
+            ]);
+            return { kind: 'status', status: detail.session.status };
+          } catch (error) {
+            if (
+              !retriedAfterRestart &&
+              typeof error === 'object' &&
+              error !== null &&
+              'kind' in error &&
+              error.kind === 'core_restarted'
+            ) {
+              retriedAfterRestart = true;
+              continue;
+            }
+            return {
+              kind: 'error',
+              ...(typeof error === 'object' && error !== null && 'kind' in error
+                ? { errorKind: String(error.kind) }
+                : {}),
+              name: error instanceof Error ? error.name : 'UnknownError',
+              message: error instanceof Error ? error.message : String(error),
+            };
+          } finally {
+            if (timeout) window.clearTimeout(timeout);
+          }
+        }
+        return {
+          kind: 'error',
+          name: 'TimeoutError',
+          message: 'sessions.get did not settle within 17 seconds',
+        };
+      }, crashSession.id)
+      .then(
+        (observation) => {
+          crashSessionObservation = observation;
+          return observation;
+        },
+        (error) => {
+          crashSessionObservation = {
+            kind: 'error',
+            message: error instanceof Error ? error.message : String(error),
+          };
+          return crashSessionObservation;
+        },
+      );
+    try {
+      await expect
+        .poll(() => crashSessionRead, { timeout: 20_000 })
+        .toEqual({
+          kind: 'status',
+          status: 'interrupted',
+        });
+    } catch (error) {
+      console.error(
+        `e2e crash-resume session.get observation: ${JSON.stringify(crashSessionObservation)}`,
+      );
+      throw error;
+    }
+    failureStep = 'crash-resume-library';
+    const crashWorkspaceName = await page.evaluate(async (id) => {
+      const detail = await window.ferryRpcClient.sessions.get(id);
+      const workspace = (await window.ferryRpcClient.workspaces.list()).find(
+        (item) => item.id === detail.session.workspaceId,
+      );
+      if (!workspace) throw new Error('Crash resume workspace unavailable in Library');
+      return workspace.name;
+    }, crashSession.id);
+    await page.getByRole('button', { name: 'Library', exact: true }).click();
+    await page
+      .getByRole('button', { name: `Expand workspace ${crashWorkspaceName}`, exact: true })
+      .click();
+    const crashSessionRow = page.getByRole('button', { name: /Crash resume flow/ });
+    await expect(crashSessionRow).toBeVisible();
+    await expect(crashSessionRow.getByText('Interrupted', { exact: true })).toBeVisible();
+    await crashSessionRow.click();
+    failureStep = 'crash-resume-detail';
+    await expect(page.locator('.transcript-viewport')).toHaveAttribute(
+      'data-session-status',
+      'interrupted',
+    );
+    await page.getByRole('button', { name: 'Resume', exact: true }).click();
+    failureStep = 'crash-resume-completion';
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            async (id) => (await window.ferryRpcClient.sessions.get(id)).session.status,
+            crashSession.id,
+          ),
+        { timeout: 30_000 },
+      )
+      .toBe('idle');
+    const resumedDetail = await page.evaluate(
+      async (id) => window.ferryRpcClient.sessions.get(id),
+      crashSession.id,
+    );
+    assert.ok(
+      resumedDetail.messages.some((message) =>
+        message.parts.some(
+          (part) =>
+            part.type === 'text' && part.text.includes('interrupted task resumed and completed'),
+        ),
+      ),
+    );
+    console.log('e2e real domains: killed mid-provider step, restarted, resumed, and completed OK');
     await stopEmbeddedCore(core);
+  } catch (error) {
+    await captureFailureArtifacts(error);
+    throw error;
   } finally {
     if (application) {
       application.kill();
@@ -777,6 +1026,9 @@ try {
     await browser?.close().catch(() => undefined);
     browser = undefined;
   }
+} catch (error) {
+  await captureFailureArtifacts(error);
+  throw error;
 } finally {
   const currentApplication = application;
   if (currentApplication) {

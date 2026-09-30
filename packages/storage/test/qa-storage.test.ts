@@ -10,6 +10,7 @@ import {
   redactHeaders,
   RequestRepository,
   runRetention,
+  salvageReadableTables,
   SettingsRepository,
   UsageDailyRepository,
 } from '../src/index.js';
@@ -30,11 +31,26 @@ describe('QA storage: migrations and corruption', () => {
     const dir = await tempDir();
     const file = join(dir, 'nested', 'ferry.sqlite');
     const first = await openDatabase(file);
-    expect(first.client.pragma('user_version', { simple: true })).toBe(1);
+    expect(first.client.pragma('user_version', { simple: true })).toBe(2);
     first.close();
     const second = await openDatabase(file);
-    expect(second.client.pragma('user_version', { simple: true })).toBe(1);
+    expect(second.client.pragma('user_version', { simple: true })).toBe(2);
     second.close();
+  });
+
+  it('salvages readable tables from an attached database', async () => {
+    const dir = await tempDir();
+    const damagedPath = join(dir, 'damaged.sqlite');
+    const damaged = await openDatabase(damagedPath);
+    new SettingsRepository(damaged.client).put('preserved', { value: 7 });
+    damaged.close();
+    const target = await openDatabase(join(dir, 'fresh.sqlite'));
+    try {
+      expect(await salvageReadableTables(target.client, damagedPath)).toContain('settings_kv');
+      expect(new SettingsRepository(target.client).get('preserved')).toEqual({ value: 7 });
+    } finally {
+      target.close();
+    }
   });
 
   it('releases the SQLite handle when opening a corrupt file fails', async () => {

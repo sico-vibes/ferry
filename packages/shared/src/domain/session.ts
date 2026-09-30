@@ -10,7 +10,13 @@ import {
   WorkspaceIdSchema,
 } from './ids.js';
 import { ProviderFailureFamilySchema } from './quota.js';
-export const SessionStatusSchema = z.enum(['idle', 'running', 'awaiting_approval', 'error']);
+export const SessionStatusSchema = z.enum([
+  'idle',
+  'running',
+  'awaiting_approval',
+  'error',
+  'interrupted',
+]);
 export type SessionStatus = z.infer<typeof SessionStatusSchema>;
 export const SessionSchema = z.object({
   id: SessionIdSchema,
@@ -23,6 +29,9 @@ export const SessionSchema = z.object({
   starred: z.boolean(),
   pinned: z.boolean(),
   status: SessionStatusSchema,
+  // Independent of status so startup can recover a run even if an error handler
+  // persisted a terminal status immediately before the process died.
+  inFlight: z.boolean().optional(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });

@@ -15,6 +15,7 @@ export type ErrorFamily =
   | 'content_filter'
   | 'unsupported_free_tier'
   | 'server'
+  | 'offline'
   | 'timeout'
   | 'request_scoped_client'
   | 'request_too_large'
@@ -141,7 +142,9 @@ export function classifyProviderError(input: ProviderErrorInput): ClassifiedProv
     body.retryMs;
   const lower = message.toLowerCase();
   let family: ErrorFamily;
-  if (
+  if (/ferry_offline|no network connection|network is unreachable/i.test(message))
+    family = 'offline';
+  else if (
     status === 413 ||
     /request too large|tokens per minute.{0,80}(?:requested|request size)|requested\s+\d+[\s\S]{0,60}tpm|single[- ]request.{0,40}(?:token|size)/i.test(
       message,
@@ -185,17 +188,19 @@ export function classifyProviderError(input: ProviderErrorInput): ClassifiedProv
   else if (status !== null && status >= 500) family = 'server';
   else family = status === null ? 'stream_failure' : 'server';
   const scope =
-    family === 'quota_exhausted'
-      ? 'key'
-      : family === 'model_not_found' ||
-          family === 'tools_unsupported' ||
-          family === 'context_overflow'
-        ? 'model'
-        : family === 'server' || family === 'timeout' || family === 'stream_failure'
-          ? 'provider'
-          : family === 'rate_limit'
-            ? 'key'
-            : 'none';
+    family === 'offline'
+      ? 'none'
+      : family === 'quota_exhausted'
+        ? 'key'
+        : family === 'model_not_found' ||
+            family === 'tools_unsupported' ||
+            family === 'context_overflow'
+          ? 'model'
+          : family === 'server' || family === 'timeout' || family === 'stream_failure'
+            ? 'provider'
+            : family === 'rate_limit'
+              ? 'key'
+              : 'none';
   return {
     family,
     status,
@@ -232,6 +237,7 @@ export const ResilienceEntrySchema = z.object({
     'content_filter',
     'unsupported_free_tier',
     'server',
+    'offline',
     'timeout',
     'request_scoped_client',
     'request_too_large',

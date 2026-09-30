@@ -10,9 +10,22 @@ import {
 export interface RpcTransport {
   send(message: unknown): void;
   subscribe(handler: (message: unknown) => void): () => void;
-  onClose?(handler: () => void): () => void;
+  onClose?(handler: (reason?: RpcError) => void): () => void;
   reconnect?(): Promise<void>;
   close?(): void;
+}
+
+export interface MessagePortConnection {
+  port: MessagePort;
+  portId: string;
+}
+
+export interface MessagePortTransportDiagnostic {
+  event: 'attached' | 'restarting' | 'queued' | 'sent' | 'received' | 'reconnected';
+  generation: number;
+  portId: string;
+  requestId?: number;
+  method?: string;
 }
 
 export class RpcError extends Error {
@@ -88,8 +101,15 @@ export function createRpcFerryClient(
       );
     } else item.resolve(response.result);
   });
-  const offClose = transport.onClose?.(() => {
+  const offClose = transport.onClose?.((reason) => {
     options.onStatus?.(false);
+    if (reason) {
+      for (const item of pending.values()) {
+        clearTimeout(item.timer);
+        item.reject(reason);
+      }
+      pending.clear();
+    }
     if (closed) return;
     void reconnect();
   });
@@ -186,32 +206,78 @@ export function createRpcFerryClient(
 }
 
 export function createMessagePortTransport(
-  initialPort: MessagePort,
+  initialConnection: MessagePort | MessagePortConnection,
   options: {
-    reconnect?: () => Promise<MessagePort>;
+    reconnect?: () => Promise<MessagePort | MessagePortConnection>;
     onRestarting?: (handler: () => void) => () => void;
+    onReconnected?: () => void;
+    onDiagnostic?: (diagnostic: MessagePortTransportDiagnostic) => void;
   } = {},
 ): RpcTransport {
-  let port = initialPort;
+  const asConnection = (connection: MessagePort | MessagePortConnection): MessagePortConnection =>
+    'port' in connection && 'portId' in connection
+      ? connection
+      : { port: connection, portId: 'untracked' };
+  let connection = asConnection(initialConnection);
+  let port = connection.port;
+  let generation = 0;
+  let reconnecting = false;
+  let reconnectPromise: Promise<void> | undefined;
+  const queuedMessages: unknown[] = [];
   const messageHandlers = new Set<(message: unknown) => void>();
-  const closeHandlers = new Set<() => void>();
-  const attach = (candidate: MessagePort) => {
-    candidate.start();
-    candidate.addEventListener('message', (event) => {
+  const closeHandlers = new Set<(reason?: RpcError) => void>();
+  const markRestarting = () => {
+    if (reconnecting) return;
+    reconnecting = true;
+    options.onDiagnostic?.({ event: 'restarting', generation, portId: connection.portId });
+    const reason = new RpcError(
+      'Core restarted while the request was pending',
+      -32002,
+      'core_restarted',
+    );
+    for (const handler of closeHandlers) handler(reason);
+  };
+  const attach = (candidate: MessagePortConnection) => {
+    connection = candidate;
+    port = candidate.port;
+    generation += 1;
+    options.onDiagnostic?.({ event: 'attached', generation, portId: connection.portId });
+    candidate.port.start();
+    candidate.port.addEventListener('message', (event) => {
+      const message = event.data as { id?: unknown; method?: unknown } | null;
+      if (typeof message?.id === 'number')
+        options.onDiagnostic?.({
+          event: 'received',
+          generation,
+          portId: connection.portId,
+          requestId: message.id,
+        });
       for (const handler of messageHandlers) handler(event.data);
     });
-    candidate.addEventListener('messageerror', () => {
-      for (const handler of closeHandlers) handler();
-    });
+    candidate.port.addEventListener('messageerror', markRestarting);
   };
-  attach(port);
-  const offRestarting = options.onRestarting?.(() => {
-    for (const handler of closeHandlers) handler();
-  });
+  attach(connection);
+  const offRestarting = options.onRestarting?.(markRestarting);
   const reconnect = options.reconnect;
   return {
     send: (message) => {
+      const request = message as { id?: unknown; method?: unknown } | null;
+      const details = {
+        ...(typeof request?.id === 'number' ? { requestId: request.id } : {}),
+        ...(typeof request?.method === 'string' ? { method: request.method } : {}),
+      };
+      if (reconnecting) {
+        queuedMessages.push(message);
+        options.onDiagnostic?.({
+          event: 'queued',
+          generation,
+          portId: connection.portId,
+          ...details,
+        });
+        return;
+      }
       port.postMessage(message);
+      options.onDiagnostic?.({ event: 'sent', generation, portId: connection.portId, ...details });
     },
     subscribe(handler) {
       messageHandlers.add(handler);
@@ -227,15 +293,40 @@ export function createMessagePortTransport(
     },
     ...(reconnect
       ? {
-          reconnect: async () => {
-            port.close();
-            port = await reconnect();
-            attach(port);
+          reconnect: () => {
+            if (reconnectPromise) return reconnectPromise;
+            reconnectPromise = (async () => {
+              port.close();
+              attach(asConnection(await reconnect()));
+              reconnecting = false;
+              for (const message of queuedMessages.splice(0)) {
+                port.postMessage(message);
+                const request = message as { id?: unknown; method?: unknown } | null;
+                options.onDiagnostic?.({
+                  event: 'sent',
+                  generation,
+                  portId: connection.portId,
+                  ...(typeof request?.id === 'number' ? { requestId: request.id } : {}),
+                  ...(typeof request?.method === 'string' ? { method: request.method } : {}),
+                });
+              }
+              options.onDiagnostic?.({
+                event: 'reconnected',
+                generation,
+                portId: connection.portId,
+              });
+              options.onReconnected?.();
+            })().finally(() => {
+              reconnectPromise = undefined;
+            });
+            return reconnectPromise;
           },
         }
       : {}),
     close() {
       offRestarting?.();
+      reconnecting = false;
+      queuedMessages.length = 0;
       port.close();
       messageHandlers.clear();
       closeHandlers.clear();

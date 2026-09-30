@@ -24,6 +24,39 @@ async function startServer(responses: FakeResponse[] = []) {
 
 const NOW = new Date('2026-09-24T12:00:00.000Z');
 
+describe('QA offline provider classification', () => {
+  it('reports probes offline for a refused endpoint', async () => {
+    const result = await probe('openai', 'fixture-key', {
+      baseUrl: 'http://127.0.0.1:1/v1',
+      timeoutMs: 1_000,
+    });
+    expect(result.errorKind).toBe('offline');
+  });
+
+  it('wraps fetch failures in a typed offline error and records offline telemetry', async () => {
+    const observations: RawCallObservation[] = [];
+    const observed = createObservedFetch(
+      (entry) => observations.push(entry),
+      { providerId: 'openai', model: 'test-model' },
+      () => Promise.reject(new TypeError('fetch failed')),
+    );
+    let wrapped: unknown;
+    try {
+      await observed('https://api.openai.com/v1/chat/completions');
+    } catch (error) {
+      wrapped = error;
+    }
+    expect(wrapped).toMatchObject({
+      name: 'OfflineProviderError',
+      code: 'FERRY_OFFLINE',
+      kind: 'offline',
+    });
+    expect(mapProviderError({ cause: wrapped }).kind).toBe('offline');
+    expect(observations.at(-1)?.errorKind).toBe('offline');
+    expect(mapProviderError(new TypeError('Failed to fetch')).kind).toBe('offline');
+  });
+});
+
 describe('QA-w2 providers: probe never echoes the key', () => {
   it('keeps the key out of a 401 result even when the provider echoes it', async () => {
     const key = 'sk-ferry-qa-w2-401-echo-0123456789';

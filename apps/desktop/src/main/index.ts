@@ -63,7 +63,19 @@ let coreListening = false;
 let restartCount = 0;
 let coreRestartTimer: NodeJS.Timeout | undefined;
 let shuttingDown = false;
-const coreConnectors: Electron.WebContents[] = [];
+let shutdownComplete = false;
+interface PendingCoreConnector {
+  sender: Electron.WebContents;
+  connectId: number;
+}
+const coreConnectors: PendingCoreConnector[] = [];
+let coreGeneration = 0;
+let nextCorePortId = 0;
+let nextCoreConnectId = 0;
+const e2eTracing = Boolean(process.env.FERRY_E2E_USER_DATA_DIR);
+function traceCore(event: string, details: Record<string, unknown>): void {
+  if (e2eTracing) console.log(`FERRY_HANDOFF ${JSON.stringify({ event, ...details })}`);
+}
 const updateController = new UpdateController(autoUpdater);
 let pendingWorkspacePath: string | null = findWorkspaceArgument(process.argv);
 
@@ -210,19 +222,45 @@ function broadcastEngineConnected(): void {
     window.webContents.send('ferry:engine-connected');
 }
 
-function transferCorePort(sender: Electron.WebContents): void {
+function transferCorePort(sender: Electron.WebContents, connectId: number): void {
   if (sender.isDestroyed()) return;
   if (!coreProcess || !coreListening) {
-    coreConnectors.push(sender);
+    coreConnectors.push({ sender, connectId });
+    traceCore('queued', {
+      connectId,
+      webContentsId: sender.id,
+      reason: !coreProcess ? 'utility-unavailable' : 'waiting-for-core-listening',
+    });
     return;
   }
+  const portId = `core-${String(coreGeneration)}-port-${String(++nextCorePortId)}`;
   const channel = new MessageChannelMain();
+  const frame = sender.mainFrame;
+  traceCore('channel-created', {
+    connectId,
+    portId,
+    coreGeneration,
+    utilityPid: coreProcess.pid ?? corePid,
+    webContentsId: sender.id,
+    frameRoutingId: frame.routingId,
+    frameUrl: frame.url,
+  });
   coreProcess.postMessage({ type: 'ferry:attach' }, [channel.port1]);
-  sender.postMessage('ferry:core-port', { type: 'ferry:core-port' }, [channel.port2]);
+  traceCore('port-posted-to-utility', { connectId, portId, coreGeneration });
+  sender.postMessage('ferry:core-port', { type: 'ferry:core-port', portId }, [channel.port2]);
+  traceCore('port-posted-to-renderer', {
+    connectId,
+    portId,
+    webContentsId: sender.id,
+    frameRoutingId: frame.routingId,
+    frameUrl: frame.url,
+  });
 }
 
 function launchCore(): void {
   if (shuttingDown) return;
+  coreGeneration += 1;
+  const generation = coreGeneration;
   const coreEntry = join(import.meta.dirname, 'core-entry.js');
   const coreEnvironment = buildCoreEnvironment(process.env, app.isPackaged);
   coreEnvironment.FERRY_REAL_DOMAINS ??= FERRY_DOMAINS.join(',');
@@ -243,6 +281,7 @@ function launchCore(): void {
   corePid = child.pid ?? null;
   coreReady = false;
   coreListening = false;
+  traceCore('respawned', { coreGeneration: generation, utilityPid: child.pid ?? null });
   child.on('message', (message: unknown) => {
     if (
       coreProcess !== child ||
@@ -253,9 +292,12 @@ function launchCore(): void {
       return;
     if (message.type === 'ferry:core-listening') {
       coreListening = true;
-      for (const sender of coreConnectors.splice(0)) transferCorePort(sender);
+      traceCore('core-listening', { coreGeneration: generation, utilityPid: child.pid ?? null });
+      for (const connector of coreConnectors.splice(0))
+        transferCorePort(connector.sender, connector.connectId);
       if (process.env.FERRY_E2E_CORE_ONLY) {
         const channel = new MessageChannelMain();
+        traceCore('e2e-core-only-channel-created', { coreGeneration: generation });
         child.postMessage({ type: 'ferry:attach' }, [channel.port1]);
         channel.port2.on('message', (event) => {
           if (process.env.FERRY_E2E_USER_DATA_DIR)
@@ -266,14 +308,21 @@ function launchCore(): void {
       return;
     }
     if (message.type !== 'ferry:core-ready') return;
+    if (process.env.FERRY_E2E_USER_DATA_DIR && 'pid' in message && typeof message.pid === 'number')
+      corePid = message.pid;
     coreReady = true;
     restartCount = 0;
     broadcastEngineConnected();
+    traceCore('core-ready', { coreGeneration: generation, utilityPid: corePid });
     if (process.env.FERRY_E2E_USER_DATA_DIR && 'selfTest' in message)
       console.log(`FERRY_CORE_READY ${JSON.stringify(message)}`);
   });
   child.on('exit', (code) => {
-    if (process.env.FERRY_E2E_USER_DATA_DIR) console.error(`FERRY_CORE_EXIT ${String(code)}`);
+    if (process.env.FERRY_E2E_USER_DATA_DIR)
+      console.error(
+        `FERRY_CORE_EXIT ${JSON.stringify({ coreGeneration: generation, pid: child.pid, code })}`,
+      );
+    traceCore('utility-exit', { coreGeneration: generation, utilityPid: child.pid ?? null, code });
     if (coreProcess !== child || shuttingDown) return;
     coreProcess = null;
     corePid = null;
@@ -285,7 +334,12 @@ function launchCore(): void {
     coreRestartTimer = setTimeout(launchCore, delay);
   });
   child.on('spawn', () => {
-    if (process.env.FERRY_E2E_USER_DATA_DIR) console.log('FERRY_UTILITY_SPAWN');
+    corePid = child.pid ?? null;
+    if (process.env.FERRY_E2E_USER_DATA_DIR)
+      console.log(
+        `FERRY_UTILITY_SPAWN ${JSON.stringify({ coreGeneration: generation, pid: corePid })}`,
+      );
+    traceCore('utility-spawn', { coreGeneration: generation, utilityPid: corePid });
   });
 }
 
@@ -372,12 +426,24 @@ ipcMain.on('ferry:connect-core', (event, rawToken: unknown) => {
   const token = CoreHandoffTokenSchema.safeParse(rawToken);
   if (!token.success || consumedHandoffTokens.has(token.data)) return;
   consumedHandoffTokens.add(token.data);
-  transferCorePort(event.sender);
+  const connectId = ++nextCoreConnectId;
+  const frame = event.senderFrame;
+  traceCore('connect-request', {
+    connectId,
+    webContentsId: event.sender.id,
+    frameRoutingId: frame?.routingId,
+    frameIsMain: frame === event.sender.mainFrame,
+    frameUrl: frame?.url,
+  });
+  transferCorePort(event.sender, connectId);
 });
 ipcMain.handle('ferry:engine-status', (event, ...args: unknown[]) => {
   if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
   EmptyIpcArgsSchema.parse(args);
-  return { status: coreReady ? 'connected' : 'restarting', pid: corePid };
+  const status = { status: coreReady ? 'connected' : 'restarting' };
+  return process.env.FERRY_E2E_USER_DATA_DIR
+    ? { ...status, pid: coreProcess?.pid ?? corePid }
+    : status;
 });
 
 ipcMain.on('ferry:theme', (event, rawTheme: unknown) => {
@@ -485,9 +551,25 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (shutdownComplete || !coreProcess) {
+    shuttingDown = true;
+    return;
+  }
+  if (shuttingDown) {
+    event.preventDefault();
+    return;
+  }
+  event.preventDefault();
   shuttingDown = true;
   if (coreRestartTimer) clearTimeout(coreRestartTimer);
-  coreProcess?.kill();
-  coreProcess = null;
+  const child = coreProcess;
+  const fallback = setTimeout(() => child.kill(), 8_000);
+  child.once('exit', () => {
+    clearTimeout(fallback);
+    coreProcess = null;
+    shutdownComplete = true;
+    app.quit();
+  });
+  child.postMessage({ type: 'ferry:shutdown' });
 });

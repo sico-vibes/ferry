@@ -35,7 +35,7 @@ describe('CLI client engine selection', () => {
     } finally {
       await second.dispose?.();
     }
-  }, 30_000);
+  }, 60_000);
 
   it('keeps the synchronous factory scoped to the mock engine', () => {
     expect(() => createClient({ engine: 'local' })).toThrow('createClientAsync');

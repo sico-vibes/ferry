@@ -1,0 +1,1 @@
+-- Session status is stored in the JSON aggregate. Startup marks live sessions interrupted.

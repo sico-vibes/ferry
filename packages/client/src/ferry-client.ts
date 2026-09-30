@@ -95,6 +95,7 @@ export interface FerryClient {
       id: SessionId,
       i: { text: string; maxSteps?: number; verbose?: boolean; routingMode?: 'auto_for_step' },
     ): Promise<void>;
+    resume(id: SessionId, options?: { retryInterruptedTool?: boolean }): Promise<void>;
     cancel(id: SessionId): Promise<void>;
     rename(id: SessionId, title: string): Promise<Session>;
     setStarred(id: SessionId, v: boolean): Promise<Session>;

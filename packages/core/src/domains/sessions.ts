@@ -44,6 +44,7 @@ const SendSchema = z.object({
   maxSteps: z.number().int().positive().optional(),
   verbose: z.boolean().optional(),
   routingMode: z.enum(['auto_for_step']).optional(),
+  resume: z.boolean().optional(),
 });
 const RenameSchema = z.string().min(1).max(160);
 const BooleanSchema = z.boolean();
@@ -110,6 +111,7 @@ export function register(host: CoreHost, services: FerryServices): void {
 
   host.onShutdown(async () => {
     shuttingDown = true;
+    const interruptedSessionIds = [...controllers.keys()];
     for (const sessionId of controllers.keys()) {
       for (const message of services.messages
         .list()
@@ -135,6 +137,11 @@ export function register(host: CoreHost, services: FerryServices): void {
       }),
     ]);
     if (timeout) clearTimeout(timeout);
+    for (const sessionId of interruptedSessionIds) {
+      const latest = services.sessions.get(sessionId);
+      if (latest && (latest.status !== 'interrupted' || latest.inFlight))
+        updateSession({ ...latest, status: 'interrupted', inFlight: false });
+    }
   });
   const listSessions = (rawQuery?: unknown) => {
     const query = z
@@ -152,10 +159,11 @@ export function register(host: CoreHost, services: FerryServices): void {
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   };
 
-  // A process restart cannot resume a provider stream, but all prior messages and steps are durable.
+  // The provider stream is process-local. A durable run marker survives status writes made by
+  // provider error handling while the process is already crashing.
   for (const session of services.sessions.list()) {
-    if (session.status === 'running' || session.status === 'awaiting_approval')
-      updateSession({ ...session, status: 'error' });
+    if (session.inFlight || session.status === 'running' || session.status === 'awaiting_approval')
+      updateSession({ ...session, status: 'interrupted', inFlight: false });
   }
 
   host.registerDomain('sessions', {
@@ -218,7 +226,7 @@ export function register(host: CoreHost, services: FerryServices): void {
     },
     async send(rawId: unknown, rawInput: unknown) {
       const session = requireSession(rawId);
-      const { text, maxSteps, verbose, routingMode } = SendSchema.parse(rawInput);
+      const { text, maxSteps, verbose, routingMode, resume } = SendSchema.parse(rawInput);
       if (controllers.has(session.id) || shuttingDown)
         throw rpcDomainError(-32010, 'conflict', 'Session is already running');
       const workspace = services.workspaces.get(session.workspaceId);
@@ -234,18 +242,20 @@ export function register(host: CoreHost, services: FerryServices): void {
       });
       runPromises.set(session.id, run);
       try {
-        const now = services.clock.now();
-        const userMessage = store.appendMessage(
-          session.id,
-          'user',
-          [{ type: 'text', id: PartIdSchema.parse(newId('part')), text }],
-          session.modelRef,
-          now,
-        );
-        host.emit('session.message', {
-          sessionId: session.id,
-          message: MessageSchema.parse(userMessage),
-        });
+        if (!resume) {
+          const now = services.clock.now();
+          const userMessage = store.appendMessage(
+            session.id,
+            'user',
+            [{ type: 'text', id: PartIdSchema.parse(newId('part')), text }],
+            session.modelRef,
+            now,
+          );
+          host.emit('session.message', {
+            sessionId: session.id,
+            message: MessageSchema.parse(userMessage),
+          });
+        }
         const preflight = createSessionDependencies(services, () => undefined);
         const configuredProviders = services.catalog.providers.filter(
           ({ provider, key_required }) => {
@@ -420,6 +430,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             ? { title: text.trim().split(/\s+/).slice(0, 6).join(' ').slice(0, 80) }
             : {}),
           status: 'running',
+          inFlight: true,
         });
         const emitAgentEvent = (event: AgentEvent) => {
           if (event.type === 'session.delta')
@@ -663,7 +674,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           },
         });
         void loop
-          .run({ sessionId: session.id, signal: controller.signal })
+          .run({ sessionId: session.id, signal: controller.signal, resume: resume === true })
           .catch((error: unknown) => {
             if (!controller.signal.aborted)
               services.logger.error(
@@ -679,7 +690,13 @@ export function register(host: CoreHost, services: FerryServices): void {
             runPromises.delete(session.id);
             if (!shuttingDown) {
               const latest = services.sessions.get(session.id);
-              if (latest?.status === 'running') updateSession({ ...latest, status: 'idle' });
+              if (latest?.inFlight)
+                updateSession({
+                  ...latest,
+                  status: latest.status === 'running' ? 'idle' : latest.status,
+                  inFlight: false,
+                });
+              else if (latest?.status === 'running') updateSession({ ...latest, status: 'idle' });
               else if (latest?.status === 'idle') {
                 host.emit('session.updated', latest);
                 host.emit('session.status', latest);
@@ -690,9 +707,69 @@ export function register(host: CoreHost, services: FerryServices): void {
       } catch (error) {
         controllers.delete(session.id);
         runPromises.delete(session.id);
+        const latest = services.sessions.get(session.id);
+        if (latest?.inFlight) updateSession({ ...latest, status: 'error', inFlight: false });
         resolveRun();
         throw error;
       }
+    },
+    async resume(rawId: unknown, rawOptions?: unknown) {
+      const session = requireSession(rawId);
+      if (session.status !== 'interrupted')
+        throw rpcDomainError(-32010, 'conflict', 'Only an interrupted session can be resumed');
+      const options = z
+        .object({ retryInterruptedTool: z.boolean().optional() })
+        .parse(rawOptions ?? {});
+      const detail = store.load(session.id);
+      if (!detail) throw rpcDomainError(-32044, 'not_found', `Session not found: ${session.id}`);
+      const interruptedTools = detail.messages
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === 'tool_call' && part.status === 'running');
+      if (interruptedTools.length && !options.retryInterruptedTool) {
+        const toolNames = interruptedTools
+          .map((part) => (part.type === 'tool_call' ? part.title : ''))
+          .join(', ');
+        throw rpcDomainError(
+          -32010,
+          'conflict',
+          `Interrupted while ${toolNames} was running. Confirm before retrying this tool.`,
+        );
+      }
+      for (const part of interruptedTools) {
+        if (part.type !== 'tool_call') continue;
+        const failed = {
+          ...part,
+          status: 'failed' as const,
+          output: {
+            text: 'The core stopped before a result was saved. The user confirmed this tool may be retried.',
+            filtered: false,
+            originalTokens: null,
+            filteredTokens: null,
+            recoveryHandle: null,
+          },
+        };
+        const updated = store.replacePart(session.id, failed);
+        if (updated)
+          host.emit('session.part', { sessionId: session.id, messageId: updated.id, part: failed });
+      }
+      const lastUser = [...detail.messages].reverse().find((message) => message.role === 'user');
+      const prompt = lastUser?.parts
+        .filter((part) => part.type === 'text')
+        .map((part) => part.text)
+        .join(' ')
+        .trim();
+      if (!prompt)
+        throw rpcDomainError(
+          -32010,
+          'conflict',
+          'This session has no durable user prompt to resume',
+        );
+      await host.dispatch({
+        jsonrpc: '2.0',
+        id: 'resume',
+        method: 'sessions.send',
+        params: [session.id, { text: prompt, resume: true }],
+      });
     },
     async cancel(rawId: unknown) {
       const session = requireSession(rawId);
