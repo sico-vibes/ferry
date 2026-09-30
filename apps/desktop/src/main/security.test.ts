@@ -125,9 +125,13 @@ describe('Electron security boundary', () => {
   it('queues MessagePort transfers until the utility process IPC listener is attached', () => {
     expect(mainSource).toContain('if (!coreProcess || !coreListening)');
     expect(mainSource).toContain("message.type === 'ferry:core-listening'");
-    expect(mainSource).toContain(
-      'for (const sender of coreConnectors.splice(0)) transferCorePort(sender)',
-    );
+    expect(mainSource).toContain('for (const connector of coreConnectors.splice(0))');
+  });
+
+  it('requests a replacement core port before waiting for the core ready event', async () => {
+    const rendererMain = await readFile(join(import.meta.dirname, '../renderer/main.tsx'), 'utf8');
+    expect(rendererMain).toContain('return connectCorePort(host, rpcClientId)');
+    expect(rendererMain).not.toContain('waitForCoreConnected');
   });
 
   it('uses a cryptographically random single-use MessagePort token and checks origin', async () => {

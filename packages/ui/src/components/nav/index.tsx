@@ -318,7 +318,7 @@ export interface TabItem {
   label: string;
   ariaLabel?: string;
   icon: LucideIcon;
-  status?: 'idle' | 'running' | 'awaiting_approval' | 'error';
+  status?: 'idle' | 'running' | 'awaiting_approval' | 'interrupted' | 'error';
   successPulse?: boolean;
 }
 export function TabsBar({
@@ -415,7 +415,8 @@ export function TabsBar({
                         'size-2 shrink-0 rounded-full',
                         tab.status === 'running' &&
                           'animate-pulse bg-blue-500 motion-reduce:animate-none',
-                        tab.status === 'awaiting_approval' && 'bg-warn',
+                        (tab.status === 'awaiting_approval' || tab.status === 'interrupted') &&
+                          'bg-warn',
                         tab.status === 'error' && 'bg-danger',
                         tab.successPulse &&
                           'bg-blue-500 tab-success-pulse motion-reduce:animate-none',

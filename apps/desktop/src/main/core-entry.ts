@@ -5,9 +5,18 @@ import { createCoreHost, runNativeSelfTest } from '@ferry/core';
 let activePort: MessagePortMain | undefined;
 let inputHandler: ((message: unknown) => void) | undefined;
 let host: Awaited<ReturnType<typeof createCoreHost>> | undefined;
+let shutdownRequested = false;
 const pendingMessages: unknown[] = [];
 const parentPort = process.parentPort;
 parentPort.on('message', (event) => {
+  const message: unknown = event.data;
+  if (typeof message === 'object' && message !== null && 'type' in message) {
+    if (message.type === 'ferry:shutdown') {
+      shutdownRequested = true;
+      if (host) void host.stop().finally(() => process.exit(0));
+      return;
+    }
+  }
   const port = event.ports[0];
   if (!port) return;
   activePort?.close();
@@ -45,6 +54,10 @@ parentPort.on('message', (event) => {
       });
   void ready
     .then((runningHost) => {
+      if (shutdownRequested) {
+        void runningHost.stop().finally(() => process.exit(0));
+        return;
+      }
       runningHost.options.services?.logger.info(
         { dataDir: runningHost.dataDir },
         'Ferry core started',

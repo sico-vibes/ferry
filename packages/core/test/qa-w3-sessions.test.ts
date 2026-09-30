@@ -2,7 +2,8 @@ import { rm } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { createRpcFerryClient } from '@ferry/client';
 import { createCoreHost, createMemoryTransportPair } from '../src/index.js';
-import type { Session } from '@ferry/shared';
+import { newId } from '@ferry/shared';
+import type { Message, Session } from '@ferry/shared';
 import {
   cancelAndSettle,
   delay,
@@ -167,16 +168,28 @@ describe('QA W3 sessions: run lifecycle and races', () => {
     }
   }, 30_000);
 
-  it('marks a run that was in flight at restart as interrupted (error), not resumable', async () => {
-    const h = await startHarness({ turns: [textTurn('hello')] });
+  it('recovers an in-flight run marker even if its last status write was error', async () => {
+    const h = await startHarness();
     let secondHost: Awaited<ReturnType<typeof createCoreHost>> | undefined;
     try {
       const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
-      await h.rpc.sessions.send(session.id, { text: 'durable prompt' });
-      await waitFor(async () => (await sessionStatus(h.rpc, session.id)) === 'idle');
+      h.services.messages.put({
+        id: newId('message') as Message['id'],
+        sessionId: session.id,
+        role: 'user',
+        createdAt: new Date().toISOString(),
+        modelRef: null,
+        parts: [
+          {
+            type: 'text',
+            id: newId('part') as Message['parts'][number]['id'],
+            text: 'durable prompt',
+          },
+        ],
+      });
       const stored = h.services.sessions.get(session.id);
       if (!stored) throw new Error('session missing');
-      h.services.sessions.put({ ...stored, status: 'running' });
+      h.services.sessions.put({ ...stored, status: 'error', inFlight: true });
       h.rpc.close();
       await h.host.stop();
       const [coreTransport, clientTransport] = createMemoryTransportPair();
@@ -188,7 +201,7 @@ describe('QA W3 sessions: run lifecycle and races', () => {
       const rpc2 = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
       await rpc2.hello;
       const after = await rpc2.sessions.get(session.id);
-      expect(after.session.status).toBe('error');
+      expect(after.session.status).toBe('interrupted');
       // Durable prior messages remain readable after the crash.
       expect(after.messages.length).toBeGreaterThan(0);
       rpc2.close();

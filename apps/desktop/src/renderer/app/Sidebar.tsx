@@ -225,6 +225,8 @@ export function Sidebar({
                   <section className="context-sidebar-section" key={workspace.id}>
                     <button
                       className="context-sidebar-row"
+                      aria-expanded={isOpen}
+                      aria-label={`${isOpen ? 'Collapse' : 'Expand'} workspace ${workspace.name}`}
                       onClick={() => {
                         setExpanded((old) =>
                           isOpen ? old.filter((id) => id !== workspace.id) : [...old, workspace.id],
@@ -250,6 +252,11 @@ export function Sidebar({
                           }}
                         >
                           {session.title}
+                          {session.status === 'interrupted' && (
+                            <span className="rounded-pill bg-warn/10 px-2 py-0.5 text-meta text-warn">
+                              Interrupted
+                            </span>
+                          )}
                           <small>{relativeAgo(session.updatedAt)}</small>
                         </button>
                       ))}

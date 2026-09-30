@@ -13,6 +13,7 @@ import { z } from 'zod';
 import {
   ModelInfoSchema,
   MessageSchema,
+  PartIdSchema,
   newId,
   ProfileIdSchema,
   ProviderIdSchema,
@@ -108,6 +109,115 @@ function textParts(state: State) {
     .filter((part) => part.type === 'text')
     .map((part) => part.text);
 }
+
+describe('QA agent: crash resume and provider chaos', () => {
+  it('reuses a persisted tool result when the resumed model repeats its call id', async () => {
+    const state = await setup();
+    const target = path.join(state.root, 'resume-safe.txt');
+    try {
+      await writeFile(target, 'already changed\n', 'utf8');
+      state.store.appendMessage(
+        state.session.id,
+        'assistant',
+        [
+          {
+            type: 'tool_call',
+            id: PartIdSchema.parse('part_persisted'),
+            toolCallId: 'persisted-call',
+            tool: 'write_file',
+            title: 'Write file',
+            args: { path: 'resume-safe.txt', content: 'overwritten\n' },
+            status: 'succeeded',
+            output: {
+              text: 'File updated.',
+              filtered: false,
+              originalTokens: null,
+              filteredTokens: null,
+              recoveryHandle: null,
+            },
+            changes: [],
+            durationMs: 1,
+          },
+        ],
+        null,
+      );
+      let calls = 0;
+      const loop = makeLoop(state, {
+        generator: async () => {
+          calls += 1;
+          return calls === 1
+            ? {
+                toolCalls: [
+                  {
+                    id: 'persisted-call',
+                    name: 'write_file',
+                    input: { path: 'resume-safe.txt', content: 'overwritten\n' },
+                  },
+                ],
+              }
+            : { text: 'Resume done.' };
+        },
+      });
+      expect((await loop.run({ sessionId: state.session.id, resume: true })).status).toBe(
+        'completed',
+      );
+      expect(await readFile(target, 'utf8')).toBe('already changed\n');
+      expect(calls).toBe(2);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('does not execute a partial streamed tool call after a mid-stream disconnect', async () => {
+    const state = await setup();
+    const target = path.join(state.root, 'partial-call.txt');
+    const chunk = (delta: Record<string, unknown>) => ({
+      id: 'chatcmpl_partial',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model: 'fixture',
+      choices: [{ index: 0, delta, finish_reason: null }],
+    });
+    const fake = await FakeOpenAIServer.scriptedTurns([
+      {
+        chunks: [
+          chunk({ role: 'assistant' }),
+          chunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: 'call_partial',
+                type: 'function',
+                function: {
+                  name: 'write_file',
+                  arguments: '{"path":"partial-call.txt","content":"partial"',
+                },
+              },
+            ],
+          }),
+        ],
+        disconnectAfterChunks: 2,
+      },
+    ]).start();
+    try {
+      const loop = makeLoop(state, {
+        apiKeys: { openai: 'fixture-key' },
+        providerBaseUrls: { openai: `${fake.baseUrl}/v1` },
+        resolveCandidates: () => [state.model],
+      });
+      await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
+        /No network connection/,
+      );
+      await expect(readFile(target, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(fake.requests.filter((request) => request.method === 'POST').length).toBeGreaterThan(
+        0,
+      );
+    } finally {
+      await fake.stop();
+      state.database.close();
+    }
+  }, 30_000);
+});
 
 describe('QA agent: cancellation phases', () => {
   it('cancels while streaming, leaves the session idle, and never runs a queued write', async () => {

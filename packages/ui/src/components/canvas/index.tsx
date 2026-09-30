@@ -194,7 +194,7 @@ export interface ChatCardProps {
   title: string;
   snippet: string;
   date: string;
-  status?: 'running' | 'awaiting_approval' | 'idle' | 'error';
+  status?: 'running' | 'awaiting_approval' | 'interrupted' | 'idle' | 'error';
   repo?: string;
   onClick?: () => void;
 }
@@ -228,7 +228,7 @@ export function ChatCard({ language, title, snippet, date, status, repo, onClick
           {status && status !== 'idle' && (
             <span
               aria-label={status === 'awaiting_approval' ? 'Awaiting approval' : status}
-              className={`size-1.5 shrink-0 rounded-full ${status === 'error' ? 'bg-danger' : status === 'awaiting_approval' ? 'bg-warn' : 'bg-blue-500'}`}
+              className={`size-1.5 shrink-0 rounded-full ${status === 'error' ? 'bg-danger' : status === 'awaiting_approval' || status === 'interrupted' ? 'bg-warn' : 'bg-blue-500'}`}
             />
           )}
           {repo && (

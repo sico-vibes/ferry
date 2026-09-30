@@ -161,8 +161,8 @@ describe('QA settings domain', () => {
     first.close();
     const second = await openDatabase(join(dir, 'db', 'ferry.sqlite'));
     try {
-      expect(Number(version)).toBe(1);
-      expect(Number(second.client.pragma('user_version', { simple: true }))).toBe(1);
+      expect(Number(version)).toBe(2);
+      expect(Number(second.client.pragma('user_version', { simple: true }))).toBe(2);
     } finally {
       second.close();
     }
@@ -599,6 +599,27 @@ describe('QA system domain', () => {
       ).rejects.toThrow(/ferry\/1/);
     } finally {
       await host2.stop();
+    }
+  });
+
+  it('recovers from a truncated SQLite header without a startup crash', async () => {
+    const dir = join(dataDir, 'system-truncated-db');
+    await mkdir(join(dir, 'db'), { recursive: true });
+    await writeFile(join(dir, 'db', 'ferry.sqlite'), Buffer.from('SQLite format 3\0'));
+    const host = await createCoreHost({ dataDir: dir });
+    try {
+      expect(
+        (await readdir(join(dir, 'db'))).some((file) => file.startsWith('ferry.sqlite.corrupt-')),
+      ).toBe(true);
+      const settings = await host.dispatch({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'settings.get',
+        params: [],
+      });
+      expect(settings).toBeTruthy();
+    } finally {
+      await host.stop();
     }
   });
 

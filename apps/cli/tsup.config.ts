@@ -2,6 +2,7 @@ import { defineConfig } from 'tsup';
 import { cp } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { copyStorageMigrations } from '../../packages/storage/scripts/copy-migrations.js';
 
 const cliDirectory = dirname(fileURLToPath(import.meta.url));
 
@@ -34,10 +35,9 @@ export default defineConfig({
       resolve(cliDirectory, 'dist/data'),
       { recursive: true },
     );
-    await cp(
+    await copyStorageMigrations(
       resolve(cliDirectory, '../../packages/storage/src/migrations'),
       resolve(cliDirectory, 'dist/migrations'),
-      { recursive: true },
     );
   },
 });

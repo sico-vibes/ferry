@@ -24,6 +24,7 @@ import {
   SessionRepository,
   WorkspaceRepository,
   openDatabase,
+  salvageReadableTables,
   type DatabaseConnection,
 } from '@ferry/storage';
 
@@ -97,7 +98,11 @@ export async function createServices({
       );
     }
     db = await openDatabase(databasePath);
-    databaseRecoveryMessage = `Ferry found a corrupt database and started a fresh one. The damaged file was moved to ${backupPath}.`;
+    const salvagedTables = await salvageReadableTables(db.client, backupPath);
+    databaseRecoveryMessage = salvagedTables.length
+      ? `Ferry recovered readable database tables (${salvagedTables.join(', ')}). The damaged file was moved to ${backupPath}.`
+      : `Ferry found a corrupt database and started a fresh one. The damaged file was moved to ${backupPath}.`;
+    logger.error({ err: error, backupPath, salvagedTables }, 'Database recovery completed');
   }
   const catalog = await loadCatalog({ now: clock?.now() ?? new Date() });
   const messages = new MessageRepository(db.client);

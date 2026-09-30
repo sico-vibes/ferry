@@ -19,6 +19,10 @@ import './styles.css';
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 20_000, refetchOnWindowFocus: false } },
 });
+const refreshSessionQueries = () => {
+  void queryClient.invalidateQueries({ queryKey: ['sessions'] });
+  void queryClient.invalidateQueries({ queryKey: ['session'] });
+};
 const root = document.getElementById('root');
 if (!root) throw new Error('Renderer root element is missing');
 const appRoot = createRoot(root);
@@ -30,56 +34,87 @@ const mock = createDemoFerryClient({
     ? { speed: configuredSpeed }
     : {}),
 });
+let coreConnectionAttempt = 0;
+let rpcClientSequence = 0;
 const connectCorePort = async (
   host: NonNullable<typeof window.ferryHost>,
-): Promise<MessagePort> => {
+  clientId: string,
+): Promise<import('@ferry/client').MessagePortConnection> => {
+  const attempt = ++coreConnectionAttempt;
   const tokenBytes = crypto.getRandomValues(new Uint8Array(32));
   const token = Array.from(tokenBytes, (value) => value.toString(16).padStart(2, '0')).join('');
-  const portPromise = new Promise<MessagePort>((resolve, reject) => {
-    const timeout = window.setTimeout(() => {
-      window.removeEventListener('message', onMessage);
-      reject(new Error('Core MessagePort transfer timed out'));
-    }, 12_000);
-    const onMessage = (event: MessageEvent<unknown>) => {
-      if (
-        event.source !== window ||
-        !isExpectedCorePortOrigin(location.protocol, event.origin, location.origin) ||
-        typeof event.data !== 'object' ||
-        event.data === null ||
-        !('type' in event.data) ||
-        event.data.type !== 'ferry:core-port' ||
-        !('token' in event.data) ||
-        event.data.token !== token
-      )
-        return;
-      window.clearTimeout(timeout);
-      window.removeEventListener('message', onMessage);
-      const port = event.ports[0];
-      if (!port) {
-        reject(new Error('Core did not transfer a MessagePort'));
-        return;
-      }
-      resolve(port);
-    };
-    window.addEventListener('message', onMessage);
-  });
+  const portPromise = new Promise<import('@ferry/client').MessagePortConnection>(
+    (resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        window.removeEventListener('message', onMessage);
+        reject(new Error('Core MessagePort transfer timed out'));
+      }, 12_000);
+      const onMessage = (event: MessageEvent<unknown>) => {
+        if (
+          event.source !== window ||
+          !isExpectedCorePortOrigin(location.protocol, event.origin, location.origin) ||
+          typeof event.data !== 'object' ||
+          event.data === null ||
+          !('type' in event.data) ||
+          event.data.type !== 'ferry:core-port' ||
+          !('token' in event.data) ||
+          event.data.token !== token
+        )
+          return;
+        window.clearTimeout(timeout);
+        window.removeEventListener('message', onMessage);
+        const port = event.ports[0];
+        if (!port) {
+          reject(new Error('Core did not transfer a MessagePort'));
+          return;
+        }
+        const portId =
+          'portId' in event.data && typeof event.data.portId === 'string'
+            ? event.data.portId
+            : `renderer-${String(attempt)}`;
+        if (host.e2eDiagnosticsEnabled)
+          console.info(
+            `FERRY_RENDERER_PORT_RECEIVED ${JSON.stringify({ clientId, attempt, portId, origin: event.origin })}`,
+          );
+        resolve({ port, portId });
+      };
+      window.addEventListener('message', onMessage);
+    },
+  );
+  if (host.e2eDiagnosticsEnabled)
+    console.info(`FERRY_RENDERER_CONNECT_START ${JSON.stringify({ clientId, attempt })}`);
   await host.connectCore(token);
   return portPromise;
 };
 const bootstrapClient = async () => {
   let rpc: ReturnType<typeof createRpcFerryClient>;
   if (window.ferryHost) {
-    const port = await connectCorePort(window.ferryHost);
+    const host = window.ferryHost;
+    host.onEngineConnected(refreshSessionQueries);
+    const rpcClientId = `desktop-rpc-${String(++rpcClientSequence)}`;
+    const port = await connectCorePort(host, rpcClientId);
     rpc = createRpcFerryClient(
       createMessagePortTransport(port, {
         reconnect: () => {
           const host = window.ferryHost;
-          return host
-            ? connectCorePort(host)
-            : Promise.reject(new Error('Desktop host unavailable'));
+          if (!host) return Promise.reject(new Error('Desktop host unavailable'));
+          // Attaching the port is what starts the replacement utility process.
+          return connectCorePort(host, rpcClientId);
         },
         onRestarting: (handler) =>
           window.ferryHost?.onEngineRestarting(handler) ?? (() => undefined),
+        onReconnected: () => {
+          refreshSessionQueries();
+        },
+        ...(window.ferryHost.e2eDiagnosticsEnabled
+          ? {
+              onDiagnostic: (diagnostic) => {
+                console.info(
+                  `FERRY_RPC ${JSON.stringify({ clientId: rpcClientId, ...diagnostic })}`,
+                );
+              },
+            }
+          : {}),
       }),
     );
   } else {

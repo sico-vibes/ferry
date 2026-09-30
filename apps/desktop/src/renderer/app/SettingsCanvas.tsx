@@ -2074,7 +2074,7 @@ function DeveloperSettings({
   const [simulateOffline, setSimulateOffline] = useState(
     () => localStorage.getItem('ferry.simulateOffline') === 'true',
   );
-  const [engine, setEngine] = useState<{ status: string; pid: number | null } | null>(null);
+  const [engine, setEngine] = useState<{ status: string; pid?: number | null } | null>(null);
   const [nativeModules, setNativeModules] = useState<
     { name: string; ok: boolean; version: string | null; error: string | null }[]
   >([]);

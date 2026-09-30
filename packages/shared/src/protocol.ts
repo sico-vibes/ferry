@@ -21,6 +21,7 @@ export const FERRY_METHODS = [
   'sessions.get',
   'sessions.create',
   'sessions.send',
+  'sessions.resume',
   'sessions.cancel',
   'sessions.rename',
   'sessions.setStarred',

@@ -97,6 +97,7 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
       s.preview = i.text;
       s.updatedAt = clock.now().toISOString();
       s.status = 'running';
+      s.inFlight = true;
       updateSession(s);
       emit('session.message', { sessionId: id, message: m });
       persist();
@@ -116,6 +117,7 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
         .then(() => {
           if (!ctrl.signal.aborted && s.status === 'running') {
             s.status = 'idle';
+            s.inFlight = false;
             s.updatedAt = clock.now().toISOString();
             updateSession(s);
           }
@@ -123,6 +125,7 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
         .catch((err: unknown) => {
           if (!ctrl.signal.aborted) {
             s.status = 'error';
+            s.inFlight = false;
             const em: Message = {
               id: stringId('message'),
               sessionId: id,
@@ -148,12 +151,114 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
           persist();
         });
     },
+    async resume(id, options = {}) {
+      await before();
+      const current = session(id);
+      if (current.status !== 'interrupted')
+        throw new Error('Only an interrupted session can be resumed');
+      const messages = state.messages.get(id) ?? [];
+      const interrupted = messages
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === 'tool_call' && part.status === 'running');
+      if (interrupted.length && !options.retryInterruptedTool) {
+        const names = interrupted
+          .map((part) => (part.type === 'tool_call' ? part.title : ''))
+          .join(', ');
+        throw new Error(
+          'Interrupted while ' + names + ' was running. Confirm before retrying this tool.',
+        );
+      }
+      for (const part of interrupted) {
+        if (part.type !== 'tool_call') continue;
+        const message = messages.find((entry) =>
+          entry.parts.some((candidate) => candidate.id === part.id),
+        );
+        if (message)
+          message.parts = message.parts.map((candidate) =>
+            candidate.id === part.id
+              ? {
+                  ...part,
+                  status: 'failed',
+                  output: {
+                    text: 'Interrupted tool retry confirmed.',
+                    filtered: false,
+                    originalTokens: null,
+                    filteredTokens: null,
+                    recoveryHandle: null,
+                  },
+                }
+              : candidate,
+          );
+      }
+      const prompt = [...messages]
+        .reverse()
+        .find((message) => message.role === 'user')
+        ?.parts.filter((part) => part.type === 'text')
+        .map((part) => part.text)
+        .join(' ')
+        .trim();
+      if (!prompt) throw new Error('This session has no durable user prompt to resume');
+      current.status = 'running';
+      current.inFlight = true;
+      current.updatedAt = clock.now().toISOString();
+      updateSession(current);
+      persist();
+      const controller = new AbortController();
+      controllers.set(id, controller);
+      void scenarioRunner
+        .run({
+          sessionId: id,
+          userText: prompt,
+          emit: (event, payload) => {
+            emitter.emit(event, payload);
+          },
+          store,
+          clock,
+          signal: controller.signal,
+        })
+        .then(() => {
+          if (!controller.signal.aborted && current.status === 'running') {
+            current.status = 'idle';
+            current.inFlight = false;
+            current.updatedAt = clock.now().toISOString();
+            updateSession(current);
+          }
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          current.status = 'error';
+          current.inFlight = false;
+          const failure: Message = {
+            id: stringId('message'),
+            sessionId: id,
+            role: 'assistant',
+            createdAt: clock.now().toISOString(),
+            modelRef: current.modelRef,
+            parts: [
+              {
+                type: 'error',
+                id: stringId('part'),
+                message: error instanceof Error ? error.message : String(error),
+                kind: 'internal',
+              },
+            ],
+          };
+          state.messages.get(id)?.push(failure);
+          emit('session.message', { sessionId: id, message: failure });
+          updateSession(current);
+        })
+        .finally(() => {
+          controllers.delete(id);
+          persist();
+        });
+    },
     async cancel(id) {
       await before();
       controllers.get(id)?.abort();
       controllers.delete(id);
       const s = session(id);
       s.status = 'idle';
+      s.inFlight = false;
       updateSession(s);
     },
     async rename(id, title) {

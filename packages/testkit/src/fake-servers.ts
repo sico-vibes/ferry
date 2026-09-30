@@ -14,6 +14,7 @@ export interface FakeResponse {
   chunks?: unknown[];
   delayMs?: number;
   malformedToolCall?: boolean;
+  disconnectAfterChunks?: number;
 }
 export interface FakeServerOptions {
   responses?: FakeResponse[];
@@ -99,10 +100,21 @@ export class FakeProviderServer {
     const payload = scripted.body ?? this.responseFor(body, scripted.malformedToolCall ?? false);
     if (streaming) {
       const chunks = scripted.chunks ?? [payload];
+      let written = 0;
       for (const chunk of chunks) {
         if (this.options.slowMs || scripted.delayMs)
           await delay(scripted.delayMs ?? this.options.slowMs);
-        if (!res.destroyed) res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        if (!res.destroyed) {
+          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          written += 1;
+          if (
+            scripted.disconnectAfterChunks !== undefined &&
+            written >= scripted.disconnectAfterChunks
+          ) {
+            res.destroy();
+            return;
+          }
+        }
       }
       if (!res.destroyed) res.end('data: [DONE]\n\n');
     } else res.end(JSON.stringify(payload));

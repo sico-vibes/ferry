@@ -223,6 +223,7 @@ interface ModelAttempt {
 export interface RunInput {
   sessionId: string;
   signal?: AbortSignal;
+  resume?: boolean;
 }
 export interface RunResult {
   session: Session;
@@ -263,7 +264,7 @@ export class AgentLoop {
     return this.options.routingNow?.() ?? Date.now();
   }
 
-  async run({ sessionId, signal: outerSignal }: RunInput): Promise<RunResult> {
+  async run({ sessionId, signal: outerSignal, resume = false }: RunInput): Promise<RunResult> {
     if (this.options.routingSettings?.().cooldownReasons)
       await this.options.probeHeuristicCooldowns?.();
     const controller = new AbortController();
@@ -276,6 +277,8 @@ export class AgentLoop {
     if (!loaded) throw new Error(`Unknown session ${sessionId}`);
     this.sessionBadKeys.set(sessionId, new Set());
     let { session, messages, taskRecord } = loaded;
+    let resumedTranscript = false;
+    const resumedToolResults = new Map<string, Extract<MessagePart, { type: 'tool_call' }>>();
     if (this.options.title && messages.filter((message) => message.role === 'user').length === 1) {
       const prompt =
         messages
@@ -390,6 +393,16 @@ export class AgentLoop {
         if (!loaded) throw new Error('Session disappeared during run');
         session = loaded.session;
         messages = loaded.messages.filter((message) => !rejectedPlannerMessageIds.has(message.id));
+        if (resume && !resumedTranscript) {
+          for (const message of loaded.messages) {
+            for (const part of message.parts) {
+              if (part.type === 'tool_call' && part.status === 'succeeded')
+                resumedToolResults.set(part.toolCallId ?? part.id, part);
+            }
+          }
+          messages = prepareResumeTranscript(messages);
+          resumedTranscript = true;
+        }
         taskRecord = loaded.taskRecord;
         const contextWindow =
           this.options.catalog.models.find((candidate) => candidate.ref === session.modelRef)
@@ -842,8 +855,8 @@ export class AgentLoop {
               message: classified.message,
             });
             const transient =
-              classified.status === null ||
-              classified.status >= 500 ||
+              (classified.status === null && classified.family !== 'offline') ||
+              (classified.status !== null && classified.status >= 500) ||
               classified.family === 'timeout' ||
               classified.family === 'stream_failure';
             if (
@@ -1129,6 +1142,18 @@ export class AgentLoop {
             this.noteValidationFailure(selectedRef);
             continue;
           }
+          const persistedToolCallId = call.toolCallId ?? call.id;
+          const persisted = persistedToolCallId
+            ? resumedToolResults.get(persistedToolCallId)
+            : undefined;
+          if (resume && persisted?.tool === call.name) {
+            this.addPart(sessionId, {
+              ...persisted,
+              id: PartIdSchema.parse(newId('part')),
+              ...(persistedToolCallId ? { toolCallId: persistedToolCallId } : {}),
+            });
+            continue;
+          }
           const toolPart: Extract<MessagePart, { type: 'tool_call' }> = {
             type: 'tool_call',
             id: PartIdSchema.parse(newId('part')),
@@ -1286,7 +1311,9 @@ export class AgentLoop {
           })),
         });
       this.options.emit({ type: 'toast', tone: 'error', message });
-      const failedSession = this.options.store.updateSession(sessionId, { status: 'error' });
+      const failedSession = this.options.store.updateSession(sessionId, {
+        status: 'error',
+      });
       this.options.emit({ type: 'session.updated', session: failedSession });
       throw error;
     } finally {
@@ -1568,6 +1595,7 @@ export class AgentLoop {
       });
     const session = this.options.store.updateSession(sessionId, {
       status: 'idle',
+      inFlight: false,
     });
     this.options.emit({ type: 'session.updated', session });
     return { session, taskRecord, steps, tokens, status };
@@ -1772,6 +1800,26 @@ function toolSchemaForEstimate(schema: z.ZodType): unknown {
   }
 }
 
+function prepareResumeTranscript(messages: readonly Message[]): Message[] {
+  let lastUserIndex = -1;
+  let lastAssistantIndex = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index]?.role === 'user') lastUserIndex = index;
+    if (messages[index]?.role === 'assistant') lastAssistantIndex = index;
+  }
+  if (lastAssistantIndex <= lastUserIndex) return [...messages];
+  const lastAssistant = messages[lastAssistantIndex];
+  if (!lastAssistant) return [...messages];
+  const tools = lastAssistant.parts.filter((part) => part.type === 'tool_call');
+  if (!tools.length) return messages.filter((_message, index) => index !== lastAssistantIndex);
+  if (tools.every((part) => !['pending', 'running'].includes(part.status))) return [...messages];
+  const durableTools = tools.filter((part) => !['pending', 'running'].includes(part.status));
+  if (!durableTools.length)
+    return messages.filter((_message, index) => index !== lastAssistantIndex);
+  return messages.map((message, index) =>
+    index === lastAssistantIndex ? { ...message, parts: durableTools } : message,
+  );
+}
 function toModelMessages(
   messages: readonly Message[],
   targetModel: ModelInfo | undefined,

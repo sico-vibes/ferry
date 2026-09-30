@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
@@ -23,6 +23,11 @@ const migrationPath = join(
   'migrations',
   '0001_initial.sql',
 );
+const recoveryMigrationPath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  'migrations',
+  '0002_interrupted_sessions.sql',
+);
 export interface DatabaseConnection {
   client: Database.Database;
   orm: BetterSQLite3Database<typeof schema>;
@@ -45,11 +50,88 @@ export async function openDatabase(path: string): Promise<DatabaseConnection> {
       });
       migrate();
     }
+    const migrated = Number(client.pragma('user_version', { simple: true }));
+    if (migrated < 2) {
+      const sql = await readFile(recoveryMigrationPath, 'utf8');
+      const migrate = client.transaction(() => {
+        client.exec(sql);
+        client.pragma('user_version = 2');
+      });
+      migrate();
+    }
   } catch (error) {
     client.close();
     throw error;
   }
   return { client, orm: drizzle(client, { schema }), close: () => client.close() };
+}
+
+const salvageTables = [
+  'providers',
+  'workspaces',
+  'sessions',
+  'messages',
+  'tasks',
+  'checkpoints',
+  'delegations',
+  'quota_windows',
+  'quota_observations',
+  'cooldowns',
+  'task_steps',
+  'decisions',
+  'touched_files',
+  'handoffs',
+  'optimizer_events',
+  'optimizer_blobs',
+  'provider_keys',
+  'models_cache',
+  'settings_kv',
+  'requests',
+  'usage_daily',
+] as const;
+/** Makes a WAL-aware SQLite backup, then copies each readable table independently. */
+export async function salvageReadableTables(
+  target: Database.Database,
+  damagedPath: string,
+): Promise<string[]> {
+  const recovered: string[] = [];
+  const backupPath = `${damagedPath}.salvage-${String(process.pid)}-${String(Date.now())}`;
+  let sourcePath = damagedPath;
+  let source: Database.Database | undefined;
+  try {
+    try {
+      source = new Database(damagedPath, { readonly: true, fileMustExist: true });
+      await source.backup(backupPath);
+      sourcePath = backupPath;
+    } catch {
+      // A damaged page can make backup fail; ATTACH can still read other tables.
+    } finally {
+      source?.close();
+    }
+    target.prepare('ATTACH DATABASE ? AS damaged').run(sourcePath);
+    for (const table of salvageTables) {
+      try {
+        const result = target
+          .prepare(
+            'INSERT OR IGNORE INTO main."' + table + '" SELECT * FROM damaged."' + table + '"',
+          )
+          .run();
+        if (result.changes > 0) recovered.push(table);
+      } catch {
+        // A malformed or older table does not prevent copying readable tables.
+      }
+    }
+  } catch {
+    return recovered;
+  } finally {
+    try {
+      target.exec('DETACH DATABASE damaged');
+    } catch {
+      /* attach may have failed */
+    }
+    if (sourcePath === backupPath) await unlink(backupPath).catch(() => undefined);
+  }
+  return recovered;
 }
 
 interface AggregateRow {

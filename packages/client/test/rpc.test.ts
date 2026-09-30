@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { MessageChannel } from 'node:worker_threads';
 import { createMockFerryClient } from '../src/index.js';
-import { createHybridClient, createRpcFerryClient, type RpcTransport } from '../src/rpc.js';
+import {
+  createHybridClient,
+  createMessagePortTransport,
+  createRpcFerryClient,
+  RpcError,
+  type RpcTransport,
+} from '../src/rpc.js';
 import { runFerryClientContract } from '../src/testing/contract.js';
 import { createFakeClock } from '../src/mock/clock.js';
 
@@ -79,10 +86,10 @@ describe('RPC client', () => {
     client.close();
   });
 
-  it('times out stalled requests and reconnects when supported', async () => {
+  it('rejects in-flight requests with core_restarted and reconnects when supported', async () => {
     const fake = fakeTransport();
     let reconnects = 0;
-    let closeHandler: (() => void) | undefined;
+    let closeHandler: ((reason?: RpcError) => void) | undefined;
     const transport: RpcTransport = {
       ...fake.transport,
       onClose: (handler) => {
@@ -96,7 +103,7 @@ describe('RPC client', () => {
         return Promise.resolve();
       },
     };
-    const client = createRpcFerryClient(transport, { timeoutMs: 15, reconnectAttempts: 1 });
+    const client = createRpcFerryClient(transport, { timeoutMs: 1_000, reconnectAttempts: 1 });
     const hello = fake.requests[0] as { id: number };
     fake.receive({
       jsonrpc: '2.0',
@@ -104,11 +111,96 @@ describe('RPC client', () => {
       result: { protocol: 'ferry/1', capabilities: [], realDomains: [], implementedMethods: [] },
     });
     await client.hello;
-    await expect(client.system.info()).rejects.toMatchObject({ kind: 'timeout' });
-    closeHandler?.();
+    const pending = client.system.info();
+    closeHandler?.(
+      new RpcError('Core restarted while the request was pending', -32002, 'core_restarted'),
+    );
+    await expect(pending).rejects.toMatchObject({ kind: 'core_restarted' });
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect(reconnects).toBe(1);
     client.close();
+  });
+
+  it('attaches the replacement port before notifying consumers that reconnect completed', async () => {
+    const initial = new MessageChannel();
+    const replacement = new MessageChannel();
+    const order: string[] = [];
+    const received: unknown[] = [];
+    const sent: unknown[] = [];
+    const diagnostics: import('../src/rpc.js').MessagePortTransportDiagnostic[] = [];
+    let restart: (() => void) | undefined;
+    let restartReason: RpcError | undefined;
+    const deferred: { attached?: () => void; reply?: (message: unknown) => void } = {};
+    const attached = new Promise<void>((resolve) => {
+      deferred.attached = resolve;
+    });
+    const reply = new Promise<unknown>((resolve) => {
+      deferred.reply = resolve;
+    });
+    const transport = createMessagePortTransport(
+      { port: initial.port1, portId: 'port-old' },
+      {
+        reconnect: () => Promise.resolve({ port: replacement.port1, portId: 'port-new' }),
+        onRestarting: (handler) => {
+          restart = handler;
+          return () => {
+            restart = undefined;
+          };
+        },
+        onReconnected: () => {
+          order.push('reconnected');
+          deferred.attached?.();
+        },
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      },
+    );
+    transport.subscribe((message) => {
+      received.push(message);
+      deferred.reply?.(message);
+    });
+    transport.onClose?.((reason) => {
+      restartReason = reason;
+    });
+    replacement.port2.addEventListener('message', (event) => {
+      sent.push(event.data);
+      replacement.port2.postMessage({ jsonrpc: '2.0', id: 17, result: { core: 'new' } });
+    });
+    replacement.port2.start();
+    transport.onClose?.(() => {
+      void transport.reconnect?.();
+    });
+
+    restart?.();
+    expect(restartReason).toMatchObject({ kind: 'core_restarted' });
+    transport.send({ jsonrpc: '2.0', id: 17, method: 'sessions.get', params: ['session-1'] });
+    await attached;
+    order.push('returned');
+    await expect(reply).resolves.toEqual({ jsonrpc: '2.0', id: 17, result: { core: 'new' } });
+
+    expect(order).toEqual(['reconnected', 'returned']);
+    expect(sent).toEqual([
+      { jsonrpc: '2.0', id: 17, method: 'sessions.get', params: ['session-1'] },
+    ]);
+    expect(received).toEqual([{ jsonrpc: '2.0', id: 17, result: { core: 'new' } }]);
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: 'attached', generation: 1, portId: 'port-old' }),
+        expect.objectContaining({ event: 'restarting', generation: 1, portId: 'port-old' }),
+        expect.objectContaining({
+          event: 'queued',
+          generation: 1,
+          portId: 'port-old',
+          requestId: 17,
+          method: 'sessions.get',
+        }),
+        expect.objectContaining({ event: 'attached', generation: 2, portId: 'port-new' }),
+        expect.objectContaining({ event: 'sent', generation: 2, portId: 'port-new' }),
+        expect.objectContaining({ event: 'received', generation: 2, portId: 'port-new' }),
+      ]),
+    );
+    transport.close?.();
+    initial.port2.close();
+    replacement.port2.close();
   });
 
   it('routes requested domains to RPC and leaves the rest mocked', async () => {

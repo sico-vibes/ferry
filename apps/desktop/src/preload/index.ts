@@ -4,6 +4,8 @@ import { releaseChannelForVersion } from '../../scripts/release-config.mjs';
 
 const releaseVersion =
   process.env.FERRY_RELEASE_VERSION ?? process.env.npm_package_version ?? '0.9.0';
+const e2eDiagnosticsEnabled = Boolean(process.env.FERRY_E2E_USER_DATA_DIR);
+let corePortAttempt = 0;
 
 const rendererWindow = globalThis as unknown as {
   location: { origin: string; protocol: string };
@@ -24,6 +26,7 @@ contextBridge.exposeInMainWorld('ferryHost', {
   },
   channel: releaseChannelForVersion(releaseVersion).displayChannel,
   commit: process.env.FERRY_COMMIT ?? 'unknown',
+  e2eDiagnosticsEnabled,
   realDomainsFromEnvironment: (): string[] =>
     process.env.FERRY_REAL_DOMAINS?.split(',')
       .map((domain) => domain.trim())
@@ -75,29 +78,54 @@ contextBridge.exposeInMainWorld('ferryHost', {
   },
   connectCore: (rawToken: string): Promise<void> =>
     new Promise((resolve, reject) => {
+      const attempt = ++corePortAttempt;
       const token = CoreHandoffTokenSchema.parse(rawToken);
       const timeout = setTimeout(() => {
         ipcRenderer.removeListener('ferry:core-port', listener);
         reject(new Error('Core connection timed out'));
       }, 12_000);
-      const listener = (event: Electron.IpcRendererEvent) => {
+      const listener = (
+        event: Electron.IpcRendererEvent,
+        metadata?: { type?: string; portId?: string },
+      ) => {
         const port = event.ports[0];
         if (!port) return;
         clearTimeout(timeout);
         ipcRenderer.removeListener('ferry:core-port', listener);
+        if (e2eDiagnosticsEnabled)
+          console.info(
+            `FERRY_PRELOAD_PORT_RECEIVED ${JSON.stringify({ attempt, portId: metadata?.portId ?? 'missing', portCount: event.ports.length })}`,
+          );
         const origin = rendererWindow.location.origin;
         const targetOrigin =
           origin === 'null' || rendererWindow.location.protocol === 'file:' ? '*' : origin;
-        rendererWindow.postMessage({ type: 'ferry:core-port', token }, targetOrigin, [port]);
+        rendererWindow.postMessage(
+          {
+            type: 'ferry:core-port',
+            token,
+            ...(metadata?.portId ? { portId: metadata.portId } : {}),
+          },
+          targetOrigin,
+          [port],
+        );
+        if (e2eDiagnosticsEnabled)
+          console.info(
+            `FERRY_PRELOAD_PORT_FORWARDED ${JSON.stringify({ attempt, portId: metadata?.portId ?? 'missing', targetOrigin })}`,
+          );
         resolve();
       };
       ipcRenderer.on('ferry:core-port', listener);
+      if (e2eDiagnosticsEnabled)
+        console.info(`FERRY_PRELOAD_CONNECT_LISTENER ${JSON.stringify({ attempt })}`);
       ipcRenderer.send('ferry:connect-core', token);
     }),
-  getEngineStatus: (): Promise<{ status: 'connected' | 'restarting'; pid: number | null }> =>
+  getEngineStatus: (): Promise<{
+    status: 'connected' | 'restarting';
+    pid?: number | null;
+  }> =>
     ipcRenderer.invoke('ferry:engine-status') as Promise<{
       status: 'connected' | 'restarting';
-      pid: number | null;
+      pid?: number | null;
     }>,
   onEngineRestarting: (handler: () => void): (() => void) => {
     const listener = () => {

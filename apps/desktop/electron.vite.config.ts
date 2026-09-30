@@ -1,9 +1,10 @@
 import { resolve } from 'node:path';
-import { copyFile, cp, mkdir } from 'node:fs/promises';
+import { cp } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'electron-vite';
+import { copyStorageMigrations } from '../../packages/storage/scripts/copy-migrations.js';
 
 const releaseVersion = process.env.FERRY_RELEASE_VERSION ?? '0.9.0';
 
@@ -25,15 +26,11 @@ const bundledWorkspacePackages = [
   '@ferry/router',
 ];
 
-const copyStorageMigrations = {
+const copyMigrationsPlugin = {
   name: 'ferry-copy-storage-migrations',
   async closeBundle() {
     const output = resolve('out/main/migrations');
-    await mkdir(output, { recursive: true });
-    await copyFile(
-      resolve('../../packages/storage/src/migrations/0001_initial.sql'),
-      resolve(output, '0001_initial.sql'),
-    );
+    await copyStorageMigrations(resolve('../../packages/storage/src/migrations'), output);
     await cp(resolve('../../packages/catalog/data'), resolve('out/data'), { recursive: true });
   },
 };
@@ -44,7 +41,7 @@ export default defineConfig({
       'process.env.FERRY_COMMIT': JSON.stringify(process.env.FERRY_COMMIT ?? 'unknown'),
       'process.env.FERRY_RELEASE_VERSION': JSON.stringify(releaseVersion),
     },
-    plugins: [copyStorageMigrations],
+    plugins: [copyMigrationsPlugin],
     resolve: { alias: { '@ferry/core': resolve('../../packages/core/src/index.ts') } },
     build: {
       externalizeDeps: {

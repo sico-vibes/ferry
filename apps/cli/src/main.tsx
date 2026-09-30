@@ -289,7 +289,8 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       );
       return code;
     }
-    if (command === 'resume') return await resume(client, flags.positionals[1], json);
+    if (command === 'resume')
+      return await resume(client, flags.positionals[1], json, flags.values['retry-tool'] === true);
     if (command === 'serve') {
       if (flags.values.gateway === true) {
         const status = await client.gateway.start();
@@ -944,18 +945,86 @@ async function listDomain(client: FerryClient, domain: 'mcp', json = false) {
   writeResult(json, rows, rows.map((item) => `${item.name} · ${item.status}`).join('\n') + '\n');
   return 0;
 }
-async function resume(client: FerryClient, id: string | undefined, json: boolean) {
-  if (!id) throw new CliError(2, 'Usage: ferry resume <sessionId>');
-  const session = await client.sessions.get(id as import('@ferry/shared').SessionId);
-  if (json)
-    process.stdout.write(
-      JSON.stringify({ type: 'session.message', sessionId: id, messages: session.messages }) + '\n',
-    );
-  else
-    for (const message of session.messages)
-      for (const part of message.parts)
-        if (part.type === 'text') process.stdout.write(`${message.role}: ${part.text}\n`);
-  return 0;
+async function resume(
+  client: FerryClient,
+  id: string | undefined,
+  json: boolean,
+  retryTool = false,
+) {
+  if (!id) throw new CliError(2, 'Usage: ferry resume <sessionId> [--retry-tool]');
+  const sessionId = id as import('@ferry/shared').SessionId;
+  const detail = await client.sessions.get(sessionId);
+  const pendingTools = detail.messages
+    .flatMap((message) => message.parts)
+    .filter((part) => part.type === 'tool_call' && part.status === 'running');
+  if (pendingTools.length && !retryTool) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY)
+      throw new CliError(
+        2,
+        'A tool was interrupted. Resume with --retry-tool only if you approve running it again.',
+      );
+    const terminal = createInterface({ input: process.stdin, output: process.stderr });
+    try {
+      const names = pendingTools
+        .map((part) => (part.type === 'tool_call' ? part.title : ''))
+        .join(', ');
+      const answer = (
+        await terminal.question('Ferry stopped while ' + names + ' was running. Retry it? [y/N] ')
+      )
+        .trim()
+        .toLowerCase();
+      if (answer !== 'y' && answer !== 'yes') return 2;
+      retryTool = true;
+    } finally {
+      terminal.close();
+    }
+  }
+  let running = false;
+  let settle!: () => void;
+  const completed = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  const observeStatus = (value: Session) => {
+    if (value.id !== sessionId) return;
+    if (value.status === 'running') running = true;
+    else if (running && (value.status === 'idle' || value.status === 'error')) settle();
+  };
+  const stopStatus = client.on('session.status', observeStatus);
+  const stopUpdated = client.on('session.updated', observeStatus);
+  try {
+    await client.sessions.resume(sessionId, { retryInterruptedTool: retryTool });
+    if (json)
+      process.stdout.write(
+        JSON.stringify({ type: 'session.message', sessionId, messages: detail.messages }) + '\n',
+      );
+    else {
+      process.stdout.write('Resuming ' + detail.session.title + '\n');
+      for (const message of detail.messages)
+        for (const part of message.parts)
+          if (part.type === 'text') process.stdout.write(message.role + ': ' + part.text + '\n');
+    }
+    const after = await client.sessions.get(sessionId);
+    if (after.session.status === 'idle' || after.session.status === 'error')
+      return after.session.status === 'error' ? 1 : 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        completed,
+        new Promise<void>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new CliError(1, 'Resume timed out while waiting for the core.')),
+            300_000,
+          );
+        }),
+      ]);
+      return 0;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  } finally {
+    stopStatus();
+    stopUpdated();
+  }
 }
 async function keys(client: FerryClient, args: string[], json = false) {
   const [action, id] = args;
