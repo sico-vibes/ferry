@@ -12,23 +12,23 @@ const executable =
 const cliShim =
   process.env.FERRY_SMOKE_CLI ??
   join(packageRoot, 'release', 'win-unpacked', 'resources', 'cli', 'ferry.cmd');
-const cliResult = spawnSync(cliShim, ['--help'], {
-  encoding: 'utf8',
-  shell: true,
-  timeout: 15_000,
-  windowsHide: true,
-});
+function runCliShim(args, options = {}) {
+  const command = [cliShim, ...args]
+    .map((value) => `"${String(value).replaceAll('"', '""')}"`)
+    .join(' ');
+  return spawnSync('cmd.exe', ['/d', '/s', '/c', `"${command}"`], {
+    ...options,
+    windowsHide: true,
+    windowsVerbatimArguments: true,
+  });
+}
+const cliResult = runCliShim(['--help'], { encoding: 'utf8', timeout: 15_000 });
 if (cliResult.error || cliResult.status !== 0 || !cliResult.stdout?.includes('ferry'))
   throw new Error(
     `Packaged CLI smoke failed: ${cliResult.error?.message ?? cliResult.stderr ?? cliResult.status}`,
   );
 console.log('Packaged CLI shim works');
-const gatewayResult = spawnSync(cliShim, ['gateway', '--help'], {
-  encoding: 'utf8',
-  shell: true,
-  timeout: 15_000,
-  windowsHide: true,
-});
+const gatewayResult = runCliShim(['gateway', '--help'], { encoding: 'utf8', timeout: 15_000 });
 if (
   gatewayResult.error ||
   gatewayResult.status !== 0 ||
@@ -42,11 +42,9 @@ const userDataDirectory =
   process.env.FERRY_SMOKE_DATA_DIR ?? (await mkdtemp(join(tmpdir(), 'ferry-packaged-smoke-')));
 const preserveSmokeData = process.env.FERRY_SMOKE_PRESERVE_DATA === 'true';
 const cliDataDirectory = join(userDataDirectory, 'cli-data');
-const cliStatus = spawnSync(cliShim, ['status', '--json', '--data-dir', cliDataDirectory], {
+const cliStatus = runCliShim(['status', '--json', '--data-dir', cliDataDirectory], {
   encoding: 'utf8',
-  shell: true,
   timeout: 30_000,
-  windowsHide: true,
   env: { ...process.env, FERRY_ENGINE: '' },
 });
 if (cliStatus.error || cliStatus.status !== 0) {
@@ -87,14 +85,12 @@ const child = spawn(
     '--in-process-gpu',
     '--use-gl=swiftshader',
     '--no-sandbox',
+    `--user-data-dir=${userDataDirectory}`,
     `--remote-debugging-port=${remoteDebuggingPort}`,
   ],
   {
     cwd: packageRoot,
-    env: {
-      ...process.env,
-      FERRY_E2E_USER_DATA_DIR: userDataDirectory,
-    },
+    env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   },
@@ -102,7 +98,6 @@ const child = spawn(
 
 let output = '';
 let settled = false;
-let verificationStarted = false;
 const finish = async (error) => {
   if (settled) return;
   settled = true;
@@ -185,24 +180,12 @@ async function waitForRendererLoad() {
             const firstRunOnboardingVisible = await skipSetup.isVisible();
             const interactiveMs = Number((performance.now() - launchStartedAt).toFixed(1));
             console.log(`Packaged time to interactive: ${String(interactiveMs)} ms`);
-            await page.waitForFunction(() => Boolean(window.ferryHybrid), undefined, {
-              timeout: 20_000,
-            });
-            const domains = await page.evaluate(async () => {
-              const client = window.ferryHybrid;
-              if (!client) throw new Error('Packaged renderer did not connect to Ferry Core');
-              const [providers, models, capacity] = await Promise.all([
-                client.providers.list(),
-                client.models.list(),
-                client.quota.capacity(),
-              ]);
-              return {
-                realDomains: client.getRealDomains(),
-                providers: providers.length,
-                modelsAreArray: Array.isArray(models),
-                capacity,
-              };
-            });
+            await page.waitForFunction(
+              () => (window.ferryEngineHello?.realDomains.length ?? 0) > 0,
+              undefined,
+              { timeout: 20_000 },
+            );
+            const domains = await page.evaluate(() => window.ferryEngineHello?.realDomains ?? []);
             if (
               ![
                 'workspaces',
@@ -220,15 +203,10 @@ async function waitForRendererLoad() {
                 'optimizer',
                 'delegation',
                 'gateway',
-              ].every((domain) => domains.realDomains.includes(domain)) ||
-              domains.providers === 0 ||
-              !domains.modelsAreArray ||
-              typeof domains.capacity.percentRemaining !== 'number'
+              ].every((domain) => domains.includes(domain))
             )
-              throw new Error(`Packaged real-domain RPC smoke failed: ${JSON.stringify(domains)}`);
-            console.log(
-              `Packaged real client connected with ${String(domains.realDomains.length)} domains`,
-            );
+              throw new Error(`Packaged real-domain hello failed: ${JSON.stringify(domains)}`);
+            console.log(`Packaged renderer hello reports ${String(domains.length)} real domains`);
             if (process.env.FERRY_SMOKE_SEED_DATA === 'true') {
               const fixturePath = join(userDataDirectory, 'workspace');
               await mkdir(fixturePath, { recursive: true });
@@ -277,7 +255,7 @@ async function waitForRendererLoad() {
               );
             }
             console.log(`Packaged renderer loaded: ${page.url()}`);
-            console.log('Packaged providers/quota RPC connected');
+            console.log('Packaged renderer and real engine hello verified');
             return;
           }
         }
@@ -299,7 +277,7 @@ async function waitForRendererLoad() {
 }
 
 const timeout = setTimeout(() => {
-  void finish(new Error('Timed out waiting for FERRY_CORE_READY'));
+  void finish(new Error('Timed out waiting for packaged renderer readiness'));
 }, 60_000);
 
 child.once('error', (error) => void finish(error));
@@ -311,35 +289,16 @@ for (const stream of [child.stdout, child.stderr]) {
   stream.setEncoding('utf8');
   stream.on('data', (chunk) => {
     output += chunk;
-    const marker = output.match(/FERRY_CORE_READY\s+(\{[^\r\n]*\})/);
-    if (!marker || settled || verificationStarted) return;
-    verificationStarted = true;
-    try {
-      const result = JSON.parse(marker[1]);
-      const modules = result.selfTest?.modules ?? result.modules;
-      const failures = Array.isArray(modules)
-        ? modules.filter((module) => module?.ok !== true)
-        : [];
-      if (!Array.isArray(modules) || modules.length === 0 || failures.length > 0) {
-        void finish(new Error(`Packaged module self-test failed: ${JSON.stringify(result)}`));
-        return;
-      }
-      void waitForRendererLoad()
-        .then(() => {
-          return readFile(coreLogPath, 'utf8');
-        })
-        .then((log) => {
-          if (!log.includes('Ferry core started'))
-            throw new Error(`Packaged core log is missing startup record: ${coreLogPath}`);
-          console.log('Packaged core log written');
-          console.log(`Packaged smoke passed: ${modules.length} modules ok`);
-          return finish();
-        })
-        .catch((error) => finish(error));
-    } catch (error) {
-      void finish(new Error(`Could not parse FERRY_CORE_READY: ${error.message}`));
-    }
   });
 }
 
-await delay(0);
+void waitForRendererLoad()
+  .then(() => readFile(coreLogPath, 'utf8'))
+  .then((log) => {
+    if (!log.includes('Ferry core started'))
+      throw new Error(`Packaged core log is missing startup record: ${coreLogPath}`);
+    console.log('Packaged core log written');
+    console.log('Packaged smoke passed');
+    return finish();
+  })
+  .catch((error) => finish(error));

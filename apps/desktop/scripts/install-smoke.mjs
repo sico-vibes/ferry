@@ -27,16 +27,25 @@ function record(label, status, detail = '') {
   rows.push({ label, status, detail });
   console.log(`${status.padEnd(4)} ${label}${detail ? ` — ${detail}` : ''}`);
 }
+function quoteCommandArgument(value) {
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
 function run(command, commandArgs, options = {}) {
-  const result = spawnSync(command, commandArgs, {
-    cwd: options.cwd ?? root,
-    env: options.env ?? process.env,
-    encoding: 'utf8',
-    timeout: options.timeout ?? 180_000,
-    windowsHide: true,
-    shell: options.shell ?? false,
-    maxBuffer: 8 * 1024 * 1024,
-  });
+  const isCmdShim = command.toLowerCase().endsWith('.cmd');
+  const commandLine = [command, ...commandArgs].map(quoteCommandArgument).join(' ');
+  const result = spawnSync(
+    isCmdShim ? 'cmd.exe' : command,
+    isCmdShim ? ['/d', '/s', '/c', `"${commandLine}"`] : commandArgs,
+    {
+      cwd: options.cwd ?? root,
+      env: options.env ?? process.env,
+      encoding: 'utf8',
+      timeout: options.timeout ?? 180_000,
+      windowsHide: true,
+      windowsVerbatimArguments: isCmdShim,
+      maxBuffer: 8 * 1024 * 1024,
+    },
+  );
   if (result.error || result.status !== 0)
     throw new Error(
       `${command} ${commandArgs.join(' ')} failed: ${result.error?.message ?? result.stderr ?? result.status}`,
@@ -101,7 +110,7 @@ async function install(installer, directory, profile, addToPath = false) {
   await access(join(directory, 'Uninstall Ferry.exe'));
 }
 async function runInstalledSmoke(directory, profile, stateFile, seed) {
-  const dataDirectory = join(profile, 'Roaming', '@ferry', 'desktop');
+  const dataDirectory = join(profile, 'Roaming', 'Ferry');
   const cli = join(directory, 'resources', 'cli', 'ferry.cmd');
   const env = {
     ...process.env,
@@ -113,7 +122,6 @@ async function runInstalledSmoke(directory, profile, stateFile, seed) {
     FERRY_SMOKE_PRESERVE_DATA: 'true',
     FERRY_SMOKE_SEED_DATA: seed ? 'true' : 'false',
     FERRY_SMOKE_STATE_FILE: stateFile,
-    FERRY_E2E_USER_DATA_DIR: dataDirectory,
   };
   run(process.execPath, [join(desktopRoot, 'scripts', 'smoke-packaged.mjs')], {
     env,
@@ -121,7 +129,6 @@ async function runInstalledSmoke(directory, profile, stateFile, seed) {
   });
   const status = run(cli, ['status', '--json', '--data-dir', join(dataDirectory, 'engine')], {
     env,
-    shell: true,
     timeout: 30_000,
   });
   const parsed = JSON.parse(status);
@@ -200,7 +207,6 @@ try {
   const pnpm = join(root, 'tools', 'pnpm.cmd');
   run(pnpm, ['--filter', '@ferry/desktop', 'dist'], {
     env: { ...process.env, FERRY_RELEASE_VERSION: upgrade },
-    shell: true,
     timeout: 900_000,
   });
   await access(generatedUpgradeInstaller);
@@ -214,11 +220,11 @@ try {
   await runInstalledSmoke(installDirectory, profile, stateFile, true);
   const state = JSON.parse(await readFile(stateFile, 'utf8'));
   assert.equal(state.theme, 'light');
-  const dataDirectory = join(profile, 'Roaming', '@ferry', 'desktop');
+  const dataDirectory = join(profile, 'Roaming', 'Ferry');
   const databasePath = join(dataDirectory, 'engine', 'db', 'ferry.sqlite');
   insertKeyReference(databasePath);
   verifyPersistedRecords(databasePath, state);
-  record('Headless packaged app connects all real domains', 'PASS');
+  record('Installed app hello reports all real domains', 'PASS');
   record('Installed ferry.cmd status reports local engine', 'PASS');
 
   const beforePath = userPath();
@@ -250,8 +256,8 @@ try {
     addedPath.toLowerCase().includes(cliPath.toLowerCase()),
     'Installer did not add its CLI directory to user PATH',
   );
-  const pathData = join(pathProfile, 'Roaming', '@ferry', 'desktop');
-  const legacyData = join(pathProfile, 'Roaming', 'Ferry');
+  const pathData = join(pathProfile, 'Roaming', 'Ferry');
+  const legacyData = join(pathProfile, 'Roaming', '@ferry', 'desktop');
   await mkdir(pathData, { recursive: true });
   await mkdir(legacyData, { recursive: true });
   const sentinel = join(pathData, 'remove-data-smoke.txt');
