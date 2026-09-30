@@ -320,11 +320,79 @@ async function openRenderer(page) {
   );
 }
 
+async function callRendererRpc(page, method, params) {
+  return await page.evaluate(
+    async ({ method: rpcMethod, params: rpcParams }) => {
+      const [domain, action] = rpcMethod.split('.');
+      if (!domain || !action) throw new Error(`Invalid RPC method name: ${rpcMethod}`);
+      try {
+        return await window.ferryRpcClient[domain][action](...rpcParams);
+      } catch (error) {
+        const rpcError = error && typeof error === 'object' ? error : {};
+        const details = 'details' in rpcError ? rpcError.details : undefined;
+        const diagnostics = {
+          method: rpcMethod,
+          name: 'name' in rpcError ? rpcError.name : undefined,
+          code: 'code' in rpcError ? rpcError.code : undefined,
+          kind: 'kind' in rpcError ? rpcError.kind : undefined,
+          message: 'message' in rpcError ? rpcError.message : String(error),
+          zodIssues:
+            details && typeof details === 'object' && 'issues' in details
+              ? details.issues
+              : undefined,
+        };
+        throw new Error(`E2E RPC failed: ${JSON.stringify(diagnostics)}`);
+      }
+    },
+    { method, params },
+  );
+}
+
+async function paidSessionApprovalState(page, sessionId) {
+  return await page.evaluate(async (id) => {
+    const detail = await window.ferryRpcClient.sessions.get(id);
+    const approvals = detail.messages.flatMap((message) =>
+      message.parts
+        .filter((part) => part.type === 'approval_request')
+        .map((part) => ({
+          id: part.id,
+          kind: part.kind,
+          state: part.state,
+          summary: part.summary,
+        })),
+    );
+    return {
+      status: detail.session.status,
+      approvals,
+      pending: approvals.filter((part) => part.state === 'pending'),
+    };
+  }, sessionId);
+}
+
+async function createChatTab(page, title, profileName, modelRef) {
+  const previousRoute = new URL(page.url()).hash;
+  await page.getByRole('button', { name: 'Add tab' }).click();
+  await page.waitForURL((url) => url.hash.startsWith('#/s/') && url.hash !== previousRoute, {
+    timeout: 15_000,
+  });
+  const sessionId = new URL(page.url()).hash.split('/').filter(Boolean).at(-1);
+  if (!sessionId) throw new Error(`Add tab did not create a session for ${title}`);
+  const detail = await callRendererRpc(page, 'sessions.get', [sessionId]);
+  const session = detail.session;
+  const profiles = await callRendererRpc(page, 'profiles.list', []);
+  const profile = profiles.find((item) => item.name === profileName);
+  if (!profile) throw new Error(`Profile not found: ${profileName}`);
+  await callRendererRpc(page, 'profiles.activate', [profile.id, session.id]);
+  await callRendererRpc(page, 'sessions.rename', [session.id, title]);
+  await callRendererRpc(page, 'models.select', [session.id, modelRef]);
+  return session;
+}
+
 try {
   fakeProvider = new FakeOpenAIServer({
     models: [
       { id: 'cohere/north-mini-code:free', supported_parameters: ['tools'] },
-      { id: 'allam-2-7b', supported_parameters: ['tools'] },
+      { id: 'bytedance-seed/seed-2.0-mini', supported_parameters: ['tools'] },
     ],
     responses: [
       toolTurn(
@@ -356,6 +424,7 @@ try {
         body: { error: { message: 'scripted rate limit', type: 'rate_limit_error' } },
       },
       textTurn('Continued successfully after a provider handoff.'),
+      textTurn('Paid approval completed.'),
     ],
   });
   await fakeProvider.start();
@@ -459,10 +528,21 @@ try {
     const agentSession = await page.evaluate(async () => {
       const workspace = (await window.ferryRpcClient.workspaces.list())[0];
       if (!workspace) throw new Error('Real FixtureRepo workspace is unavailable');
-      return await window.ferryRpcClient.sessions.create({
+      const profile = (await window.ferryRpcClient.profiles.list()).find(
+        (item) => item.name === 'Auto-Free',
+      );
+      if (!profile) throw new Error('Auto-Free profile is unavailable');
+      const freeModel = (await window.ferryRpcClient.models.list('openrouter')).find(
+        (item) => item.ref.endsWith(':free') && item.toolCalling,
+      );
+      if (!freeModel) throw new Error('OpenRouter free tool model is unavailable');
+      const session = await window.ferryRpcClient.sessions.create({
         workspaceId: workspace.id,
+        profileId: profile.id,
         title: 'Agent walking skeleton',
       });
+      await window.ferryRpcClient.models.select(session.id, freeModel.ref);
+      return session;
     });
     const sessionRow = page.getByRole('button', { name: /Agent walking skeleton/ });
     await expect(sessionRow.first()).toBeVisible();
@@ -514,6 +594,7 @@ try {
             async (id) => (await window.ferryRpcClient.sessions.get(id)).session.status,
             agentSession.id,
           ),
+        { timeout: 30_000 },
       )
       .toBe('awaiting_approval');
     await expect
@@ -521,6 +602,10 @@ try {
       .toContain('I will update the failing fixture and verify the tests.');
     const approval = await page.evaluate(async (id) => {
       const detail = await window.ferryRpcClient.sessions.get(id);
+      const paidApproval = detail.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.type === 'approval_request' && part.kind === 'paid_model');
+      if (paidApproval) throw new Error('Auto-Free requested approval for a free model');
       return detail.messages
         .flatMap((message) => message.parts)
         .find((part) => part.type === 'approval_request' && part.state === 'pending')?.id;
@@ -626,7 +711,19 @@ try {
       }),
     ).toBeVisible();
     await page.getByRole('button', { name: 'Chats navigation' }).click();
-    await page.getByRole('tab', { name: /Agent walking skeleton/ }).click();
+    const cancellationModel = await page.evaluate(async () => {
+      const model = (await window.ferryRpcClient.models.list('openrouter')).find(
+        (item) => item.ref.endsWith(':free') && item.toolCalling,
+      );
+      if (!model) throw new Error('OpenRouter free tool model is unavailable');
+      return model.ref;
+    });
+    const cancellationSession = await createChatTab(
+      page,
+      'Cancellation E2E',
+      'Auto-Free',
+      cancellationModel,
+    );
     await expect(composer).toBeVisible({ timeout: 15_000 });
 
     await composer.fill('Start a slow response so I can cancel it.');
@@ -636,7 +733,7 @@ try {
         async () =>
           await page.evaluate(
             async (id) => (await window.ferryRpcClient.sessions.get(id)).session.status,
-            agentSession.id,
+            cancellationSession.id,
           ),
       )
       .toBe('running');
@@ -647,19 +744,24 @@ try {
         async () =>
           await page.evaluate(
             async (id) => (await window.ferryRpcClient.sessions.get(id)).session.status,
-            agentSession.id,
+            cancellationSession.id,
           ),
       )
       .toBe('idle');
     console.log('e2e real domains: cancellation stops a streaming turn mid-run OK');
 
+    const handoffSession = await createChatTab(
+      page,
+      'Rate Limit Recovery E2E',
+      'Auto-Free',
+      'auto',
+    );
     const autoTrigger = page.getByRole('button', { name: /Auto ·/ });
-    if (await autoTrigger.isVisible().catch(() => false)) {
-      await autoTrigger.click();
-      const manualModel = page.getByRole('option', { name: /North Mini Code/ });
-      await expect(manualModel).toBeVisible();
-      await manualModel.click();
-    }
+    await expect(autoTrigger).toBeVisible();
+    await autoTrigger.click();
+    const manualModel = page.getByRole('option', { name: /North Mini Code/ });
+    await expect(manualModel).toBeVisible();
+    await manualModel.click();
     await expect(page.getByRole('button', { name: /Manual · North Mini Code/ })).toBeVisible();
     await page.getByRole('button', { name: /Manual · North Mini Code/ }).click();
     const autoModel = page.getByRole('option', { name: /Auto \(recommended\)/ });
@@ -667,7 +769,14 @@ try {
     await autoModel.click();
     await expect(page.getByRole('dialog', { name: 'Choose model' })).toBeHidden();
     await expect(page.getByRole('button', { name: /Auto ·/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Auto/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Auto-Free', exact: true })).toBeVisible();
+    await page.evaluate((sessionId) => {
+      window.e2eHandoffParts = [];
+      window.ferryRpcClient.on('session.part', (event) => {
+        if (event.sessionId === sessionId && event.part.type === 'handoff_marker')
+          window.e2eHandoffParts.push(event.part);
+      });
+    }, handoffSession.id);
     await composer.fill('Continue with a forced provider handoff.');
     await composer.press('Enter');
     const handoff = page.getByRole('button', { name: /Switched .*rate_limit/ });
@@ -700,7 +809,7 @@ try {
             toolCalling: model.toolCalling,
           })),
         };
-      }, agentSession.id);
+      }, handoffSession.id);
       console.error(
         'e2e handoff diagnostic',
         JSON.stringify({
@@ -722,7 +831,7 @@ try {
         stats: await window.ferryRpcClient.quota.handoffs(30),
         session: await window.ferryRpcClient.sessions.get(sessionId),
       }),
-      agentSession.id,
+      handoffSession.id,
     );
     assert.ok(handoffEvidence.parts.some((part) => part.reason === 'rate_limit'));
     assert.ok(
@@ -749,13 +858,13 @@ try {
               await window.ferryRpcClient.approvals.respond(id, approvalId, 'allow_once');
             }
             return 'approvals_responded';
-          }, agentSession.id),
+          }, handoffSession.id),
         { timeout: 60_000 },
       )
       .toBe('idle');
     const handoffDetail = await page.evaluate(
       async (id) => await window.ferryRpcClient.sessions.get(id),
-      agentSession.id,
+      handoffSession.id,
     );
     expect(
       handoffDetail.messages.some((message) =>
@@ -767,6 +876,196 @@ try {
       ),
     ).toBe(true);
     console.log('e2e real domains: rate-limit recovery emits a handoff marker OK');
+
+    await callRendererRpc(page, 'providers.setBillingEnabled', ['openrouter', true]);
+    await callRendererRpc(page, 'settings.update', [
+      { paidCaps: { dailyUsd: null, sessionUsd: null, monthlyUsd: null } },
+    ]);
+    const spendBeforePaid = await page.evaluate(async () => {
+      const history = await window.ferryRpcClient.quota.history(31);
+      const today = new Date().toISOString().slice(0, 10);
+      return history
+        .filter((point) => point.date === today)
+        .reduce((sum, point) => sum + point.costUsd, 0);
+    });
+    const paidModelCatalog = await page.evaluate(async () => {
+      const models = await window.ferryRpcClient.models.list('openrouter');
+      return {
+        selected:
+          models.find(
+            (model) =>
+              !model.free &&
+              model.toolCalling &&
+              model.priceInPerM !== null &&
+              model.priceInPerM > 0 &&
+              model.priceOutPerM !== null,
+          )?.ref ?? null,
+        paidModelIds: models
+          .filter((model) => !model.free)
+          .map((model) => model.ref.replace(/^openrouter\//, '')),
+      };
+    });
+    const paidModel = paidModelCatalog.selected;
+    const paidOpenRouterModelIds = new Set(paidModelCatalog.paidModelIds);
+    expect(paidModel).toBeTruthy();
+    const paidWorkspaceExists = await page.evaluate(
+      async (workspaceId) =>
+        (await window.ferryRpcClient.workspaces.list()).some(
+          (workspace) => workspace.id === workspaceId,
+        ),
+      openedWorkspace.id,
+    );
+    expect(paidWorkspaceExists).toBe(true);
+    // The Electron file renderer uses hash routing; wait for Add tab to navigate to its new session.
+    const previousRoute = new URL(page.url()).hash;
+    await page.getByRole('button', { name: 'Add tab' }).click();
+    await page.waitForURL((url) => url.hash.startsWith('#/s/') && url.hash !== previousRoute, {
+      timeout: 15_000,
+    });
+    const createdSessionId = new URL(page.url()).hash.split('/').filter(Boolean).at(-1);
+    if (!createdSessionId) throw new Error('Add tab navigated without a session id');
+    const paidSessionDetail = await callRendererRpc(page, 'sessions.get', [createdSessionId]);
+    const livePaidSession = paidSessionDetail.session;
+    const paidProfiles = await callRendererRpc(page, 'profiles.list', []);
+    const paidProfile = paidProfiles.find((item) => item.name === 'Best Available');
+    if (!paidProfile) throw new Error('Profile not found: Best Available');
+    await callRendererRpc(page, 'profiles.activate', [paidProfile.id, livePaidSession.id]);
+    await callRendererRpc(page, 'sessions.rename', [livePaidSession.id, 'Paid guardrails E2E']);
+    await callRendererRpc(page, 'models.select', [livePaidSession.id, paidModel]);
+    expect(livePaidSession).toBeTruthy();
+    const paidComposer = page.getByRole('textbox', { name: 'Message Ferry' });
+    await paidComposer.fill('Use the paid model after explicit confirmation.');
+    await paidComposer.press('Enter');
+    const paidConfirmation = page.getByText(/Use .* from .* for an estimated \$\d+\.\d{4}/);
+    await expect(paidConfirmation).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(paidConfirmation).toContainText('OpenRouter');
+    await expect(paidConfirmation).not.toContainText(/free models/i);
+    const screenshotDirectory = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      '..',
+      '..',
+      'design',
+      'screenshots',
+      'app',
+    );
+    await mkdir(screenshotDirectory, { recursive: true });
+    await page.screenshot({
+      path: join(screenshotDirectory, 'paid-confirmation.png'),
+      fullPage: false,
+    });
+    const pendingPaidApproval = await page.evaluate(async (id) => {
+      const detail = await window.ferryRpcClient.sessions.get(id);
+      return (
+        detail.messages
+          .flatMap((message) => message.parts)
+          .find(
+            (part) =>
+              part.type === 'approval_request' &&
+              part.kind === 'paid_model' &&
+              part.state === 'pending',
+          )?.id ?? null
+      );
+    }, livePaidSession.id);
+    expect(pendingPaidApproval).toBeTruthy();
+    await page.evaluate(
+      async ({ sessionId, partId }) => {
+        await window.ferryRpcClient.approvals.respond(sessionId, partId, 'allow_once');
+      },
+      { sessionId: livePaidSession.id, partId: pendingPaidApproval },
+    );
+    try {
+      await expect
+        .poll(async () => {
+          const state = await paidSessionApprovalState(page, livePaidSession.id);
+          return state.approvals.find((approval) => approval.id === pendingPaidApproval)?.state;
+        })
+        .toBe('allowed_once');
+      await expect
+        .poll(
+          async () => {
+            const state = await paidSessionApprovalState(page, livePaidSession.id);
+            if (state.status === 'awaiting_approval' && state.pending.length) {
+              if (state.pending.some((approval) => approval.kind === 'paid_model'))
+                return 'unexpected_pending_paid_confirmation';
+              console.log(
+                'e2e paid flow: approving pending agent request(s)',
+                JSON.stringify(
+                  state.pending.map(({ id, kind, summary }) => ({ id, kind, summary })),
+                ),
+              );
+              for (const approval of state.pending) {
+                await page.evaluate(
+                  async ({ sessionId, partId }) =>
+                    await window.ferryRpcClient.approvals.respond(sessionId, partId, 'allow_once'),
+                  { sessionId: livePaidSession.id, partId: approval.id },
+                );
+              }
+              return 'tool_approval_responded';
+            }
+            return state.status;
+          },
+          { timeout: 30_000 },
+        )
+        .toBe('idle');
+    } catch (error) {
+      const pending = await paidSessionApprovalState(page, livePaidSession.id);
+      console.error('e2e paid approval diagnostic', JSON.stringify(pending));
+      throw error;
+    }
+    const paidUsage = await page.evaluate(async () => {
+      const history = await window.ferryRpcClient.quota.history(31);
+      const today = new Date().toISOString().slice(0, 10);
+      return history
+        .filter((point) => point.date === today)
+        .reduce((sum, point) => sum + point.costUsd, 0);
+    });
+    expect(paidUsage).toBeGreaterThan(spendBeforePaid);
+    const capState = await page.evaluate(async () => {
+      const settings = await window.ferryRpcClient.settings.get();
+      const history = await window.ferryRpcClient.quota.history(31);
+      const today = new Date().toISOString().slice(0, 10);
+      const used = history
+        .filter((point) => point.date === today)
+        .reduce((sum, point) => sum + point.costUsd, 0);
+      return { used, caps: { ...settings.paidCaps, dailyUsd: used } };
+    });
+    const cappedSettings = await callRendererRpc(page, 'settings.update', [
+      { paidCaps: capState.caps },
+    ]);
+    expect(capState.used).toBeGreaterThan(0);
+    expect(cappedSettings.paidCaps.dailyUsd).toBe(capState.used);
+    const paidRequestsBeforeCappedAttempt = fakeProvider.requests.filter(
+      (request) =>
+        request.url.startsWith('/openrouter/') &&
+        typeof request.body?.model === 'string' &&
+        paidOpenRouterModelIds.has(request.body.model),
+    ).length;
+    await paidComposer.fill('Attempt a second paid call after the cap is reached.');
+    await paidComposer.press('Enter');
+    await expect(page.getByText(/Paid cap reached:/)).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(page.getByRole('button', { name: 'Wait for free capacity' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Raise cap' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible();
+    await page.screenshot({
+      path: join(screenshotDirectory, 'paid-cap-reached.png'),
+      fullPage: false,
+    });
+    expect(
+      fakeProvider.requests.filter(
+        (request) =>
+          request.url.startsWith('/openrouter/') &&
+          typeof request.body?.model === 'string' &&
+          paidOpenRouterModelIds.has(request.body.model),
+      ),
+    ).toHaveLength(paidRequestsBeforeCappedAttempt);
+    console.log(
+      'e2e real domains: paid confirmation, recorded spend, cap hard stop, and screenshots OK',
+    );
     await stopEmbeddedCore(core);
   } finally {
     if (application) {

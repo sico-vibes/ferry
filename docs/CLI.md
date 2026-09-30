@@ -7,7 +7,7 @@ The parser in `apps/cli/src/main.tsx` is the current source of truth. Run `ferry
 | Command | Purpose |
 |---|---|
 | `ferry` | Interactive terminal UI |
-| `ferry run <prompt>` | Start a prompt/session |
+| `ferry run <prompt> [--model-ref provider/model] [--yes-paid]` | Start a prompt/session; optionally select a model and pre-authorize paid calls for this run |
 | `ferry resume <sessionId>` | Resume a session |
 | `ferry status` | Show the active engine and provider configuration |
 | `ferry serve` | Placeholder; reports that engine transport is coming in B0 |
@@ -28,7 +28,7 @@ Subcommand syntax and accepted names are implemented in `apps/cli/src/main.tsx`;
 
 ## Flags
 
-Global parser flags: `--json`, `--verbose`, `--cwd <path>`, `--data-dir <path>`, `--engine <mock|local>`. Commands also accept `--profile <name>`, `--permission <ask|auto_edit|full_auto>`, `--max-steps <positive integer>`, `--watch`, `--providers`, `--yes`, and `--i-understand-the-risk` where applicable. Some admin handlers accept `--delegation` and `--model`. `--json` emits JSON lines/results; verbose routing diagnostics go to stderr. Exact command-specific operands are (updating).
+Global parser flags: `--json`, `--verbose`, `--cwd <path>`, `--data-dir <path>`, `--engine <mock|local>`. Commands also accept `--profile <name>`, `--permission <ask|auto_edit|full_auto>`, `--max-steps <positive integer>`, `--watch`, `--providers`, `--yes`, and `--i-understand-the-risk` where applicable. `ferry run --model-ref provider/model` selects a specific model. `ferry run --yes-paid` confirms each paid call once for this run, including under `--permission full_auto`. Without a TTY or profile pre-authorization, a paid call is denied unless this flag is passed. Some admin handlers accept `--delegation` and `--model`. `--json` emits JSON lines/results; verbose routing diagnostics go to stderr. Exact command-specific operands are (updating).
 
 Examples:
 
@@ -48,5 +48,8 @@ ferry profiles chain show Auto-Free
 | `2` | Invalid command/arguments/flag value or missing required argument |
 | `3` | Approval was needed but could not be granted (for example, non-interactive run) |
 | `4` | `run --max-steps` reached its step boundary; session remains resumable |
+| `5` | Paid spending cap reached; no further paid call was sent |
+
+| 5 | Paid spending cap reached; no further paid call was sent |
 
 Other subcommands may return their handler's status. `--max-steps` ends cleanly at the boundary; it does not issue a cancellation request. For routing, see [ROUTING.md](ROUTING.md).

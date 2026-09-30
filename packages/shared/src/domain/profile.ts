@@ -31,7 +31,15 @@ export const ProfileSchema = z.object({
   allowedProviders: z.union([z.enum(['all_free', 'all']), z.array(ProviderIdSchema)]),
   tierByStep: z.record(StepKindSchema, z.array(TierSchema)),
   paidAllowed: z.boolean(),
+  paidConfirmation: z
+    .object({
+      preauthorize: z.boolean().default(false),
+      confirmSubscriptions: z.boolean().default(false),
+      confirmTrials: z.boolean().default(false),
+    })
+    .default({ preauthorize: false, confirmSubscriptions: false, confirmTrials: false }),
   caps: z.object({
+    sessionUsd: z.number().nonnegative().nullable().optional(),
     dailyUsd: z.number().nonnegative().nullable(),
     monthlyUsd: z.number().nonnegative().nullable(),
   }),

@@ -46,9 +46,16 @@ export class CoreLockError extends Error {
   }
 }
 
-export function mapError(error: unknown) {
+export function mapError(error: unknown, method?: string) {
   if (error instanceof ZodError)
-    return rpcError(-32010, 'validation', 'Domain parameters or result failed validation');
+    return rpcError(-32010, 'validation', 'Domain parameters or result failed validation', {
+      ...(method ? { method } : {}),
+      issues: error.issues.map((issue) => ({
+        code: issue.code,
+        message: issue.message,
+        path: issue.path,
+      })),
+    });
   if (
     typeof error === 'object' &&
     error !== null &&
@@ -272,7 +279,7 @@ export class CoreHost {
       const mapped =
         error instanceof DispatchError
           ? rpcError(error.code, error.kind, error.message)
-          : mapError(error);
+          : mapError(error, request.method);
       return { jsonrpc: '2.0', id: request.id, error: mapped };
     }
   }

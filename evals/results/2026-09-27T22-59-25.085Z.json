@@ -1,0 +1,183 @@
+{
+  "timestamp": "2026-09-27T22:59:25.085Z",
+  "profile": "auto-free",
+  "roles": "on",
+  "model": null,
+  "dataDir": "[provided]",
+  "maxSteps": 25,
+  "timeoutMs": 600000,
+  "estimatedRequests": [
+    {
+      "provider": "gemini",
+      "estimatedRequests": 200
+    },
+    {
+      "provider": "groq",
+      "estimatedRequests": 200
+    },
+    {
+      "provider": "kilo",
+      "estimatedRequests": 200
+    },
+    {
+      "provider": "llm7",
+      "estimatedRequests": 200
+    },
+    {
+      "provider": "nvidia",
+      "estimatedRequests": 200
+    },
+    {
+      "provider": "openrouter",
+      "estimatedRequests": 200
+    },
+    {
+      "provider": "ovhcloud",
+      "estimatedRequests": 200
+    }
+  ],
+  "results": [
+    {
+      "id": "fix-failing-test",
+      "repetition": 1,
+      "passed": true,
+      "steps": 8,
+      "wallTimeMs": 59902,
+      "models": ["gemini/gemini-3.1-flash-lite", "groq/qwen/qwen3.8-27b"],
+      "tokensIn": 19326,
+      "tokensOut": 52,
+      "providerErrors": {},
+      "handoffs": ["groq/qwen/qwen3.8-27b -> gemini/gemini-3.1-flash-lite (error)"],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": ""
+    },
+    {
+      "id": "add-function-test",
+      "repetition": 1,
+      "passed": true,
+      "steps": 7,
+      "wallTimeMs": 58623,
+      "models": ["groq/qwen/qwen3.8-27b", "gemini/gemini-3.1-flash-lite"],
+      "tokensIn": 16193,
+      "tokensOut": 350,
+      "providerErrors": {},
+      "handoffs": ["groq/qwen/qwen3.8-27b -> gemini/gemini-3.1-flash-lite (rate_limit)"],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": ""
+    },
+    {
+      "id": "rename-symbol",
+      "repetition": 1,
+      "passed": true,
+      "steps": 6,
+      "wallTimeMs": 122659,
+      "models": [
+        "gemini/gemini-3.1-flash-lite",
+        "groq/qwen/qwen3.8-27b",
+        "kilo/z-ai/glm-5.3-prime"
+      ],
+      "tokensIn": 14532,
+      "tokensOut": 178,
+      "providerErrors": {},
+      "handoffs": [
+        "groq/qwen/qwen3.8-27b -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "kilo/z-ai/glm-5.3-prime -> gemini/gemini-3.1-flash-lite (error)"
+      ],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": ""
+    },
+    {
+      "id": "read-explain",
+      "repetition": 1,
+      "passed": false,
+      "steps": 2,
+      "wallTimeMs": 43362,
+      "models": ["groq/qwen/qwen3.8-27b"],
+      "tokensIn": 2320,
+      "tokensOut": 4,
+      "providerErrors": {},
+      "handoffs": [],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": "{}\n{}"
+    },
+    {
+      "id": "crlf-edit",
+      "repetition": 1,
+      "passed": false,
+      "steps": 6,
+      "wallTimeMs": 58835,
+      "models": ["groq/qwen/qwen3.8-27b", "gemini/gemini-3.1-flash-lite"],
+      "tokensIn": 11164,
+      "tokensOut": 71,
+      "providerErrors": {},
+      "handoffs": ["groq/qwen/qwen3.8-27b -> gemini/gemini-3.1-flash-lite (rate_limit)"],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": "<tool_call>\n{\"name\":\"ReadFile\",\"arguments\":{\"path\":\"README.md\"},\"_ferry\":{\"hint\":\"ReadFile\"}}\n</function>\nThe second line in `README.md` has been updated to \"updated.\"."
+    },
+    {
+      "id": "large-targeted-edit",
+      "repetition": 1,
+      "passed": false,
+      "steps": 6,
+      "wallTimeMs": 52233,
+      "models": ["groq/qwen/qwen3.8-27b", "gemini/gemini-3.1-flash-lite"],
+      "tokensIn": 11729,
+      "tokensOut": 134,
+      "providerErrors": {},
+      "handoffs": [
+        "groq/qwen/qwen3.8-27b -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> gemini/gemini-3.1-flash-lite-preview (error)",
+        "gemini/gemini-3.1-flash-lite-preview -> gemini/gemini-3.5-flash-lite (error)",
+        "gemini/gemini-3.5-flash-lite -> gemini/gemini-flash-lite-latest (error)"
+      ],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": "{}\",files\":[]}"
+    },
+    {
+      "id": "diagnose-build",
+      "repetition": 1,
+      "passed": false,
+      "steps": 1,
+      "wallTimeMs": 55800,
+      "models": ["gemini/gemini-3.8-flash", "groq/qwen/qwen3.8-27b"],
+      "tokensIn": 1693,
+      "tokensOut": 9,
+      "providerErrors": {},
+      "handoffs": ["groq/qwen/qwen3.8-27b -> gemini/gemini-3.8-flash (rate_limit)"],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": "{\n  \"files\": [],\n  \"changes\": []\n}"
+    },
+    {
+      "id": "multi-file-refactor",
+      "repetition": 1,
+      "passed": false,
+      "steps": 10,
+      "wallTimeMs": 77682,
+      "models": ["groq/qwen/qwen3.8-27b", "gemini/gemini-3.1-flash-lite"],
+      "tokensIn": 31252,
+      "tokensOut": 381,
+      "providerErrors": {},
+      "handoffs": ["groq/qwen/qwen3.8-27b -> gemini/gemini-3.1-flash-lite (rate_limit)"],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": "/parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=read_file>\n<parameter=path>\npackages/b/package.json\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=read_file>\n<parameter=path>\ntest.js\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=read_file>\n<parameter=path>\npackage.json\n</parameter>\n</function>\n</tool_call>\nPackages appear empty. Let me inspect the full tree.\n\n"
+    }
+  ],
+  "passed": 3,
+  "total": 8
+}

@@ -7,6 +7,7 @@ import {
   buildBriefing,
   calculateSpend,
   canSpend,
+  requiresConfirmation,
   classifyStep,
   runSimulationScenarios,
   scoreModels,
@@ -680,6 +681,37 @@ describe('spend guardrails and simulations', () => {
         { sessionUsd: 0, dayUsd: 4, monthUsd: 0, paidCallsThisSession: 0 },
         { sessionUsd: null, dayUsd: null, monthUsd: null },
         2,
+      ),
+    ).toBe(false);
+  });
+
+  it('enforces the profile session cap and honors only explicit pre-authorization', () => {
+    const capped = { ...profile, caps: { ...profile.caps, sessionUsd: 3 } };
+    expect(
+      canSpend(
+        capped,
+        { sessionUsd: 2, dayUsd: 0, monthUsd: 0, paidCallsThisSession: 1 },
+        { sessionUsd: null, dayUsd: null, monthUsd: null },
+        1.01,
+      ),
+    ).toBe(false);
+    expect(
+      requiresConfirmation(
+        capped,
+        {
+          sessionUsd: 0,
+          dayUsd: 0,
+          monthUsd: 0,
+          paidCallsThisSession: 0,
+        },
+        0.01,
+      ),
+    ).toBe(true);
+    expect(
+      requiresConfirmation(
+        { ...capped, paidConfirmation: { ...capped.paidConfirmation, preauthorize: true } },
+        { sessionUsd: 0, dayUsd: 0, monthUsd: 0, paidCallsThisSession: 0 },
+        0.01,
       ),
     ).toBe(false);
   });

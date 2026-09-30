@@ -143,7 +143,8 @@ function builtinProfile(
     allowedProviders,
     tierByStep,
     paidAllowed,
-    caps: { dailyUsd, monthlyUsd },
+    paidConfirmation: { preauthorize: false, confirmSubscriptions: false, confirmTrials: false },
+    caps: { sessionUsd: null, dailyUsd, monthlyUsd },
     delegationMode: 'suggest',
     optimizers: { ...optimizerDefaults },
     ...(name === 'Auto-Free' || name === 'Best Available'
@@ -240,14 +241,27 @@ export interface SpendCaps {
   monthUsd: number | null;
 }
 
+export const UNKNOWN_PRICE_ESTIMATE_USD = 0.01;
+
+export function estimateSpend(
+  usage: SpendUsage,
+  model: Pick<ModelInfo, 'priceInPerM' | 'priceOutPerM'>,
+): { amountUsd: number; estimated: boolean } {
+  if (model.priceInPerM === null || model.priceOutPerM === null)
+    return { amountUsd: UNKNOWN_PRICE_ESTIMATE_USD, estimated: true };
+  return {
+    amountUsd:
+      (usage.inputTokens * model.priceInPerM) / 1_000_000 +
+      (usage.outputTokens * model.priceOutPerM) / 1_000_000,
+    estimated: false,
+  };
+}
+
 export function calculateSpend(
   usage: SpendUsage,
   model: Pick<ModelInfo, 'priceInPerM' | 'priceOutPerM'>,
 ): number {
-  return (
-    (usage.inputTokens * (model.priceInPerM ?? 0)) / 1_000_000 +
-    (usage.outputTokens * (model.priceOutPerM ?? 0)) / 1_000_000
-  );
+  return estimateSpend(usage, model).amountUsd;
 }
 
 export function canSpend(
@@ -261,7 +275,7 @@ export function canSpend(
   const profileDaily = profile.caps.dailyUsd;
   const profileMonthly = profile.caps.monthlyUsd;
   return (
-    within(state.sessionUsd, amountUsd, caps.sessionUsd) &&
+    within(state.sessionUsd, amountUsd, minCap(caps.sessionUsd, profile.caps.sessionUsd ?? null)) &&
     within(state.dayUsd, amountUsd, minCap(caps.dayUsd, profileDaily)) &&
     within(state.monthUsd, amountUsd, minCap(caps.monthUsd, profileMonthly))
   );
@@ -277,7 +291,12 @@ export function requiresConfirmation(
   state: SpendState,
   amountUsd: number,
 ): boolean {
-  return profile.paidAllowed && amountUsd > 0 && state.paidCallsThisSession === 0;
+  return (
+    profile.paidAllowed &&
+    !profile.paidConfirmation.preauthorize &&
+    amountUsd > 0 &&
+    state.paidCallsThisSession === 0
+  );
 }
 
 export interface ScoreInput {
@@ -376,9 +395,9 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
         );
     if (
       cost > 0 &&
-      (!input.spend ||
-        !input.spendCaps ||
-        !canSpend(input.profile, input.spend, input.spendCaps, cost))
+      input.spend &&
+      input.spendCaps &&
+      !canSpend(input.profile, input.spend, input.spendCaps, cost)
     )
       continue;
     const remaining = capacityRemaining(input.capacity, provider);
@@ -559,9 +578,9 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
           );
     if (
       cost > 0 &&
-      (!input.spend ||
-        !input.spendCaps ||
-        !canSpend(input.profile, input.spend, input.spendCaps, cost))
+      input.spend &&
+      input.spendCaps &&
+      !canSpend(input.profile, input.spend, input.spendCaps, cost)
     )
       reasons.push('spend unavailable or over cap');
     if (provider) {
@@ -617,9 +636,9 @@ function providerAllowed(
   return profile.allowedProviders.includes(provider.id);
 }
 
-function isFreeForRouting(
+export function isFreeForRouting(
   provider: Provider,
-  model: ModelInfo,
+  model: Pick<ModelInfo, 'ref' | 'free' | 'priceInPerM' | 'priceOutPerM'>,
   trialOptInProviders: readonly string[] = [],
 ): boolean {
   if (provider.tag === 'trial')

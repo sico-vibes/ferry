@@ -11,10 +11,9 @@ import {
   Section,
   Stack,
   UsageChart,
-  QuotaWindowBar,
   type UsageMetric,
 } from '@ferry/ui';
-import type { HandoffStat, Provider } from '@ferry/shared';
+import type { HandoffStat } from '@ferry/shared';
 import { useFerryClient } from '../../data/client';
 
 const reasons: Record<HandoffStat['reason'], string> = {
@@ -26,6 +25,14 @@ const reasons: Record<HandoffStat['reason'], string> = {
   manual: 'Manual',
 };
 const format = (value: number) => new Intl.NumberFormat().format(value);
+const money = (value: number) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+const tightestCap = (profileCap: number | null, globalCap: number | null) =>
+  profileCap === null
+    ? globalCap
+    : globalCap === null
+      ? profileCap
+      : Math.min(profileCap, globalCap);
 
 export function UsageCanvas() {
   const client = useFerryClient();
@@ -46,6 +53,18 @@ export function UsageCanvas() {
     queryKey: ['usage', 'history', 14],
     queryFn: () => client.quota.history(14),
   });
+  const { data: paidHistory = [] } = useQuery({
+    queryKey: ['usage', 'paid-spend-history', 31],
+    queryFn: () => client.quota.history(31),
+  });
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => client.settings.get(),
+  });
+  const { data: profiles = [] } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: () => client.profiles.list(),
+  });
   const { data: handoffs = [] } = useQuery({
     queryKey: ['usage', 'handoffs', 14],
     queryFn: () => client.quota.handoffs(14),
@@ -58,9 +77,22 @@ export function UsageCanvas() {
     () => Object.fromEntries(providers.map((provider) => [provider.id, provider.name])),
     [providers],
   );
-  const providerById = useMemo(
-    () => new Map(providers.map((provider) => [provider.id, provider])),
-    [providers],
+  const activeProfile = profiles.find((profile) => profile.id === settings?.activeProfileId);
+  const today = new Date().toISOString().slice(0, 10);
+  const month = today.slice(0, 7);
+  const paidToday = paidHistory
+    .filter((point) => point.date === today)
+    .reduce((total, point) => total + point.costUsd, 0);
+  const paidMonth = paidHistory
+    .filter((point) => point.date.startsWith(month))
+    .reduce((total, point) => total + point.costUsd, 0);
+  const dailyCap = tightestCap(
+    activeProfile?.caps.dailyUsd ?? null,
+    settings?.paidCaps.dailyUsd ?? null,
+  );
+  const monthlyCap = tightestCap(
+    activeProfile?.caps.monthlyUsd ?? null,
+    settings?.paidCaps.monthlyUsd ?? null,
   );
   const timelineSummary = useMemo(() => {
     if (!capacity) return undefined;
@@ -301,17 +333,31 @@ export function UsageCanvas() {
             </ul>
           </Section>
           <Section title="Paid spend" ariaLabel="Paid spend">
-            <header className="mb-3 flex items-center">
-              <span className="mr-auto" />
-              <span className="text-meta text-text-3">OpenCode Go</span>
-            </header>
-            <div className="grid gap-3">
-              {providerById
-                .get('opencode-go' as Provider['id'])
-                ?.windows.map((window) => <QuotaWindowBar key={window.id} window={window} />) ?? (
-                <p className="text-meta text-text-3">No paid spend data available.</p>
-              )}
-            </div>
+            <p className="mb-3 text-meta text-text-3">
+              {activeProfile
+                ? `All providers · ${activeProfile.name} and global limits`
+                : 'All providers'}
+            </p>
+            <dl className="grid gap-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-label text-text-2">Today</dt>
+                <dd className="tabular-nums text-label font-medium text-text-1">
+                  {money(paidToday)}
+                  {dailyCap === null ? ' · no cap' : ` of ${money(dailyCap)}`}
+                </dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-label text-text-2">This month</dt>
+                <dd className="tabular-nums text-label font-medium text-text-1">
+                  {money(paidMonth)}
+                  {monthlyCap === null ? ' · no cap' : ` of ${money(monthlyCap)}`}
+                </dd>
+              </div>
+              <p className="text-meta text-text-3">
+                Spend is calculated from recorded token usage and model prices. Unknown prices use a
+                conservative estimate.
+              </p>
+            </dl>
           </Section>
         </div>
         <button

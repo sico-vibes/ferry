@@ -16,7 +16,7 @@ import {
   CheckpointIdSchema,
   newId,
 } from '@ferry/shared';
-import type { MessagePart, Profile, Session, SessionId } from '@ferry/shared';
+import type { MessagePart, ModelInfo, Profile, Provider, Session, SessionId } from '@ferry/shared';
 import {
   BUILTIN_PROFILES,
   chainForProfile,
@@ -24,6 +24,11 @@ import {
   resolveFallbackChain,
   scoreModels,
   ResilienceEntrySchema,
+  canSpend,
+  estimateSpend,
+  isFreeForRouting,
+  requiresConfirmation,
+  type SpendState,
 } from '@ferry/router';
 import { createSkillManager } from './skills.js';
 import { createMcpManager } from './mcp.js';
@@ -49,6 +54,32 @@ const RenameSchema = z.string().min(1).max(160);
 const BooleanSchema = z.boolean();
 const noModelMessage = 'No available model — add a provider key or check Explore → Providers';
 const defaultStepTimeoutMs = 120_000;
+const PaidCapsSchema = z.object({
+  sessionUsd: z.number().nonnegative().nullable().default(null),
+  dailyUsd: z.number().nonnegative().nullable().default(null),
+  monthlyUsd: z.number().nonnegative().nullable().default(null),
+});
+function isPaidAccordingToRouter(
+  model: Pick<ModelInfo, 'ref' | 'free' | 'priceInPerM' | 'priceOutPerM'>,
+  provider: Provider | undefined,
+  trialOptInProviders: readonly string[],
+): boolean {
+  return provider ? !isFreeForRouting(provider, model, trialOptInProviders) : true;
+}
+
+function unknownPriceModel(
+  modelRef: ModelInfo['ref'],
+): Pick<ModelInfo, 'ref' | 'free' | 'priceInPerM' | 'priceOutPerM'> {
+  return { ref: modelRef, free: false, priceInPerM: null, priceOutPerM: null };
+}
+
+function tightestCap(profileCap: number | null, globalCap: number | null): number | null {
+  return profileCap === null
+    ? globalCap
+    : globalCap === null
+      ? profileCap
+      : Math.min(profileCap, globalCap);
+}
 
 function stepTimeoutFromEnvironment(value: string | undefined): number {
   const timeout = Number(value);
@@ -58,6 +89,17 @@ function stepTimeoutFromEnvironment(value: string | undefined): number {
 export function register(host: CoreHost, services: FerryServices): void {
   const controllers = new Map<string, AbortController>();
   const runPromises = new Map<string, Promise<void>>();
+  const paidReservations = new Map<
+    string,
+    {
+      sessionId: string;
+      profileId: string;
+      modelRef: string;
+      amountUsd: number;
+      day: string;
+      month: string;
+    }
+  >();
   let shuttingDown = false;
   const approvals = new Map<
     string,
@@ -599,8 +641,321 @@ export function register(host: CoreHost, services: FerryServices): void {
             adaptExtensionTools(mcpManager.toolSource()),
           ],
           generator: (req) => runtime.gateway.streamStep(req, req.signal),
+          authorizePaidCall: async (candidate, estimate, signal) => {
+            const providerRecord = preflightCapacity.providers.find(
+              (item) => item.id === candidate.providerId,
+            );
+            const subscriptionLane =
+              providerRecord?.tag === 'subscription_oauth' ||
+              providerRecord?.tag === 'subscription_cli';
+            const trialLane = providerRecord?.tag === 'trial' || providerRecord?.tag === 'credits';
+            const routerSaysPaid = isPaidAccordingToRouter(
+              candidate,
+              providerRecord,
+              routing.trialOptInProviders,
+            );
+            const laneNeedsConfirmation =
+              routerSaysPaid &&
+              ((subscriptionLane && profile.paidConfirmation.confirmSubscriptions) ||
+                (trialLane && profile.paidConfirmation.confirmTrials));
+            const monetaryPaid =
+              routerSaysPaid &&
+              ((!subscriptionLane && !trialLane) || providerRecord.billingEnabled === true);
+            if (!routerSaysPaid && !laneNeedsConfirmation) return { allowed: true };
+            const usage = services.quota.queryUsage();
+            const byRef = new Map<string, (typeof availableModels)[number]>(
+              availableModels.map((model) => [model.ref, model]),
+            );
+            const paidRows = usage.filter((row) => {
+              const model = byRef.get(row.modelRef);
+              const provider = preflightCapacity.providers.find(
+                (item) => item.id === row.providerId,
+              );
+              const usageModel = model ?? unknownPriceModel(row.modelRef as ModelInfo['ref']);
+              const confirmationOnlyLane =
+                provider?.billingEnabled !== true &&
+                (provider?.tag === 'subscription_oauth' ||
+                  provider?.tag === 'subscription_cli' ||
+                  provider?.tag === 'trial' ||
+                  provider?.tag === 'credits');
+              return (
+                !confirmationOnlyLane &&
+                isPaidAccordingToRouter(usageModel, provider, routing.trialOptInProviders)
+              );
+            });
+            const confirmationOnlyRows = usage.filter((row) => {
+              if (row.sessionId !== session.id) return false;
+              const provider = preflightCapacity.providers.find(
+                (item) => item.id === row.providerId,
+              );
+              const model =
+                byRef.get(row.modelRef) ?? unknownPriceModel(row.modelRef as ModelInfo['ref']);
+              if (
+                !isPaidAccordingToRouter(model, provider, routing.trialOptInProviders) ||
+                provider?.billingEnabled === true
+              )
+                return false;
+              return (
+                (profile.paidConfirmation.confirmSubscriptions &&
+                  (provider?.tag === 'subscription_oauth' ||
+                    provider?.tag === 'subscription_cli')) ||
+                (profile.paidConfirmation.confirmTrials &&
+                  (provider?.tag === 'trial' || provider?.tag === 'credits'))
+              );
+            });
+            const amount = (rows: typeof usage) =>
+              rows.reduce((sum, row) => {
+                if (row.costUsd !== undefined) return sum + row.costUsd;
+                const model = byRef.get(row.modelRef);
+                if (!model) return sum + 0.01;
+                return (
+                  sum +
+                  estimateSpend(
+                    {
+                      inputTokens: row.inputTokens ?? 0,
+                      outputTokens: row.outputTokens ?? 0,
+                    },
+                    model,
+                  ).amountUsd
+                );
+              }, 0);
+            const now = services.clock.now();
+            const today = now.toISOString().slice(0, 10);
+            const thisMonth = today.slice(0, 7);
+            const profileSessionIds = new Set<string>(
+              services.sessions
+                .list()
+                .filter((item) => item.profileId === profile.id)
+                .map((item) => item.id),
+            );
+            const profileRows = paidRows.filter((row) =>
+              row.sessionId ? profileSessionIds.has(row.sessionId) : false,
+            );
+            const sessionRows = paidRows.filter((row) => row.sessionId === session.id);
+            const reservations = [...paidReservations.values()];
+            const sessionReservations = reservations.filter(
+              (item) => item.sessionId === session.id,
+            );
+            const profileReservations = reservations.filter(
+              (item) => item.profileId === profile.id,
+            );
+            const state: SpendState = {
+              sessionUsd:
+                amount(sessionRows) +
+                sessionReservations.reduce((sum, item) => sum + item.amountUsd, 0),
+              dayUsd:
+                amount(paidRows.filter((row) => row.occurredAt.slice(0, 10) === today)) +
+                reservations
+                  .filter((item) => item.day === today)
+                  .reduce((sum, item) => sum + item.amountUsd, 0),
+              monthUsd:
+                amount(paidRows.filter((row) => row.occurredAt.slice(0, 7) === thisMonth)) +
+                reservations
+                  .filter((item) => item.month === thisMonth)
+                  .reduce((sum, item) => sum + item.amountUsd, 0),
+              paidCallsThisSession:
+                sessionRows.length + confirmationOnlyRows.length + sessionReservations.length,
+            };
+            const globalPaidCaps =
+              typeof services.settings.get('global') === 'object' &&
+              services.settings.get('global') !== null &&
+              'paidCaps' in (services.settings.get('global') as object)
+                ? (services.settings.get('global') as { paidCaps?: unknown }).paidCaps
+                : undefined;
+            const storedCaps = PaidCapsSchema.safeParse(globalPaidCaps);
+            const globalCaps = storedCaps.success
+              ? storedCaps.data
+              : { sessionUsd: null, dailyUsd: null, monthlyUsd: null };
+            const estimateSpendResult = monetaryPaid
+              ? estimateSpend(estimate, candidate)
+              : { amountUsd: 0, estimated: false };
+            const amountUsd = estimateSpendResult.amountUsd;
+            const profileState: SpendState = {
+              ...state,
+              dayUsd:
+                amount(profileRows.filter((row) => row.occurredAt.slice(0, 10) === today)) +
+                profileReservations
+                  .filter((item) => item.day === today)
+                  .reduce((sum, item) => sum + item.amountUsd, 0),
+              monthUsd:
+                amount(profileRows.filter((row) => row.occurredAt.slice(0, 7) === thisMonth)) +
+                profileReservations
+                  .filter((item) => item.month === thisMonth)
+                  .reduce((sum, item) => sum + item.amountUsd, 0),
+            };
+            const globalOnlyProfile = {
+              ...profile,
+              caps: { sessionUsd: null, dailyUsd: null, monthlyUsd: null },
+            };
+            const sessionCap = tightestCap(profile.caps.sessionUsd ?? null, globalCaps.sessionUsd);
+            const dailyCap = tightestCap(profile.caps.dailyUsd, globalCaps.dailyUsd);
+            const monthlyCap = tightestCap(profile.caps.monthlyUsd, globalCaps.monthlyUsd);
+            const reachedCap = [
+              { used: state.sessionUsd, cap: sessionCap, period: 'this session' },
+              { used: profileState.dayUsd, cap: dailyCap, period: 'today' },
+              { used: profileState.monthUsd, cap: monthlyCap, period: 'this month' },
+            ].find(({ used, cap }) => cap !== null && used + amountUsd > cap);
+            if (
+              monetaryPaid &&
+              (!canSpend(
+                profile,
+                profileState,
+                { sessionUsd: null, dayUsd: null, monthUsd: null },
+                amountUsd,
+              ) ||
+                !canSpend(
+                  globalOnlyProfile,
+                  state,
+                  {
+                    sessionUsd: globalCaps.sessionUsd,
+                    dayUsd: globalCaps.dailyUsd,
+                    monthUsd: globalCaps.monthlyUsd,
+                  },
+                  amountUsd,
+                ))
+            ) {
+              const limit = reachedCap?.cap ?? 0;
+              const used = reachedCap?.used ?? state.sessionUsd;
+              const period = reachedCap?.period ?? 'today';
+              return {
+                allowed: false,
+                message: `Paid cap reached: $${used.toFixed(2)} of $${limit.toFixed(2)} ${period}. Wait for free capacity, raise the cap in Settings, or stop.`,
+              };
+            }
+            const reservationId = monetaryPaid || laneNeedsConfirmation ? newId('usage') : null;
+            if (reservationId)
+              paidReservations.set(reservationId, {
+                sessionId: session.id,
+                profileId: profile.id,
+                modelRef: candidate.ref,
+                amountUsd,
+                day: today,
+                month: thisMonth,
+              });
+            if (
+              requiresConfirmation(profile, state, amountUsd) ||
+              (laneNeedsConfirmation &&
+                !profile.paidConfirmation.preauthorize &&
+                state.paidCallsThisSession === 0)
+            ) {
+              const selectedProvider = preflightCapacity.providers.find(
+                (item) => item.id === candidate.providerId,
+              );
+              // This card is only shown for paid calls, so a "free models" provider label is always misleading here.
+              const paidProviderLabel = selectedProvider?.name.replace(/\s+free models?$/i, '');
+              const providerName =
+                paidProviderLabel === undefined || paidProviderLabel === ''
+                  ? candidate.providerId
+                  : paidProviderLabel;
+              const assistant = [...services.messages.list()]
+                .reverse()
+                .find((item) => item.sessionId === session.id && item.role === 'assistant');
+              if (!assistant) {
+                if (reservationId) paidReservations.delete(reservationId);
+                return { allowed: false, message: 'Could not show paid approval.' };
+              }
+              const part: Extract<MessagePart, { type: 'approval_request' }> = {
+                type: 'approval_request',
+                id: PartIdSchema.parse(newId('part')),
+                kind: 'paid_model',
+                summary: `Use ${candidate.name} from ${providerName} for an estimated $${amountUsd.toFixed(4)}?`,
+                detail: estimateSpendResult.estimated
+                  ? 'Estimated with Ferry’s conservative unknown-price allowance.'
+                  : `Estimated cost for ${estimate.inputTokens.toLocaleString()} input and ${estimate.outputTokens.toLocaleString()} output tokens.`,
+                risk: 'medium',
+                state: 'pending',
+              };
+              const key = `${session.id}:${part.id}`;
+              const pendingDecision = new Promise<'allowed_once' | 'allowed_always' | 'denied'>(
+                (resolve) => {
+                  if (signal.aborted) {
+                    resolve('denied');
+                    return;
+                  }
+                  approvals.set(key, resolve);
+                  signal.addEventListener(
+                    'abort',
+                    () => {
+                      approvals.delete(key);
+                      resolve('denied');
+                    },
+                    { once: true },
+                  );
+                },
+              );
+              store.appendPart(session.id, assistant.id, part);
+              host.emit('session.part', { sessionId: session.id, messageId: assistant.id, part });
+              const current = services.sessions.get(session.id);
+              if (current) updateSession({ ...current, status: 'awaiting_approval' });
+              const decision = await pendingDecision;
+              const currentAfterApproval = services.sessions.get(session.id);
+              if (currentAfterApproval?.status === 'awaiting_approval')
+                updateSession({ ...currentAfterApproval, status: 'running' });
+              if (decision === 'denied') {
+                if (reservationId) paidReservations.delete(reservationId);
+                return { allowed: false, message: 'Paid call declined. No paid request was sent.' };
+              }
+            }
+            return {
+              allowed: true,
+              ...(reservationId
+                ? {
+                    usageId: reservationId,
+                    release: () => paidReservations.delete(reservationId),
+                  }
+                : {}),
+            };
+          },
           onUsage: (record) => {
-            runtime.usage.record(record);
+            const model = availableModels.find((item) => item.ref === record.modelRef);
+            const usageProvider = preflightCapacity.providers.find(
+              (item) => item.id === record.providerId,
+            );
+            const confirmationOnlyLane =
+              usageProvider?.billingEnabled !== true &&
+              (usageProvider?.tag === 'subscription_oauth' ||
+                usageProvider?.tag === 'subscription_cli' ||
+                usageProvider?.tag === 'trial' ||
+                usageProvider?.tag === 'credits');
+            const usageModel = model ?? unknownPriceModel(record.modelRef as ModelInfo['ref']);
+            const routerSaysPaid = isPaidAccordingToRouter(
+              usageModel,
+              usageProvider,
+              routing.trialOptInProviders,
+            );
+            const monetaryPaid =
+              routerSaysPaid && (!confirmationOnlyLane || usageProvider.billingEnabled === true);
+            const reservation = paidReservations.get(record.id);
+            const calculated =
+              !monetaryPaid || confirmationOnlyLane
+                ? { amountUsd: 0, estimated: false }
+                : model
+                  ? estimateSpend(
+                      {
+                        inputTokens: record.inputTokens ?? 0,
+                        outputTokens: record.outputTokens ?? 0,
+                      },
+                      model,
+                    )
+                  : { amountUsd: 0.01, estimated: true };
+            const priced =
+              monetaryPaid && calculated.amountUsd <= 0 && reservation && reservation.amountUsd > 0
+                ? { amountUsd: reservation.amountUsd, estimated: true }
+                : calculated;
+            runtime.usage.record({
+              ...record,
+              costUsd: priced.amountUsd,
+              ...(priced.estimated
+                ? {
+                    headers: {
+                      costEstimate:
+                        calculated.estimated && calculated.amountUsd > 0
+                          ? 'conservative-unknown-price'
+                          : 'approved-preflight-estimate',
+                    },
+                  }
+                : {}),
+            });
           },
           onHandoff: (reason) => {
             runtime.gateway.recordHandoff(session.id, reason);
@@ -743,6 +1098,8 @@ export function register(host: CoreHost, services: FerryServices): void {
       const target = message.parts.find((part) => part.id === partId);
       if (target?.type !== 'approval_request')
         throw rpcDomainError(-32044, 'not_found', `Approval not found: ${partId}`);
+      if (target.kind === 'paid_model' && decision === 'allow_always')
+        throw rpcDomainError(-32010, 'conflict', 'Paid calls can only be approved once.');
       if (target.state !== 'pending')
         throw rpcDomainError(-32010, 'conflict', `Approval is already resolved: ${partId}`);
       const state: 'allowed_once' | 'allowed_always' | 'denied' =

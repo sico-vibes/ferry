@@ -742,7 +742,63 @@ export function SettingsCanvas() {
                   }}
                 />
               </SettingRow>
+              <SettingRow
+                title="Paid confirmation"
+                helper="Skip the first paid-call prompt only when this profile explicitly pre-authorizes paid models."
+              >
+                <Switch
+                  label="Pre-authorize paid models"
+                  checked={profileDraft.paidConfirmation.preauthorize}
+                  onCheckedChange={(value) => {
+                    mutateProfile('paidConfirmation', {
+                      ...profileDraft.paidConfirmation,
+                      preauthorize: value,
+                    });
+                  }}
+                />
+              </SettingRow>
+              <SettingRow
+                title="Subscription account calls"
+                helper="Ask before using subscription OAuth or CLI account lanes."
+              >
+                <Switch
+                  label="Confirm subscription account calls"
+                  checked={profileDraft.paidConfirmation.confirmSubscriptions}
+                  onCheckedChange={(value) => {
+                    mutateProfile('paidConfirmation', {
+                      ...profileDraft.paidConfirmation,
+                      confirmSubscriptions: value,
+                    });
+                  }}
+                />
+              </SettingRow>
+              <SettingRow
+                title="Trial and credit calls"
+                helper="Ask before using provider trial or credit lanes."
+              >
+                <Switch
+                  label="Confirm trial and credit calls"
+                  checked={profileDraft.paidConfirmation.confirmTrials}
+                  onCheckedChange={(value) => {
+                    mutateProfile('paidConfirmation', {
+                      ...profileDraft.paidConfirmation,
+                      confirmTrials: value,
+                    });
+                  }}
+                />
+              </SettingRow>
               <div className="form-grid">
+                <TextField
+                  label="Session cap ($)"
+                  value={profileDraft.caps.sessionUsd?.toString() ?? ''}
+                  placeholder="No cap"
+                  onChange={(value) => {
+                    mutateProfile('caps', {
+                      ...profileDraft.caps,
+                      sessionUsd: value ? Number(value) : null,
+                    });
+                  }}
+                />
                 <TextField
                   label="Daily cap ($)"
                   value={profileDraft.caps.dailyUsd?.toString() ?? ''}
@@ -1205,6 +1261,46 @@ export function SettingsCanvas() {
     if (section === 'Advanced')
       return (
         <>
+          <Group title="Paid spending caps">
+            <p className="muted">
+              Global limits apply across every profile. Profile limits can make these stricter.
+            </p>
+            <div className="form-grid">
+              <TextField
+                label="Global session cap ($)"
+                value={settings?.paidCaps.sessionUsd?.toString() ?? ''}
+                placeholder="No cap"
+                onChange={(value) =>
+                  settings &&
+                  void update({
+                    paidCaps: { ...settings.paidCaps, sessionUsd: value ? Number(value) : null },
+                  })
+                }
+              />
+              <TextField
+                label="Global daily cap ($)"
+                value={settings?.paidCaps.dailyUsd?.toString() ?? ''}
+                placeholder="No cap"
+                onChange={(value) =>
+                  settings &&
+                  void update({
+                    paidCaps: { ...settings.paidCaps, dailyUsd: value ? Number(value) : null },
+                  })
+                }
+              />
+              <TextField
+                label="Global monthly cap ($)"
+                value={settings?.paidCaps.monthlyUsd?.toString() ?? ''}
+                placeholder="No cap"
+                onChange={(value) =>
+                  settings &&
+                  void update({
+                    paidCaps: { ...settings.paidCaps, monthlyUsd: value ? Number(value) : null },
+                  })
+                }
+              />
+            </div>
+          </Group>
           <Group title="Advanced">
             <SettingRow
               title="Planner/editor roles"
