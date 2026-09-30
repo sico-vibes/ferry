@@ -152,12 +152,30 @@ const ThoughtLine: React.FC<ThoughtLineProps> = ({
     if (!isWorking) return undefined;
     const startedAt = performance.now();
     paint(0);
-    const id = setInterval(() => {
+    let id: ReturnType<typeof setInterval> | undefined;
+    const tick = () => {
       const ds = Math.floor((performance.now() - startedAt) / 100);
       paint(ds);
       if (settleAfter > 0 && ds >= Math.round(settleAfter * 10)) setAutoSettled(true);
-    }, 100);
-    return () => clearInterval(id);
+    };
+    const syncTimer = () => {
+      const active =
+        document.visibilityState === 'visible' &&
+        document.documentElement.dataset.windowBackgrounded !== 'true';
+      if (active && !id) id = setInterval(tick, 100);
+      else if (!active && id) {
+        clearInterval(id);
+        id = undefined;
+      }
+    };
+    document.addEventListener('visibilitychange', syncTimer);
+    window.addEventListener('ferry:window-background', syncTimer);
+    syncTimer();
+    return () => {
+      if (id) clearInterval(id);
+      document.removeEventListener('visibilitychange', syncTimer);
+      window.removeEventListener('ferry:window-background', syncTimer);
+    };
   }, [isWorking, elapsed, settleAfter]);
 
   useLayoutEffect(() => {

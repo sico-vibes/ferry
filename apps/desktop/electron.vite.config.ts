@@ -91,6 +91,7 @@ export default defineConfig({
       },
     },
     build: {
+      manifest: true,
       outDir: resolve('out/renderer'),
       emptyOutDir: true,
       rollupOptions: {

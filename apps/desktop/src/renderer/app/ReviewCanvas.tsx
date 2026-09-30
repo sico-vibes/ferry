@@ -29,12 +29,6 @@ export function ReviewCanvas() {
   const { data: runs, isLoading } = useQuery({
     queryKey: ['delegation', sessionId],
     queryFn: () => client.delegation.runs(sessionId),
-    refetchInterval: (query) =>
-      query.state.data?.some(
-        (item) => item.id === runId && (item.status === 'running' || item.status === 'queued'),
-      )
-        ? 1000
-        : false,
   });
   const run = runs?.find((item) => item.id === runId);
   const change = run?.touchedFiles[selected];

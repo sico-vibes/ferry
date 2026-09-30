@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Profiler, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { FileText, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
@@ -24,6 +24,15 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const [engineRestarting, setEngineRestarting] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateSnapshot | null>(null);
   useFerryEvents();
+  useEffect(() => {
+    if (!window.ferryHost) return;
+    const sync = (backgrounded: boolean) => {
+      document.documentElement.dataset.windowBackgrounded = String(backgrounded);
+      window.dispatchEvent(new CustomEvent('ferry:window-background', { detail: backgrounded }));
+    };
+    sync(window.ferryHost.isWindowBackgrounded());
+    return window.ferryHost.onWindowBackground(sync);
+  }, []);
   useEffect(() => {
     if (!window.ferryHost) return;
     let active = true;
@@ -408,7 +417,29 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
               </button>
             </div>
           )}
-          <div className="canvas-slot">{children}</div>
+          <div className="canvas-slot">
+            {import.meta.env.DEV && new URLSearchParams(location.search).has('perf-render') ? (
+              <Profiler
+                id={
+                  pathname.startsWith('/s/')
+                    ? 'Session'
+                    : pathname.startsWith('/explore')
+                      ? 'Explore'
+                      : pathname.startsWith('/settings')
+                        ? 'Settings'
+                        : 'Home'
+                }
+                onRender={(id) => {
+                  const counts = (window.ferryPerfRenderCounts ??= {});
+                  counts[id] = (counts[id] ?? 0) + 1;
+                }}
+              >
+                {children}
+              </Profiler>
+            ) : (
+              children
+            )}
+          </div>
           {appMounts.main.map((Mount, index) => (
             <Mount bottomOpen={bottomOpen} fullCanvasPage={fullCanvasPage} key={index} />
           ))}

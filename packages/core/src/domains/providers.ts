@@ -13,6 +13,7 @@ import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { invalidateSessionProviderKeyCache } from '../session-deps.js';
 import { getModelDiscovery } from './model-discovery.js';
+import { isCoreWindowActive, onCoreWindowActiveChange } from '../runtime-activity.js';
 
 const ProviderIdInput = ProviderIdSchema;
 const KeyInput = z.string().trim().min(1).max(4096);
@@ -89,8 +90,80 @@ export function register(host: CoreHost, services: FerryServices): void {
     probeBackoff.get(services) ?? new Map<string, { failures: number; retryAt: number }>();
   probeBackoff.set(services, providerProbeBackoff);
   const modelDiscovery = getModelDiscovery(host, services);
-  let healthRecoveryTimer: ReturnType<typeof setInterval> | undefined;
-  let offlineRecoveryTimer: ReturnType<typeof setInterval> | undefined;
+  let healthRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  let offlineRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleOfflineRecovery = () => {
+    if (offlineRecoveryTimer) clearTimeout(offlineRecoveryTimer);
+    offlineRecoveryTimer = undefined;
+    if (!isCoreWindowActive() || providerProbeBackoff.size === 0) return;
+    const now = services.clock.now().getTime();
+    const nextRetry = Math.min(...[...providerProbeBackoff.values()].map((item) => item.retryAt));
+    offlineRecoveryTimer = setTimeout(
+      () => {
+        offlineRecoveryTimer = undefined;
+        for (const [id, backoff] of providerProbeBackoff) {
+          if (backoff.retryAt > services.clock.now().getTime()) continue;
+          providerProbeBackoff.set(id, {
+            ...backoff,
+            retryAt: services.clock.now().getTime() + 30_000,
+          });
+          void host
+            .dispatch({
+              jsonrpc: '2.0',
+              id: 'offline-recovery',
+              method: 'providers.probe',
+              params: [id],
+            })
+            .catch(() => undefined);
+        }
+        scheduleOfflineRecovery();
+      },
+      Math.max(250, nextRetry - now),
+    );
+    offlineRecoveryTimer.unref();
+  };
+  const scheduleHealthRecovery = () => {
+    if (healthRecoveryTimer) clearTimeout(healthRecoveryTimer);
+    healthRecoveryTimer = undefined;
+    if (!isCoreWindowActive()) return;
+    healthRecoveryTimer = setTimeout(
+      () => {
+        healthRecoveryTimer = undefined;
+        for (const { provider: id } of services.catalog.providers) {
+          const saved = services.providers.get(id);
+          if (
+            saved &&
+            (saved.health !== 'ok' || saved.keyStatus === 'invalid') &&
+            services.providerKeys.get(id)
+          )
+            void modelDiscovery.refreshIfStale(id);
+        }
+        scheduleHealthRecovery();
+      },
+      60 * 60 * 1000,
+    );
+    healthRecoveryTimer.unref();
+  };
+  const unsubscribeWindowActivity = onCoreWindowActiveChange((active) => {
+    if (!active) {
+      if (offlineRecoveryTimer) clearTimeout(offlineRecoveryTimer);
+      if (healthRecoveryTimer) clearTimeout(healthRecoveryTimer);
+      offlineRecoveryTimer = undefined;
+      healthRecoveryTimer = undefined;
+      return;
+    }
+    services.catalog.providers.forEach(({ provider: id }) => {
+      const saved = services.providers.get(id);
+      if (
+        services.providerKeys.get(id) ||
+        (saved?.enabled &&
+          services.catalog.providers.find((item) => item.provider === id)?.key_required === false)
+      )
+        void modelDiscovery.refreshIfStale(id);
+    });
+    scheduleOfflineRecovery();
+    scheduleHealthRecovery();
+  });
   host.onStart(async () => {
     const testProviderId = services.env.FERRY_E2E_PROVIDER_ID;
     const testProviderKey = services.env.FERRY_E2E_PROVIDER_KEY;
@@ -121,50 +194,19 @@ export function register(host: CoreHost, services: FerryServices): void {
       const saved = services.providers.get(id);
       const key = services.providerKeys.get(id);
       const limits = services.catalog.providers.find((item) => item.provider === id);
-      if (key || (saved?.enabled && limits?.key_required === false))
+      if (isCoreWindowActive() && (key || (saved?.enabled && limits?.key_required === false)))
         void modelDiscovery.refreshIfStale(id);
     });
-    if (!offlineRecoveryTimer) {
-      offlineRecoveryTimer = setInterval(() => {
-        const now = services.clock.now().getTime();
-        for (const [id, backoff] of providerProbeBackoff) {
-          if (backoff.retryAt > now) continue;
-          void host
-            .dispatch({
-              jsonrpc: '2.0',
-              id: 'offline-recovery',
-              method: 'providers.probe',
-              params: [id],
-            })
-            .catch(() => undefined);
-        }
-      }, 1_000);
-      offlineRecoveryTimer.unref();
-    }
-    if (!healthRecoveryTimer) {
-      healthRecoveryTimer = setInterval(
-        () => {
-          for (const { provider: id } of services.catalog.providers) {
-            const saved = services.providers.get(id);
-            if (
-              saved &&
-              (saved.health !== 'ok' || saved.keyStatus === 'invalid') &&
-              services.providerKeys.get(id)
-            )
-              void modelDiscovery.refreshIfStale(id);
-          }
-        },
-        60 * 60 * 1000,
-      );
-      healthRecoveryTimer.unref();
-    }
+    scheduleOfflineRecovery();
+    scheduleHealthRecovery();
   });
   host.onShutdown(async () => {
-    if (healthRecoveryTimer) clearInterval(healthRecoveryTimer);
-    if (offlineRecoveryTimer) clearInterval(offlineRecoveryTimer);
+    if (healthRecoveryTimer) clearTimeout(healthRecoveryTimer);
+    if (offlineRecoveryTimer) clearTimeout(offlineRecoveryTimer);
     healthRecoveryTimer = undefined;
     offlineRecoveryTimer = undefined;
     await modelDiscovery.dispose();
+    unsubscribeWindowActivity();
   });
   host.registerDomain('providers', {
     list() {
@@ -257,6 +299,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           retryAt: nowMs + Math.min(60_000, 2_000 * 2 ** Math.min(failures - 1, 5)),
         });
       } else if (result.ok) providerProbeBackoff.delete(id);
+      scheduleOfflineRecovery();
       let discovered: Awaited<ReturnType<typeof discoverProviderModels>> = [];
       let discoverySucceeded = false;
       if (result.ok) {

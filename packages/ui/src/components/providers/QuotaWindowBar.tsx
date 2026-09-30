@@ -21,13 +21,38 @@ function countdown(resetAt: string | null, now: number): string | null {
 export function QuotaWindowBar({ window }: { window: QuotaWindow }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const timer = window.resetAt
-      ? globalThis.setInterval(() => {
-          setNow(Date.now());
-        }, 60_000)
-      : undefined;
+    if (!window.resetAt) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const active = () =>
+      document.visibilityState === 'visible' &&
+      document.documentElement.dataset.windowBackgrounded !== 'true';
+    const stop = () => {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+    };
+    const tick = () => {
+      timer = undefined;
+      if (!active()) return;
+      setNow(Date.now());
+      timer = globalThis.setTimeout(tick, 60_000);
+    };
+    const resume = () => {
+      stop();
+      if (active()) timer = globalThis.setTimeout(tick, 60_000);
+    };
+    const background = (event: Event) => {
+      document.documentElement.dataset.windowBackgrounded = String(
+        (event as CustomEvent<boolean>).detail,
+      );
+      resume();
+    };
+    document.addEventListener('visibilitychange', resume);
+    document.defaultView?.addEventListener('ferry:window-background', background);
+    resume();
     return () => {
-      if (timer) clearInterval(timer);
+      stop();
+      document.removeEventListener('visibilitychange', resume);
+      document.defaultView?.removeEventListener('ferry:window-background', background);
     };
   }, [window.resetAt]);
   const percent =

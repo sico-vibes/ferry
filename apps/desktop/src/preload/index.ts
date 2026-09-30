@@ -6,6 +6,8 @@ const releaseVersion =
   process.env.FERRY_RELEASE_VERSION ?? process.env.npm_package_version ?? '0.9.0';
 const e2eDiagnosticsEnabled = Boolean(process.env.FERRY_E2E_USER_DATA_DIR);
 let corePortAttempt = 0;
+let backgrounded = true;
+const windowBackgroundHandlers = new Set<(value: boolean) => void>();
 
 const rendererWindow = globalThis as unknown as {
   location: { origin: string; protocol: string };
@@ -16,6 +18,12 @@ let pendingWorkspacePath: string | null = null;
 ipcRenderer.on('ferry:open-workspace', (_event, path: string) => {
   if (openWorkspaceHandler) openWorkspaceHandler(path);
   else pendingWorkspacePath = path;
+});
+ipcRenderer.on('ferry:window-background', (_event, value: boolean) => {
+  backgrounded = value;
+  windowBackgroundHandlers.forEach((handler) => {
+    handler(value);
+  });
 });
 
 contextBridge.exposeInMainWorld('ferryHost', {
@@ -73,6 +81,18 @@ contextBridge.exposeInMainWorld('ferryHost', {
       openWorkspaceHandler = null;
     };
   },
+  isWindowBackgrounded: (): boolean => backgrounded,
+  onWindowBackground: (handler: (backgrounded: boolean) => void): (() => void) => {
+    windowBackgroundHandlers.add(handler);
+    handler(backgrounded);
+    return () => windowBackgroundHandlers.delete(handler);
+  },
+  getProcessMetrics: (): Promise<
+    { role: string; pid: number; rssBytes: number; cpuPercent: number }[]
+  > =>
+    ipcRenderer.invoke('ferry:process-metrics') as Promise<
+      { role: string; pid: number; rssBytes: number; cpuPercent: number }[]
+    >,
   updateTheme: (theme: 'dark' | 'light'): void => {
     ipcRenderer.send('ferry:theme', DesktopThemeSchema.parse(theme));
   },

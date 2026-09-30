@@ -680,7 +680,6 @@ function DelegationRunView({
   const { data: runs = [] } = useQuery({
     queryKey: ['delegation', sessionId],
     queryFn: () => client.delegation.runs(sessionId),
-    refetchInterval: 1000,
   });
   const run = runs.find((item) => item.id === runId);
   if (!run) return <div className="text-label text-text-3">Loading delegated work…</div>;
@@ -902,23 +901,36 @@ export function SessionCanvas() {
     overscan: 5,
   });
   useEffect(() => {
+    const pending = new Map<string, string>();
+    let frame = 0;
+    const flush = () => {
+      frame = 0;
+      for (const [partId, text] of pending) {
+        setStreamingPartId(partId);
+        if (!pinnedToBottom.current) {
+          streamAnchor.current ??= captureTranscriptAnchor(viewport.current);
+          setNewOutputCount((count) => count + 1);
+        }
+        publishStreamedText(partId, text);
+      }
+      pending.clear();
+    };
     const off = client.on('session.delta', (event) => {
       if (event.sessionId !== sessionId) return;
-      setStreamingPartId(event.partId);
-      if (!pinnedToBottom.current) {
-        streamAnchor.current ??= captureTranscriptAnchor(viewport.current);
-        setNewOutputCount((count) => count + 1);
-      }
-      publishStreamedText(event.partId, event.textDelta);
+      pending.set(event.partId, `${pending.get(event.partId) ?? ''}${event.textDelta}`);
+      if (!frame) frame = requestAnimationFrame(flush);
     });
     const partOff = client.on('session.part', (event) => {
       if (event.sessionId !== sessionId) return;
+      flush();
       clearStreamedText(event.part.id);
       setStreamingPartId((current) => (current === event.part.id ? null : current));
     });
     return () => {
       off();
       partOff();
+      if (frame) cancelAnimationFrame(frame);
+      flush();
     };
   }, [client, sessionId]);
   useEffect(() => {
@@ -936,22 +948,27 @@ export function SessionCanvas() {
     frameId = requestAnimationFrame(sampleFrame);
     const speedParam = Number(new URLSearchParams(location.search).get('speed'));
     const streamSpeed = Number.isFinite(speedParam) && speedParam > 0 ? speedParam : 1;
-    const stream = window.setInterval(() => {
-      if (!pinnedToBottom.current) {
-        streamAnchor.current ??= captureTranscriptAnchor(viewport.current);
-        setNewOutputCount((count) => count + 1);
+    let stream = 0;
+    const emit = () => {
+      if (document.visibilityState === 'visible' && !window.ferryHost?.isWindowBackgrounded()) {
+        if (!pinnedToBottom.current) {
+          streamAnchor.current ??= captureTranscriptAnchor(viewport.current);
+          setNewOutputCount((count) => count + 1);
+        }
+        setStreamingPartId('perf-demo-stream');
+        publishStreamedText('perf-demo-stream', ' token ');
       }
-      setStreamingPartId('perf-demo-stream');
-      publishStreamedText('perf-demo-stream', ' token ');
-    }, 80 * streamSpeed);
+      stream = window.setTimeout(emit, 80 * streamSpeed);
+    };
+    stream = window.setTimeout(emit, 80 * streamSpeed);
     const finish = window.setTimeout(() => {
-      window.clearInterval(stream);
+      window.clearTimeout(stream);
       cancelAnimationFrame(frameId);
       window.ferryPerfFrameTimes = frameTimes;
     }, 4_000);
     return () => {
       window.ferryPerfReady = false;
-      window.clearInterval(stream);
+      window.clearTimeout(stream);
       window.clearTimeout(finish);
       cancelAnimationFrame(frameId);
     };

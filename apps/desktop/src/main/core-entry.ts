@@ -1,6 +1,6 @@
 import type { MessagePortMain } from 'electron';
 import { join } from 'node:path';
-import { createCoreHost, runNativeSelfTest } from '@ferry/core';
+import { createCoreHost, runNativeSelfTest, setCoreWindowActive } from '@ferry/core';
 
 let activePort: MessagePortMain | undefined;
 let inputHandler: ((message: unknown) => void) | undefined;
@@ -14,6 +14,14 @@ parentPort.on('message', (event) => {
     if (message.type === 'ferry:shutdown') {
       shutdownRequested = true;
       if (host) void host.stop().finally(() => process.exit(0));
+      return;
+    }
+    if (
+      message.type === 'ferry:ui-active' &&
+      'active' in message &&
+      typeof message.active === 'boolean'
+    ) {
+      setCoreWindowActive(message.active);
       return;
     }
   }

@@ -7,6 +7,9 @@ const router = createRouter({
   ...(location.protocol === 'file:' ? { history: createHashHistory() } : {}),
 });
 
+if (import.meta.env.DEV && new URLSearchParams(location.search).has('perf-render'))
+  window.ferryPerfNavigate = (path) => router.navigate({ to: path as never });
+
 declare module '@tanstack/react-router' {
   interface Register {
     router: typeof router;
