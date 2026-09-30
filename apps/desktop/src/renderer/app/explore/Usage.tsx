@@ -32,7 +32,6 @@ export function UsageCanvas() {
   const navigate = useNavigate();
   const cache = useQueryClient();
   const realQuota = window.ferryHybrid?.getRealDomains().includes('quota') ?? false;
-  const realOptimizer = window.ferryHybrid?.getRealDomains().includes('optimizer') ?? false;
   const [metric, setMetric] = useState<UsageMetric>('requests');
   const { data: providers = [] } = useQuery({
     queryKey: ['providers'],
@@ -276,19 +275,28 @@ export function UsageCanvas() {
           <Section title="Optimizer savings" ariaLabel="Optimizer savings">
             <header className="mb-3 flex items-center gap-2">
               <span className="mr-auto" />
-              {!realOptimizer && optimizer?.demo && (
+              {(!optimizer || optimizer.demo) && (
                 <span className="rounded-pill bg-raised px-2 py-1 text-[10px] leading-[14px] text-text-2">
-                  Demo data
+                  No measurements
                 </span>
               )}
             </header>
-            <p className="text-[18px] leading-6 font-semibold tabular-nums text-text-1">
-              {format(optimizer?.today.savedTokens ?? 0)}{' '}
-              <span className="text-label font-medium text-text-2">tokens today</span>
-            </p>
-            <p className="mt-1 text-meta text-text-3">
-              {optimizer?.today.percent ?? 0}% saved across optimized output
-            </p>
+            {!optimizer || optimizer.demo ? (
+              <p className="text-meta text-text-3">
+                Measured token totals will appear after optimizer events are recorded.
+              </p>
+            ) : (
+              <>
+                <p className="text-[18px] leading-6 font-semibold tabular-nums text-text-1">
+                  {format(optimizer.today.savedTokens)}{' '}
+                  <span className="text-label font-medium text-text-2">tokens saved today</span>
+                </p>
+                <p className="mt-1 text-meta text-text-3">
+                  {optimizer.today.percent}% across {format(optimizer.today.samples)} measured
+                  events
+                </p>
+              </>
+            )}
             <ul className="mt-3 grid gap-2">
               {(optimizer?.byOptimizer ?? []).map((item) => (
                 <li className="flex items-center justify-between gap-3 text-meta" key={item.id}>

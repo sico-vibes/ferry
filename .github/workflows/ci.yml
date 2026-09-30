@@ -38,3 +38,5 @@ jobs:
         run: node scripts/check-text.mjs
       - if: ${{ !cancelled() }}
         run: pnpm exec prettier --check .
+      - if: ${{ !cancelled() }}
+        run: pnpm bench:optimizers

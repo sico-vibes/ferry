@@ -457,9 +457,9 @@ export function register(host: CoreHost, services: FerryServices): void {
             const optimizerEvent = {
               id,
               sessionId: session.id,
-              kind: event.tool,
-              beforeTokens: event.originalTokens,
-              afterTokens: event.filteredTokens,
+              kind: event.kind,
+              beforeTokens: event.beforeTokens,
+              afterTokens: event.afterTokens,
               timestamp: services.clock.now().toISOString(),
             };
             services.optimizerEvents.put(optimizerEvent);
@@ -649,9 +649,9 @@ export function register(host: CoreHost, services: FerryServices): void {
                 { once: true },
               );
             }),
-          filterOutput: async (name, output) => {
+          filterOutput: async (name, output, command) => {
             const { optimizeOutput } = await import('@ferry/optimizer');
-            const result = optimizeOutput(name, output);
+            const result = optimizeOutput(command ?? name, output);
             const handle = result.output === output ? undefined : newId('recovery');
             if (handle)
               services.db.client

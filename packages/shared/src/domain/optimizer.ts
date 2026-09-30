@@ -1,7 +1,11 @@
 import { z } from 'zod';
 export const OptimizerStatsSchema = z.object({
   demo: z.boolean(),
-  today: z.object({ savedTokens: z.number().nonnegative(), percent: z.number().min(0).max(100) }),
+  today: z.object({
+    savedTokens: z.number().nonnegative(),
+    percent: z.number().min(0).max(100),
+    samples: z.number().int().nonnegative(),
+  }),
   byOptimizer: z.array(
     z.object({
       id: z.string(),

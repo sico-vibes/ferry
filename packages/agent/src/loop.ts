@@ -15,7 +15,15 @@ import {
   promptCacheOptions,
   normalizeToolSchema,
 } from '@ferry/providers';
-import { optimizeOutput, InMemoryBlobStore, readOutput, compactContext } from '@ferry/optimizer';
+import {
+  optimizeOutput,
+  InMemoryBlobStore,
+  readOutput,
+  compactContext,
+  optimizeContextMessages,
+  estimateTokens as estimateOptimizerTokens,
+  TERSE_LEVEL_TEXT,
+} from '@ferry/optimizer';
 import {
   classifyStep,
   scoreModels,
@@ -80,9 +88,9 @@ export type AgentEvent =
   | { type: 'quota.updated'; observation: RawCallObservation }
   | {
       type: 'optimizer.event';
-      tool: string;
-      originalTokens: number;
-      filteredTokens: number;
+      kind: string;
+      beforeTokens: number;
+      afterTokens: number;
       recoveryHandle: string | null;
     }
   | { type: 'toast'; message: string; tone: 'info' | 'warning' | 'error' };
@@ -366,10 +374,20 @@ export class AgentLoop {
           ...(result.handle ? { recoveryHandle: result.handle } : {}),
         };
       },
-      readRecovery: async (handle) =>
-        this.options.filterOutput
+      readRecovery: async (handle) => {
+        const output = this.options.filterOutput
           ? ((await this.options.readRecovery?.(handle)) ?? readOutput(this.recoveryStore, handle))
-          : (readOutput(this.recoveryStore, handle) ?? this.options.readRecovery?.(handle)),
+          : (readOutput(this.recoveryStore, handle) ?? (await this.options.readRecovery?.(handle)));
+        if (output !== undefined)
+          this.options.emit({
+            type: 'optimizer.event',
+            kind: 'recovery-read',
+            beforeTokens: 0,
+            afterTokens: estimateOptimizerTokens(output),
+            recoveryHandle: handle,
+          });
+        return output;
+      },
       ...(this.options.toolSources ? { sources: this.options.toolSources } : {}),
       updateTask: (task) => {
         taskRecord = task;
@@ -412,7 +430,11 @@ export class AgentLoop {
           messages,
           contextWindow,
           this.estimates,
+          this.recoveryStore,
+          sessionId,
         );
+        for (const event of compactedContext.events)
+          this.options.emit({ type: 'optimizer.event', ...event });
         messages = compactedContext.messages;
         if (compactedContext.summary) {
           taskRecord = {
@@ -967,6 +989,33 @@ export class AgentLoop {
           }
         }
         this.activeMessageParts.delete(sessionId);
+        if (this.options.terseLevel && this.options.terseLevel !== 'off') {
+          const tersePromptTokens = estimateOptimizerTokens(
+            TERSE_LEVEL_TEXT[
+              this.options.terseLevel === 'lite'
+                ? 'Lite'
+                : this.options.terseLevel === 'full'
+                  ? 'Full'
+                  : 'Ultra'
+            ],
+          );
+          this.options.emit({
+            type: 'optimizer.event',
+            kind: 'terse-prompt',
+            beforeTokens: estimateOptimizerTokens(TERSE_LEVEL_TEXT.Off),
+            afterTokens: tersePromptTokens,
+            recoveryHandle: null,
+          });
+          const responseTokens =
+            generated.outputTokens ?? estimateOptimizerTokens(generated.text ?? '');
+          this.options.emit({
+            type: 'optimizer.event',
+            kind: 'terse-response',
+            beforeTokens: responseTokens,
+            afterTokens: responseTokens,
+            recoveryHandle: null,
+          });
+        }
         this.options.onUsage?.({
           id: newId('usage'),
           providerId: model.providerId,
@@ -1933,7 +1982,139 @@ function compactConversationMessages(
   messages: readonly Message[],
   contextWindow: number,
   estimate: (text: string) => number,
-): { messages: Message[]; summary: string } {
+  blobStore: InMemoryBlobStore,
+  sessionId: string,
+): {
+  messages: Message[];
+  summary: string;
+  events: {
+    kind: string;
+    beforeTokens: number;
+    afterTokens: number;
+    recoveryHandle: string | null;
+  }[];
+} {
+  const seenReads = new Map<string, string>();
+  const events: {
+    kind: string;
+    beforeTokens: number;
+    afterTokens: number;
+    recoveryHandle: string | null;
+  }[] = [];
+  const hygienic = messages.map((message, messageIndex) => ({
+    ...message,
+    parts: message.parts.map((part) => {
+      if (part.type !== 'tool_call' || !part.output) return part;
+      const isStale = messageIndex < messages.length - 10;
+      const isPayload = /^\s*(?:\{|\[|<!doctype html|<html)/i.test(part.output.text);
+      if (isStale && estimate(part.output.text) > 240 && !isPayload) {
+        const handle = part.output.recoveryHandle ?? blobStore.put(sessionId, part.output.text);
+        const text = summarizeStaleToolResult(part.output.text, handle);
+        events.push({
+          kind: 'context-hygiene',
+          beforeTokens: estimate(part.output.text),
+          afterTokens: estimate(text),
+          recoveryHandle: handle,
+        });
+        return {
+          ...part,
+          output: {
+            ...part.output,
+            text,
+            filtered: true,
+            originalTokens: estimate(part.output.text),
+            filteredTokens: estimate(text),
+            recoveryHandle: handle,
+          },
+        };
+      }
+      if (part.tool !== 'read_file') return part;
+      const path = typeof part.args.path === 'string' ? part.args.path : '';
+      const previous = seenReads.get(path);
+      seenReads.set(path, part.output.text);
+      if (!path || previous !== part.output.text) return part;
+      const handle = part.output.recoveryHandle ?? blobStore.put(sessionId, part.output.text);
+      const text = `[${path} unchanged since its earlier read. Full output: ${handle}]`;
+      events.push({
+        kind: 'context-hygiene',
+        beforeTokens: estimate(part.output.text),
+        afterTokens: estimate(text),
+        recoveryHandle: handle,
+      });
+      return {
+        ...part,
+        output: {
+          ...part.output,
+          text,
+          filtered: true,
+          originalTokens: estimate(part.output.text),
+          filteredTokens: estimate(text),
+          recoveryHandle: handle,
+        },
+      };
+    }),
+  }));
+  const hygieneInput = hygienic.flatMap((message, messageIndex) =>
+    message.parts.flatMap((part) => {
+      if (part.type !== 'tool_call' || !part.output) return [];
+      const text = part.output.text;
+      const kind = text.startsWith('Older tool result summary:')
+        ? 'context-summary'
+        : part.tool === 'read_file'
+          ? 'file-read'
+          : /^\s*(?:\{|\[)/.test(text)
+            ? 'json'
+            : /^\s*<!doctype html|^\s*<html/i.test(text)
+              ? 'html'
+              : 'tool-result';
+      return [
+        {
+          key: `${message.id}:${part.id}`,
+          role: message.role,
+          content: text,
+          kind,
+          step: messageIndex + 1,
+          ...(part.tool === 'read_file'
+            ? { path: typeof part.args.path === 'string' ? part.args.path : '' }
+            : {}),
+          ...(part.output.recoveryHandle ? { handle: part.output.recoveryHandle } : {}),
+        },
+      ];
+    }),
+  );
+  const hygieneResult = optimizeContextMessages(hygieneInput, {
+    currentStep: messages.length,
+    staleAfterSteps: 10,
+    blobStore,
+    sessionId,
+  });
+  if (hygieneResult.event.afterTokens < hygieneResult.event.beforeTokens)
+    events.push({
+      kind: 'context-hygiene',
+      beforeTokens: hygieneResult.event.beforeTokens,
+      afterTokens: hygieneResult.event.afterTokens,
+      recoveryHandle: null,
+    });
+  const hygieneByKey = new Map(hygieneResult.output.map((entry) => [entry.key, entry]));
+  const compressed = hygienic.map((message) => ({
+    ...message,
+    parts: message.parts.map((part) => {
+      if (part.type !== 'tool_call' || !part.output) return part;
+      const updated = hygieneByKey.get(`${message.id}:${part.id}`);
+      if (!updated || updated.content === part.output.text) return part;
+      return {
+        ...part,
+        output: {
+          ...part.output,
+          text: updated.content,
+          filtered: true,
+          originalTokens: estimate(part.output.text),
+          filteredTokens: estimate(updated.content),
+          recoveryHandle: updated.handle ?? part.output.recoveryHandle,
+        },
+      };
+    }),
+  }));
   const outputs: {
     key: string;
     role: string;
@@ -1942,7 +2123,7 @@ function compactConversationMessages(
     protected: boolean;
     recoveryHandle?: string;
   }[] = [];
-  for (const [messageIndex, message] of messages.entries())
+  for (const [messageIndex, message] of compressed.entries())
     for (const part of message.parts)
       if (part.type === 'tool_call' && part.output)
         outputs.push({
@@ -1953,7 +2134,7 @@ function compactConversationMessages(
           protected: messageIndex >= messages.length - 8,
           ...(part.output.recoveryHandle ? { recoveryHandle: part.output.recoveryHandle } : {}),
         });
-  if (!outputs.length) return { messages: [...messages], summary: '' };
+  if (!outputs.length) return { messages: compressed, summary: '', events };
   const compacted = compactContext(outputs, contextWindow, estimate, {
     threshold: 0.9,
     protectedTail: 4,
@@ -1961,8 +2142,13 @@ function compactConversationMessages(
     maxToolBytes: 10_000,
   });
   const replacements = new Map(compacted.messages.map((entry) => [entry.key, entry.content]));
+  const beforeTokens = outputs.reduce((sum, output) => sum + estimate(output.content), 0);
+  const afterTokens = compacted.messages.reduce((sum, output) => sum + estimate(output.content), 0);
+  if (afterTokens < beforeTokens)
+    events.push({ kind: 'context-compaction', beforeTokens, afterTokens, recoveryHandle: null });
   return {
-    messages: messages.map((message) => ({
+    events,
+    messages: compressed.map((message) => ({
       ...message,
       parts: message.parts.map((part) =>
         part.type === 'tool_call' && part.output && replacements.has(`${message.id}:${part.id}`)
@@ -2023,6 +2209,17 @@ function compactToolHistoryText(text: string): string {
   const limit = 1_600;
   if (text.length <= limit) return text;
   return `${text.slice(0, 1_250)}\n[Earlier tool output shortened; inspect again if needed.]\n${text.slice(-250)}`;
+}
+
+function summarizeStaleToolResult(text: string, handle: string): string {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim());
+  const diagnostics = lines.filter((line) =>
+    /(?:\berror\b|\bwarning\b|\bfailed\b|\bFAIL(?:ED)?\b|AssertionError|Traceback|(?:^|\s)[\w./-]+\.(?:tsx?|jsx?|py|rs)(?::\d+)?)/i.test(
+      line,
+    ),
+  );
+  const retained = [...new Set([lines[0] ?? '(empty output)', ...diagnostics])].slice(0, 12);
+  return `Older tool result summary:\n${retained.join('\n')}\n[recover ${handle}]`;
 }
 
 function rootErrorCause(error: unknown): unknown {

@@ -771,8 +771,7 @@ describe('@ferry/agent', () => {
     }
   });
 
-  it('runs all eight eval scenarios against fixture repos and scripted fake OpenAI responses', async () => {
-    expect(AGENT_EVALS).toHaveLength(8);
+  it('runs all configured eval scenarios against fixture repos and scripted fake OpenAI responses', async () => {
     const report = await runAgentEvals({
       run: async (fixture) => {
         const repo = await createFixtureRepo(fixture.template);
@@ -826,7 +825,11 @@ describe('@ferry/agent', () => {
         }
       },
     });
-    expect(report).toMatchObject({ mode: 'fake', passed: 8, total: 8 });
+    expect(report).toMatchObject({
+      mode: 'fake',
+      passed: AGENT_EVALS.length,
+      total: AGENT_EVALS.length,
+    });
     expect(report.results.map(({ id, success }) => [id, success])).toEqual(
       AGENT_EVALS.map(({ id }) => [id, true]),
     );

@@ -56,7 +56,7 @@ describe('golden tool-output fixtures', () => {
     [
       'npx vitest run',
       ' RUN  v3.2.0 C:/repo\n ✓ src/a.test.ts (4 tests)\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n',
-      'All tests passed.',
+      ' Test Files  1 passed (1)\n      Tests  4 passed (4)',
     ],
     [
       'Get-ChildItem -Recurse',
@@ -71,7 +71,12 @@ describe('golden tool-output fixtures', () => {
     [
       'pytest -q',
       '...F.                                                                    [100%]\n=================================== FAILURES ===================================\n________________ test_bad __________________\nE   AssertionError: 1 != 2\n=========================== short test summary info ===========================\n1 failed, 4 passed in 0.03s\n',
-      '...F.                                                                    [100%]\n________________ test_bad __________________\nE   AssertionError: 1 != 2\n1 failed, 4 passed in 0.03s',
+      '...F.                                                                    [100%]\n=================================== FAILURES ===================================\n________________ test_bad __________________\nE   AssertionError: 1 != 2\n=========================== short test summary info ===========================\n1 failed, 4 passed in 0.03s',
+    ],
+    [
+      'go test ./...',
+      `${'noise line\n'.repeat(80)}ok example.com/ferry/core 0.04s\n? example.com/ferry/docs [no test files]\nFAIL example.com/ferry/api 0.02s`,
+      'ok example.com/ferry/core 0.04s\n? example.com/ferry/docs [no test files]\nFAIL example.com/ferry/api 0.02s',
     ],
   ] as const;
   for (const [command, input, expected] of fixtures)
@@ -216,10 +221,15 @@ describe('large realistic golden fixtures', () => {
     it(`never inflates ${file}`, () => {
       const input = largeFixture(file);
       const result = filterToolOutput(command, input, { maxLines: 120 });
+      expect(result.output.length).toBeLessThanOrEqual(input.length);
       expect(result.event.beforeTokens).toBe(estimateTokens(input));
       expect(result.event.afterTokens).toBeLessThanOrEqual(result.event.beforeTokens);
       if (result.event.afterTokens >= result.event.beforeTokens) expect(result.output).toBe(input);
-      if (file === 'jest-500-pass.txt') expect(result.output).toBe('All tests passed.');
+      if (file === 'jest-500-pass.txt') {
+        expect(result.output).toContain('Test Suites: 25 passed, 25 total');
+        expect(result.output).toContain('Tests:       500 passed, 500 total');
+        expect(result.output).toContain('Snapshots:   18 passed, 18 total');
+      }
       if (file === 'git-diff-800-lines-12-files.txt') {
         expect(result.output).toContain('diff --stat');
         expect(result.output).toContain('12 files changed');

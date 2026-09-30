@@ -143,7 +143,11 @@ export function detectOutputKind(
     )
   )
     return 'test';
-  if (/(^|\s)(tsc|eslint|ruff|cargo\s+build)(\s|$)/.test(cmd)) return 'build';
+  if (
+    /(^|\s)(tsc|eslint|ruff|cargo\s+build)(\s|$)/.test(cmd) ||
+    /(^|\s)(?:pnpm|npm|yarn)\s+(?:run\s+)?build(\s|$)/.test(cmd)
+  )
+    return 'build';
   if (/(^|\s)(npm|pnpm|yarn|pip)\s+(install|i|add)(\s|$)/.test(cmd)) return 'package-install';
   if (/(^|\s)(ls|dir|tree|gci|get-childitem)(\s|$)/.test(cmd) || cmd.includes('get-childitem'))
     return 'filesystem';
@@ -298,7 +302,15 @@ function testCandidate(input: string): string {
     /(Test Files|Tests\s+|Suites\s+|Snapshots\s+|Time\s+|passed|failed|skipped|no tests|All tests passed|ok\s+\S+\s+\(\d)/i.test(
       line,
     );
-  const failed = sourceLines.some(hasFailure);
+  const isRunnerSummary = (line: string): boolean =>
+    /^\s*(?:Test Files?\b|Test Suites?\s*:|Tests?\s*:|Snapshots?\s*:|Time\s*:|Duration\b|test result\s*:|={3,}\s*(?:short test summary info|\d+\s+(?:failed|passed))|\d+\s+(?:failed|passed|skipped)\b|FAIL\s+\S+(?:\s+[\d.]+s)?\s*$|ok\s+\S+\s+(?:\(\d+(?:\.\d+)?s\)|\d+(?:\.\d+)?s)|\?\s+\S+\s+\[no test files\])/i.test(
+      line,
+    );
+  const startsFailureBlock = (line: string): boolean =>
+    /^\s*(?:FAIL\s+\S|FAILED\b|ERROR\b|not ok\b|--- FAIL:|=+\s*FAILURES\s*=+|failures\s*:|\u25cf\s|\u2715|\u00d7|Expected:|Received:|E\s+AssertionError|Traceback\b|AssertionError\b|error:|Error:)/i.test(
+      line,
+    );
+  const failed = sourceLines.some((line) => hasFailure(line) || startsFailureBlock(line));
   const nonZeroExitCode =
     runnerExitCode !== undefined
       ? runnerExitCode !== 0
@@ -309,10 +321,26 @@ function testCandidate(input: string): string {
     ) &&
     !failed &&
     !nonZeroExitCode
-  )
-    return 'All tests passed.';
+  ) {
+    const successSummary = sourceLines.filter((line) => hasSummary(line) || isRunnerSummary(line));
+    return successSummary.length ? successSummary.join('\n') : 'All tests passed.';
+  }
+  const failureBlockLines = new Set<number>();
+  for (let index = 0; index < sourceLines.length; index++) {
+    if (!startsFailureBlock(sourceLines[index] ?? '')) continue;
+    for (let blockIndex = index; blockIndex < sourceLines.length; blockIndex++) {
+      if (blockIndex > index && isRunnerSummary(sourceLines[blockIndex] ?? '')) break;
+      failureBlockLines.add(blockIndex);
+    }
+  }
   const kept = sourceLines
-    .filter((line) => hasFailure(line) || hasSummary(line))
+    .filter(
+      (line, index) =>
+        hasFailure(line) ||
+        hasSummary(line) ||
+        isRunnerSummary(line) ||
+        failureBlockLines.has(index),
+    )
     .map((line) => (/^\s*❯/.test(line) ? line.trimStart() : line));
   if (nonZeroExitCode) {
     const exitSummary =
@@ -328,29 +356,34 @@ function testCandidate(input: string): string {
       : genericFilter(input, { maxLines: 30 });
 }
 function buildCandidate(input: string): string {
-  const lines = genericFilter(input, { maxLines: 2000 }).split('\n');
-  const errors = new Map<string, Set<string>>();
-  const summary: string[] = [];
-  for (const line of lines) {
-    const m =
-      /^(.+?\.(?:tsx?|jsx?|py|rs))(?::\d+(?::\d+)?)?:\s*(?:(error|warning|note)(?:\[[^\]]+\])?:\s*)?(.*)$/i.exec(
-        line,
-      );
-    if (!m) {
-      if (/(found \d+|no errors|finished|error\[|warning:|failed|successfully)/i.test(line))
-        summary.push(line);
-      continue;
+  const result: string[] = [];
+  let inDiagnosticBlock = false;
+  const isPathDiagnostic = (line: string): boolean =>
+    /^\s*(?:[A-Za-z]:)?[^\s].*?\.(?:tsx?|jsx?|py|rs)(?:\(\d+(?:,\d+)?\)|:\d+(?::\d+)?)(?::|\s|$)/i.test(
+      line,
+    );
+  const isPathHeader = (line: string): boolean =>
+    /^\s*(?:[A-Za-z]:)?[^\s].*?\.(?:tsx?|jsx?|py|rs)\s*$/i.test(line);
+  const isDiagnostic = (line: string): boolean =>
+    /^\s*(?:error|warning|note)(?:\[[^\]]+\])?(?::|\s)/i.test(line);
+  const isSummary = (line: string): boolean =>
+    /(?:found \d+|no errors|finished|error\s*\[|warning:|build failed|failed to compile|successfully built)/i.test(
+      line,
+    );
+  for (const line of input.split(/\r?\n/)) {
+    if (isSummary(line)) {
+      result.push(line);
+      inDiagnosticBlock = false;
+    } else if (isPathDiagnostic(line) || isPathHeader(line) || isDiagnostic(line)) {
+      result.push(line);
+      inDiagnosticBlock = true;
+    } else if (inDiagnosticBlock && (!line.trim() || /^\s+/.test(line))) {
+      result.push(line);
+    } else {
+      inDiagnosticBlock = false;
     }
-    const file = m[1] ?? '';
-    const bucket = errors.get(file) ?? new Set<string>();
-    bucket.add(`${m[2] ? `${m[2]}: ` : ''}${m[3] ?? ''}`);
-    errors.set(file, bucket);
   }
-  const result = [...errors].map(
-    ([file, messages]) => `${file}:\n${[...messages].map((message) => `  ${message}`).join('\n')}`,
-  );
-  result.push(...summary);
-  return result.length ? result.join('\n') : 'No build or lint diagnostics.';
+  return result.some((line) => line.trim()) ? result.join('\n') : 'No build or lint diagnostics.';
 }
 function packageInstallCandidate(input: string): string {
   const lines = input.split(/\r?\n/);

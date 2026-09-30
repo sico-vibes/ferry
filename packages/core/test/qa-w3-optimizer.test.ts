@@ -11,7 +11,11 @@ interface StoredEvent {
 }
 
 function putEvent(h: CoreHarness, event: StoredEvent): void {
-  h.services.optimizerEvents.put(event);
+  const stored: StoredEvent = {
+    ...event,
+    timestamp: event.timestamp ?? new Date().toISOString(),
+  };
+  h.services.optimizerEvents.put(stored);
 }
 
 describe('QA W3 optimizer: honest stats', () => {
@@ -42,6 +46,7 @@ describe('QA W3 optimizer: honest stats', () => {
       expect(stats.demo).toBe(false);
       expect(stats.today.savedTokens).toBe(600);
       expect(stats.today.percent).toBeCloseTo(60, 5);
+      expect(stats.today.samples).toBe(1);
     } finally {
       await h.close();
     }

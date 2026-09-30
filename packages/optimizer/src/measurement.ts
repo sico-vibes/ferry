@@ -9,7 +9,11 @@ export type OptimizerKind =
   | 'build'
   | 'package-install'
   | 'filesystem'
-  | 'context-hygiene';
+  | 'context-hygiene'
+  | 'terse-prompt'
+  | 'terse-response'
+  | 'recovery-read'
+  | 'context-compaction';
 export type MeasuredOptimizerKind = OptimizerKind | 'benchmark-bypass';
 export interface OptimizationEvent {
   kind: MeasuredOptimizerKind;
@@ -32,7 +36,9 @@ export function estimateTokens(text: string): number {
 }
 
 export function keepOnlyIfSmaller(original: string, candidate: string): string {
-  return estimateTokens(candidate) < estimateTokens(original) ? candidate : original;
+  return candidate.length <= original.length && estimateTokens(candidate) < estimateTokens(original)
+    ? candidate
+    : original;
 }
 
 export function measured<T>(
