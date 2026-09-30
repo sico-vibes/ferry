@@ -1628,7 +1628,14 @@ export class AgentLoop {
     this.options.emit({ type: 'session.part', sessionId, messageId: target.id, part });
   }
   private replacePart(sessionId: string, part: MessagePart): void {
-    this.options.store.replacePart(sessionId, part);
+    const updated = this.options.store.replacePart(sessionId, part);
+    if (updated)
+      this.options.emit({
+        type: 'session.part',
+        sessionId,
+        messageId: updated.id,
+        part,
+      });
   }
   private replaceMessageParts(
     message: Message,

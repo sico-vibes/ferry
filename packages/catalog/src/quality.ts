@@ -471,11 +471,12 @@ export async function loadFreeCodingRanking(
     }
   >;
   const candidates: FreeModelCandidate[] = [];
-  const liveRefs = liveModelRefs ? new Set(liveModelRefs.map((ref) => ref.toLowerCase())) : null;
+  // This function feeds a current availability ranking. Snapshot data is a
+  // metadata source only; without live refs we cannot claim a model is offered.
+  const liveRefs = new Set((liveModelRefs ?? []).map((ref) => ref.toLowerCase()));
   for (const [providerId, dataProvider] of Object.entries(freeProviderSources)) {
     for (const [id, model] of Object.entries(modelData[dataProvider]?.models ?? {})) {
       if (
-        liveRefs &&
         !liveRefs.has(`${providerId}/${id}`.toLowerCase()) &&
         !liveRefs.has(`${dataProvider}/${id}`.toLowerCase())
       )
@@ -504,7 +505,7 @@ export async function loadFreeCodingRanking(
     }[];
   };
   for (const model of openRouter.data ?? []) {
-    if (liveRefs && !liveRefs.has(`openrouter/${model.id}`.toLowerCase())) continue;
+    if (!liveRefs.has(`openrouter/${model.id}`.toLowerCase())) continue;
     const free =
       model.id.endsWith(':free') ||
       (Number(model.pricing?.prompt) === 0 && Number(model.pricing?.completion) === 0);

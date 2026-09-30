@@ -24,7 +24,8 @@
     "check:tasks": "turbo run typecheck lint test --continue --concurrency=50%",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "catalog:sync-datasets": "node scripts/catalog-sync-datasets.mjs"
+    "catalog:sync-datasets": "node scripts/catalog-sync-datasets.mjs",
+    "catalog:check": "node scripts/catalog-check.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

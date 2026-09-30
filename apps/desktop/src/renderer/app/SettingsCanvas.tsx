@@ -1251,6 +1251,7 @@ export function SettingsCanvas() {
                 <div className="inline-control">
                   <span
                     className="routing-info"
+                    role="img"
                     title={row.info}
                     aria-label={`${row.title} trade-off`}
                   >

@@ -556,12 +556,27 @@ try {
     await page.evaluate((sessionId) => {
       window.e2eStreamedText = '';
       window.e2eHandoffParts = [];
+      window.e2eAgentEvents = [];
       window.ferryRpcClient.on('session.delta', (event) => {
         if (event.sessionId === sessionId) window.e2eStreamedText += event.textDelta;
       });
       window.ferryRpcClient.on('session.part', (event) => {
-        if (event.sessionId === sessionId && event.part.type === 'handoff_marker')
-          window.e2eHandoffParts.push(event.part);
+        if (event.sessionId !== sessionId) return;
+        if (event.part.type === 'handoff_marker') window.e2eHandoffParts.push(event.part);
+        if (event.part.type === 'tool_call')
+          window.e2eAgentEvents.push({
+            kind: 'session.part',
+            status: event.part.status,
+            tool: event.part.tool,
+            paths: event.part.changes.map((change) => change.path),
+          });
+      });
+      window.ferryRpcClient.on('task.updated', (task) => {
+        if (task.sessionId === sessionId)
+          window.e2eAgentEvents.push({
+            kind: 'task.updated',
+            touchedPaths: task.touchedFiles.map((file) => file.path),
+          });
       });
     }, agentSession.id);
     await composer.fill(
@@ -658,6 +673,19 @@ try {
       async (id) => await window.ferryRpcClient.sessions.get(id),
       agentSession.id,
     );
+    const agentEventTrace = await page.evaluate(() => window.e2eAgentEvents);
+    console.log(`e2e real domains: edit event trace ${JSON.stringify(agentEventTrace)}`);
+    const touchedFileEventIndex = agentEventTrace.findIndex(
+      (event) => event.kind === 'task.updated' && event.touchedPaths.includes('index.js'),
+    );
+    const successfulEditEventIndex = agentEventTrace.findIndex(
+      (event) =>
+        event.kind === 'session.part' &&
+        event.status === 'succeeded' &&
+        event.paths.includes('index.js'),
+    );
+    expect(touchedFileEventIndex).toBeGreaterThanOrEqual(0);
+    expect(successfulEditEventIndex).toBeGreaterThan(touchedFileEventIndex);
     expect(
       finalDetail.messages.some((message) =>
         message.parts.some(

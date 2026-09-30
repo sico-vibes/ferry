@@ -17,7 +17,7 @@
   --fade-line: linear-gradient(90deg,transparent,rgba(255,255,255,0.12),transparent);
   --text-1: #EDEEF2;
   --text-2: #A3A6B0;
-  --text-3: #82848E;
+  --text-3: #9C9EA7;
   --text-link: #60A5FA;
   --text-on-gradient: #FFFFFF;
   --text-on-send: #0B0C0F;
@@ -43,4 +43,3 @@
   --r-item: 12px;
   --r-pill: 999px;
 }
-
