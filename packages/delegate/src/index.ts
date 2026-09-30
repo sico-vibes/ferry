@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isProtectedWorkspacePath } from '@ferry/shared';
 import { access, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, extname, isAbsolute, join, relative, resolve, win32 } from 'node:path';
@@ -489,10 +490,8 @@ export function resolveAcpCommand(executable: string, args: string[]) {
 }
 export function assertSafeArguments(args: readonly string[]): void {
   for (const arg of args) {
-    const standaloneOperator =
-      !arg.includes('\n') && /(?:;\s|\s&&\s|\s\|\s|\s\|\|\s|\s[<>^%!]\s)/.test(arg);
-    if (arg.includes('\0') || standaloneOperator)
-      throw new Error(`Unsafe CLI argument rejected: ${arg}`);
+    const shellSyntax = /[\0\r\n%!'"`]/.test(arg) || /\$\([^)]*\)|%[^%]+%/.test(arg);
+    if (shellSyntax) throw new Error(`Unsafe CLI argument rejected: ${arg}`);
   }
 }
 
@@ -504,13 +503,15 @@ function cliArgs(name: Implementer, request: AdapterRequest, outputPath: string)
     args.push('--json', '-o', outputPath);
     if (request.model) args.push('-m', request.model);
     if (request.effort) args.push('-c', `model_reasoning_effort=${request.effort}`);
-    args.push(
-      '--sandbox',
-      request.mode === 'plan' ? 'read-only' : 'workspace-write',
-      '--cd',
-      request.cwd,
-      '-',
-    );
+    // Codex CLI 0.159's exec-resume subcommand does not accept --sandbox or --cd.
+    if (!request.resumeId)
+      args.push(
+        '--sandbox',
+        request.mode === 'plan' ? 'read-only' : 'workspace-write',
+        '--cd',
+        request.cwd,
+      );
+    args.push('-');
   } else if (name === 'opencode') {
     args.push('run');
     if (request.resumeId) args.push('--session', request.resumeId);
@@ -838,10 +839,14 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
   };
   const client = acpClient({ name: 'Ferry' })
     .onRequest('fs/read_text_file', async ({ params }) => {
+      if (isProtectedWorkspacePath(params.path))
+        throw new Error('ACP access to credential and secret files is denied');
       const safePath = await assertAcpWorkspacePath(request.cwd, params.path, false);
       return { content: await readFile(safePath, 'utf8') };
     })
     .onRequest('fs/write_text_file', async ({ params }) => {
+      if (isProtectedWorkspacePath(params.path))
+        throw new Error('ACP access to credential and secret files is denied');
       const safePath = await assertAcpWorkspacePath(request.cwd, params.path, true);
       const allowed =
         request.permissionPolicy !== 'read_only' &&
@@ -1037,13 +1042,17 @@ function commandInvocation(
   args: string[];
   verbatim: boolean;
 } {
+  assertSafeArguments([executable, ...args]);
   const isShim =
     process.platform === 'win32' && ['.cmd', '.bat'].includes(extname(executable).toLowerCase());
   return isShim
     ? {
-        file: process.env.ComSpec ?? 'cmd.exe',
+        file: process.env.SystemRoot
+          ? join(process.env.SystemRoot, 'System32', 'cmd.exe')
+          : 'cmd.exe',
         args: [
           '/d',
+          '/v:off',
           '/s',
           '/c',
           `"${quoteCmdArgument(executable)} ${args.map(quoteCmdArgument).join(' ')}"`,
@@ -1375,6 +1384,8 @@ export async function assertAcpWorkspacePath(
   target: string,
   writing: boolean,
 ): Promise<string> {
+  if (isProtectedWorkspacePath(target))
+    throw new Error('ACP access to credential and secret files is denied');
   if (
     (hasWindowsDrivePrefix(target) && !win32.isAbsolute(target)) ||
     (process.platform !== 'win32' && win32.isAbsolute(target))

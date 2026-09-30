@@ -21,6 +21,9 @@ import { canonicalPathKey } from '@ferry/shared/node-paths';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 const StartSchema = z.object({
   sessionId: z.string().min(1),
@@ -56,6 +59,16 @@ export function register(host: CoreHost, services: FerryServices): void {
             : null,
     });
   };
+  const projectConfigHash = async (workspacePath: string): Promise<string | null> => {
+    try {
+      const bytes = await readFile(join(workspacePath, '.ferry', 'config.json'));
+      return createHash('sha256').update(bytes).digest('hex');
+    } catch {
+      return null;
+    }
+  };
+  const projectConfigApprovalKey = (workspacePath: string) =>
+    `project-config-approved:${canonicalPathKey(workspacePath)}`;
   const publish = (run: DelegationRun) => {
     const parsed = DelegationRunSchema.parse(run);
     services.delegations.put(parsed);
@@ -82,6 +95,14 @@ export function register(host: CoreHost, services: FerryServices): void {
         );
       return (await laneRead(workspace.path)).lanes;
     },
+    async approveProjectConfig() {
+      const workspace = services.workspaces.list()[0];
+      if (!workspace) return { approved: false, hash: null };
+      const hash = await projectConfigHash(workspace.path);
+      if (!hash) return { approved: false, hash: null };
+      services.settings.put(projectConfigApprovalKey(workspace.path), hash);
+      return { approved: true, hash };
+    },
     runs(rawSessionId: unknown) {
       const id = SessionIdSchema.parse(rawSessionId);
       if (!services.sessions.get(id))
@@ -102,7 +123,12 @@ export function register(host: CoreHost, services: FerryServices): void {
       const jail = new WorkspaceJail(workspace.path);
       const shadow = new ShadowCheckpoints(jail, services.paths.home);
       const beforeId = await shadow.snapshot(`Before delegation ${input.lane}`);
-      const gateCommands = (await loadProjectConfig(workspace.path, services.env)).gateCommands;
+      const configHash = await projectConfigHash(workspace.path);
+      const approvedConfigHash = services.settings.get(projectConfigApprovalKey(workspace.path));
+      const gateCommands =
+        configHash && configHash === approvedConfigHash
+          ? (await loadProjectConfig(workspace.path, {})).gateCommands
+          : [];
       const now = services.clock.now().toISOString();
       const runId = newId('run') as RunId;
       const initial = DelegationRunSchema.parse({
@@ -157,6 +183,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           const gateResults: DelegationRun['gateResults'] = [];
           if (completed.status === 'completed') {
             for (const command of gateCommands) {
+              if ((await projectConfigHash(workspace.path)) !== approvedConfigHash) break;
               const result = await runCommand(jail, {
                 command,
                 cwd: '.',

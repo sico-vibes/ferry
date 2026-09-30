@@ -89,7 +89,7 @@ export async function runPrompt(
             mode === 'full_auto' ? 'allow_always' : 'allow_once',
           );
         } else if (process.stdin.isTTY && process.stdout.isTTY) {
-          void askApproval(event.part.summary).then((decision) => {
+          void askApproval(event.part.summary, event.part.detail).then((decision) => {
             if (!decision || decision === 'deny') approvalNeeded = true;
             return client.approvals.respond(session.id, event.part.id, decision ?? 'deny');
           });
@@ -180,9 +180,11 @@ function emit(json: boolean, event: Record<string, unknown>, human?: string) {
 }
 async function askApproval(
   summary: string,
+  detail: string,
 ): Promise<'allow_once' | 'allow_always' | 'deny' | null> {
   const terminal = createInterface({ input: process.stdin, output: process.stdout });
   try {
+    process.stderr.write(`\n${detail}\n`);
     const answer = (await terminal.question(`Approval needed: ${summary} [y/n/a] `))
       .trim()
       .toLowerCase();

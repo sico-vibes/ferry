@@ -6,6 +6,7 @@ import simpleGit from 'simple-git';
 import { glob } from 'tinyglobby';
 import { z } from 'zod';
 import { WorkspaceJail } from './fs.js';
+import { isProtectedWorkspacePath } from './permissions.js';
 import { canonicalPathKey, canonicalizePath } from '@ferry/shared/node-paths';
 
 export const GitPathInput = z.object({ path: z.string().default('.') });
@@ -24,7 +25,7 @@ export async function gitStatus(jail: WorkspaceJail) {
 }
 export async function gitDiff(jail: WorkspaceJail, file?: string) {
   if (file) await jail.resolve(file);
-  return simpleGit(jail.root).diff(file ? ['--', file] : []);
+  return simpleGit(jail.root).diff(file ? ['--', `:(literal)${file}`] : []);
 }
 export async function gitLog(jail: WorkspaceJail, maxCount = 20) {
   return simpleGit(jail.root).log({ maxCount: Math.max(1, Math.min(100, maxCount)) });
@@ -52,15 +53,50 @@ export class ShadowCheckpoints {
       await execa('git', ['init', '--bare', this.dir], { cwd: this.jail.root });
     }
     if (touchedPaths === undefined) {
-      await this.git(['add', '-A']);
+      const tracked = (await this.git(['ls-files', '-z'])).stdout.split('\0').filter(Boolean);
+      const trackedSet = new Set(tracked);
+      const files = await glob('**/*', {
+        cwd: this.jail.root,
+        dot: true,
+        onlyFiles: true,
+        ignore: ['.git/**', 'node_modules/**'],
+      });
+      const paths = new Set([...tracked, ...files]);
+      const safePaths: string[] = [];
+      for (const relative of paths) {
+        if (isProtectedWorkspacePath(relative)) continue;
+        if (
+          !trackedSet.has(relative) &&
+          (await this.jail.isIgnored(path.join(this.jail.root, relative)))
+        )
+          continue;
+        safePaths.push(relative);
+      }
+      if (safePaths.length)
+        await this.git(
+          ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
+          Buffer.from(
+            `${safePaths.map((relative) => `:(literal)${relative}`).join('\0')}\0`,
+            'utf8',
+          ),
+        );
     } else if (touchedPaths.length > 0) {
       const paths: string[] = [];
       for (const touched of touchedPaths) {
+        if (isProtectedWorkspacePath(touched)) continue;
         const absolute = await this.jail.resolve(touched, { allowMissing: true });
         paths.push(this.jail.relative(absolute));
       }
-      await this.git(['add', '-A', '--', ...paths]);
+      if (paths.length)
+        await this.git(['add', '-A', '--', ...paths.map((relative) => `:(literal)${relative}`)]);
     }
+    const indexed = (await this.git(['ls-files', '-z'])).stdout.split('\0').filter(Boolean);
+    const protectedIndexed = indexed.filter(isProtectedWorkspacePath);
+    if (protectedIndexed.length)
+      await this.git(
+        ['update-index', '--force-remove', '--stdin', '-z'],
+        Buffer.from(`${protectedIndexed.join('\0')}\0`, 'utf8'),
+      );
     const tree = await this.git(['write-tree']);
     const parent = await this.git(['rev-parse', '-q', '--verify', 'HEAD']).catch(() => undefined);
     if (parent?.stdout.trim()) {
@@ -87,11 +123,28 @@ export class ShadowCheckpoints {
       });
   }
   async diff(id: string, file?: string) {
-    const args = ['diff-tree', '--root', '-p', id];
+    const args = ['diff-tree', '--root', '-r', '-p', id];
     if (file) {
+      if (isProtectedWorkspacePath(file))
+        throw new Error('Credential and secret files are protected');
       await this.jail.resolve(file);
-      args.push('--', file);
+      args.push('--', `:(literal)${file}`);
+      return (await this.git(args)).stdout;
     }
+    const names = await this.git([
+      'diff-tree',
+      '--root',
+      '--no-commit-id',
+      '--name-only',
+      '-z',
+      '-r',
+      id,
+    ]);
+    const safePaths = names.stdout
+      .split('\0')
+      .filter((relative) => relative && !isProtectedWorkspacePath(relative));
+    if (!safePaths.length) return '';
+    args.push('--', ...safePaths.map((relative) => `:(literal)${relative}`));
     return (await this.git(args)).stdout;
   }
   async restore(id: string, file?: string): Promise<void> {
@@ -99,6 +152,8 @@ export class ShadowCheckpoints {
       .string()
       .regex(/^[0-9a-f]{40}$/i)
       .parse(id);
+    if (file && isProtectedWorkspacePath(file))
+      throw new Error('Credential and secret files are protected');
     await fs.mkdir(this.jail.root, { recursive: true });
     if (file) {
       const target = await this.jail.resolve(file, { allowMissing: true });
@@ -111,8 +166,11 @@ export class ShadowCheckpoints {
       });
       await fs.writeFile(target, stdout);
     } else {
-      const files = await this.git(['ls-tree', '-r', '--name-only', sha]);
-      const keep = new Set(files.stdout.split(/\r?\n/).filter(Boolean));
+      const files = await this.git(['ls-tree', '-r', '-z', '--name-only', sha]);
+      const safeFiles = files.stdout
+        .split('\0')
+        .filter((relative) => relative && !isProtectedWorkspacePath(relative));
+      const keep = new Set(safeFiles);
       const current = await glob('**/*', {
         cwd: this.jail.root,
         dot: true,
@@ -120,20 +178,28 @@ export class ShadowCheckpoints {
         ignore: ['.git/**', 'node_modules/**'],
       });
       for (const rel of current) {
-        if (!keep.has(rel) && !(await this.jail.isIgnored(path.join(this.jail.root, rel))))
+        if (
+          !isProtectedWorkspacePath(rel) &&
+          !keep.has(rel) &&
+          !(await this.jail.isIgnored(path.join(this.jail.root, rel)))
+        )
           await fs.rm(await this.jail.resolve(rel), { force: true });
       }
       await this.git(['read-tree', sha]);
-      await this.git(['checkout-index', '-a', '-f']);
+      if (safeFiles.length)
+        await this.git(
+          ['checkout-index', '-f', '--stdin', '-z'],
+          Buffer.from(`${safeFiles.join('\0')}\0`, 'utf8'),
+        );
     }
   }
-  private git(args: string[]) {
+  private git(args: string[], input?: Buffer) {
     return fs.access(this.jail.root).then(
-      () => this.runGit(args, this.jail.root),
-      () => this.runGit(args, path.dirname(this.dir)),
+      () => this.runGit(args, this.jail.root, input),
+      () => this.runGit(args, path.dirname(this.dir), input),
     );
   }
-  private runGit(args: string[], cwd: string) {
+  private runGit(args: string[], cwd: string, input?: Buffer) {
     return execa(
       'git',
       [
@@ -157,6 +223,7 @@ export class ShadowCheckpoints {
       ],
       {
         cwd,
+        ...(input ? { input } : {}),
         env: { ...process.env, GIT_INDEX_FILE: this.indexFile },
         reject: true,
       },

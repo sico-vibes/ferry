@@ -53,6 +53,12 @@ async function setupDelegation(
   const { directProcess = false, ...fakeCliOptions } = fake;
   const repo = await createFixtureRepo('typescript');
   repos.push(repo);
+  await mkdir(join(repo.path, '.ferry'), { recursive: true });
+  await writeFile(
+    join(repo.path, '.ferry', 'config.json'),
+    JSON.stringify({ gateCommands: [] }),
+    'utf8',
+  );
   const bin = await mkdtemp(join(tmpdir(), 'qa-w3-deleg-bin-'));
   dirs.push(bin);
   await mkdir(join(repo.path, '.delegate'), { recursive: true });
@@ -85,6 +91,8 @@ async function setupDelegation(
   process.env.PATH = `${bin}${delimiter}${originalPath ?? ''}`;
   const h = await startHarness({ workspacePath: repo.path });
   await h.rpc.delegation.approveProjectLanes();
+  const configApproval = await h.rpc.delegation.approveProjectConfig();
+  expect(configApproval.approved).toBe(true);
   return {
     h,
     repo,
@@ -152,6 +160,73 @@ describe('QA W3 delegation: trust, isolation and lifecycle', () => {
           'completed',
       );
       expect(await fileExists(touched)).toBe(true);
+    } finally {
+      await h.close();
+    }
+  }, 40_000);
+
+  it('never executes project gate commands until the exact Ferry config is approved', async () => {
+    const { h, repo } = await setupDelegation();
+    const marker = join(repo.path, 'UNAPPROVED_GATE_RAN.txt');
+    try {
+      await mkdir(join(repo.path, '.ferry'), { recursive: true });
+      await writeFile(
+        join(repo.path, '.ferry', 'config.json'),
+        JSON.stringify({ gateCommands: ['echo ran > UNAPPROVED_GATE_RAN.txt'] }),
+        'utf8',
+      );
+      const sessionId = await createSession(h);
+      const run = await h.rpc.delegation.start({ sessionId, lane: 'native', brief: 'do work' });
+      await waitFor(
+        async () =>
+          (await h.rpc.delegation.runs(sessionId)).find((item) => item.id === run.id)?.status !==
+          'running',
+      );
+      const result = (await h.rpc.delegation.runs(sessionId)).find((item) => item.id === run.id);
+      expect(result?.gateResults).toEqual([]);
+      expect(await fileExists(marker)).toBe(false);
+
+      const approved = await h.rpc.delegation.approveProjectConfig();
+      expect(approved.approved).toBe(true);
+      expect(approved.hash).toMatch(/^[a-f0-9]{64}$/);
+      const approvedRun = await h.rpc.delegation.start({
+        sessionId,
+        lane: 'native',
+        brief: 'run the approved gate',
+      });
+      await waitFor(
+        async () =>
+          (await h.rpc.delegation.runs(sessionId)).find((item) => item.id === approvedRun.id)
+            ?.gateResults.length === 1,
+      );
+      const approvedResult = (await h.rpc.delegation.runs(sessionId)).find(
+        (item) => item.id === approvedRun.id,
+      );
+      expect(approvedResult?.gateResults).toEqual([
+        { command: 'echo ran > UNAPPROVED_GATE_RAN.txt', ok: true, outputTail: '' },
+      ]);
+      expect(await fileExists(marker)).toBe(true);
+      await rm(marker, { force: true });
+      await writeFile(
+        join(repo.path, '.ferry', 'config.json'),
+        JSON.stringify({ gateCommands: ['echo changed > UNAPPROVED_GATE_RAN.txt'] }),
+        'utf8',
+      );
+      const changedRun = await h.rpc.delegation.start({
+        sessionId,
+        lane: 'native',
+        brief: 'do more work',
+      });
+      await waitFor(
+        async () =>
+          (await h.rpc.delegation.runs(sessionId)).find((item) => item.id === changedRun.id)
+            ?.status !== 'running',
+      );
+      expect(
+        (await h.rpc.delegation.runs(sessionId)).find((item) => item.id === changedRun.id)
+          ?.gateResults,
+      ).toEqual([]);
+      expect(await fileExists(marker)).toBe(false);
     } finally {
       await h.close();
     }

@@ -56,6 +56,7 @@ export const FERRY_METHODS = [
   'delegation.lanes',
   'delegation.detectAgents',
   'delegation.approveProjectLanes',
+  'delegation.approveProjectConfig',
   'delegation.runs',
   'delegation.start',
   'delegation.cancel',

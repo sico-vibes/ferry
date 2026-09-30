@@ -1,7 +1,10 @@
 import { AgentLoop, SessionStore } from '@ferry/agent';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { AgentEvent } from '@ferry/agent';
 import { WorkspaceJail, ShadowCheckpoints } from '@ferry/workspace';
-import { loadProjectConfig } from '@ferry/config';
+import { ProjectConfigSchema } from '@ferry/config';
 import type { AgentTool, ToolSource as AgentToolSource } from '@ferry/agent';
 import type { ToolSource as ExtensionToolSource } from '@ferry/extensions';
 import {
@@ -33,6 +36,7 @@ import type { FerryServices } from '../services.js';
 import { createSessionDependencies } from '../session-deps.js';
 import { oauthModelCatalog } from '@ferry/oauth';
 import { z } from 'zod';
+import { canonicalPathKey } from '@ferry/shared/node-paths';
 
 const CreateSchema = z.object({
   workspaceId: z.string().min(1),
@@ -464,7 +468,19 @@ export function register(host: CoreHost, services: FerryServices): void {
             ...configuredOauth,
           ],
         };
-        const config = await loadProjectConfig(workspace.path, services.env);
+        const rawProjectConfig = await readFile(join(workspace.path, '.ferry', 'config.json'))
+          .then((bytes) => {
+            const source: unknown = JSON.parse(bytes.toString('utf8'));
+            return { bytes, source, parsed: ProjectConfigSchema.safeParse(source) };
+          })
+          .catch(() => null);
+        const projectConfigHash = rawProjectConfig
+          ? createHash('sha256').update(rawProjectConfig.bytes).digest('hex')
+          : null;
+        const projectConfigApproved =
+          projectConfigHash !== null &&
+          services.settings.get(`project-config-approved:${canonicalPathKey(workspace.path)}`) ===
+            projectConfigHash;
         const globalSettings = services.settings.get('global');
         const savedToolCallRepair =
           z
@@ -481,6 +497,16 @@ export function register(host: CoreHost, services: FerryServices): void {
               ? (globalSettings as { permissionMode?: unknown }).permissionMode
               : undefined,
           );
+        const userPermissionMode = savedPermissionMode.success ? savedPermissionMode.data : 'ask';
+        const projectPermissionMode =
+          projectConfigApproved &&
+          rawProjectConfig?.parsed.success &&
+          hasOwnProperty(rawProjectConfig.source, 'permissionMode')
+            ? rawProjectConfig.parsed.data.permissionMode
+            : undefined;
+        const effectivePermissionMode = projectPermissionMode
+          ? stricterPermissionMode(userPermissionMode, projectPermissionMode)
+          : userPermissionMode;
         const skillManager = createSkillManager(services, workspace.path);
         await skillManager.load();
         const mcpManager = createMcpManager(services, host, workspace.path);
@@ -504,9 +530,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           capacity: runtime.capacity,
           apiKeys: runtime.apiKeys,
           repairToolCalls: savedToolCallRepair,
-          permissionMode: savedPermissionMode.success
-            ? savedPermissionMode.data
-            : config.permissionMode,
+          permissionMode: effectivePermissionMode,
           ...(maxSteps === undefined ? {} : { maxSteps }),
           resilienceState: (() => {
             const parsed = z
@@ -574,12 +598,16 @@ export function register(host: CoreHost, services: FerryServices): void {
             services.quota.acquireLease(model.providerId, model.ref, tokens) ?? null,
           probeHeuristicCooldowns: () => runtime.gateway.probeHeuristicCooldowns(),
           permissionRules: [
-            ...config.permissionRules.map((rule) => ({
-              effect: rule.mode,
-              tool: '*',
-              level: 'project' as const,
-              pattern: rule.pattern,
-            })),
+            ...(projectConfigApproved &&
+            rawProjectConfig?.parsed.success &&
+            hasOwnProperty(rawProjectConfig.source, 'permissionRules')
+              ? rawProjectConfig.parsed.data.permissionRules.map((rule) => ({
+                  effect: rule.mode,
+                  tool: '*',
+                  level: 'project' as const,
+                  pattern: rule.pattern,
+                }))
+              : []),
             ...(Array.isArray(services.settings.get(`permission-rules:${session.workspaceId}`))
               ? (
                   services.settings.get(`permission-rules:${session.workspaceId}`) as {
@@ -773,6 +801,18 @@ export function register(host: CoreHost, services: FerryServices): void {
       approvals.delete(`${sessionId}:${partId}`);
     },
   });
+}
+
+function stricterPermissionMode(
+  user: 'ask' | 'auto_edit' | 'full_auto',
+  project: 'ask' | 'auto_edit' | 'full_auto',
+): 'ask' | 'auto_edit' | 'full_auto' {
+  const rank = { ask: 0, auto_edit: 1, full_auto: 2 } as const;
+  return rank[user] <= rank[project] ? user : project;
+}
+
+function hasOwnProperty(value: unknown, key: string): boolean {
+  return typeof value === 'object' && value !== null && Object.hasOwn(value, key);
 }
 
 function compactAgentError(error: unknown): string {

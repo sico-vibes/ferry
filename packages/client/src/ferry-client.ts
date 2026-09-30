@@ -42,7 +42,12 @@ export interface FerryClient {
       allowLan: boolean;
       status: { running: boolean; port: number | null; host: string | null; url: string | null };
     }>;
-    setSettings(input: { enabled: boolean; port: number; allowLan: boolean }): Promise<unknown>;
+    setSettings(input: {
+      enabled: boolean;
+      port: number;
+      allowLan: boolean;
+      confirmLan?: boolean;
+    }): Promise<unknown>;
     listKeys(): Promise<
       {
         id: string;
@@ -149,6 +154,7 @@ export interface FerryClient {
     lanes(): Promise<Lane[]>;
     detectAgents(): Promise<AcpAgentDetection[]>;
     approveProjectLanes(): Promise<Lane[]>;
+    approveProjectConfig(): Promise<{ approved: boolean; hash: string | null }>;
     runs(sessionId: SessionId): Promise<DelegationRun[]>;
     start(i: { sessionId: SessionId; lane: string; brief: string }): Promise<DelegationRun>;
     cancel(id: RunId): Promise<void>;

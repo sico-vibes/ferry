@@ -7,6 +7,7 @@ const settingsSchema = z.object({
   enabled: z.boolean(),
   port: z.number().int().min(0).max(65535),
   allowLan: z.boolean(),
+  confirmLan: z.boolean().optional(),
 });
 const createSchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -34,7 +35,10 @@ export function register(host: CoreHost, services: FerryServices): void {
   host.registerDomain('gateway', {
     settings: () => ({ ...gateway.settings, status: gateway.status }),
     async setSettings(value: unknown) {
-      return await gateway.setSettings(settingsSchema.parse(value));
+      const parsed = settingsSchema.parse(value);
+      if (parsed.allowLan && parsed.confirmLan !== true)
+        throw new Error('Enabling LAN connections requires explicit confirmation');
+      return await gateway.setSettings(parsed);
     },
     listKeys: () => gateway.listKeys(),
     createKey(value: unknown) {

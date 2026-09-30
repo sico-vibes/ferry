@@ -4,6 +4,12 @@ import type { Duplex } from 'node:stream';
 import { mapError, type CoreHost } from './host.js';
 import { JsonRpcRequestSchema, rpcError } from '@ferry/shared';
 
+export const MAX_WEBSOCKET_PENDING_BYTES = 1_000_014;
+
+export function exceedsWebSocketBufferLimit(bytes: number): boolean {
+  return bytes > MAX_WEBSOCKET_PENDING_BYTES;
+}
+
 export interface CoreWebSocketHandle {
   url: string;
   token: string;
@@ -28,14 +34,7 @@ function frame(payload: string, opcode = 1): Buffer {
 }
 
 function writeFailure(socket: Duplex, id: string | number | null, error: unknown): void {
-  const mapped =
-    typeof error === 'object' && error !== null && 'kind' in error && 'code' in error
-      ? rpcError(
-          error.code as number,
-          String(error.kind),
-          error instanceof Error ? error.message : 'Request failed',
-        )
-      : mapError(error);
+  const mapped = mapError(error);
   socket.write(frame(JSON.stringify({ jsonrpc: '2.0', id, error: mapped })));
 }
 
@@ -90,6 +89,10 @@ export async function startCoreWebSocketServer(
     let pending = Buffer.alloc(0);
     socket.on('data', (chunk: Buffer) => {
       pending = Buffer.concat([pending, chunk]);
+      if (exceedsWebSocketBufferLimit(pending.length)) {
+        socket.destroy();
+        return;
+      }
       while (pending.length >= 6) {
         const firstByte = pending.readUInt8(0);
         const secondByte = pending.readUInt8(1);

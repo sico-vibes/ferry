@@ -103,7 +103,8 @@ describe('subscription OAuth lifecycle', () => {
 
   it('validates Radius gateway URLs and rejects embedded credentials', () => {
     expect(validateRadiusGatewayUrl('https://radius.example/')).toBe('https://radius.example/');
-    expect(() => validateRadiusGatewayUrl('file:///tmp/gateway')).toThrow(/HTTP\(S\)/);
+    expect(() => validateRadiusGatewayUrl('file:///tmp/gateway')).toThrow(/HTTPS/);
+    expect(() => validateRadiusGatewayUrl('http://radius.example/')).toThrow(/HTTPS/);
     expect(() => validateRadiusGatewayUrl('https://user:password@radius.example')).toThrow(
       /credentials/,
     );

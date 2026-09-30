@@ -163,7 +163,9 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
       name: 'run_command',
       title: 'Run command',
       schema: CommandSchema,
-      permission: { command: (a) => (a as z.infer<typeof CommandSchema>).command },
+      permission: {
+        command: (a) => (a as z.infer<typeof CommandSchema>).command,
+      },
       execute: (a, c) => runCommand(workspace.jail, a, undefined, c.signal),
     },
     {
@@ -224,9 +226,21 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
         const args = definition.schema.parse(raw);
         const path = definition.permission?.path?.(args);
         const command = definition.permission?.command?.(args);
+        const commandArgs = definition.name === 'run_command' ? CommandSchema.parse(args) : null;
         const actionTool = definition.name;
         const decision = evaluatePermission(
-          { tool: actionTool, ...(path ? { path } : {}), ...(command ? { command } : {}) },
+          {
+            tool: actionTool,
+            ...(path ? { path } : {}),
+            ...(command ? { command } : {}),
+            ...(commandArgs
+              ? {
+                  cwd: commandArgs.cwd ?? '.',
+                  envKeys: Object.keys(commandArgs.env ?? {}),
+                  pty: commandArgs.pty,
+                }
+              : {}),
+          },
           {
             mode: options.permissionMode,
             ...(options.permissionRules ? { rules: options.permissionRules } : {}),
@@ -240,9 +254,19 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
             id: PartIdSchema.parse(newId('part')),
             kind: command ? ('command' as const) : ('edit' as const),
             summary: definition.title,
-            detail: decision.reason.startsWith('Danger warning:')
-              ? `${decision.reason}\n${command ?? path ?? definition.title}`
-              : (command ?? path ?? definition.title),
+            detail: commandArgs
+              ? [
+                  `Command: ${commandArgs.command}`,
+                  `CWD: ${commandArgs.cwd ?? '.'}`,
+                  `Environment keys: ${Object.keys(commandArgs.env ?? {}).join(', ') || '(none)'}`,
+                  `PTY: ${String(commandArgs.pty ?? true)}`,
+                  decision.reason.startsWith('Danger warning:') ? decision.reason : '',
+                ]
+                  .filter(Boolean)
+                  .join('\n')
+              : decision.reason.startsWith('Danger warning:')
+                ? `${decision.reason}\n${command ?? path ?? definition.title}`
+                : (command ?? path ?? definition.title),
             risk: command ? ('high' as const) : ('medium' as const),
             state: 'pending' as const,
           };

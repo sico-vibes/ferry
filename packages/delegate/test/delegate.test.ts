@@ -315,6 +315,25 @@ describe('external CLI adapters', () => {
     }).not.toThrow();
   }, 20_000);
 
+  it('uses the Codex 0.159 exec resume argument shape', async () => {
+    const root = await tempRoot();
+    const captureArgsPath = join(root, 'codex-args.json');
+    const paths = await installFakeClis(join(root, 'bin'), { captureArgsPath });
+    const result = await runAdapter('codex', {
+      prompt: 'Continue the same session',
+      cwd: root,
+      executable: paths.codex,
+      resumeId: 'codex-session-123',
+    });
+    expect(result.threadId).toBe('fake-codex-session-001');
+    const args = await readStringArray(captureArgsPath);
+    expect(args.slice(0, 3)).toEqual(['exec', 'resume', 'codex-session-123']);
+    expect(args).toContain('--json');
+    expect(args).toContain('-');
+    expect(args).not.toContain('--sandbox');
+    expect(args).not.toContain('--cd');
+  }, 20_000);
+
   it('detects installed and authenticated CLIs and keeps OpenCode plan mode unapproved', async () => {
     const root = await tempRoot();
     const captureArgsPath = join(root, 'args.json');

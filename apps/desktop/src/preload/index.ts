@@ -88,7 +88,7 @@ contextBridge.exposeInMainWorld('ferryHost', {
         const origin = rendererWindow.location.origin;
         const targetOrigin =
           origin === 'null' || rendererWindow.location.protocol === 'file:' ? '*' : origin;
-        rendererWindow.postMessage({ type: 'ferry:core-port', token }, targetOrigin, [port]);
+        rendererWindow.postMessage({ type: 'ferry:core-port' }, targetOrigin, [port]);
         resolve();
       };
       ipcRenderer.on('ferry:core-port', listener);

@@ -236,6 +236,45 @@ describe('QA agent: cancellation phases', () => {
 });
 
 describe('QA agent: permissions', () => {
+  it('shows the complete command invocation in approval details', async () => {
+    const state = await setup();
+    try {
+      const loop = makeLoop(state, {
+        permissionMode: 'ask',
+        requestApproval: async () => 'denied',
+        generator: async () =>
+          partsOf(state).some((part) => part.type === 'tool_call')
+            ? { text: 'No command was run.', finishReason: 'stop' }
+            : {
+                toolCalls: [
+                  {
+                    name: 'run_command',
+                    input: {
+                      command: 'echo approved?',
+                      cwd: 'nested',
+                      env: { FERRY_TASK: 'build' },
+                      pty: false,
+                    },
+                  },
+                ],
+                finishReason: 'tool-calls',
+              },
+      });
+      await loop.run({ sessionId: state.session.id });
+      const approval = partsOf(state).find((part) => part.type === 'approval_request');
+      expect(approval?.type === 'approval_request' ? approval.detail : '').toContain(
+        'Command: echo approved?',
+      );
+      expect(approval?.type === 'approval_request' ? approval.detail : '').toContain('CWD: nested');
+      expect(approval?.type === 'approval_request' ? approval.detail : '').toContain(
+        'Environment keys: FERRY_TASK',
+      );
+      expect(approval?.type === 'approval_request' ? approval.detail : '').toContain('PTY: false');
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
   it('never executes an ask-mode tool before approval resolves', async () => {
     const state = await setup();
     try {

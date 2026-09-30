@@ -316,7 +316,7 @@ export function LibraryCanvas() {
                 <div className="group-title">
                   <div>
                     <h3>Project lanes</h3>
-                    <p>Delegation lanes declared by this repository.</p>
+                    <p>Project config approval is separate from lane approval.</p>
                   </div>
                   {lanes.some((lane) => lane.source === 'project') && (
                     <Pill
@@ -335,6 +335,39 @@ export function LibraryCanvas() {
                       Approve project lanes
                     </Pill>
                   )}
+                </div>
+                <div className="settings-row">
+                  <div>
+                    <strong>Gate commands</strong>
+                    <small>
+                      Approves this exact .ferry/config.json hash, applies its stricter permission
+                      rules, and runs its gates after delegation.
+                    </small>
+                  </div>
+                  <Pill
+                    size="sm"
+                    onClick={() => {
+                      if (
+                        !window.confirm(
+                          'Review .ferry/config.json first. Approve these exact bytes so its permission rules apply and its gate commands can run after delegation?',
+                        )
+                      )
+                        return;
+                      void client.delegation.approveProjectConfig().then((result) => {
+                        toast({
+                          kind: result.approved ? 'success' : 'error',
+                          title: result.approved
+                            ? 'Project config approved'
+                            : 'No project config found',
+                          body: result.approved
+                            ? `Approved SHA-256: ${result.hash ?? 'unavailable'}`
+                            : null,
+                        });
+                      });
+                    }}
+                  >
+                    Approve project config
+                  </Pill>
                 </div>
                 {lanes
                   .filter((lane) => lane.source === 'project')

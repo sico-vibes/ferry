@@ -5,6 +5,7 @@ import { execa } from 'execa';
 import * as pty from 'node-pty';
 import { z } from 'zod';
 import { WorkspaceJail } from './fs.js';
+import { isShellAffectingEnvironmentKey } from './permissions.js';
 
 export const RunCommandInput = z.object({
   command: z.string().min(1),
@@ -51,13 +52,18 @@ export async function runCommand(
 ): Promise<CommandResult> {
   if (signal?.aborted) throw abortReason(signal);
   const input = RunCommandInput.parse(raw);
+  const blockedEnvironmentKey = Object.keys(input.env).find(isShellAffectingEnvironmentKey);
+  if (blockedEnvironmentKey)
+    throw new Error(
+      `Shell-affecting environment override is not allowed: ${blockedEnvironmentKey}`,
+    );
   const cwd = await jail.resolve(input.cwd);
   if (signal?.aborted) throw abortReason(signal);
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env))
     if (value !== undefined && envAllow.has(key.toUpperCase())) env[key] = value;
   for (const [key, value] of Object.entries(input.env)) env[key] = value;
-  const shell = chooseShell(env, input.env.FERRY_SHELL ?? process.env.FERRY_SHELL);
+  const shell = chooseShell(env);
   const chunks: { out: Buffer[]; err: Buffer[] } = { out: [], err: [] };
   let bytes = 0;
   let spillFile: string | undefined;

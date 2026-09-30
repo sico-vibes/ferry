@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { createServer } from 'node:net';
 import { readFile } from 'node:fs/promises';
 import {
   authenticateGatewayKey,
   createGatewayKey,
+  pruneRateState,
   startGateway,
   type GatewayKey,
   type GatewayRuntime,
@@ -80,6 +82,16 @@ async function server() {
 }
 
 describe('Ferry gateway', () => {
+  it('prunes rate state older than one minute', () => {
+    const state = new Map([
+      ['expired', [-1, 0]],
+      ['active', [10, 59_999]],
+    ]);
+    pruneRateState(state, 60_000);
+    expect(state.has('expired')).toBe(false);
+    expect(state.get('active')).toEqual([10, 59_999]);
+  });
+
   it('stores only a key hash and uses constant-time compatible authentication', () => {
     expect(created.secret).toMatch(/^ferry-gw-/);
     expect(created.key.hash).not.toContain(created.secret);
@@ -89,6 +101,55 @@ describe('Ferry gateway', () => {
     created.key.revokedAt = new Date().toISOString();
     expect(authenticateGatewayKey(created.secret, entries)).toBeUndefined();
   });
+
+  it('rejects browser origins and throttles repeated invalid authentication', async () => {
+    const url = await server();
+    const browser = await fetch(`${url}/v1/models`, {
+      headers: { origin: 'https://attacker.invalid', authorization: `Bearer ${created.secret}` },
+    });
+    expect(browser.status).toBe(403);
+    expect(browser.headers.get('access-control-allow-origin')).toBeNull();
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await fetch(`${url}/v1/models`, {
+        headers: { authorization: 'Bearer ferry-gw-invalid' },
+      });
+      expect(response.status).toBe(401);
+    }
+    const throttled = await fetch(`${url}/v1/models`, {
+      headers: { authorization: 'Bearer ferry-gw-invalid' },
+    });
+    expect(throttled.status).toBe(429);
+  }, 30_000);
+
+  it('requires explicit confirmation before binding the gateway to LAN interfaces', async () => {
+    await expect(startGateway({ runtime, port: 0, allowLan: true })).rejects.toThrow(
+      /explicit confirmation/,
+    );
+    const handle = await startGateway({
+      runtime,
+      port: 0,
+      allowLan: true,
+      allowLanConfirmed: true,
+    });
+    stop = () => handle.close();
+    expect(handle.host).toBe('0.0.0.0');
+  }, 30_000);
+
+  it('retries a busy port on an ephemeral port and resolves readiness', async () => {
+    const occupied = createServer();
+    await new Promise<void>((resolve) => occupied.listen(0, '127.0.0.1', resolve));
+    const address = occupied.address();
+    if (!address || typeof address === 'string') throw new Error('Expected TCP address');
+    const handle = await startGateway({ runtime, port: address.port });
+    stop = () => handle.close();
+    expect(handle.port).not.toBe(address.port);
+    await new Promise<void>((resolve, reject) =>
+      occupied.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      }),
+    );
+  }, 30_000);
 
   it('serves OpenAI non-streaming completions and usage accounting', async () => {
     const url = await server();

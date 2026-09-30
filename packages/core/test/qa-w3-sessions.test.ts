@@ -1,4 +1,5 @@
-import { rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createRpcFerryClient } from '@ferry/client';
 import { createCoreHost, createMemoryTransportPair } from '../src/index.js';
@@ -262,6 +263,81 @@ describe('QA W3 sessions: run lifecycle and races', () => {
       off();
       expect(approvals).toEqual([]);
       expect(await h.rpc.sessions.get(session.id)).toMatchObject({ session: { status: 'idle' } });
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
+
+  it('ignores unapproved project permission mode and allow rules', async () => {
+    const h = await startHarness({
+      turns: [
+        toolTurn('write_file', { path: 'project-allowed.txt', content: 'blocked' }),
+        textTurn('done'),
+      ],
+    });
+    try {
+      await mkdir(join(h.workspacePath, '.ferry'), { recursive: true });
+      await writeFile(
+        join(h.workspacePath, '.ferry', 'config.json'),
+        JSON.stringify({
+          permissionMode: 'full_auto',
+          permissionRules: [{ pattern: '*', mode: 'allow' }],
+        }),
+        'utf8',
+      );
+      await h.rpc.settings.update({ permissionMode: 'ask' });
+      const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      let approvalId: string | undefined;
+      const off = h.rpc.on('approval.request', (event) => {
+        if (event.sessionId === session.id) approvalId = event.part.id;
+      });
+      const sending = h.rpc.sessions.send(session.id, { text: 'write it' });
+      await waitFor(() => approvalId !== undefined);
+      await h.rpc.approvals.respond(session.id, approvalId as never, 'deny');
+      await sending;
+      off();
+      expect(
+        await readFile(join(h.workspacePath, 'project-allowed.txt')).catch(() => null),
+      ).toBeNull();
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
+
+  it('hash-approved project rules cannot make an ask-mode user permission more permissive', async () => {
+    const h = await startHarness({
+      turns: [
+        toolTurn('write_file', { path: 'approved-project-allow.txt', content: 'blocked' }),
+        textTurn('done'),
+      ],
+    });
+    try {
+      await mkdir(join(h.workspacePath, '.ferry'), { recursive: true });
+      await writeFile(
+        join(h.workspacePath, '.ferry', 'config.json'),
+        JSON.stringify({
+          permissionMode: 'full_auto',
+          permissionRules: [{ pattern: '*', mode: 'allow' }],
+        }),
+        'utf8',
+      );
+      await h.rpc.settings.update({ permissionMode: 'ask' });
+      const approval = await h.rpc.delegation.approveProjectConfig();
+      expect(approval.approved).toBe(true);
+      expect(approval.hash).toMatch(/^[a-f0-9]{64}$/);
+      const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      let approvalId: string | undefined;
+      const off = h.rpc.on('approval.request', (event) => {
+        if (event.sessionId === session.id) approvalId = event.part.id;
+      });
+      const sending = h.rpc.sessions.send(session.id, { text: 'write it' });
+      await waitFor(() => approvalId !== undefined);
+      await h.rpc.approvals.respond(session.id, approvalId as never, 'deny');
+      await sending;
+      off();
+      expect(
+        await readFile(join(h.workspacePath, 'approved-project-allow.txt')).catch(() => null),
+      ).toBeNull();
     } finally {
       await h.close();
     }
