@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { z } from 'zod';
+import { isProtectedWorkspacePath } from '@ferry/shared';
 
 export const PermissionModeSchema = z.enum(['ask', 'auto_edit', 'full_auto']);
 export type PermissionMode = z.infer<typeof PermissionModeSchema>;
@@ -18,13 +19,12 @@ export const ActionSchema = z.object({
   tool: z.string().min(1),
   path: z.string().optional(),
   command: z.string().optional(),
+  cwd: z.string().optional(),
+  envKeys: z.array(z.string()).optional(),
+  pty: z.boolean().optional(),
 });
 export type Action = z.infer<typeof ActionSchema>;
-const credentialPattern =
-  /(^|[\\/])(?:\.env(?:\.[^\\/]+)?|[^\\/]+\.(?:pem|key|p12|pfx|jks)|id_rsa[^\\/]*|id_ed25519[^\\/]*|credentials(?:\.[^\\/]*)?|secrets?\.[^\\/]*|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.aws[\\/]credentials|\.azure[\\/][^\\/]+|\.kube[\\/]config|\.docker[\\/]config\.json|\.config[\\/]gh[\\/]hosts\.yml|\.config[\\/]gcloud[\\/]application_default_credentials\.json|\.ssh[\\/]known_hosts)(?:$|[\\/])/i;
-export function isProtectedWorkspacePath(value: string): boolean {
-  return credentialPattern.test(value);
-}
+export { isProtectedWorkspacePath } from '@ferry/shared';
 const destructiveCommand = [
   /\bremove-item\b(?=.*-recurse)(?=.*(?:[a-z]:\\(?:$|\s)|\\\\|\/))/i,
   /\bremove-item\b(?=.*-recurse)(?=.*-force)/i,
@@ -33,6 +33,10 @@ const destructiveCommand = [
   /\bdel\b(?=.*\/s)(?=.*\/q)/i,
   /\bgit\s+push\b(?=.*(?:--force|-f\b))/i,
   /\b(?:iex|invoke-expression)\s*\(?\s*(?:iwr|invoke-webrequest)\b/i,
+  /\b(?:iex|invoke-expression)\b/i,
+  /\b(?:frombase64string|convertto-securestring)\b/i,
+  /\b(?:powershell|pwsh)(?:\.exe)?\b.*\s-(?:e|enc|encodedcommand)\b/i,
+  /\b(?:iwr|invoke-webrequest|curl|wget)\b[^\n]*(?:\||;|&&)[^\n]*(?:iex|invoke-expression|\bsh\b|\bbash\b)/i,
   /\breg(?:\.exe)?\s+(?:add|delete|import)\b/i,
   /\b(?:set-itemproperty|new-itemproperty|remove-itemproperty)\b.*\b(hklm|hkcu|registry::)/i,
   /\b(?:powershell|pwsh)(?:\.exe)?\b.*\s-encodedcommand\b/i,
@@ -89,6 +93,25 @@ export function evaluatePermission(
 ): PermissionDecision {
   if (action.path && isProtectedWorkspacePath(action.path))
     return { decision: 'deny', reason: 'Credential and secret files are protected' };
+  if (action.envKeys?.some(isShellAffectingEnvironmentKey))
+    return { decision: 'deny', reason: 'Shell-affecting environment overrides are not allowed' };
+  if (
+    (action.envKeys?.length ?? 0) > 0 ||
+    (action.cwd && action.cwd !== '.') ||
+    action.pty !== undefined
+  ) {
+    if (options.mode === 'full_auto')
+      return {
+        decision: 'deny',
+        reason: 'Non-default command execution options are not allowed in full-auto mode',
+      };
+    return { decision: 'ask', reason: 'Command execution options require confirmation' };
+  }
+  if (action.command && commandReadsProtectedPath(action.command))
+    return {
+      decision: 'deny',
+      reason: 'Commands that access credential and secret files are denied',
+    };
   if (action.command) {
     const danger = classifyDangerousCommand(action.command, options.workspace);
     if (danger) {
@@ -98,14 +121,16 @@ export function evaluatePermission(
     }
   }
   const rules = options.rules ?? [];
-  // Project rules override user rules; within a level, the last matching rule wins.
+  // Project rules can tighten user choices but cannot allow an action the user would deny.
   const matching = rules.filter(
     (rule) =>
       (rule.tool === '*' || rule.tool === action.tool) &&
       (!rule.pattern || match(rule.pattern, action.command ?? action.path ?? '')),
   );
-  matching.sort((a, b) => (a.level === 'project' ? 1 : 0) - (b.level === 'project' ? 1 : 0));
-  const selected = matching.at(-1);
+  const selected =
+    matching.find((rule) => rule.effect === 'deny') ??
+    matching.find((rule) => rule.effect === 'ask') ??
+    matching.find((rule) => rule.effect === 'allow' && rule.level === 'user');
   if (selected)
     return {
       decision: selected.effect,
@@ -131,6 +156,23 @@ export function evaluatePermission(
     reason:
       options.mode === 'ask' ? 'Ask mode requires confirmation' : 'Command requires confirmation',
   };
+}
+export function isShellAffectingEnvironmentKey(key: string): boolean {
+  return /^(?:FERRY_SHELL|SHELL|COMSPEC|SYSTEMROOT|WINDIR|PATH|PATHEXT|NODE_OPTIONS|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_[A-Z0-9_]+|BASH_ENV|ENV|PYTHONPATH|PERL5OPT|GIT_(?:SSH|SSH_COMMAND|EXEC_PATH)|NPM_CONFIG_SCRIPT_SHELL)$/i.test(
+    key,
+  );
+}
+export function commandReadsProtectedPath(command: string): boolean {
+  const normalized = command.replace(/["']/g, '').replace(/\\/g, '/');
+  return (
+    isProtectedWorkspacePath(normalized) ||
+    /(?:^|[\s/])(?:\.env[^\s/]*|\.npmrc|\.pypirc|\.netrc|id_rsa[^\s/]*|id_ed25519[^\s/]*|credentials(?:\.[\w.-]+)?|\.aws\/(?:credentials|config)|\.ssh\/(?:id_[^\s/]+|known_hosts)|\.gnupg\/[^\s/]+|keyrings?\/[^\s/]+|[\w.-]+\.(?:pem|key|p12|pfx|jks))(?=$|[\s/])/i.test(
+      normalized,
+    ) ||
+    /(?:^|\s)(?:cat|type|more|less|head|tail|Get-Content|gc|sc|select-string|grep|rg|findstr|copy|cp|move|mv|open|nano|vim|code)\b[^\n]*(?:\.env[^\s/\\]*|\.npmrc|\.pypirc|\.netrc|id_rsa\w*|id_ed25519\w*|credentials(?:\.[\w.-]+)?|\.aws[\\/]credentials|\.ssh[\\/][\w.-]+|keyrings?[\\/][\w.-]+|[\w.-]+\.(?:pem|key|p12|pfx|jks))(?:$|\s)/i.test(
+      normalized,
+    )
+  );
 }
 function withinWorkspace(target: string, workspace: string): boolean {
   if (!path.isAbsolute(target) && !path.win32.isAbsolute(target)) return true;

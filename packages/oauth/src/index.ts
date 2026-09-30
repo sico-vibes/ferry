@@ -136,8 +136,8 @@ const secretKey = (id: OAuthProviderId) => (id === 'openrouter' ? 'openrouter' :
 
 export function validateRadiusGatewayUrl(gateway: string): string {
   const url = new URL(gateway);
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
-    throw new Error('Radius gateway URL must be an HTTP(S) URL without embedded credentials');
+  if (url.protocol !== 'https:' || url.username || url.password)
+    throw new Error('Radius gateway URL must use HTTPS without embedded credentials');
   return url.toString();
 }
 

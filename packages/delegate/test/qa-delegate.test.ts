@@ -9,6 +9,7 @@ import {
   decide,
   delegatePaths,
   readLanes,
+  resolveAcpCommand,
   runAdapter,
   startDelegation,
 } from '../src/index.js';
@@ -44,17 +45,7 @@ function lane(overrides: Partial<Lane> = {}): Lane {
 }
 
 describe('QA delegate: argument safety', () => {
-  it.each([
-    ['a; calc'],
-    ['a && b'],
-    ['a | b'],
-    ['a < b'],
-    ['a > b'],
-    ['a ^ b'],
-    ['a % b'],
-    ['a ! b'],
-    ['a\0b'],
-  ])('rejects shell metacharacters in %j', (arg) => {
+  it.each([['a % b'], ['a\0b'], ['line\rbreak']])('rejects shell metacharacters in %j', (arg) => {
     expect(() => {
       assertSafeArguments([arg]);
     }).toThrow(/Unsafe CLI argument/);
@@ -66,17 +57,35 @@ describe('QA delegate: argument safety', () => {
     }).not.toThrow();
   });
 
-  it('allows benign punctuation that is common in real briefs', () => {
-    // BUG: tokenUnsafe = /[\0;&|<>^%!]/ rejects "%", "!", "&" and "|", so normal
-    // briefs such as a 50%-complete note or a chained gate command ("npm test &&
-    // pnpm lint") make delegation fail before any CLI is spawned.
+  it('allows shell operator characters contained within one argument', () => {
     expect(() => {
-      assertSafeArguments(['Fix the remaining 50% of the bug!']);
-    }).not.toThrow();
-    expect(() => {
-      assertSafeArguments(['## Gates\n- npm test && pnpm lint']);
+      assertSafeArguments(['hello & calc', 'a||b', 'left > right', 'use;next', 'a^b']);
     }).not.toThrow();
   });
+
+  it.runIf(process.platform === 'win32')(
+    'quotes shell operators inside one .cmd argv value',
+    () => {
+      const invocation = resolveAcpCommand('C:\\tools\\agent.cmd', ['hello & calc']);
+      expect(invocation.args.at(-1)).toContain('"hello & calc"');
+    },
+  );
+
+  it.each(['tool%PATH%.cmd', 'tool"quoted.cmd', 'tool\nbreak.cmd'])(
+    'rejects unsafe executable names before constructing a shim command: %s',
+    (executable) => {
+      expect(() => resolveAcpCommand(executable, [])).toThrow(/Unsafe CLI argument/);
+    },
+  );
+
+  it.each(['%COMSPEC%', 'quote"break', 'line\nbreak'])(
+    'rejects embedded shell syntax in arguments: %s',
+    (arg) => {
+      expect(() => {
+        assertSafeArguments([arg]);
+      }).toThrow(/Unsafe CLI argument/);
+    },
+  );
 
   it.runIf(process.platform === 'win32')(
     'preserves a multi-line brief as a single argument through the .cmd shim',

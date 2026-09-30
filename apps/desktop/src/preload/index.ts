@@ -99,15 +99,7 @@ contextBridge.exposeInMainWorld('ferryHost', {
         const origin = rendererWindow.location.origin;
         const targetOrigin =
           origin === 'null' || rendererWindow.location.protocol === 'file:' ? '*' : origin;
-        rendererWindow.postMessage(
-          {
-            type: 'ferry:core-port',
-            token,
-            ...(metadata?.portId ? { portId: metadata.portId } : {}),
-          },
-          targetOrigin,
-          [port],
-        );
+        rendererWindow.postMessage({ type: 'ferry:core-port' }, targetOrigin, [port]);
         if (e2eDiagnosticsEnabled)
           console.info(
             `FERRY_PRELOAD_PORT_FORWARDED ${JSON.stringify({ attempt, portId: metadata?.portId ?? 'missing', targetOrigin })}`,

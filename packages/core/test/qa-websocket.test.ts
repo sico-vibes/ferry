@@ -11,6 +11,7 @@ import {
 } from '@ferry/client';
 import { CoreHost, createCoreHost } from '../src/index.js';
 import type { CoreWebSocketHandle } from '../src/index.js';
+import { exceedsWebSocketBufferLimit, MAX_WEBSOCKET_PENDING_BYTES } from '../src/websocket.js';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'ferry-qa-ws-'));
 vi.setConfig({ testTimeout: 30_000 });
@@ -133,6 +134,11 @@ async function readAllLogs(logsDir: string): Promise<string> {
 }
 
 describe('QA WebSocket transport validation', () => {
+  it('caps buffered bytes at the maximum single-frame size', () => {
+    expect(exceedsWebSocketBufferLimit(MAX_WEBSOCKET_PENDING_BYTES)).toBe(false);
+    expect(exceedsWebSocketBufferLimit(MAX_WEBSOCKET_PENDING_BYTES + 1)).toBe(true);
+  });
+
   it('handles abrupt client destruction during a request and an event stream', async () => {
     const { host, endpoint } = await startBareWs('ws-abrupt-close');
     const uncaught = vi.fn();

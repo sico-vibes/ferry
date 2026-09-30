@@ -281,8 +281,12 @@ describe('core host dispatcher and lifecycle', () => {
     const secrets = new MemorySecretStore('map-error');
     const key = 'opaque-value-without-provider-prefix-7192';
     await secrets.set('openai', key);
-    const error = Object.assign(new Error('failed'), { code: -32040, details: { note: key } });
+    const error = Object.assign(new Error(`failed with ${key}`), {
+      code: -32040,
+      details: { note: key },
+    });
     expect(JSON.stringify(mapError(error))).not.toContain(key);
+    expect(JSON.stringify(mapError(error))).not.toContain('opaque-value-without-provider-prefix');
     expect(redactSecretText(`log text ${key}`)).not.toContain(key);
     expect(redactHeaders({ note: `stored header text ${key}` })).not.toContain(key);
     await secrets.delete('openai');

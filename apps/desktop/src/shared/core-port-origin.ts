@@ -3,6 +3,6 @@ export function isExpectedCorePortOrigin(
   eventOrigin: string,
   locationOrigin: string,
 ): boolean {
-  if (protocol === 'file:') return eventOrigin === 'null' || eventOrigin === 'file://';
+  if (protocol === 'file:') return eventOrigin === 'null';
   return eventOrigin === locationOrigin;
 }

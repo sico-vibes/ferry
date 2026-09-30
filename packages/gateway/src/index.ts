@@ -75,6 +75,7 @@ export interface GatewayRuntime {
 export interface GatewayOptions {
   port?: number;
   allowLan?: boolean;
+  allowLanConfirmed?: boolean;
   runtime: GatewayRuntime;
 }
 export interface GatewayHandle {
@@ -90,6 +91,14 @@ const aliases: Record<string, GatewayProfile> = {
   'ferry/long-context': 'long-context',
 };
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
+
+export function pruneRateState<K>(state: Map<K, number[]>, now: number): void {
+  for (const [key, times] of state) {
+    const recent = times.filter((at) => now - at < 60_000);
+    if (recent.length) state.set(key, recent);
+    else state.delete(key);
+  }
+}
 
 export class GatewayRequestError extends Error {
   readonly code = 'invalid_request_error';
@@ -717,9 +726,38 @@ async function handleAnthropic(
 }
 
 export async function startGateway(options: GatewayOptions): Promise<GatewayHandle> {
+  if (options.allowLan && !options.allowLanConfirmed)
+    throw new Error('LAN gateway binding requires explicit confirmation');
   const host = options.allowLan ? '0.0.0.0' : '127.0.0.1';
   const requestTimes = new Map<string, number[]>();
+  const failedAuth = new Map<string, number[]>();
+  const rejectBrowserOrigin = (req: IncomingMessage, res: ServerResponse): boolean => {
+    if (!req.headers.origin) return false;
+    json(res, 403, errorBody('Browser origins are not allowed by the Ferry gateway', 'forbidden'));
+    return true;
+  };
+  const badAuthentication = (req: IncomingMessage, res: ServerResponse) => {
+    const address = req.socket.remoteAddress ?? 'unknown';
+    const now = Date.now();
+    const recent = (failedAuth.get(address) ?? []).filter((at) => now - at < 60_000);
+    if (recent.length >= 5) {
+      res.setHeader('retry-after', '60');
+      json(
+        res,
+        429,
+        errorBody('Too many failed gateway authentication attempts', 'rate_limit_error'),
+      );
+      return;
+    }
+    recent.push(now);
+    failedAuth.set(address, recent);
+    json(res, 401, errorBody('Invalid or revoked Ferry gateway key', 'authentication_error'));
+  };
   const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
+    const now = Date.now();
+    pruneRateState(requestTimes, now);
+    pruneRateState(failedAuth, now);
+    if (rejectBrowserOrigin(req, res)) return;
     const path = new URL(req.url ?? '/', 'http://localhost').pathname;
     if (req.method === 'GET' && path === '/health') {
       json(res, 200, { ok: true, service: 'ferry-gateway' });
@@ -729,9 +767,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
       const token = bearer(req);
       const key = token ? authenticateGatewayKey(token, options.runtime.store.list()) : undefined;
       if (!key) {
-        json(res, 401, errorBody('Invalid or revoked Ferry gateway key', 'authentication_error'));
+        badAuthentication(req, res);
         return;
       }
+      failedAuth.delete(req.socket.remoteAddress ?? 'unknown');
       options.runtime.store.touch(key.id, new Date().toISOString());
       const availableModels = await options.runtime.models(key);
       const ids = [
@@ -759,9 +798,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
       const token = bearer(req);
       const key = token ? authenticateGatewayKey(token, options.runtime.store.list()) : undefined;
       if (!key) {
-        json(res, 401, errorBody('Invalid or revoked Ferry gateway key', 'authentication_error'));
+        badAuthentication(req, res);
         return;
       }
+      failedAuth.delete(req.socket.remoteAddress ?? 'unknown');
       if (key.rateLimit !== null) {
         const now = Date.now();
         const recent = (requestTimes.get(key.id) ?? []).filter((at) => now - at < 60_000);
@@ -795,6 +835,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
       server.off('listening', onListen);
       if (error.code === 'EADDRINUSE' && wantedPort !== 0) {
         server.removeListener('error', onError);
+        server.once('error', onError);
+        server.once('listening', onListen);
         server.listen(0, host);
         return;
       }

@@ -23,6 +23,9 @@ import { canonicalPathKey } from '@ferry/shared/node-paths';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 const StartSchema = z.object({
   sessionId: z.string().min(1),
@@ -30,30 +33,6 @@ const StartSchema = z.object({
   brief: z.string().min(1),
 });
 const DecisionSchema = z.enum(['accepted', 'rejected', 'rework']);
-
-async function configuredGateCommands(
-  workspace: Workspace,
-  env: NodeJS.ProcessEnv,
-): Promise<string[]> {
-  const projectCommands = (await loadProjectConfig(workspace.path, env)).gateCommands;
-  return workspace.settings.gateCommands.length ? workspace.settings.gateCommands : projectCommands;
-}
-
-async function executeGateCommands(
-  jail: WorkspaceJail,
-  commands: readonly string[],
-): Promise<GateResult[]> {
-  const results: GateResult[] = [];
-  for (const command of commands) {
-    const result = await runCommand(jail, { command, cwd: '.', pty: false, timeoutMs: 120_000 });
-    results.push({
-      command,
-      ok: result.exitCode === 0 && !result.timedOut,
-      outputTail: `${result.stdout}\n${result.stderr}`.trim().slice(-4000),
-    });
-  }
-  return results;
-}
 
 export function register(host: CoreHost, services: FerryServices): void {
   const handles = new Map<string, DelegationHandle>();
@@ -82,6 +61,53 @@ export function register(host: CoreHost, services: FerryServices): void {
             : null,
     });
   };
+  const projectConfigHash = async (workspacePath: string): Promise<string | null> => {
+    try {
+      const bytes = await readFile(join(workspacePath, '.ferry', 'config.json'));
+      return createHash('sha256').update(bytes).digest('hex');
+    } catch {
+      return null;
+    }
+  };
+  const projectConfigApprovalKey = (workspacePath: string) =>
+    `project-config-approved:${canonicalPathKey(workspacePath)}`;
+  const configuredGatePlan = async (workspace: Workspace) => {
+    if (workspace.settings.gateCommands.length)
+      return { commands: [...workspace.settings.gateCommands], projectConfigHash: null };
+    const currentHash = await projectConfigHash(workspace.path);
+    const approvedHash = services.settings.get(projectConfigApprovalKey(workspace.path));
+    if (!currentHash || typeof approvedHash !== 'string' || currentHash !== approvedHash)
+      return { commands: [], projectConfigHash: null };
+    const commands = (await loadProjectConfig(workspace.path, {})).gateCommands;
+    if ((await projectConfigHash(workspace.path)) !== approvedHash)
+      return { commands: [], projectConfigHash: null };
+    return { commands, projectConfigHash: commands.length ? approvedHash : null };
+  };
+  const executeGatePlan = async (
+    jail: WorkspaceJail,
+    workspace: Workspace,
+    plan: Awaited<ReturnType<typeof configuredGatePlan>>,
+  ) => {
+    const results: GateResult[] = [];
+    for (const command of plan.commands) {
+      if (
+        plan.projectConfigHash &&
+        (await projectConfigHash(workspace.path)) !== plan.projectConfigHash
+      )
+        break;
+      const result = await runCommand(jail, { command, cwd: '.', pty: false, timeoutMs: 120_000 });
+      results.push({
+        command,
+        ok: result.exitCode === 0 && !result.timedOut,
+        outputTail: `${result.stdout}\n${result.stderr}`.trim().slice(-4000),
+      });
+    }
+    return results;
+  };
+  const briefWithGates = (brief: string, commands: readonly string[]) =>
+    commands.length
+      ? `${brief}\n\n## Gates\n${commands.map((command) => `- ${command}`).join('\n')}`
+      : brief;
   const publish = (run: DelegationRun) => {
     const parsed = DelegationRunSchema.parse(run);
     services.delegations.put(parsed);
@@ -107,6 +133,14 @@ export function register(host: CoreHost, services: FerryServices): void {
           result.projectHash,
         );
       return (await laneRead(workspace.path)).lanes;
+    },
+    async approveProjectConfig() {
+      const workspace = services.workspaces.list()[0];
+      if (!workspace) return { approved: false, hash: null };
+      const hash = await projectConfigHash(workspace.path);
+      if (!hash) return { approved: false, hash: null };
+      services.settings.put(projectConfigApprovalKey(workspace.path), hash);
+      return { approved: true, hash };
     },
     runs(rawSessionId: unknown) {
       const id = SessionIdSchema.parse(rawSessionId);
@@ -134,11 +168,9 @@ export function register(host: CoreHost, services: FerryServices): void {
       const jail = new WorkspaceJail(workspace.path);
       const shadow = new ShadowCheckpoints(jail, services.paths.home);
       const beforeId = await shadow.snapshot(`Before delegation ${input.lane}`);
-      const projectGateCommands = (await loadProjectConfig(workspace.path, services.env))
-        .gateCommands;
-      const gateCommands = workspace.settings.gateCommands.length
-        ? workspace.settings.gateCommands
-        : projectGateCommands;
+      const gatePlan = await configuredGatePlan(workspace);
+      const delegationBrief = briefWithGates(input.brief, gatePlan.commands);
+
       const now = services.clock.now().toISOString();
       const runId = newId('run') as RunId;
       const initial = DelegationRunSchema.parse({
@@ -146,7 +178,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         sessionId,
         lane: lane.name,
         implementer: lane.implementer,
-        brief: input.brief,
+        brief: delegationBrief,
         status: 'running',
         startedAt: now,
         finishedAt: null,
@@ -170,7 +202,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         runId,
         sessionId,
         lane,
-        brief: input.brief,
+        brief: delegationBrief,
         cwd: workspace.path,
         checkpointDiff: async () => {
           const diff = await shadow.diff(beforeId);
@@ -191,7 +223,9 @@ export function register(host: CoreHost, services: FerryServices): void {
       void handle.run
         .then(async (completed) => {
           const gateResults =
-            completed.status === 'completed' ? await executeGateCommands(jail, gateCommands) : [];
+            completed.status === 'completed'
+              ? await executeGatePlan(jail, workspace, gatePlan)
+              : [];
           const updated = DelegationRunSchema.parse({
             ...completed,
             gateResults,
@@ -219,7 +253,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const workspace = workspaceForSession(run.sessionId).workspace;
       const shadow = new ShadowCheckpoints(new WorkspaceJail(workspace.path), services.paths.home);
       const jail = new WorkspaceJail(workspace.path);
-      const gateCommands = await configuredGateCommands(workspace, services.env);
+      const gatePlan = await configuredGatePlan(workspace);
       const updated = await decide(
         run,
         decision,
@@ -238,8 +272,8 @@ export function register(host: CoreHost, services: FerryServices): void {
           },
           resumeSession: async (brief) => {
             if (!handle) throw new Error('Delegation process cannot be resumed after restart');
-            const resumed = await handle.resume(brief);
-            const gateResults = await executeGateCommands(jail, gateCommands);
+            const resumed = await handle.resume(briefWithGates(brief, gatePlan.commands));
+            const gateResults = await executeGatePlan(jail, workspace, gatePlan);
             return DelegationRunSchema.parse({
               ...resumed,
               gateResults,

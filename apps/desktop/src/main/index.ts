@@ -170,14 +170,9 @@ function isAllowlistedExternal(url: string): boolean {
 }
 function isTrustedRendererUrl(url: string): boolean {
   try {
-    const actual = new URL(url);
     const devUrl = process.env.ELECTRON_RENDERER_URL;
-    if (devUrl) {
-      const expected = new URL(devUrl);
-      return actual.origin === expected.origin && actual.pathname === expected.pathname;
-    }
     const rendererFile = pathToFileURL(join(import.meta.dirname, '../renderer/index.html'));
-    return actual.protocol === 'file:' && actual.pathname === rendererFile.pathname;
+    return isTrustedRendererOrigin(url, devUrl, rendererFile.toString());
   } catch {
     return false;
   }
@@ -190,7 +185,7 @@ function isTrustedSender(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEv
     event.sender === mainWindow.webContents &&
     frame &&
     frame === event.sender.mainFrame &&
-    isTrustedRendererOrigin(frame.url, process.env.ELECTRON_RENDERER_URL),
+    isTrustedRendererUrl(frame.url),
   );
 }
 async function openExternalSafely(url: string): Promise<void> {
@@ -514,6 +509,7 @@ app
     session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
       callback(false);
     });
+    session.defaultSession.setPermissionCheckHandler(() => false);
     if (app.isPackaged && !e2eUserDataPath) {
       const oldUserData = join(app.getPath('appData'), '@ferry', 'desktop');
       const newUserData = app.getPath('userData');

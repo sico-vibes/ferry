@@ -29,36 +29,51 @@ describe('ACP workspace filesystem callbacks', () => {
     const workspace = await temporaryDirectory('ferry-acp-workspace-');
     const outside = await temporaryDirectory('ferry-acp-outside-');
     await writeFile(join(workspace, 'inside.txt'), 'inside');
-    await writeFile(join(outside, 'secret.txt'), 'secret');
+    await writeFile(join(outside, 'outside-data.txt'), 'secret');
     await expect(assertAcpWorkspacePath(workspace, 'inside.txt', false)).resolves.toBe(
       await realpath(join(workspace, 'inside.txt')),
     );
     await expect(
       assertAcpWorkspacePath(workspace, '../ferry-acp-outside-x', false),
     ).rejects.toThrow(/escapes/);
-    await expect(assertAcpWorkspacePath(workspace, '..\\..\\secret.txt', false)).rejects.toThrow(
-      /escapes/,
-    );
+    await expect(
+      assertAcpWorkspacePath(workspace, '..\\..\\outside-data.txt', false),
+    ).rejects.toThrow(/escapes/);
     await expect(assertAcpWorkspacePath(workspace, 'C:secret.txt', false)).rejects.toThrow(
       /escapes/,
     );
     await expect(
-      assertAcpWorkspacePath(workspace, resolve(outside, 'secret.txt'), false),
+      assertAcpWorkspacePath(workspace, resolve(outside, 'outside-data.txt'), false),
     ).rejects.toThrow(/escapes/);
   });
+
+  it.each(['.env', '.npmrc', 'id_rsa', '.aws/credentials', 'certs/private.pem'])(
+    'rejects protected credential paths for ACP callbacks: %s',
+    async (credential) => {
+      const workspace = await temporaryDirectory('ferry-acp-credentials-');
+      const target = join(workspace, credential);
+      await expect(assertAcpWorkspacePath(workspace, credential, false)).rejects.toThrow(
+        /credential and secret files/,
+      );
+      await expect(assertAcpWorkspacePath(workspace, credential, true)).rejects.toThrow(
+        /credential and secret files/,
+      );
+      expect(target).toContain(workspace);
+    },
+  );
 
   it('rejects a symlink that resolves outside the workspace', async () => {
     const workspace = await temporaryDirectory('ferry-acp-link-workspace-');
     const outside = await temporaryDirectory('ferry-acp-link-outside-');
-    await writeFile(join(outside, 'secret.txt'), 'secret');
+    await writeFile(join(outside, 'outside-data.txt'), 'secret');
     try {
       await symlink(outside, join(workspace, 'external'), 'junction');
     } catch {
       return;
     }
-    await expect(assertAcpWorkspacePath(workspace, 'external/secret.txt', false)).rejects.toThrow(
-      /symlink/,
-    );
+    await expect(
+      assertAcpWorkspacePath(workspace, 'external/outside-data.txt', false),
+    ).rejects.toThrow(/symlink/);
   });
 
   it('canonicalizes a workspace reached through a non-canonical directory path', async () => {

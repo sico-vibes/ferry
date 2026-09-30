@@ -63,8 +63,9 @@ describe('@ferry/cli', () => {
   });
 
   it('renders the approval prompt', () => {
-    const app = render(<ApprovalPrompt summary="Run tests" />);
+    const app = render(<ApprovalPrompt summary="Run tests" detail="Command: pnpm test" />);
     expect(app.lastFrame()).toContain('Approval: Run tests');
+    expect(app.lastFrame()).toContain('Command: pnpm test');
     app.unmount();
   });
 

@@ -71,6 +71,10 @@ export function createDelegationDomain(
       syncStore();
       return structuredClone(state.lanes);
     },
+    async approveProjectConfig() {
+      await before();
+      return { approved: true, hash: 'mock-project-config-hash' };
+    },
     async runs(id) {
       await before();
       return state.delegationRuns.filter((r) => r.sessionId === id).map((r) => structuredClone(r));

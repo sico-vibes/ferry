@@ -27,6 +27,7 @@ export function Chat({
   const [approval, setApproval] = useState<{
     id: import('@ferry/shared').PartId;
     summary: string;
+    detail: string;
   } | null>(null);
   const [status, setStatus] = useState(`${profile.name} · auto · loading capacity`);
   const [activeProfile, setActiveProfile] = useState(profile);
@@ -55,7 +56,7 @@ export function Chat({
     const partOff = client.on('session.part', ({ part }) => {
       setLines((old) => [...old, describePart(part)]);
       if (part.type === 'approval_request' && part.state === 'pending')
-        setApproval({ id: part.id, summary: part.summary });
+        setApproval({ id: part.id, summary: part.summary, detail: part.detail });
     });
     const updateOff = client.on('session.updated', (value) =>
       setRunning(value.status === 'running' || value.status === 'awaiting_approval'),
@@ -147,7 +148,10 @@ export function Chat({
         ))}
       </Box>
       {approval ? (
-        <Text>{warn(`Approval: ${approval.summary}  [y] allow  [n] deny  [a] always`)}</Text>
+        <Box flexDirection="column">
+          <Text>{approval.detail}</Text>
+          <Text>{warn(`Approval: ${approval.summary}  [y] allow  [n] deny  [a] always`)}</Text>
+        </Box>
       ) : null}
       {running ? (
         <Text>
@@ -162,8 +166,13 @@ export function Chat({
   );
 }
 
-export function ApprovalPrompt({ summary }: { summary: string }) {
-  return <Text>{warn(`Approval: ${summary}  [y] allow  [n] deny  [a] always`)}</Text>;
+export function ApprovalPrompt({ summary, detail }: { summary: string; detail: string }) {
+  return (
+    <Box flexDirection="column">
+      <Text>{detail}</Text>
+      <Text>{warn(`Approval: ${summary}  [y] allow  [n] deny  [a] always`)}</Text>
+    </Box>
+  );
 }
 
 function describePart(part: MessagePart): string {

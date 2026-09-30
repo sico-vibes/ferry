@@ -250,11 +250,20 @@ export function SettingsCanvas() {
     patch: Partial<{ enabled: boolean; port: number; allowLan: boolean }>,
   ) => {
     if (!gateway) return;
+    const enablingLan = patch.allowLan === true && !gateway.allowLan;
+    if (
+      enablingLan &&
+      !window.confirm(
+        'Allow other devices on your local network to connect to Ferry? Only continue on a trusted network.',
+      )
+    )
+      return;
     await client.gateway.setSettings({
       enabled: gateway.enabled,
       port: gateway.port,
       allowLan: gateway.allowLan,
       ...patch,
+      ...(enablingLan ? { confirmLan: true } : {}),
     });
     await cache.invalidateQueries({ queryKey: ['gateway-settings'] });
   };

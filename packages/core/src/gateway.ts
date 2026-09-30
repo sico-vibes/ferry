@@ -353,7 +353,12 @@ export function createGatewayController(services: FerryServices) {
     },
     async start(settings = gatewaySettings(services)) {
       if (handle) return this.status;
-      handle = await startGateway({ runtime, port: settings.port, allowLan: settings.allowLan });
+      handle = await startGateway({
+        runtime,
+        port: settings.port,
+        allowLan: settings.allowLan,
+        allowLanConfirmed: settings.allowLan,
+      });
       return this.status;
     },
     async stop() {

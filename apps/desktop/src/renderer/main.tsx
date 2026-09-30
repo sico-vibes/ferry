@@ -56,9 +56,7 @@ const connectCorePort = async (
           typeof event.data !== 'object' ||
           event.data === null ||
           !('type' in event.data) ||
-          event.data.type !== 'ferry:core-port' ||
-          !('token' in event.data) ||
-          event.data.token !== token
+          event.data.type !== 'ferry:core-port'
         )
           return;
         window.clearTimeout(timeout);

@@ -6,7 +6,17 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   root: resolve('src/renderer'),
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    {
+      name: 'ferry-dev-websocket-csp',
+      apply: 'serve',
+      transformIndexHtml(html: string) {
+        return html.replace("connect-src 'self';", "connect-src 'self' ws://127.0.0.1:*;");
+      },
+    },
+  ],
   resolve: {
     alias: {
       'monaco-editor/esm/vs/editor/editor.api.js': fileURLToPath(

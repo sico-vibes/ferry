@@ -20,7 +20,7 @@ that every UI domain is connected to a production service.
 | `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false` | Enabled on the desktop window |
 | Webview disabled; no Blink feature opt-ins | Enabled; no remote module is imported or enabled |
 | Packaged DevTools | Disabled unless `FERRY_DEBUG_TOOLS=1` |
-| CSP | `script-src 'self'`, no `unsafe-eval`, loopback-only WebSocket connect allowance, object/frame/form restrictions; inline styles remain enabled for Monaco and runtime component styles |
+| CSP | `script-src 'self'`, no `unsafe-eval`, no loopback WebSocket allowance in production, object/frame/form restrictions; inline styles remain enabled for Monaco and runtime component styles |
 | New windows and navigation | New windows denied; navigation and redirects are allowed only to the exact renderer URL; external HTTP(S) links go through a host allowlist or a user confirmation dialog |
 | Renderer permissions | All permission requests denied; camera, microphone, geolocation, and notifications are not needed |
 | IPC handlers | `ferry:open-folder`, `ferry:engine-status`, `ferry:connect-core`, and `ferry:theme`; arguments use shared Zod schemas; sender frame must match the renderer URL |
@@ -32,18 +32,30 @@ that every UI domain is connected to a production service.
 
 - The optional WebSocket RPC listener binds explicitly to `127.0.0.1`, gets a
   fresh random bearer token per server start, uses constant-time token comparison,
-  rejects any `Origin` header, and locks out an address after five bad tokens.
+  rejects any `Origin` header, locks out an address after five bad tokens, and
+  caps buffered frames.
 - Stdio transport behavior is unchanged.
 - Workspace file tools deny credential paths, including `.env`, `.env.local`, and
   other `.env.*` variants. Listing and grep paths apply the same protection.
 - Destructive commands and shell indirection are classified for approval in
   `ask` and `auto_edit` modes and denied in `full_auto` mode.
+- Shell commands are screened for protected credential paths; model-supplied
+  shell-affecting environment keys are rejected, and non-default command
+  execution options require approval. ACP file callbacks apply the same
+  protected-path policy.
+- Project permission modes and rules cannot raise the saved user permission
+  mode or override user deny rules. Unapproved project permission rules are not
+  loaded. Project gate commands run only after approval of the exact
+  `.ferry/config.json` SHA-256.
+- Checkpoint snapshots, restores, and diffs exclude protected credential paths.
 - Project MCP configuration is not currently loaded by the desktop MCP domain.
   The MCP manager filters project-sourced entries unless the exact configuration
   hash is approved. Project delegation lanes likewise require approval for the
-  exact project config hash; a byte change invalidates the approval.
+  exact project config hash; a byte change invalidates the approval. The same
+  exact-byte rule protects `.ferry/config.json` gate commands.
 - ACP filesystem callbacks resolve paths against the delegation workspace and
-  reject parent traversal, absolute escapes, and symlink escapes.
+  reject parent traversal, absolute escapes, symlink escapes, and protected
+  credential paths.
 - Shared secret redaction is exercised by core regression coverage for provider
   keys and OAuth access/refresh tokens across RPC results, events, SQLite, and
   logs. WebSocket bearer tokens are separately checked against console and log
@@ -57,14 +69,42 @@ known vulnerabilities at that time; the audit preceded the addition of
 
 ## Windows release updates
 
-Ferry beta installers are unsigned. Windows may show SmartScreen warnings, and
-unsigned update packages do not provide publisher identity or signature-based
-tamper detection. Ferry's `electron-updater` client disables its code-signature
-requirement to accept these unsigned releases. Updates are fetched from the
-public `sico-vibes/ferry` GitHub Releases feed over HTTPS; GitHub release
-integrity and HTTPS remain the transport boundary. Users should install only
-from the official Releases page. Signing releases later would restore publisher
-identity and signature verification.
+Windows beta installers are unsigned, and Ferry's `electron-updater` client
+disables code-signature verification to accept them. Updates are fetched over
+HTTPS from the public `sico-vibes/ferry` GitHub Releases feed. HTTPS protects the
+transport against passive network observers and ordinary in-path modification.
+An attacker would need to compromise the GitHub release account or release CI,
+or control a trusted TLS inspection certificate/local proxy on the user's
+machine, to replace update metadata or packages; unsigned packages provide no
+publisher identity or signature-based tamper detection if one of those boundaries
+is compromised. Users should install only from the official Releases page. The
+accepted risk is to keep unsigned beta updates enabled while the project has no
+release signing identity; the planned mitigation is to sign Windows releases
+and restore updater signature verification.
+
+## Fixed in B10
+
+- Project gate commands are hash-approved against the exact `.ferry/config.json`
+  bytes before execution. `run_command` checks command, working directory,
+  environment keys, and PTY options; model calls cannot override shell or
+  executable lookup variables, and approval details show the full invocation.
+- Credential files are denied to shell reads and ACP read/write callbacks.
+  Checkpoint snapshots, diffs, and restores filter protected paths.
+- Project permission settings cannot raise the user's mode; user deny rules
+  take precedence. Unapproved project permission rules are not loaded.
+- The gateway rejects every browser `Origin` by default, throttles repeated bad
+  keys, and requires a confirmation prompt before LAN binding. Rate state is
+  pruned and busy-port fallback resolves on the replacement port.
+- Core RPC error mapping redacts known secrets in both messages and details.
+  Delegate argv rejects shell metacharacters, and PowerShell encoded commands,
+  expression evaluation, and download cradles require review or are denied.
+- Desktop permission checks are explicitly denied, renderer trust is bound to
+  the exact renderer URL, core MessagePort handoff does not expose its bearer
+  token in a wildcard-origin message, production CSP no longer allows the
+  loopback WebSocket endpoint, and Radius URLs require HTTPS.
+
+Unsigned auto-updates remain the accepted B10 risk described above; update
+configuration was intentionally left unchanged pending signing infrastructure.
 
 ## Reporting vulnerabilities
 
