@@ -540,36 +540,48 @@ function PartView({
       );
     case 'error': {
       const presentation = getErrorPresentation(part);
+      const paidCapReached = part.message.startsWith('Paid cap reached:');
       return (
         <div className="space-y-2">
           <ErrorPart
             message={presentation.summary}
             attempts={presentation.attempts}
             onRetry={
-              canRetry && !presentation.allExhausted ? () => void retryLastPrompt() : undefined
-            }
-            onSwitchToAuto={canRetry ? () => void retryLastPrompt('auto_for_step') : undefined}
-            onPickModel={canRetry ? onPickAnother : undefined}
-            onWait={
-              canRetry && presentation.allExhausted
-                ? () => {
-                    const minutes = Number(
-                      /in (\d+) min/i.exec(presentation.nextCapacity ?? '')?.[1] ?? 0,
-                    );
-                    window.setTimeout(
-                      () => void retryLastPrompt('auto_for_step'),
-                      Math.max(60_000, minutes * 60_000),
-                    );
-                    pushToast({
-                      kind: 'info',
-                      title: 'Retry scheduled',
-                      body: presentation.nextCapacity ?? 'The next free reset.',
-                    });
-                  }
+              !paidCapReached && canRetry && !presentation.allExhausted
+                ? () => void retryLastPrompt()
                 : undefined
             }
+            onSwitchToAuto={
+              !paidCapReached && canRetry ? () => void retryLastPrompt('auto_for_step') : undefined
+            }
+            onPickModel={!paidCapReached && canRetry ? onPickAnother : undefined}
+            onWait={
+              paidCapReached
+                ? () => void retryLastPrompt('auto_for_step')
+                : canRetry && presentation.allExhausted
+                  ? () => {
+                      const minutes = Number(
+                        /in (\d+) min/i.exec(presentation.nextCapacity ?? '')?.[1] ?? 0,
+                      );
+                      window.setTimeout(
+                        () => void retryLastPrompt('auto_for_step'),
+                        Math.max(60_000, minutes * 60_000),
+                      );
+                      pushToast({
+                        kind: 'info',
+                        title: 'Retry scheduled',
+                        body: presentation.nextCapacity ?? 'The next free reset.',
+                      });
+                    }
+                  : undefined
+            }
+            waitLabel={paidCapReached ? 'Wait for free capacity' : undefined}
+            onRaiseCap={paidCapReached ? () => void navigate({ to: '/settings' }) : undefined}
+            onStop={paidCapReached ? () => void client.sessions.cancel(sessionId) : undefined}
             onAddProvider={
-              presentation.allExhausted ? () => void navigate({ to: '/explore' }) : undefined
+              !paidCapReached && presentation.allExhausted
+                ? () => void navigate({ to: '/explore' })
+                : undefined
             }
           />
           {presentation.summary.startsWith('No available model —') ? (

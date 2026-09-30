@@ -181,6 +181,11 @@ export interface AgentOptions {
   estimateTokens?: (text: string) => number;
   onObservation?: (observation: RawCallObservation) => void;
   onUsage?: (usage: UsageRecord) => void;
+  authorizePaidCall?: (
+    model: ModelInfo,
+    estimate: { inputTokens: number; outputTokens: number },
+    signal: AbortSignal,
+  ) => Promise<{ allowed: boolean; message?: string; usageId?: string; release?: () => void }>;
   onHandoff?: (
     reason: 'quota' | 'rate_limit' | 'error' | 'capability',
     from: string,
@@ -699,9 +704,27 @@ export class AgentLoop {
         const toolCapabilityFailures: string[] = [];
         let sameModelRetries = 0;
         let handoffsThisStep = 0;
+        let pendingPaidRelease: (() => void) | undefined;
+        let pendingPaidUsageId: string | undefined;
         while (!generationComplete) {
           const attemptStartedAt = performance.now();
           try {
+            const paidDecision = await this.options.authorizePaidCall?.(
+              model,
+              { inputTokens, outputTokens: 2048 },
+              signal,
+            );
+            pendingPaidRelease = paidDecision?.release;
+            pendingPaidUsageId = paidDecision?.usageId;
+            if (paidDecision && !paidDecision.allowed) {
+              this.addPart(sessionId, {
+                type: 'error',
+                id: PartIdSchema.parse(newId('part')),
+                message: paidDecision.message ?? 'Paid model call was not authorized.',
+                kind: 'all_candidates_exhausted',
+              });
+              return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'paused');
+            }
             const generator =
               this.options.generator ?? this.createStreamingGenerator(model, sessionId);
             let releaseLease: (() => void) | null | undefined;
@@ -766,6 +789,9 @@ export class AgentLoop {
             this.options.onResilienceState?.(this.resilience.snapshot());
             break;
           } catch (error) {
+            pendingPaidRelease?.();
+            pendingPaidRelease = undefined;
+            pendingPaidUsageId = undefined;
             if (executionRole === 'editor') editorFailures += 1;
             const classified = classifyProviderError(errorInput(error));
             const routing = this.options.routingSettings?.();
@@ -1017,7 +1043,7 @@ export class AgentLoop {
           });
         }
         this.options.onUsage?.({
-          id: newId('usage'),
+          id: pendingPaidUsageId ?? newId('usage'),
           providerId: model.providerId,
           modelRef: model.ref,
           occurredAt: new Date().toISOString(),
@@ -1027,6 +1053,9 @@ export class AgentLoop {
           outputTokens: generated.outputTokens ?? 0,
           status: 'success',
         });
+        pendingPaidRelease?.();
+        pendingPaidRelease = undefined;
+        pendingPaidUsageId = undefined;
         if (isSignalAborted(signal))
           throw signal.reason ?? new DOMException('Aborted', 'AbortError');
         let parts =

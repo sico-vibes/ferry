@@ -147,6 +147,15 @@ export function runFerryClientContract(
           if (!workspace) throw new Error('Contract workspace fixture missing');
           const s = await client.sessions.create({ workspaceId: workspace.id });
           let heard = 0;
+          const offPaid = client.on('session.part', (event) => {
+            if (
+              event.sessionId === s.id &&
+              event.part.type === 'approval_request' &&
+              event.part.kind === 'paid_model' &&
+              event.part.state === 'pending'
+            )
+              void client.approvals.respond(s.id, event.part.id, 'allow_once');
+          });
           const off = client.on('session.message', () => heard++);
           await client.sessions.send(s.id, { text: 'hello' });
           if (advance) {
@@ -166,6 +175,7 @@ export function runFerryClientContract(
             await advance(150);
           } else await waitForSettled(client, s.id);
           expect(heard).toBe(count);
+          offPaid();
         }
         if (includes('settings'))
           expect(SettingsSchema.parse(await client.settings.update({ theme: 'light' })).theme).toBe(

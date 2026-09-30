@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import {
   createMockFerryClient,
   createHybridClient,
@@ -277,6 +278,30 @@ describe('core host dispatcher and lifecycle', () => {
     });
   });
 
+  it('includes safe Zod issue summaries and the RPC method in validation errors', () => {
+    const parsed = z.object({ count: z.number() }).safeParse({ count: 'invalid' });
+    if (parsed.success) throw new Error('Validation fixture unexpectedly passed');
+    const issue = parsed.error.issues[0];
+    if (!issue) throw new Error('Validation fixture produced no issue');
+
+    expect(mapError(parsed.error, 'settings.update')).toMatchObject({
+      code: -32010,
+      data: {
+        kind: 'validation',
+        details: {
+          method: 'settings.update',
+          issues: [
+            {
+              code: 'invalid_type',
+              message: issue.message,
+              path: ['count'],
+            },
+          ],
+        },
+      },
+    });
+  });
+
   it('redacts exact stored secrets from mapped error details', async () => {
     const secrets = new MemorySecretStore('map-error');
     const key = 'opaque-value-without-provider-prefix-7192';
@@ -516,6 +541,13 @@ describe('provider, model and quota RPC integration', () => {
           recovered?.availableModels?.find((model) => model.ref === 'sambanova/gpt-oss-120b'),
         ).toMatchObject({ priceInPerM: null, priceOutPerM: null, toolCalling: true });
       });
+      // This routing fixture represents explicit zero-priced/free SambaNova models.
+      for (const model of services.models.list(providerId)) {
+        services.models.put(
+          providerId,
+          ModelInfoSchema.parse({ ...model, free: true, priceInPerM: 0, priceOutPerM: 0 }),
+        );
+      }
       const autoFreeId = ProfileIdSchema.parse('profile_builtin_auto_free');
       await rpc.settings.update({ activeProfileId: autoFreeId });
       services.models.put(

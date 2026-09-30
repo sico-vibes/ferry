@@ -33,6 +33,12 @@ export const RoutingSettingsSchema = RoutingSettingsFieldsSchema.extend({
 });
 export const DEFAULT_ROUTING_SETTINGS = RoutingSettingsSchema.parse({});
 export type RoutingSettings = z.infer<typeof RoutingSettingsSchema>;
+export const PaidCapsSchema = z.object({
+  sessionUsd: z.number().nonnegative().nullable().default(null),
+  dailyUsd: z.number().nonnegative().nullable().default(null),
+  monthlyUsd: z.number().nonnegative().nullable().default(null),
+});
+export type PaidCaps = z.infer<typeof PaidCapsSchema>;
 export const SettingsSchema = z.object({
   theme: ThemeSchema,
   homeStyle: z.enum(['auto', 'hero', 'compact']).default('auto'),
@@ -44,6 +50,7 @@ export const SettingsSchema = z.object({
   delegationMode: DelegationModeSchema,
   permissionMode: PermissionModeSchema,
   activeProfileId: ProfileIdSchema,
+  paidCaps: PaidCapsSchema.default({ sessionUsd: null, dailyUsd: null, monthlyUsd: null }),
   onboardingComplete: z.boolean(),
   optimizers: OptimizerTogglesSchema,
   routing: RoutingSettingsSchema.default(DEFAULT_ROUTING_SETTINGS),
@@ -55,6 +62,7 @@ export const SettingsSchema = z.object({
   }),
 });
 export const SettingsPatchSchema = SettingsSchema.partial().extend({
+  paidCaps: PaidCapsSchema.partial().optional(),
   optimizers: OptimizerTogglesSchema.partial().optional(),
   routing: RoutingSettingsFieldsSchema.partial().optional(),
   developer: z

@@ -423,9 +423,11 @@ export function ApprovalCard({
           <Pill size="sm" onClick={() => onRespond?.('allow_once')}>
             Allow once
           </Pill>
-          <Pill size="sm" onClick={() => onRespond?.('always_allow')}>
-            Always allow
-          </Pill>
+          {kind !== 'paid_model' && (
+            <Pill size="sm" onClick={() => onRespond?.('always_allow')}>
+              Always allow
+            </Pill>
+          )}
           <Pill size="sm" variant="warm-outline" onClick={() => onRespond?.('deny')}>
             Deny
           </Pill>
@@ -540,6 +542,9 @@ export function ErrorPart({
   onPickModel,
   onWait,
   onAddProvider,
+  onRaiseCap,
+  onStop,
+  waitLabel,
 }: {
   message: string;
   attempts?: ErrorAttempt[];
@@ -548,6 +553,9 @@ export function ErrorPart({
   onPickModel?: (() => void) | undefined;
   onWait?: (() => void) | undefined;
   onAddProvider?: (() => void) | undefined;
+  onRaiseCap?: (() => void) | undefined;
+  onStop?: (() => void) | undefined;
+  waitLabel?: string | undefined;
 }) {
   return (
     <section className="session-error-card" role="alert">
@@ -573,7 +581,17 @@ export function ErrorPart({
         )}
         {onWait && (
           <button type="button" onClick={onWait}>
-            Wait
+            {waitLabel ?? 'Wait'}
+          </button>
+        )}
+        {onRaiseCap && (
+          <button type="button" onClick={onRaiseCap}>
+            Raise cap
+          </button>
+        )}
+        {onStop && (
+          <button type="button" onClick={onStop}>
+            Stop
           </button>
         )}
         {onAddProvider && (

@@ -1,0 +1,264 @@
+{
+  "timestamp": "2026-09-27T17:49:10.445Z",
+  "profile": "auto-free",
+  "roles": "on",
+  "model": null,
+  "dataDir": "[provided]",
+  "maxSteps": 25,
+  "timeoutMs": 600000,
+  "estimatedRequests": [
+    {
+      "provider": "cloudflare-workers-ai",
+      "estimatedRequests": 200
+    },
+    {
+      "provider": "gemini",
+      "estimatedRequests": 200
+    },
+    {
+      "provider": "groq",
+      "estimatedRequests": 200
+    },
+    {
+      "provider": "kilo",
+      "estimatedRequests": 200
+    },
+    {
+      "provider": "llm7",
+      "estimatedRequests": 200
+    },
+    {
+      "provider": "nvidia",
+      "estimatedRequests": 200
+    },
+    {
+      "provider": "openrouter",
+      "estimatedRequests": 200
+    },
+    {
+      "provider": "ovhcloud",
+      "estimatedRequests": 200
+    }
+  ],
+  "results": [
+    {
+      "id": "fix-failing-test",
+      "repetition": 1,
+      "passed": true,
+      "steps": 8,
+      "wallTimeMs": 32240,
+      "models": ["gemini/gemini-3.1-flash-lite", "openrouter/qwen/qwen3.8-27b:free"],
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "providerErrors": {},
+      "handoffs": ["openrouter/qwen/qwen3.8-27b:free -> gemini/gemini-3.1-flash-lite (rate_limit)"],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": ""
+    },
+    {
+      "id": "add-function-test",
+      "repetition": 1,
+      "passed": false,
+      "steps": 9,
+      "wallTimeMs": 31861,
+      "models": [
+        "gemini/gemini-3.1-flash-lite",
+        "groq/qwen/qwen3.8-27b",
+        "kilo/inclusionai/ling-3.0-flash-fin",
+        "kilo/qwen/qwen3-coder-next",
+        "kilo/z-ai/glm-4.7",
+        "kilo/~deepseek/deepseek-v4-flash-latest",
+        "kilo/~z-ai/glm-flash-latest",
+        "kilo/~z-ai/glm-latest",
+        "kilo/deepseek/deepseek-v4-flash",
+        "kilo/stepfun/step-3.5-flash"
+      ],
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "providerErrors": {},
+      "handoffs": [
+        "groq/qwen/qwen3.8-27b -> gemini/gemini-3.1-flash-lite (error)",
+        "kilo/inclusionai/ling-3.0-flash-fin -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/qwen/qwen3-coder-next (quota)",
+        "kilo/qwen/qwen3-coder-next -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/z-ai/glm-4.7 (quota)",
+        "kilo/z-ai/glm-4.7 -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/~deepseek/deepseek-v4-flash-latest (quota)",
+        "kilo/~deepseek/deepseek-v4-flash-latest -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/~z-ai/glm-flash-latest (quota)",
+        "kilo/~z-ai/glm-flash-latest -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/~z-ai/glm-latest (quota)",
+        "kilo/~z-ai/glm-latest -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/deepseek/deepseek-v4-flash (quota)",
+        "kilo/deepseek/deepseek-v4-flash -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/stepfun/step-3.5-flash (quota)",
+        "kilo/stepfun/step-3.5-flash -> gemini/gemini-3.1-flash-lite (rate_limit)"
+      ],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": " Next returned quota_exhausted (HTTP 402): Add credits to continue, or switch to a free model; continuing with Gemini 3.1 Flash Lite.\nModel handoff: Gemini 3.1 Flash Lite returned finished.\nI have completed the task.\n\n1.  Modified `index.js` to include the `double` function.\n2.  Modified `test.js` to include a test case verifying `double(2) === 4`.\n\nYou can now run the tests to verify the changes."
+    },
+    {
+      "id": "rename-symbol",
+      "repetition": 1,
+      "passed": true,
+      "steps": 8,
+      "wallTimeMs": 29055,
+      "models": [
+        "gemini/gemini-3.1-flash-lite",
+        "groq/openai/gpt-oss-120b",
+        "openrouter/qwen/qwen3.8-27b:free",
+        "kilo/qwen/qwen3.7-max",
+        "kilo/google/gemini-3.6-flash",
+        "kilo/mistralai/codestral-2508",
+        "kilo/deepseek/deepseek-v3.2",
+        "kilo/z-ai/glm-4.5",
+        "kilo/z-ai/glm-5.1"
+      ],
+      "tokensIn": 3083,
+      "tokensOut": 196,
+      "providerErrors": {},
+      "handoffs": [
+        "openrouter/qwen/qwen3.8-27b:free -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "kilo/qwen/qwen3.7-max -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/google/gemini-3.6-flash (quota)",
+        "kilo/google/gemini-3.6-flash -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/mistralai/codestral-2508 (quota)",
+        "kilo/mistralai/codestral-2508 -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/deepseek/deepseek-v3.2 (quota)",
+        "kilo/deepseek/deepseek-v3.2 -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/z-ai/glm-4.5 (quota)",
+        "kilo/z-ai/glm-4.5 -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> groq/openai/gpt-oss-120b (quota)",
+        "groq/openai/gpt-oss-120b -> kilo/z-ai/glm-5.1 (quota)",
+        "kilo/z-ai/glm-5.1 -> gemini/gemini-3.1-flash-lite (rate_limit)"
+      ],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": ""
+    },
+    {
+      "id": "read-explain",
+      "repetition": 1,
+      "passed": true,
+      "steps": 4,
+      "wallTimeMs": 7879,
+      "models": ["groq/qwen/qwen3.8-27b", "gemini/gemini-3.1-flash-lite"],
+      "tokensIn": 4695,
+      "tokensOut": 347,
+      "providerErrors": {},
+      "handoffs": ["groq/qwen/qwen3.8-27b -> gemini/gemini-3.1-flash-lite (rate_limit)"],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": ""
+    },
+    {
+      "id": "crlf-edit",
+      "repetition": 1,
+      "passed": true,
+      "steps": 6,
+      "wallTimeMs": 29320,
+      "models": [
+        "gemini/gemini-3.1-flash-lite",
+        "groq/qwen/qwen3.8-27b",
+        "kilo/qwen/qwen3.5-397b-a17b",
+        "kilo/mistralai/devstral-2512",
+        "kilo/z-ai/glm-4.6v",
+        "kilo/qwen/qwen3-coder",
+        "kilo/qwen/qwen3.8-2.4t-a95b"
+      ],
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "providerErrors": {},
+      "handoffs": [
+        "groq/qwen/qwen3.8-27b -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "kilo/qwen/qwen3.5-397b-a17b -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/mistralai/devstral-2512 (quota)",
+        "kilo/mistralai/devstral-2512 -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/z-ai/glm-4.6v (quota)",
+        "kilo/z-ai/glm-4.6v -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/qwen/qwen3-coder (quota)",
+        "kilo/qwen/qwen3-coder -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/qwen/qwen3.8-2.4t-a95b (quota)",
+        "kilo/qwen/qwen3.8-2.4t-a95b -> gemini/gemini-3.1-flash-lite (rate_limit)"
+      ],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": ""
+    },
+    {
+      "id": "large-targeted-edit",
+      "repetition": 1,
+      "passed": false,
+      "steps": 6,
+      "wallTimeMs": 14737,
+      "models": [
+        "gemini/gemini-3.1-flash-lite",
+        "kilo/stepfun/step-3.7-flash:free",
+        "groq/qwen/qwen3.8-27b",
+        "kilo/z-ai/glm-5.2",
+        "kilo/qwen/qwen3-coder-30b-a3b-instruct",
+        "kilo/z-ai/glm-5",
+        "kilo/qwen/qwen3.6-27b"
+      ],
+      "tokensIn": 1973,
+      "tokensOut": 88,
+      "providerErrors": {},
+      "handoffs": [
+        "groq/qwen/qwen3.8-27b -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "kilo/z-ai/glm-5.2 -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/stepfun/step-3.7-flash:free (quota)",
+        "kilo/stepfun/step-3.7-flash:free -> kilo/qwen/qwen3-coder-30b-a3b-instruct (quota)",
+        "kilo/qwen/qwen3-coder-30b-a3b-instruct -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/z-ai/glm-5 (quota)",
+        "kilo/z-ai/glm-5 -> gemini/gemini-3.1-flash-lite (rate_limit)",
+        "gemini/gemini-3.1-flash-lite -> kilo/qwen/qwen3.6-27b (quota)",
+        "kilo/qwen/qwen3.6-27b -> gemini/gemini-3.1-flash-lite (rate_limit)"
+      ],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": "{\n  \"files\": [\n    {\n      \"path\": \"large.txt\",\n      \"intent\": \"Update the content of line 50000 to 'updated'.\"\n    }\n  ],\n  \"changes\": [\n    {\n      \"path\": \"large.txt\",\n      \"instructions\": \"Replace line 50000 with the text 'updated'.\"\n    }\n  ]\n}"
+    },
+    {
+      "id": "diagnose-build",
+      "repetition": 1,
+      "passed": true,
+      "steps": 5,
+      "wallTimeMs": 12177,
+      "models": ["gemini/gemini-3.1-flash-lite", "groq/qwen/qwen3.8-27b"],
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "providerErrors": {},
+      "handoffs": ["groq/qwen/qwen3.8-27b -> gemini/gemini-3.1-flash-lite (rate_limit)"],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": ""
+    },
+    {
+      "id": "multi-file-refactor",
+      "repetition": 1,
+      "passed": false,
+      "steps": 9,
+      "wallTimeMs": 21527,
+      "models": ["groq/qwen/qwen3.8-27b", "gemini/gemini-3.1-flash-lite"],
+      "tokensIn": 4397,
+      "tokensOut": 128,
+      "providerErrors": {},
+      "handoffs": ["groq/qwen/qwen3.8-27b -> gemini/gemini-3.1-flash-lite (rate_limit)"],
+      "toolCallRepairs": 0,
+      "editsRefused": 0,
+      "editsRetried": 0,
+      "detail": "[]\nCheckpoint created: Before Run command\nThe `answer` constant was successfully moved to `packages/a/src/constants.js` and `packages/a/src/index.js` was updated to export it from the new module. The `test.js` script passed, indicating that the refactoring maintained the expected behavior."
+    }
+  ],
+  "passed": 5,
+  "total": 8
+}

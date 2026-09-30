@@ -245,6 +245,7 @@ export const sampleProfile: Profile = {
     long_context: ['T2'],
   },
   paidAllowed: false,
+  paidConfirmation: { preauthorize: false, confirmSubscriptions: false, confirmTrials: false },
   caps: { dailyUsd: null, monthlyUsd: null },
   delegationMode: 'suggest',
   optimizers: sampleOptimizerToggles,
@@ -313,6 +314,7 @@ export const sampleSettings: Settings = {
   delegationMode: 'suggest',
   permissionMode: 'ask',
   activeProfileId: profileId,
+  paidCaps: { sessionUsd: null, dailyUsd: null, monthlyUsd: null },
   onboardingComplete: true,
   optimizers: sampleOptimizerToggles,
   routing: {

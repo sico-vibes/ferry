@@ -20,6 +20,7 @@ function customProfile(overrides: Record<string, unknown> = {}): Profile {
       long_context: ['T1', 'T2', 'T3'],
     },
     paidAllowed: false,
+    paidConfirmation: { preauthorize: false, confirmSubscriptions: false, confirmTrials: false },
     caps: { dailyUsd: null, monthlyUsd: null },
     delegationMode: 'suggest',
     optimizers: {

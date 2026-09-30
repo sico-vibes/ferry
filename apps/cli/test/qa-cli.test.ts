@@ -49,6 +49,40 @@ function runCli(
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
+function runCliAsync(
+  args: string[],
+  extra: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<CliResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cliEntry, ...args], {
+      cwd: extra.cwd,
+      env: {
+        ...process.env,
+        ...extra.env,
+        FERRY_ENGINE: extra.env?.FERRY_ENGINE ?? 'mock',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => (stdout += chunk));
+    child.stderr.on('data', (chunk: string) => (stderr += chunk));
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('CLI paid-call test exceeded 90 seconds'));
+    }, 90_000);
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('exit', (status) => {
+      clearTimeout(timer);
+      resolve({ status, stdout, stderr });
+    });
+  });
+}
 function tempDirectory(label: string): string {
   const directory = mkdtempSync(join(tmpdir(), `ferry-qa-${label}-`));
   temporaryRoots.push(directory);
@@ -493,6 +527,92 @@ describe('@ferry/cli argument parsing and exit codes', () => {
       expect(Array.isArray(value.nextResets)).toBe(true);
       expect(typeof value.updatedAt).toBe('string');
       expect(result.stderr).toBe('');
+    },
+    ONE_SPAWN,
+  );
+
+  it(
+    'refuses a first paid call in non-interactive mode without --yes-paid',
+    async () => {
+      const dataDir = tempDirectory('paid-refusal');
+      const workspace = tempDirectory('paid-refusal-workspace');
+      const fake = new FakeOpenAIServer({
+        models: [{ id: 'bytedance-seed/seed-2.0-mini', supported_parameters: ['tools'] }],
+        responses: [
+          {
+            chunks: [
+              {
+                id: 'chatcmpl_paid',
+                object: 'chat.completion.chunk',
+                created: 1,
+                model: 'fake',
+                choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+              },
+              {
+                id: 'chatcmpl_paid',
+                object: 'chat.completion.chunk',
+                created: 1,
+                model: 'fake',
+                choices: [
+                  { index: 0, delta: { content: 'must not be requested' }, finish_reason: null },
+                ],
+              },
+              {
+                id: 'chatcmpl_paid',
+                object: 'chat.completion.chunk',
+                created: 1,
+                model: 'fake',
+                choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+              },
+            ],
+          },
+        ],
+      });
+      await fake.start();
+      fakeServers.push(fake);
+      const result = await runCliAsync(
+        [
+          'run',
+          'do one task',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+          '--cwd',
+          workspace,
+          '--model-ref',
+          'openrouter/bytedance-seed/seed-2.0-mini',
+          '--profile',
+          'Best Available',
+        ],
+        {
+          cwd: workspace,
+          env: {
+            FERRY_ENGINE: 'local',
+            NODE_ENV: 'test',
+            FERRY_HOME: dataDir,
+            FERRY_TEST_KEYRING_NAMESPACE: 'cli-paid-refusal',
+            FERRY_E2E_USER_DATA_DIR: dataDir,
+            FERRY_E2E_PROVIDER_ID: 'openrouter',
+            FERRY_E2E_PROVIDER_KEY: 'fixture-key',
+            FERRY_PROVIDER_BASE_URL_OPENROUTER: `${fake.baseUrl}/v1`,
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(3);
+      expect(result.stderr).toContain('Paid model confirmation is required');
+      expect(result.stderr).toContain('No paid request was sent');
+      expect(fake.requests.filter((request) => request.method === 'POST')).toHaveLength(0);
+    },
+    ONE_SPAWN,
+  );
+  it(
+    'parses --yes-paid as a boolean without consuming the prompt that follows it',
+    () => {
+      const result = runCli(['run', '--yes-paid', 'hello', '--engine', 'invalid']);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('Invalid --engine');
+      expect(result.stderr).not.toContain('Usage: ferry run <prompt>');
     },
     ONE_SPAWN,
   );

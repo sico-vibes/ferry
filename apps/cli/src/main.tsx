@@ -39,6 +39,7 @@ export async function runPrompt(
     permission?: 'ask' | 'auto_edit' | 'full_auto';
     maxSteps?: number;
     mock?: boolean;
+    yesPaid?: boolean;
     verbose?: boolean;
     quiet?: boolean;
     modelRef?: string;
@@ -64,6 +65,7 @@ export async function runPrompt(
     if (!options.quiet) emit(json, event, human);
   };
   let approvalNeeded = false;
+  let paidCapReached = false;
   let failed = false;
   let stepLimitExceeded = false;
   let terminalStatusEmitted = false;
@@ -82,7 +84,25 @@ export async function runPrompt(
       if (event.sessionId !== session.id) return;
       if (event.part.type === 'approval_request' && event.part.state === 'pending') {
         const mode = options.permission ?? settings.permissionMode;
-        if (mode === 'full_auto' || (mode === 'auto_edit' && event.part.kind === 'edit')) {
+        if (event.part.kind === 'paid_model' && options.yesPaid) {
+          void client.approvals.respond(session.id, event.part.id, 'allow_once');
+        } else if (
+          event.part.kind === 'paid_model' &&
+          process.stdin.isTTY &&
+          process.stdout.isTTY
+        ) {
+          void askPaidApproval(event.part.summary).then((decision) => {
+            if (decision === 'deny') approvalNeeded = true;
+            return client.approvals.respond(session.id, event.part.id, decision);
+          });
+        } else if (event.part.kind === 'paid_model') {
+          approvalNeeded = true;
+          if (!options.quiet)
+            process.stderr.write(
+              'Paid model confirmation is required in a TTY, or pass --yes-paid. No paid request was sent.\n',
+            );
+          void client.approvals.respond(session.id, event.part.id, 'deny');
+        } else if (mode === 'full_auto' || (mode === 'auto_edit' && event.part.kind === 'edit')) {
           void client.approvals.respond(
             session.id,
             event.part.id,
@@ -100,6 +120,7 @@ export async function runPrompt(
       }
       if (event.part.type === 'error') {
         failed = true;
+        if (event.part.message.startsWith('Paid cap reached:')) paidCapReached = true;
         if (!options.quiet && options.verbose && event.part.details)
           process.stderr.write(`Routing exclusions: ${formatRoutingDetails(event.part.details)}\n`);
       }
@@ -136,14 +157,14 @@ export async function runPrompt(
   disposers.push(
     client.on('session.status', (value) => {
       if (value.id !== session.id) return;
-      if (['idle', 'error'].includes(value.status)) {
+      if (['idle', 'error', 'paused'].includes(value.status)) {
         if (!terminalStatusEmitted) publish({ type: 'session.status', session: value });
         terminalStatusEmitted = true;
         finishRun();
       } else publish({ type: 'session.status', session: value });
     }),
     client.on('session.updated', (value) => {
-      if (value.id !== session.id || !['idle', 'error'].includes(value.status)) return;
+      if (value.id !== session.id || !['idle', 'error', 'paused'].includes(value.status)) return;
       if (!terminalStatusEmitted) {
         publish({ type: 'session.status', session: value });
         terminalStatusEmitted = true;
@@ -171,6 +192,7 @@ export async function runPrompt(
     return 4;
   }
   if (approvalNeeded) return 3;
+  if (paidCapReached) return 5;
   return failed ? 1 : 0;
 }
 
@@ -195,6 +217,15 @@ async function askApproval(
         : answer === 'n'
           ? 'deny'
           : null;
+  } finally {
+    terminal.close();
+  }
+}
+async function askPaidApproval(summary: string): Promise<'allow_once' | 'deny'> {
+  const terminal = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = (await terminal.question(`Paid call: ${summary} [y/N] `)).trim().toLowerCase();
+    return answer === 'y' || answer === 'yes' ? 'allow_once' : 'deny';
   } finally {
     terminal.close();
   }
@@ -287,6 +318,10 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
             : {}),
           ...(verbose ? { verbose: true } : {}),
           mock: engine === 'mock',
+          ...(flags.values['yes-paid'] === true ? { yesPaid: true } : {}),
+          ...(typeof flags.values['model-ref'] === 'string'
+            ? { modelRef: flags.values['model-ref'] }
+            : {}),
         },
       );
       return code;
@@ -413,7 +448,7 @@ export async function main(): Promise<void> {
         `Active engine: ${process.env.FERRY_ENGINE === 'mock' ? 'mock' : 'local'} (override with --engine mock|local)`,
         '',
         'Commands:',
-        '  run <prompt>                                  Run a coding task',
+        '  run <prompt> [--model-ref ref] [--yes-paid]  Run a task with an optional explicit model',
         '  status                                        Show engine and provider status',
         '  serve --gateway                              Run Ferry core and Gateway in the foreground',
         '  gateway start|stop|status                    Manage the local Gateway',
@@ -540,6 +575,7 @@ const VALUE_FLAGS = new Set([
   'max-steps',
   'delegation',
   'model',
+  'model-ref',
 ]);
 function readFlags(argv: string[]): Flags {
   const positionals: string[] = [];
@@ -553,6 +589,7 @@ function readFlags(argv: string[]): Flags {
     const [rawKey, inline] = token.slice(2).split('=', 2);
     const key = rawKey ?? '';
     if (inline !== undefined) values[key] = inline;
+    else if (key === 'yes-paid') values[key] = true;
     else if (argv[i + 1] && !argv[i + 1]?.startsWith('--')) values[key] = argv[++i] ?? '';
     else if (VALUE_FLAGS.has(key)) throw new CliError(2, `Missing value for --${key}`);
     else values[key] = true;
@@ -621,6 +658,9 @@ function validateFlags(values: Record<string, string | boolean>): void {
 }
 function validateRunArguments(flags: Flags): void {
   if (!flags.positionals.slice(1).join(' ')) throw new CliError(2, 'Usage: ferry run <prompt>');
+  const modelRef = flags.values['model-ref'];
+  if (typeof modelRef === 'string' && !ModelRefSchema.safeParse(modelRef).success)
+    throw new CliError(2, 'Invalid --model-ref. Use a provider/model reference.');
   const permission = flags.values.permission;
   if (typeof permission === 'string' && !['ask', 'auto_edit', 'full_auto'].includes(permission))
     throw new CliError(2, 'Invalid --permission. Use ask, auto_edit, or full_auto.');
