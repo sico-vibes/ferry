@@ -11,9 +11,17 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { MessagePart, Provider, RunId, SessionDetail, SessionId } from '@ferry/shared';
+import type {
+  AgentEvent,
+  MessagePart,
+  Provider,
+  RunId,
+  SessionDetail,
+  SessionId,
+} from '@ferry/shared';
 import {
   ApprovalCard,
+  AgentTimeline,
   AssistantMessage,
   CanvasHeaderActions,
   CanvasPanel,
@@ -53,6 +61,7 @@ import {
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
 import { ModelPickerPopover } from './SessionPowerControls';
+import { FullOutputDialog } from './FullOutputDialog';
 
 const starters: Record<string, string> = {
   'Explain this repo': 'Explain how this repository is structured and where the main flows live.',
@@ -123,6 +132,52 @@ function relativeDate(value: string): string {
   if (delta < 3_600_000) return `${String(Math.floor(delta / 60_000))}m ago`;
   if (delta < 86_400_000) return `${String(Math.floor(delta / 3_600_000))}h ago`;
   return `${String(Math.floor(delta / 86_400_000))}d ago`;
+}
+
+function timelineEventsByTurn(
+  messages: SessionDetail['messages'],
+  events: AgentEvent[],
+): Map<number, AgentEvent[]> {
+  const result = new Map<number, AgentEvent[]>();
+  const turns: { start: number; end: number; assistant: number }[] = [];
+  let turnStart: number | null = null;
+  let lastAssistant = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!message) continue;
+    if (message.role === 'user') {
+      if (turnStart !== null && lastAssistant >= 0)
+        turns.push({
+          start: turnStart,
+          end: Date.parse(message.createdAt),
+          assistant: lastAssistant,
+        });
+      turnStart = Date.parse(message.createdAt);
+      lastAssistant = -1;
+    } else lastAssistant = index;
+  }
+  if (turnStart !== null && lastAssistant >= 0)
+    turns.push({ start: turnStart, end: Number.POSITIVE_INFINITY, assistant: lastAssistant });
+  const orderedEvents = events
+    .map((event) => ({ event, at: Date.parse(event.timestamp) }))
+    .sort((left, right) => left.at - right.at);
+  let eventIndex = 0;
+  for (const turn of turns) {
+    while (eventIndex < orderedEvents.length) {
+      const item = orderedEvents[eventIndex];
+      if (!item || item.at >= turn.start) break;
+      eventIndex += 1;
+    }
+    const turnEvents: AgentEvent[] = [];
+    while (eventIndex < orderedEvents.length) {
+      const item = orderedEvents[eventIndex];
+      if (!item || item.at >= turn.end) break;
+      turnEvents.push(item.event);
+      eventIndex += 1;
+    }
+    if (turnEvents.length) result.set(turn.assistant, turnEvents);
+  }
+  return result;
 }
 
 function captureTranscriptAnchor(
@@ -425,7 +480,7 @@ export function PartView({
   canRetry: boolean;
   isStreaming?: boolean;
   onPickAnother: () => void;
-  onFull: (text: string) => void;
+  onFull: (handle: string) => void;
   onDiff: () => void;
   onReview: (id: RunId) => void;
   onCancel: (id: RunId) => void;
@@ -469,8 +524,8 @@ export function PartView({
       return (
         <ToolCallBlock
           {...part}
-          onShowFull={() => {
-            onFull(`${part.output?.text ?? ''}\n\nFull output restored from recovery handle.`);
+          onShowFull={(handle) => {
+            onFull(handle);
           }}
           onOpenDiff={onDiff}
         />
@@ -527,6 +582,7 @@ export function PartView({
             onReview(part.runId);
           }}
           onCancel={onCancel}
+          onFull={onFull}
         />
       );
     case 'checkpoint':
@@ -670,11 +726,13 @@ function DelegationRunView({
   runId,
   onReview,
   onCancel,
+  onFull,
 }: {
   sessionId: SessionId;
   runId: string;
   onReview: (id: RunId) => void;
   onCancel: (id: RunId) => void;
+  onFull: (handle: string) => void;
 }) {
   const client = useFerryClient();
   const { data: runs = [] } = useQuery({
@@ -695,6 +753,8 @@ function DelegationRunView({
           ? `${String(run.usage.inputTokens + run.usage.outputTokens)} tokens`
           : 'Usage updating'
       }
+      events={run.events}
+      onShowFull={onFull}
       onReviewDiff={() => {
         onReview(run.id);
       }}
@@ -711,6 +771,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   top,
   modelName,
   planSteps,
+  timelineEvents,
   sessionId,
   canRetry,
   streamPartId,
@@ -723,10 +784,11 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   top: number;
   modelName: string;
   planSteps: { label: string; status: 'done' | 'active' | 'pending' }[];
+  timelineEvents: AgentEvent[];
   sessionId: SessionId;
   canRetry: boolean;
   streamPartId: string | null;
-  onFullOutput: (value: string | null) => void;
+  onFullOutput: (handle: string) => void;
   onPickModel: () => void;
   measureElement: (element: HTMLElement | null) => void;
 }) {
@@ -736,6 +798,9 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   const streamingText = useStreamedText(streamPartId);
   const streamingPartIsInMessage =
     streamPartId !== null && message.parts.some((part) => part.id === streamPartId);
+  const timelineHasTools = timelineEvents.some((event) => event.type === 'tool_use');
+  const timelineHasThinking = timelineEvents.some((event) => event.type === 'thinking');
+  const timelineHasText = timelineEvents.some((event) => event.type === 'text');
   return (
     <div
       className="transcript-message"
@@ -761,8 +826,24 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
           modelName={modelName}
           {...(message.agentRole ? { agentRole: message.agentRole } : {})}
         >
-          {groupParts(message.parts).map((part) =>
-            part.type === 'tool_group' ? (
+          <AgentTimeline
+            events={timelineEvents}
+            {...(timelineEvents.length
+              ? {
+                  onShowFull: (handle: string) => {
+                    onFullOutput(handle);
+                  },
+                }
+              : {})}
+          />
+          {groupParts(message.parts).map((part) => {
+            if (
+              (timelineHasTools && (part.type === 'tool_group' || part.type === 'tool_call')) ||
+              (timelineHasThinking && part.type === 'reasoning') ||
+              (timelineHasText && part.type === 'text')
+            )
+              return null;
+            return part.type === 'tool_group' ? (
               <ToolStepGroup
                 key={part.parts[0]?.id ?? 'tool-group'}
                 parts={part.parts}
@@ -790,8 +871,8 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
                 onCancel={(id) => void client.delegation.cancel(id)}
                 onPickAnother={onPickModel}
               />
-            ),
-          )}
+            );
+          })}
           {streamingText !== null && !streamingPartIsInMessage && (
             <div className="whitespace-pre-wrap break-words">
               {streamingText}
@@ -830,43 +911,6 @@ export function SessionCanvas() {
     setModelPickerOpen(true);
   }, []);
   const [fullOutput, setFullOutput] = useState<string | null>(null);
-  const outputDialogRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    if (fullOutput === null) return;
-    const dialog = outputDialogRef.current;
-    const previousFocus =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focusable = () =>
-      Array.from(
-        dialog?.querySelectorAll<HTMLElement>(
-          'button:not([disabled]),a[href],input:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
-        ) ?? [],
-      );
-    focusable()[0]?.focus();
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setFullOutput(null);
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const items = focusable();
-      const first = items[0];
-      const last = items.at(-1);
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      previousFocus?.focus();
-    };
-  }, [fullOutput]);
   const [streamingPartId, setStreamingPartId] = useState<string | null>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
@@ -877,6 +921,10 @@ export function SessionCanvas() {
   const [newOutputCount, setNewOutputCount] = useState(0);
   const [atBottom, setAtBottom] = useState(true);
   const messages = data?.messages ?? [];
+  const timelineByMessage = useMemo(
+    () => timelineEventsByTurn(messages, data?.session.agentEvents ?? []),
+    [data?.session.agentEvents, messages],
+  );
   const getTranscriptScrollElement = useCallback(() => viewport.current, []);
   const estimateTranscriptMessageSize = useCallback(() => 248, []);
   const measureTranscriptMessage = useCallback(
@@ -1331,6 +1379,7 @@ export function SessionCanvas() {
                 top={item.start}
                 modelName={shortModel(message.modelRef, models)}
                 planSteps={planSteps}
+                timelineEvents={timelineByMessage.get(item.index) ?? []}
                 sessionId={sessionId}
                 canRetry={data?.session.status === 'error'}
                 streamPartId={streamPartId}
@@ -1392,37 +1441,15 @@ export function SessionCanvas() {
           pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
         }}
       />
-      {fullOutput !== null && (
-        <div
-          role="presentation"
-          className="output-dialog-backdrop"
-          onClick={() => {
+      {fullOutput !== null && data?.session && (
+        <FullOutputDialog
+          client={client}
+          sessionId={data.session.id}
+          handle={fullOutput}
+          onClose={() => {
             setFullOutput(null);
           }}
-        >
-          <section
-            aria-label="Full tool output"
-            aria-modal="true"
-            className="output-dialog"
-            ref={outputDialogRef}
-            role="dialog"
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
-          >
-            <header>
-              <strong>Full output</strong>
-              <button
-                onClick={() => {
-                  setFullOutput(null);
-                }}
-              >
-                Close
-              </button>
-            </header>
-            <pre>{fullOutput}</pre>
-          </section>
-        </div>
+        />
       )}
     </CanvasPanel>
   );

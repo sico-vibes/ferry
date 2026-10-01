@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   FERRY_METHODS,
+  FERRY_METHOD_PARAMS_SCHEMAS,
   FERRY_PROTOCOL,
   HelloParamsSchema,
   HelloResultSchema,
@@ -11,8 +12,17 @@ import {
 
 describe('ferry/1 JSON-RPC contract', () => {
   it('validates requests, responses, notifications, and hello payloads', () => {
+    const readOutputParamsSchema = FERRY_METHOD_PARAMS_SCHEMAS['sessions.readOutput'];
+    if (!readOutputParamsSchema) throw new Error('Missing sessions.readOutput parameter schema');
     expect(FERRY_PROTOCOL).toBe('ferry/1');
     expect(FERRY_METHODS).toContain('sessions.send');
+    expect(FERRY_METHODS).toContain('sessions.readOutput');
+    expect(
+      readOutputParamsSchema.safeParse([{ sessionId: 'session_1', handle: 'recovery_1' }]).success,
+    ).toBe(true);
+    expect(readOutputParamsSchema.safeParse([{ sessionId: 'session_1', handle: '' }]).success).toBe(
+      false,
+    );
     expect(
       JsonRpcRequestSchema.safeParse({
         jsonrpc: '2.0',

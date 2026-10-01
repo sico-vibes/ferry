@@ -173,6 +173,7 @@ export interface AgentOptions {
     name: string,
     text: string,
     command?: string,
+    sourcePath?: string,
   ) => Promise<{ text: string; filtered: boolean; recoveryHandle?: string }>;
   readRecovery?: (handle: string) => Promise<string | undefined>;
   title?: (prompt: string, signal: AbortSignal) => Promise<string>;
@@ -378,8 +379,9 @@ export class AgentLoop {
           }
         }
       },
-      filterOutput: async (name, text, command) => {
-        if (this.options.filterOutput) return this.options.filterOutput(name, text, command);
+      filterOutput: async (name, text, command, sourcePath) => {
+        if (this.options.filterOutput)
+          return this.options.filterOutput(name, text, command, sourcePath);
         const result = optimizeOutput(command ?? name, text, {
           sessionId,
           blobStore: this.recoveryStore,

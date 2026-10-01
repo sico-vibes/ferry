@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ReadOutputInputSchema } from './domain/session.js';
 
 export const FERRY_PROTOCOL = 'ferry/1' as const;
 export const DomainErrorKindSchema = z.enum([
@@ -19,6 +20,7 @@ export const FERRY_METHODS = [
   'sessions.list',
   'sessions.search',
   'sessions.get',
+  'sessions.readOutput',
   'sessions.create',
   'sessions.send',
   'sessions.resume',
@@ -78,6 +80,11 @@ export const FERRY_METHODS = [
   'system.hello',
   'system.selfTest',
 ] as const;
+export const FERRY_METHOD_PARAMS_SCHEMAS: Readonly<
+  Record<string, z.ZodType<unknown[]> | undefined>
+> = {
+  'sessions.readOutput': z.tuple([ReadOutputInputSchema]),
+};
 export const FERRY_EVENTS = [
   'session.updated',
   'session.status',

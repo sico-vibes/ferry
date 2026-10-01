@@ -556,6 +556,7 @@ describe('QA system domain', () => {
       );
       expect(core.rpc.implementedMethods).toContain('settings.update');
       expect(core.rpc.implementedMethods).toContain('sessions.send');
+      expect(core.rpc.implementedMethods).toContain('sessions.readOutput');
     } finally {
       await core.close();
     }

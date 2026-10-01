@@ -5,6 +5,7 @@ import {
   DomainErrorKindSchema,
   FERRY_DOMAINS,
   FERRY_EVENTS,
+  FERRY_METHOD_PARAMS_SCHEMAS,
   FERRY_METHODS,
   FERRY_PROTOCOL,
   HelloParamsSchema,
@@ -327,6 +328,12 @@ export class CoreHost {
         'not_implemented',
         `Method is not implemented: ${request.method}`,
       );
+    const schema = FERRY_METHOD_PARAMS_SCHEMAS[request.method];
+    if (schema) {
+      const parsed = schema.safeParse(request.params ?? []);
+      if (!parsed.success) throw new DispatchError(-32010, 'validation', parsed.error.message);
+      return await handler(...parsed.data);
+    }
     return await handler(...(request.params ?? []));
   }
 }

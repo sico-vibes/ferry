@@ -365,6 +365,10 @@ export interface AdapterRequest {
   signal?: AbortSignal;
   onProgress?: (text: string) => void;
   onEvent?: (event: AgentEvent) => void;
+  onRecoveryOutput?: (
+    event: Extract<AgentEvent, { type: 'tool_result' }>,
+    output: string,
+  ) => string | null;
 }
 export interface AdapterResult {
   finalMessage: string;
@@ -402,15 +406,22 @@ export interface AcpAgentDefinition {
   cautionNote: string | null;
 }
 
-function boundEventOutput(event: AgentEvent, artifactsDir: string): AgentEvent {
+function boundEventOutput(
+  event: AgentEvent,
+  artifactsDir: string,
+  onRecoveryOutput?: AdapterRequest['onRecoveryOutput'],
+): AgentEvent {
   if (event.type !== 'tool_result' || event.output.length <= 16_000) return event;
-  const recoveryHandle = join(artifactsDir, `${event.id}.txt`);
-  void writeFile(recoveryHandle, event.output, 'utf8').catch(() => undefined);
+  const recoveryHandle = onRecoveryOutput
+    ? onRecoveryOutput(event, event.output)
+    : join(artifactsDir, `${event.id}.txt`);
+  if (!onRecoveryOutput && recoveryHandle)
+    void writeFile(recoveryHandle, event.output, 'utf8').catch(() => undefined);
   return {
     ...event,
     output: `${event.output.slice(0, 16_000)}\n[Output truncated]`,
     truncated: true,
-    recoveryHandle,
+    ...(recoveryHandle ? { recoveryHandle } : {}),
   };
 }
 export const ACP_AGENT_REGISTRY: readonly AcpAgentDefinition[] = [
@@ -1292,7 +1303,7 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
     killInFlight = killTree();
   };
   const reportEvent = (event: AgentEvent) => {
-    const bounded = boundEventOutput(event, artifactsDir);
+    const bounded = boundEventOutput(event, artifactsDir, request.onRecoveryOutput);
     events.push(bounded);
     if (events.length > 2_000) events.shift();
     request.onEvent?.(bounded);
@@ -1610,7 +1621,7 @@ export async function runAdapter(
     request.onProgress?.(text);
   };
   const emitEvent = (event: AgentEvent) => {
-    const bounded = boundEventOutput(event, artifactsDir);
+    const bounded = boundEventOutput(event, artifactsDir, request.onRecoveryOutput);
     events.push(bounded);
     if (events.length > 2_000) events.shift();
     raw.push(summarizeAgentEvent(bounded));
@@ -1705,6 +1716,7 @@ export interface StartDelegationInput {
   checkpoint?: () => Promise<void>;
   requestApproval?: AdapterRequest['requestApproval'];
   onAuthMethods?: AdapterRequest['onAuthMethods'];
+  onRecoveryOutput?: AdapterRequest['onRecoveryOutput'];
   authMethodId?: string;
   onUpdate?: (run: DelegationRun) => void;
 }
@@ -1794,6 +1806,7 @@ export function startDelegation(input: StartDelegationInput): DelegationHandle {
             update(text);
           },
           onEvent: updateEvent,
+          ...(input.onRecoveryOutput ? { onRecoveryOutput: input.onRecoveryOutput } : {}),
         },
       );
       threadId = result.threadId;
@@ -1869,6 +1882,7 @@ export function startDelegation(input: StartDelegationInput): DelegationHandle {
             update(text);
           },
           onEvent: updateEvent,
+          ...(input.onRecoveryOutput ? { onRecoveryOutput: input.onRecoveryOutput } : {}),
         },
       );
       threadId = resumed.threadId ?? threadId;

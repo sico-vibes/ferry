@@ -31,6 +31,8 @@ import type {
   Workspace,
   WorkspaceId,
   WorkspaceSettings,
+  ReadOutputInput,
+  ReadOutputPage,
 } from '@ferry/shared';
 import type { FerryEvents } from './events.js';
 
@@ -91,6 +93,7 @@ export interface FerryClient {
     list(q?: { workspaceId?: WorkspaceId; query?: string }): Promise<Session[]>;
     search(q?: { workspaceId?: WorkspaceId; query?: string }): Promise<Session[]>;
     get(id: SessionId): Promise<SessionDetail>;
+    readOutput(input: ReadOutputInput): Promise<ReadOutputPage>;
     create(i: {
       workspaceId: WorkspaceId;
       profileId?: ProfileId;

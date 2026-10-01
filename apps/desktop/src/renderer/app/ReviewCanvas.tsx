@@ -3,9 +3,10 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Check, FileCode2, X } from 'lucide-react';
 import type { RunId, SessionId } from '@ferry/shared';
-import { EmptyState, Pill } from '@ferry/ui';
+import { AgentTimeline, EmptyState, Pill } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { decideReview } from './reviewActions';
+import { FullOutputDialog } from './FullOutputDialog';
 
 const DiffEditor = lazy(async () => {
   const module = await import('@monaco-editor/react');
@@ -26,6 +27,7 @@ export function ReviewCanvas() {
   const [selected, setSelected] = useState(0);
   const [rework, setRework] = useState(false);
   const [brief, setBrief] = useState('');
+  const [fullOutput, setFullOutput] = useState<string | null>(null);
   const { data: runs, isLoading } = useQuery({
     queryKey: ['delegation', sessionId],
     queryFn: () => client.delegation.runs(sessionId),
@@ -43,7 +45,7 @@ export function ReviewCanvas() {
   );
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && fullOutput === null) {
         void navigate({ to: '/s/$sessionId', params: { sessionId } });
       }
     };
@@ -51,7 +53,7 @@ export function ReviewCanvas() {
     return () => {
       window.removeEventListener('keydown', escape);
     };
-  }, [navigate, sessionId]);
+  }, [fullOutput, navigate, sessionId]);
   if (!run && isLoading)
     return (
       <section className="canvas review-canvas">
@@ -154,6 +156,9 @@ export function ReviewCanvas() {
             : 'Review actions are available when changed files and gate results are ready.'}
         </p>
       )}
+      <div className="px-4 pt-3">
+        <AgentTimeline events={run.events} onShowFull={setFullOutput} />
+      </div>
       <div className="review-body">
         <nav aria-label="Changed files" className="review-files">
           {run.touchedFiles.map((file, index) => (
@@ -252,6 +257,16 @@ export function ReviewCanvas() {
             Cancel
           </button>
         </div>
+      )}
+      {fullOutput !== null && (
+        <FullOutputDialog
+          client={client}
+          sessionId={sessionId}
+          handle={fullOutput}
+          onClose={() => {
+            setFullOutput(null);
+          }}
+        />
       )}
     </section>
   );

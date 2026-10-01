@@ -36,6 +36,34 @@ describe('QA sessions domain', () => {
     expect(await client.sessions.list({ query: 'zzzz-no-match' })).toHaveLength(0);
   });
 
+  it('reads mock recovery output with the same page contract', async () => {
+    const client = makeClient();
+    const sessions = await client.sessions.list();
+    let sessionId: (typeof sessions)[number]['id'] | undefined;
+    let recoveryHandle: string | undefined;
+    for (const session of sessions) {
+      const detail = await client.sessions.get(session.id);
+      const call = detail.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.type === 'tool_call' && part.output?.recoveryHandle);
+      if (call?.type === 'tool_call' && call.output?.recoveryHandle) {
+        sessionId = session.id;
+        recoveryHandle = call.output.recoveryHandle;
+        break;
+      }
+    }
+    if (!sessionId || !recoveryHandle) throw new Error('Recovery fixture missing');
+    const output = await client.sessions.readOutput({
+      sessionId,
+      handle: recoveryHandle,
+    });
+    expect(output.text).toContain('212 passed');
+    expect(output.hasMore).toBe(false);
+    await expect(
+      client.sessions.readOutput({ sessionId, handle: 'recovery_unknown' }),
+    ).rejects.toThrow('Output handle not found');
+  });
+
   it('sends a user message, streams an assistant reply, then returns to idle', async () => {
     const fake = createFakeClock(now);
     const client = createMockFerryClient({ clock: fake.clock, behavior: 'test' });
