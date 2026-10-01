@@ -24,7 +24,7 @@ Releases (`v0.9.0-beta.N`, auto-published on every merge to `main`; installed ap
 | M5 CLI | ✅ local engine default, `ferry status`, gateway commands | CLI tests |
 | B6.6 paid guardrails | ✅ confirmation (incl. zero/unknown-price billable), caps gate every candidate incl. handoffs, hard stop, spend vs caps | `design/screenshots/app/paid-*.png` |
 | B10 hardening | ✅ crash-resume + reconnect, DB salvage, offline mode, chaos; security review fixes (`docs/SECURITY-REVIEW.md`); perf budget + axe gate; catalog:check | e2e phases, `docs/PERFORMANCE.md` |
-| B11 release | ✅ unsigned NSIS + portable, auto-update beta channel, CLI on PATH; clean-VM install smoke workflow (installed-app checks via packaged-safe signals — latest fix awaiting its GitHub run) | `.github/workflows/beta.yml`, `install-smoke.yml` |
+| B11 release | ✅ unsigned NSIS + portable, auto-update beta channel, CLI on PATH; clean-VM install smoke workflow green (install, hello, CLI status, upgrade keeps data, default/opt-in uninstall, PATH) after fixing 8.3 short-path handoff and silent `/ADD_TO_PATH` / `/REMOVE_DATA` flags | `.github/workflows/beta.yml`, `install-smoke.yml` |
 
 Quality gates on `main`: `pnpm check` (63 tasks) + desktop e2e in 5 isolated phases (web UI flows;
 real domains: core flows, crash resume, paid guardrails; Electron core smoke); GitHub CI on Windows +
@@ -53,7 +53,6 @@ indexes) and must ship in all build targets.
 
 ## Known gaps
 
-- Install smoke (clean CI VM) has never passed: installed app's renderer reports "Core MessagePort transfer timed out"; also the updater logs a 406 for `releases/latest` because only pre-releases exist. Under investigation.
 - Real-domains paid-guardrails e2e is intermittent under load (approval part sometimes absent after allow-once); passes in isolation.
 
 - 2 s packaged start-up is a target, not met on cold CI runners (advisory warning; fails above 10 s).
