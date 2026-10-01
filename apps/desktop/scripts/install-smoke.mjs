@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { access, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -169,6 +170,33 @@ function verifyPersistedRecords(databasePath, state) {
 function userPath() {
   return powershell("[Environment]::GetEnvironmentVariable('Path','User')");
 }
+function expandEnvironmentVariables(value) {
+  const environment = new Map(
+    Object.entries(process.env).map(([name, variable]) => [name.toLowerCase(), variable]),
+  );
+  return value.replace(/%([^%]+)%/g, (match, name) => environment.get(name.toLowerCase()) ?? match);
+}
+function lexicalPath(value) {
+  return resolve(expandEnvironmentVariables(value.replace(/^"|"$/g, ''))).toLowerCase();
+}
+function canonicalPath(value) {
+  const expanded = expandEnvironmentVariables(value.replace(/^"|"$/g, ''));
+  try {
+    return realpathSync.native(expanded).toLowerCase();
+  } catch {
+    return resolve(expanded).toLowerCase();
+  }
+}
+function userPathEntries(value = userPath()) {
+  return value
+    .split(';')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+function matchingPathEntries(value, directory) {
+  const canonicalDirectory = canonicalPath(directory);
+  return userPathEntries(value).filter((entry) => canonicalPath(entry) === canonicalDirectory);
+}
 function setUserPath(value) {
   const literal = safePowerShellLiteral(value);
   powershell(`[Environment]::SetEnvironmentVariable('Path',${literal},'User')`);
@@ -252,10 +280,9 @@ try {
   await install(generatedUpgradeInstaller, pathInstall, pathProfile, true);
   const addedPath = userPath();
   const cliPath = join(pathInstall, 'resources', 'cli');
-  assert.ok(
-    addedPath.toLowerCase().includes(cliPath.toLowerCase()),
-    'Installer did not add its CLI directory to user PATH',
-  );
+  const addedEntries = matchingPathEntries(addedPath, cliPath);
+  assert.ok(addedEntries.length > 0, 'Installer did not add its CLI directory to user PATH');
+  const cliPathAliases = new Set([lexicalPath(cliPath), ...addedEntries.map(lexicalPath)]);
   const pathData = join(pathProfile, 'Roaming', 'Ferry');
   const legacyData = join(pathProfile, 'Roaming', '@ferry', 'desktop');
   await mkdir(pathData, { recursive: true });
@@ -273,8 +300,12 @@ try {
     false,
     'Selected remove-data uninstall retained legacy user data',
   );
+  const remainingPathEntries = userPathEntries();
   assert.ok(
-    !userPath().toLowerCase().includes(cliPath.toLowerCase()),
+    !remainingPathEntries.some(
+      (entry) =>
+        canonicalPath(entry) === canonicalPath(cliPath) || cliPathAliases.has(lexicalPath(entry)),
+    ),
     'Uninstall left the selected Ferry CLI PATH entry behind',
   );
   assert.deepEqual(registryRowsForLocation(pathInstall), []);

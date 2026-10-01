@@ -12,8 +12,9 @@ Var ForceAddToPath
 !macro customInit
   StrCpy $ForceAddToPath 0
   ${GetParameters} $0
+  ClearErrors
   ${GetOptions} $0 "/ADD_TO_PATH" $1
-  ${IfNot} $1 == ""
+  ${IfNot} ${Errors}
     StrCpy $ForceAddToPath 1
   ${EndIf}
 !macroend
@@ -74,8 +75,9 @@ Var ForceDeleteUserData
   StrCpy $DeleteUserDataCheckbox 0
   StrCpy $ForceDeleteUserData 0
   ${GetParameters} $0
+  ClearErrors
   ${GetOptions} $0 "/REMOVE_DATA" $1
-  ${IfNot} $1 == ""
+  ${IfNot} ${Errors}
     StrCpy $ForceDeleteUserData 1
   ${EndIf}
 !macroend
@@ -102,9 +104,18 @@ FunctionEnd
   ReadRegDWORD $1 HKCU "Software\Ferry" "AddToPath"
   ${If} $1 == 1
     ReadRegStr $2 HKCU "Environment" "Path"
-    ${UnStrRep} $2 "$2" ";$INSTDIR\resources\cli" ""
-    ${UnStrRep} $2 "$2" "$INSTDIR\resources\cli;" ""
-    ${UnStrRep} $2 "$2" "$INSTDIR\resources\cli" ""
+    StrCpy $3 "$INSTDIR\resources\cli"
+    Call un.RemoveFerryPathEntry
+    System::Call 'kernel32::GetLongPathName(t r3, t .r4, i ${NSIS_MAX_STRLEN}) i .r5'
+    ${If} $5 > 0
+      StrCpy $3 $4
+      Call un.RemoveFerryPathEntry
+    ${EndIf}
+    System::Call 'kernel32::GetShortPathName(t r3, t .r4, i ${NSIS_MAX_STRLEN}) i .r5'
+    ${If} $5 > 0
+      StrCpy $3 $4
+      Call un.RemoveFerryPathEntry
+    ${EndIf}
     WriteRegExpandStr HKCU "Environment" "Path" "$2"
     SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment"
   ${EndIf}
@@ -122,4 +133,10 @@ FunctionEnd
     RMDir /r "$APPDATA\Ferry"
   ${EndIf}
 !macroend
+
+Function un.RemoveFerryPathEntry
+  ${UnStrRep} $2 "$2" ";$3" ""
+  ${UnStrRep} $2 "$2" "$3;" ""
+  ${UnStrRep} $2 "$2" "$3" ""
+FunctionEnd
 !endif
