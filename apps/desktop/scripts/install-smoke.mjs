@@ -1,10 +1,20 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  rmdir,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 if (process.platform !== 'win32') throw new Error('The installer smoke requires Windows.');
 
@@ -23,6 +33,12 @@ let tempRoot;
 let originalUserPath;
 let didSetUserPath = false;
 let generatedUpgradeInstaller;
+const isCi = process.env.GITHUB_ACTIONS === 'true';
+const realRoamingDirectory = powershell("[Environment]::GetFolderPath('ApplicationData')");
+const realFerryData = join(realRoamingDirectory, 'Ferry');
+const realLegacyData = join(realRoamingDirectory, '@ferry', 'desktop');
+const seededRealProfileFiles = [];
+const createdRealProfileDirectories = [];
 
 function record(label, status, detail = '') {
   rows.push({ label, status, detail });
@@ -170,6 +186,27 @@ function verifyPersistedRecords(databasePath, state) {
 function userPath() {
   return powershell("[Environment]::GetEnvironmentVariable('Path','User')");
 }
+async function seedRealProfileFile(directory, name) {
+  if (!(await exists(directory))) {
+    let ancestor = directory;
+    const missingDirectories = [];
+    while (ancestor !== realRoamingDirectory && !(await exists(ancestor))) {
+      missingDirectories.unshift(ancestor);
+      ancestor = dirname(ancestor);
+    }
+    await mkdir(directory, { recursive: true });
+    createdRealProfileDirectories.push(...missingDirectories);
+  }
+  const file = join(directory, name);
+  await writeFile(file, 'install smoke sentinel', 'utf8');
+  seededRealProfileFiles.push(file);
+  return file;
+}
+async function cleanRealProfileSentinels() {
+  for (const file of seededRealProfileFiles) await rm(file, { force: true });
+  for (const directory of [...createdRealProfileDirectories].reverse())
+    await rmdir(directory).catch(() => undefined);
+}
 function expandEnvironmentVariables(value) {
   const environment = new Map(
     Object.entries(process.env).map(([name, variable]) => [name.toLowerCase(), variable]),
@@ -267,11 +304,30 @@ try {
   });
   verifyPersistedRecords(databasePath, state);
   record('Higher-version install preserves settings, session, and key reference', 'PASS');
+  let defaultDataStatus = 'SKIP';
+  let defaultDataDetail = isCi
+    ? 'real roaming data path is unavailable for sentinel verification'
+    : 'only runs on CI to avoid touching a real user profile';
+  let defaultSentinel;
+  if (isCi) {
+    defaultSentinel = await seedRealProfileFile(realFerryData, 'default-uninstall-smoke.txt');
+  }
   await uninstall(installDirectory, profile);
   await access(databasePath);
   assert.deepEqual(registryRowsForLocation(installDirectory), []);
   assert.equal(userPath(), beforePath, 'Default uninstall unexpectedly changed user PATH');
-  record('Default uninstall keeps Ferry data and removes its registry key', 'PASS');
+  if (defaultSentinel) {
+    assert.equal(
+      await exists(defaultSentinel),
+      true,
+      'Default uninstall removed the current user data sentinel',
+    );
+    defaultDataStatus = 'PASS';
+    defaultDataDetail = '';
+    await cleanRealProfileSentinels();
+  }
+  record('Default uninstall keeps Ferry data', defaultDataStatus, defaultDataDetail);
+  record('Default uninstall removes its registry key and preserves PATH', 'PASS');
 
   const pathInstall = join(tempRoot, 'path-install');
   const pathProfile = join(tempRoot, 'path-profile');
@@ -283,23 +339,34 @@ try {
   const addedEntries = matchingPathEntries(addedPath, cliPath);
   assert.ok(addedEntries.length > 0, 'Installer did not add its CLI directory to user PATH');
   const cliPathAliases = new Set([lexicalPath(cliPath), ...addedEntries.map(lexicalPath)]);
-  const pathData = join(pathProfile, 'Roaming', 'Ferry');
-  const legacyData = join(pathProfile, 'Roaming', '@ferry', 'desktop');
-  await mkdir(pathData, { recursive: true });
-  await mkdir(legacyData, { recursive: true });
-  const sentinel = join(pathData, 'remove-data-smoke.txt');
-  await writeFile(sentinel, 'remove me', 'utf8');
-  await uninstall(pathInstall, pathProfile, true);
-  assert.equal(
-    await exists(pathData),
-    false,
-    'Selected remove-data uninstall retained current user data',
-  );
-  assert.equal(
-    await exists(legacyData),
-    false,
-    'Selected remove-data uninstall retained legacy user data',
-  );
+  const canVerifyRemoveData =
+    isCi && !(await exists(realFerryData)) && !(await exists(realLegacyData));
+  if (canVerifyRemoveData) {
+    await seedRealProfileFile(realFerryData, 'remove-data-smoke.txt');
+    await seedRealProfileFile(realLegacyData, 'remove-data-smoke.txt');
+  }
+  await uninstall(pathInstall, pathProfile, canVerifyRemoveData);
+  if (canVerifyRemoveData) {
+    assert.equal(
+      await exists(realFerryData),
+      false,
+      'Selected remove-data uninstall retained current user data',
+    );
+    assert.equal(
+      await exists(realLegacyData),
+      false,
+      'Selected remove-data uninstall retained legacy user data',
+    );
+    record('Opt-in uninstall removes current and legacy user data', 'PASS');
+  } else {
+    record(
+      'Opt-in uninstall removes current and legacy user data',
+      'SKIP',
+      isCi
+        ? 'real roaming Ferry or legacy data already exists; refusing to risk deleting user data'
+        : 'only runs on CI to avoid touching a real user profile',
+    );
+  }
   const remainingPathEntries = userPathEntries();
   assert.ok(
     !remainingPathEntries.some(
@@ -309,7 +376,7 @@ try {
     'Uninstall left the selected Ferry CLI PATH entry behind',
   );
   assert.deepEqual(registryRowsForLocation(pathInstall), []);
-  record('Opt-in uninstall removes Ferry data, PATH entry, and registry key', 'PASS');
+  record('Opt-in uninstall removes PATH entry and registry key', 'PASS');
 } catch (error) {
   record(
     'Install/upgrade/uninstall smoke',
@@ -325,6 +392,18 @@ try {
     } catch (error) {
       record(
         'Restore original user PATH after option verification',
+        'FAIL',
+        error instanceof Error ? error.message : String(error),
+      );
+      process.exitCode = 1;
+    }
+  }
+  if (seededRealProfileFiles.length > 0) {
+    try {
+      await cleanRealProfileSentinels();
+    } catch (error) {
+      record(
+        'Clean real profile smoke sentinels',
         'FAIL',
         error instanceof Error ? error.message : String(error),
       );
@@ -362,7 +441,7 @@ try {
 
 console.log('\nInstall smoke results');
 console.table(rows);
-if (rows.some(({ status }) => status !== 'PASS')) process.exitCode = 1;
+if (rows.some(({ status }) => status === 'FAIL')) process.exitCode = 1;
 
 async function exists(path) {
   try {
