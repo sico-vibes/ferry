@@ -9,7 +9,9 @@
   ],
   "exports": {
     ".": "./src/index.ts",
-    "./styles.css": "./src/styles/index.css"
+    "./styles.css": "./src/styles/index.css",
+    "./ui": "./src/components/ui/index.tsx",
+    "./theme": "./src/lib/theme.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

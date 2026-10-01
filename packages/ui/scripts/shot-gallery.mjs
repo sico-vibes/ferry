@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const packageDirectory = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const repositoryRoot = resolve(packageDirectory, '../..');
 const buildDirectory = resolve(packageDirectory, 'build');
-const screenshotDirectory = resolve(repositoryRoot, 'design/screenshots/gallery');
+const screenshotDirectory = resolve(repositoryRoot, 'design/screenshots/v2/gallery');
 const packageManager = resolve(repositoryRoot, 'node_modules/pnpm/bin/pnpm.cjs');
 const scaleFlag = process.argv.find((argument) => argument.startsWith('--scale'));
 const scaleIndex = process.argv.indexOf('--scale');

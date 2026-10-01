@@ -24,7 +24,7 @@ export function DataUseBadge({ dataUse }: { dataUse: string | null | undefined }
     status === 'training'
       ? 'bg-[var(--tint-warn)] text-warn'
       : status === 'no-training'
-        ? 'bg-[var(--tint-success)] text-success'
+        ? 'bg-[var(--tint-success)] text-success-legacy'
         : 'bg-icon-circle text-text-2';
   return (
     <span

@@ -2,7 +2,7 @@ import { Search } from 'lucide-react';
 import { IconButton } from './index';
 export default { title: 'Primitives/IconButton' };
 export const Variants = () => (
-  <div className="flex gap-3 bg-app p-4">
+  <div className="flex items-center gap-3 bg-app p-4">
     <IconButton label="Search">
       <Search size={18} />
     </IconButton>

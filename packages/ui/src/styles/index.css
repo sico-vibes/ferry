@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import '../fonts/geist.css';
 @import '../fonts/inter.css';
 @import './tokens.css';
 @import './effects.css';
@@ -7,13 +8,17 @@
 @source '../';
 @source "../**/*.{ts,tsx}";
 
+@custom-variant dark (&:where(.dark, .dark *));
+@custom-variant light (&:where(.light, .light *));
+
 @theme inline {
+  /* Legacy palette remains available to screens awaiting UI-1 through UI-3. */
   --color-app: var(--bg-app);
   --color-panel: var(--bg-panel);
   --color-canvas: var(--bg-canvas);
-  --color-card: var(--bg-card);
+  --color-card-legacy: var(--bg-card);
   --color-raised: var(--bg-raised);
-  --color-input: var(--bg-input);
+  --color-input-legacy: var(--bg-input);
   --color-pill-dark: var(--bg-pill-dark);
   --color-pill: var(--bg-pill);
   --color-icon-circle: var(--bg-icon-circle);
@@ -30,22 +35,57 @@
   --color-blue-mini: var(--blue-mini);
   --color-star: var(--star);
   --color-warn: var(--warn);
-  --color-success: var(--success);
+  --color-success-legacy: var(--legacy-success);
   --color-danger: var(--danger);
   --color-border-hair: var(--border-hair);
   --color-border-soft: var(--border-soft);
   --color-border-strong: var(--border-strong);
-
   --radius-panel: var(--r-panel);
   --radius-canvas: var(--r-canvas);
-  --radius-card: var(--r-card);
+  --radius-card-legacy: var(--r-card);
   --radius-tile: var(--r-tile);
   --radius-input: var(--r-input);
   --radius-item: var(--r-item);
   --radius-pill: var(--r-pill);
-
   --font-sans: 'Inter Variable', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
 
+  /* shadcn semantic palette for v2 primitives. */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --spacing: 0.25rem;
+  --radius-control: 6px;
+  --radius-button: 10px;
+  --radius-card: 14px;
+  --radius-full: 9999px;
+  /* Legacy scale remains unchanged until its screens are rebuilt. */
   --text-meta: 11px;
   --text-meta--line-height: 16px;
   --text-label: 12px;
@@ -59,36 +99,47 @@
   --text-hero: 30px;
   --text-hero--line-height: 38px;
   --text-hero--letter-spacing: -0.01em;
+  /* V2 type scale. */
+  --text-ui-meta: 12px;
+  --text-ui-meta--line-height: 16px;
+  --text-ui-meta--font-weight: 450;
+  --text-ui-secondary: 13px;
+  --text-ui-secondary--line-height: 20px;
+  --text-ui-secondary--font-weight: 450;
+  --text-ui-body: 14px;
+  --text-ui-body--line-height: 22px;
+  --text-ui-body--font-weight: 450;
+  --text-ui-label: 14px;
+  --text-ui-label--line-height: 20px;
+  --text-ui-label--font-weight: 550;
+  --text-ui-section: 16px;
+  --text-ui-section--line-height: 24px;
+  --text-ui-section--font-weight: 600;
+  --text-ui-page: 20px;
+  --text-ui-page--line-height: 28px;
+  --text-ui-page--font-weight: 600;
+  --text-ui-greeting: 28px;
+  --text-ui-greeting--line-height: 36px;
+  --text-ui-greeting--font-weight: 650;
+  --text-ui-page--letter-spacing: -0.01em;
+  --text-ui-greeting--letter-spacing: -0.01em;
 }
 
-/* Keep generated surface utilities tied to active surface tokens in both themes. */
 @layer utilities {
-  .bg-app {
-    background-color: var(--bg-app);
-  }
-  .bg-rail-tile {
-    background-color: var(--bg-rail-tile);
-  }
-  .bg-rail-tile-active {
-    background-color: var(--bg-rail-tile-active);
-  }
-  .bg-panel {
-    background-color: var(--bg-panel);
-  }
-  .bg-canvas {
-    background-color: var(--bg-canvas);
-  }
-  .bg-card {
-    background-color: var(--bg-card);
-  }
-  .bg-raised {
-    background-color: var(--bg-raised);
-  }
   .bg-input {
     background-color: var(--bg-input);
   }
-  .bg-pill-dark {
-    background-color: var(--bg-pill-dark);
+}
+
+@layer components {
+  .ferry-ui {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: 'Geist', system-ui, sans-serif;
+    font-feature-settings: 'cv11', 'ss01';
+    font-size: 14px;
+    font-weight: 450;
+    line-height: 22px;
   }
 }
 
@@ -98,17 +149,14 @@
     min-height: 100%;
     background: var(--bg-app);
     color: var(--text-1);
-    font-family: var(--font-sans);
+    font-family: 'Inter Variable', system-ui, sans-serif;
     font-feature-settings: 'cv11', 'ss01';
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-
-  /* DESIGN §2.7: the UI's default text is `body` (13/20). Anything without an explicit size
-     class inherits this instead of the browser's 16px. Form controls inherit too. */
   body {
-    font-size: var(--text-body);
-    line-height: var(--text-body--line-height);
+    font-size: 13px;
+    line-height: 20px;
   }
   button,
   input,
@@ -117,12 +165,6 @@
     font-size: inherit;
     line-height: inherit;
   }
-
-  ::selection {
-    background: var(--blue-500);
-    color: var(--text-1);
-  }
-
   * {
     scrollbar-color: var(--bg-raised) var(--bg-app);
     scrollbar-width: thin;
@@ -137,13 +179,11 @@
     background-position: -100% 0;
   }
 }
-
 @keyframes ferry-dash {
   to {
     stroke-dashoffset: -24;
   }
 }
-
 @keyframes ferry-text-shine {
   from {
     color: var(--text-2);
@@ -154,20 +194,65 @@
     text-shadow: 3rem 0 1.2rem var(--text-1);
   }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    scroll-behavior: auto !important;
-  }
-}
-
 .composer-banner-content {
   color: var(--text-on-gradient);
 }
 [data-theme='light'] .composer-banner-content {
   color: var(--text-1);
+}
+
+@keyframes ferry-ui-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes ferry-ui-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes ferry-ui-dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes ferry-ui-expand {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+}
+@keyframes ferry-ui-collapse {
+  from {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ferry-ui :where(*, *::before, *::after) {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }

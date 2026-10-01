@@ -11,3 +11,4 @@ export * from './components/feedback';
 export * from './components/providers';
 export * from './components/charts';
 export * from './components/layout';
+export * as UiV2 from './components/ui';

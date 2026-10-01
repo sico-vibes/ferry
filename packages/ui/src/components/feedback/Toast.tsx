@@ -32,7 +32,7 @@ export function Toast({
       <Icon
         className={
           kind === 'success'
-            ? 'text-success'
+            ? 'text-success-legacy'
             : kind === 'warning'
               ? 'text-warn'
               : kind === 'error'
