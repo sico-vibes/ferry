@@ -114,6 +114,11 @@ function registryRowsForLocation(location) {
   const parsed = JSON.parse(result);
   return Array.isArray(parsed) ? parsed : [parsed];
 }
+function hasRunningNsisUninstallerCopy() {
+  const script =
+    "$matches = @(Get-Process | Where-Object { $_.Path -like '*\\~nsu*' -and $_.ProcessName -match '^(Un_|Au_)' }); if ($matches.Count -gt 0) { 'running' } else { 'idle' }";
+  return powershell(script) === 'running';
+}
 async function install(installer, directory, profile, addToPath = false) {
   await access(installer);
   const env = {
@@ -248,6 +253,34 @@ async function uninstall(directory, profile, removeData = false) {
     env,
     timeout: 180_000,
   });
+  const uninstallExecutable = join(directory, 'Uninstall Ferry.exe');
+  const ferryExecutable = join(directory, 'Ferry.exe');
+  const deadline = Date.now() + 180_000;
+  let state;
+  do {
+    state = {
+      uninstallExecutableExists: await exists(uninstallExecutable),
+      ferryExecutableExists: await exists(ferryExecutable),
+      registryEntries: registryRowsForLocation(directory).length,
+      runningNsisCopy: hasRunningNsisUninstallerCopy(),
+    };
+    if (
+      !state.uninstallExecutableExists &&
+      !state.ferryExecutableExists &&
+      state.registryEntries === 0 &&
+      !state.runningNsisCopy
+    )
+      return;
+    if (Date.now() >= deadline) break;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+  } while (Date.now() < deadline);
+  throw new Error(
+    `Timed out after 180 seconds waiting for uninstall completion at ${directory} ` +
+      `(Uninstall Ferry.exe: ${state?.uninstallExecutableExists ? 'present' : 'gone'}; ` +
+      `Ferry.exe: ${state?.ferryExecutableExists ? 'present' : 'gone'}; ` +
+      `registry entries: ${state?.registryEntries ?? 'unknown'}; ` +
+      `NSIS temporary process: ${state?.runningNsisCopy ? 'running' : 'none'}).`,
+  );
 }
 
 try {

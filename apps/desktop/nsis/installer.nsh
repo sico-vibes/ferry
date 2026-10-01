@@ -124,6 +124,7 @@ FunctionEnd
     DeleteRegKey HKCU "Software\Classes\Directory\shell\Ferry"
   ${EndIf}
   DeleteRegKey HKCU "Software\Ferry"
+  SetShellVarContext current
   ${NSD_GetState} $DeleteUserDataCheckbox $0
   ${If} $ForceDeleteUserData == 1
     StrCpy $0 ${BST_CHECKED}
