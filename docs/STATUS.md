@@ -9,7 +9,7 @@ Releases (`v0.9.0-beta.N`, auto-published on every merge to `main`; installed ap
 ## Where we are
 
 1. **Original master plan: complete** (integrated on `main` 2026-09-30; milestones below).
-2. **v0.10 upgrade waves: in progress** (`docs/plans/v0.10-upgrade.md`) — first batch finishing.
+2. **v0.10 upgrade waves: first batch on `main`** (`41eb69c`, beta `v0.9.0-beta.10`): P0/P2, P1, U1, U5, U2. P3/P6 parked (see below).
 3. **Next: full UI remake** (`docs/plans/ui-remake.md`, spec `design/DESIGN-v2.md`). Backend v0.10 work
    resumes after the remake from the "Not started" rows below.
 
@@ -35,12 +35,12 @@ Ubuntu.
 | Item | State | Branch / worktree |
 |---|---|---|
 | RP1 reasoning-exposure matrix | ✅ on main | `docs/research/reasoning-matrix.md` |
-| P0 perf baseline + budgets, P2 no polling | ✅ green, awaiting integration | `wave/perf-a` · ferry-w5 |
-| U1 structured agent events | ✅ green, awaiting integration | `wave/u1-events` · ferry-w4 |
-| U5 thinking + tool-call timeline (+ paged "show full output") | verifying | `wave/u5-timeline` · ferry-w4 |
-| P1 pagination / Show more / virtualization | fixing a paid-guardrail regression | `wave/perf-b` · ferry-w3 |
-| U2 command palette + keybindings | fixing composer focus after palette New Chat | `wave/u2-palette` · ferry-w6 |
-| P3 caching + P6 storage/memory | picker re-render fixed; verifying | `wave/p3-caching` · ferry-w7 |
+| P0 perf baseline + budgets, P2 no polling | ✅ on main | `wave/perf-a` |
+| U1 structured agent events (migration 0003) | ✅ on main | `wave/u1-events` |
+| U5 thinking + tool-call timeline (+ paged "show full output", `sessions.readOutput`) | ✅ on main | `wave/u5-timeline` |
+| P1 pagination / Show more / virtualization (+ paid billing metadata for paged models) | ✅ on main | `wave/perf-b` |
+| U2 command palette + keybindings | ✅ on main | `wave/u2-palette` |
+| P3 caching + P6 storage/memory (migration 0004) | ⏸ parked: check 63/63 green, but real-domains core flows fails (model picker option never "stable"); bisected to its `renderer/data/events.tsx` handlers (not single-handler; removing the settings/status/updated changes together passes). Picker changes reverted (rebuilt in UI-1). Resume after UI-1 against the new picker | `wave/p3-caching` · ferry-w7 (uncommitted fix-ups) |
 | P4 lighter startup/bundle, P5 render hygiene, P7 smaller install | Not started | — |
 | U3 speed/honesty pass, U4 delegate safety (min versions, CODEX_HOME symlink) | Not started | — |
 | U6 subscription-CLI models + traits picker, U7 plan cards + plan mode | Not started | — |
@@ -52,6 +52,9 @@ fast-forward `main` only when green; migrations are numbered uniquely (0003 agen
 indexes) and must ship in all build targets.
 
 ## Known gaps
+
+- Install smoke (clean CI VM) has never passed: installed app's renderer reports "Core MessagePort transfer timed out"; also the updater logs a 406 for `releases/latest` because only pre-releases exist. Under investigation.
+- Real-domains paid-guardrails e2e is intermittent under load (approval part sometimes absent after allow-once); passes in isolation.
 
 - 2 s packaged start-up is a target, not met on cold CI runners (advisory warning; fails above 10 s).
 - grep and checkpoint snapshots on a 50k-file repo are slow on this laptop with Defender real-time
