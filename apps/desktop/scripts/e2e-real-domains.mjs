@@ -973,7 +973,7 @@ try {
         throw error;
       }
       await handoff.click();
-      await expect(page.getByText(/HTTP 429/)).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByText(/HTTP 429/).first()).toBeVisible({ timeout: 30_000 });
       const handoffEvidence = await page.evaluate(
         async (sessionId) => ({
           parts: window.e2eHandoffParts,

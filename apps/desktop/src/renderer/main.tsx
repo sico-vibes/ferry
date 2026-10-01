@@ -137,6 +137,8 @@ const bootstrapClient = async () => {
   return hybrid;
 };
 const mountApp = (currentClient: FerryClient) => {
+  if (import.meta.env.DEV && new URLSearchParams(location.search).has('perf-render'))
+    window.ferryPerfClient = currentClient;
   if (window.ferryHost && currentClient === mock)
     console.warn('Ferry is using the mock client because the core connection failed.');
   appRoot.render(

@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { MessagePart, SessionDetail } from '@ferry/shared';
+import type { MessageId, MessagePart, PartId, SessionDetail, SessionId } from '@ferry/shared';
 import { keys } from './queries';
 import { useFerryClient } from './client';
 import { useToasts } from '../state/toasts';
@@ -26,7 +26,16 @@ export function useFerryEvents(): void {
   const client = useFerryClient();
   const cache = useQueryClient();
   const pushToast = useToasts((state) => state.push);
+  const flushPendingDeltas = useRef<() => void>(() => undefined);
   useEffect(() => {
+    const pendingParts = new Map<string, Map<PartId, MessagePart>>();
+    const pendingKey = (sessionId: SessionId, messageId: MessageId) => `${sessionId}:${messageId}`;
+    const takePendingParts = (sessionId: SessionId, messageId: MessageId) => {
+      const key = pendingKey(sessionId, messageId);
+      const parts = pendingParts.get(key);
+      pendingParts.delete(key);
+      return parts ? [...parts.values()] : [];
+    };
     const off = [
       client.on('quota.updated', (capacity) => cache.setQueryData(keys.capacity, capacity)),
       client.on('session.updated', (session) => {
@@ -36,30 +45,75 @@ export function useFerryEvents(): void {
         if (current) cache.setQueryData(key, { ...current, session });
       }),
       client.on('session.message', ({ sessionId, message }) => {
-        patchSessionChanges(
-          cache,
-          sessionId,
-          message.parts.flatMap((part) => (part.type === 'tool_call' ? part.changes : [])),
-        );
         const key = keys.session(sessionId);
         const current = cache.getQueryData<SessionDetail>(key);
         if (!current) {
+          takePendingParts(sessionId, message.id);
           void cache.invalidateQueries({ queryKey: key });
           return;
         }
-        if (current.messages.some((item) => item.id === message.id)) return;
-        cache.setQueryData(key, { ...current, messages: [...current.messages, message] });
+        const parts = takePendingParts(sessionId, message.id);
+        const messageWithPendingParts = parts.length
+          ? {
+              ...message,
+              parts: [
+                ...message.parts,
+                ...parts.filter(
+                  (part) => !message.parts.some((existing) => existing.id === part.id),
+                ),
+              ],
+            }
+          : message;
+        patchSessionChanges(
+          cache,
+          sessionId,
+          messageWithPendingParts.parts.flatMap((part) =>
+            part.type === 'tool_call' ? part.changes : [],
+          ),
+        );
+        const existingIndex = current.messages.findIndex((item) => item.id === message.id);
+        if (existingIndex >= 0) {
+          if (!parts.length) return;
+          const existingMessage = current.messages[existingIndex];
+          if (!existingMessage) return;
+          const mergedMessage = {
+            ...existingMessage,
+            parts: [
+              ...existingMessage.parts,
+              ...parts.filter(
+                (part) => !existingMessage.parts.some((existing) => existing.id === part.id),
+              ),
+            ],
+          };
+          const messages = current.messages.slice();
+          messages[existingIndex] = mergedMessage;
+          cache.setQueryData(key, { ...current, messages });
+          return;
+        }
+        cache.setQueryData(key, {
+          ...current,
+          messages: [...current.messages, messageWithPendingParts],
+        });
       }),
       client.on('session.part', ({ sessionId, messageId, part }) => {
+        flushPendingDeltas.current();
         if (part.type === 'tool_call') patchSessionChanges(cache, sessionId, part.changes);
         const key = keys.session(sessionId);
         const current = cache.getQueryData<import('@ferry/shared').SessionDetail>(key);
         if (!current) {
+          const eventKey = pendingKey(sessionId, messageId);
+          const parts = pendingParts.get(eventKey) ?? new Map<PartId, MessagePart>();
+          parts.set(part.id, part);
+          pendingParts.set(eventKey, parts);
           void cache.invalidateQueries({ queryKey: key });
         } else {
           const messageIndex = current.messages.findIndex((message) => message.id === messageId);
           const message = current.messages[messageIndex];
           if (messageIndex < 0 || !message) {
+            const eventKey = pendingKey(sessionId, messageId);
+            const parts = pendingParts.get(eventKey) ?? new Map<PartId, MessagePart>();
+            parts.set(part.id, part);
+            pendingParts.set(eventKey, parts);
             void cache.invalidateQueries({ queryKey: key });
           } else {
             const existing = message.parts.find((item) => item.id === part.id);
@@ -97,34 +151,63 @@ export function useFerryEvents(): void {
           });
         }
       }),
-      client.on('session.delta', ({ sessionId, messageId, partId, textDelta }) => {
-        const key = keys.session(sessionId);
-        const current = cache.getQueryData<import('@ferry/shared').SessionDetail>(key);
-        if (!current) {
-          void cache.invalidateQueries({ queryKey: key });
-          return;
-        }
-        const messageIndex = current.messages.findIndex((message) => message.id === messageId);
-        const message = current.messages[messageIndex];
-        if (messageIndex < 0 || !message) {
-          void cache.invalidateQueries({ queryKey: key });
-          return;
-        }
-        const exists = message.parts.some((part) => part.id === partId);
-        const updatedMessage = {
-          ...message,
-          parts: exists
-            ? message.parts.map((part) =>
-                part.id === partId && part.type === 'text'
-                  ? { ...part, text: part.text + textDelta }
-                  : part,
-              )
-            : [...message.parts, { type: 'text' as const, id: partId, text: textDelta }],
+      (() => {
+        const pending = new Map<
+          string,
+          { sessionId: SessionId; messageId: MessageId; partId: PartId; text: string }
+        >();
+        let frame = 0;
+        const flush = () => {
+          frame = 0;
+          for (const { sessionId, messageId, partId, text } of pending.values()) {
+            const key = keys.session(sessionId);
+            const current = cache.getQueryData<SessionDetail>(key);
+            if (!current) {
+              void cache.invalidateQueries({ queryKey: key });
+              continue;
+            }
+            const messageIndex = current.messages.findIndex((message) => message.id === messageId);
+            const message = current.messages[messageIndex];
+            if (messageIndex < 0 || !message) {
+              void cache.invalidateQueries({ queryKey: key });
+              continue;
+            }
+            const exists = message.parts.some((part) => part.id === partId);
+            const updatedMessage = {
+              ...message,
+              parts: exists
+                ? message.parts.map((part) =>
+                    part.id === partId && part.type === 'text'
+                      ? { ...part, text: part.text + text }
+                      : part,
+                  )
+                : [...message.parts, { type: 'text' as const, id: partId, text }],
+            };
+            const messages = current.messages.slice();
+            messages[messageIndex] = updatedMessage;
+            cache.setQueryData(key, { ...current, messages });
+          }
+          pending.clear();
         };
-        const messages = current.messages.slice();
-        messages[messageIndex] = updatedMessage;
-        cache.setQueryData(key, { ...current, messages });
-      }),
+        const off = client.on('session.delta', ({ sessionId, messageId, partId, textDelta }) => {
+          const id = `${sessionId}:${messageId}:${partId}`;
+          const previous = pending.get(id);
+          pending.set(id, {
+            sessionId,
+            messageId,
+            partId,
+            text: `${previous?.text ?? ''}${textDelta}`,
+          });
+          if (!frame) frame = requestAnimationFrame(flush);
+        });
+        flushPendingDeltas.current = flush;
+        return () => {
+          off();
+          if (frame) cancelAnimationFrame(frame);
+          flush();
+          flushPendingDeltas.current = () => undefined;
+        };
+      })(),
       client.on('task.updated', (task) => {
         const key = keys.session(task.sessionId);
         const current = cache.getQueryData<SessionDetail>(key);
@@ -138,7 +221,18 @@ export function useFerryEvents(): void {
         pushToast({ kind: 'info', title: `${provider.name} updated`, body: null });
       }),
       client.on('delegation.updated', (run) => {
-        void cache.invalidateQueries({ queryKey: ['delegation', run.sessionId] });
+        const key = ['delegation', run.sessionId] as const;
+        const current = cache.getQueryData<import('@ferry/shared').DelegationRun[]>(key);
+        if (!current) void cache.invalidateQueries({ queryKey: key });
+        else {
+          const index = current.findIndex((item) => item.id === run.id);
+          if (index < 0) cache.setQueryData(key, [...current, run]);
+          else {
+            const updated = current.slice();
+            updated[index] = run;
+            cache.setQueryData(key, updated);
+          }
+        }
         if (run.status === 'completed') {
           window.dispatchEvent(
             new CustomEvent('ferry:success-pulse', { detail: { sessionId: run.sessionId } }),

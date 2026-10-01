@@ -55,6 +55,7 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
 
 let mainWindow: BrowserWindow | null = null;
+let windowBackgrounded = true;
 let saveTimer: NodeJS.Timeout | undefined;
 let coreProcess: UtilityProcess | null = null;
 let corePid: number | null = null;
@@ -96,6 +97,13 @@ function publishWorkspacePath(path: string | null): void {
 function publishUpdateState(state: UpdateSnapshot): void {
   for (const window of BrowserWindow.getAllWindows())
     window.webContents.send('ferry:update-state', state);
+}
+
+function publishWindowBackground(backgrounded: boolean): void {
+  windowBackgrounded = backgrounded;
+  coreProcess?.postMessage({ type: 'ferry:ui-active', active: !backgrounded });
+  for (const window of BrowserWindow.getAllWindows())
+    window.webContents.send('ferry:window-background', backgrounded);
 }
 updateController.subscribe(publishUpdateState);
 
@@ -330,6 +338,7 @@ function launchCore(): void {
   });
   child.on('spawn', () => {
     corePid = child.pid ?? null;
+    child.postMessage({ type: 'ferry:ui-active', active: !windowBackgrounded });
     if (process.env.FERRY_E2E_USER_DATA_DIR)
       console.log(
         `FERRY_UTILITY_SPAWN ${JSON.stringify({ coreGeneration: generation, pid: corePid })}`,
@@ -361,7 +370,21 @@ async function createWindow(): Promise<void> {
     },
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show();
+  });
+  mainWindow.on('show', () => {
+    publishWindowBackground(false);
+  });
+  mainWindow.on('focus', () => {
+    publishWindowBackground(false);
+  });
+  mainWindow.on('blur', () => {
+    publishWindowBackground(true);
+  });
+  mainWindow.on('hide', () => {
+    publishWindowBackground(true);
+  });
   mainWindow.on('resize', () => {
     if (mainWindow) saveBounds(mainWindow);
   });
@@ -439,6 +462,32 @@ ipcMain.handle('ferry:engine-status', (event, ...args: unknown[]) => {
   return process.env.FERRY_E2E_USER_DATA_DIR
     ? { ...status, pid: coreProcess?.pid ?? corePid }
     : status;
+});
+ipcMain.handle('ferry:process-metrics', (event, ...args: unknown[]) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  EmptyIpcArgsSchema.parse(args);
+  const rendererPid = mainWindow?.webContents.getOSProcessId();
+  const metrics = app.getAppMetrics();
+  return metrics.flatMap((metric) => {
+    const role =
+      metric.pid === process.pid
+        ? 'main'
+        : metric.pid === rendererPid
+          ? 'renderer'
+          : metric.pid === corePid
+            ? 'core'
+            : null;
+    return role
+      ? [
+          {
+            role,
+            pid: metric.pid,
+            rssBytes: metric.memory.workingSetSize * 1024,
+            cpuPercent: metric.cpu.percentCPUUsage,
+          },
+        ]
+      : [];
+  });
 });
 
 ipcMain.on('ferry:theme', (event, rawTheme: unknown) => {

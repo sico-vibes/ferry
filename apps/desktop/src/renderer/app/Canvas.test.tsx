@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMockFerryClient } from '@ferry/client';
-import type { SessionDetail } from '@ferry/shared';
+import type { Message, MessagePart, SessionDetail } from '@ferry/shared';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FerryProvider } from '../data/client';
@@ -63,6 +63,56 @@ describe('Home and session canvases', () => {
       );
     });
     expect(getSession).not.toHaveBeenCalled();
+  });
+
+  it('applies a handoff part event that arrives before its assistant message event', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const listeners = new Map<string, Set<(payload: unknown) => void>>();
+    const on = ((event: string, handler: (payload: unknown) => void) => {
+      const eventListeners = listeners.get(event) ?? new Set<(payload: unknown) => void>();
+      eventListeners.add(handler);
+      listeners.set(event, eventListeners);
+      return () => eventListeners.delete(handler);
+    }) as typeof client.on;
+    const eventClient = Object.assign(client, { on });
+    const { queries } = mount(<div />, eventClient);
+    const session = (await client.sessions.list())[0];
+    if (!session) throw new Error('Expected a fixture session');
+    const detail = await client.sessions.get(session.id);
+    queries.setQueryData(keys.session(session.id), detail);
+    const message: Message = {
+      id: 'msg_handoff_event' as Message['id'],
+      sessionId: session.id,
+      role: 'assistant',
+      createdAt: new Date().toISOString(),
+      modelRef: null,
+      parts: [],
+    };
+    const handoffPart: Extract<MessagePart, { type: 'handoff_marker' }> = {
+      type: 'handoff_marker',
+      id: 'part_handoff_event' as MessagePart['id'],
+      from: 'groq/qwen/qwen3.6-27b' as Extract<MessagePart, { type: 'handoff_marker' }>['from'],
+      to: 'openrouter/cohere/north-mini-code:free' as Extract<
+        MessagePart,
+        { type: 'handoff_marker' }
+      >['to'],
+      reason: 'rate_limit',
+      briefingTokens: 120,
+      explanation: 'Provider returned HTTP 429; continuing with a fallback model.',
+    };
+    const emit = (event: string, payload: unknown) => {
+      listeners.get(event)?.forEach((handler) => {
+        handler(payload);
+      });
+    };
+
+    emit('session.part', { sessionId: session.id, messageId: message.id, part: handoffPart });
+    emit('session.message', { sessionId: session.id, message });
+
+    const updated = queries.getQueryData<SessionDetail>(keys.session(session.id));
+    expect(updated?.messages.find((item) => item.id === message.id)?.parts).toContainEqual(
+      handoffPart,
+    );
   });
 
   it('creates, sends, opens a tab, and navigates from the Home composer', async () => {

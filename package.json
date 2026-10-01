@@ -21,6 +21,7 @@
     "probe:live": "tsx scripts/probe-live.mjs",
     "eval:live": "tsx scripts/eval-live.mjs",
     "bench:optimizers": "tsx scripts/bench-optimizers.mjs",
+    "perf": "pnpm --filter @ferry/desktop perf:all",
     "check": "turbo run typecheck lint test --concurrency=50% && tsc --noEmit -p scripts/tsconfig.json && eslint --no-ignore scripts/eval-live.test.ts && vitest run --config scripts/vitest.config.ts && node scripts/check-text.mjs && prettier --check .",
     "check:tasks": "turbo run typecheck lint test --continue --concurrency=50%",
     "format": "prettier --write .",

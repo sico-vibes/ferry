@@ -1,0 +1,23 @@
+{
+  "startup.warmInteractiveMs": { "max": 2000, "unit": "ms" },
+  "startup.idle.afterStartup.main.averageCpuPercent": { "max": 2, "unit": "%" },
+  "startup.idle.afterStartup.renderer.averageCpuPercent": { "max": 2, "unit": "%" },
+  "startup.idle.afterStartup.core.averageCpuPercent": { "max": 2, "unit": "%" },
+  "startup.idle.afterSession.main.averageCpuPercent": { "max": 2, "unit": "%" },
+  "startup.idle.afterSession.renderer.averageCpuPercent": { "max": 2, "unit": "%" },
+  "startup.idle.afterSession.core.averageCpuPercent": { "max": 2, "unit": "%" },
+  "startup.idle.afterStartup.main.rssBytes": { "max": 536870912, "unit": "bytes" },
+  "startup.idle.afterStartup.renderer.rssBytes": { "max": 805306368, "unit": "bytes" },
+  "startup.idle.afterStartup.core.rssBytes": { "max": 536870912, "unit": "bytes" },
+  "startup.idle.afterSession.main.rssBytes": { "max": 536870912, "unit": "bytes" },
+  "startup.idle.afterSession.renderer.rssBytes": { "max": 805306368, "unit": "bytes" },
+  "startup.idle.afterSession.core.rssBytes": { "max": 536870912, "unit": "bytes" },
+  "bundle.totalJsBytes": { "max": 1800000, "unit": "bytes" },
+  "bundle.maxChunkBytes": { "max": 500000, "unit": "bytes per chunk" },
+  "longTranscript.appendMs": { "max": 100, "unit": "ms" },
+  "workspace.grepMs": { "max": 5000, "unit": "ms" },
+  "renders.Home": { "max": 30, "unit": "commits / harness run" },
+  "renders.Session": { "max": 30, "unit": "commits / harness run" },
+  "renders.Explore": { "max": 30, "unit": "commits / harness run" },
+  "renders.Settings": { "max": 30, "unit": "commits / harness run" }
+}

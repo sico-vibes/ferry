@@ -21,6 +21,8 @@
     "perf:start": "node scripts/perf-startup.mjs",
     "perf:long": "node scripts/perf-long-transcript.mjs",
     "perf:workspace": "node --import tsx scripts/perf-workspace.mjs",
+    "perf:all": "node scripts/perf-all.mjs",
+    "perf:render": "node scripts/perf-render.mjs",
     "test:e2e": "node scripts/e2e-runner.mjs"
   },
   "dependencies": {

@@ -77,10 +77,9 @@ export function BottomPanel() {
   const path = useRouterState({ select: (state) => state.location.pathname });
   const sessionId = path.startsWith('/s/') ? path.slice(3) : null;
   const { data } = useQuery({
-    queryKey: ['session', sessionId, 'agent-log'],
+    queryKey: ['session', sessionId],
     queryFn: () => (sessionId ? client.sessions.get(sessionId as never) : Promise.resolve(null)),
     enabled: Boolean(sessionId),
-    refetchInterval: 1500,
   });
   const bottomTab = useUI((s) => s.bottomTab);
   const bottomHeight = useUI((s) => s.bottomHeight);

@@ -58,7 +58,7 @@ describe('Electron security boundary', () => {
   });
 
   it('guards all IPC handlers and exposes only named preload capabilities', () => {
-    expect(mainSource.match(/ipcMain\.handle\(/g)).toHaveLength(7);
+    expect(mainSource.match(/ipcMain\.handle\(/g)).toHaveLength(8);
     expect(mainSource.match(/ipcMain\.on\(/g)).toHaveLength(2);
     expect(mainSource).toContain('isTrustedSender(event)');
     expect(mainSource).toContain('event.sender === mainWindow.webContents');
@@ -73,6 +73,14 @@ describe('Electron security boundary', () => {
     expect(mainSource).toContain("ipcMain.handle('ferry:update-auto-download'");
     expect(mainSource).toContain("ipcMain.handle('ferry:update-install'");
     expect(mainSource).toContain("ipcMain.handle('ferry:update-download'");
+    expect(mainSource).toContain("ipcMain.handle('ferry:process-metrics'");
+    expect(mainSource).toContain("webContents.send('ferry:window-background'");
+    expect(mainSource).toMatch(
+      /ipcMain\.handle\('ferry:process-metrics',[\s\S]*?if \(!isTrustedSender\(event\)\) throw new Error\('Untrusted IPC sender'\);[\s\S]*?EmptyIpcArgsSchema\.parse\(args\);/,
+    );
+    expect(preloadSource).toContain('getProcessMetrics:');
+    expect(preloadSource).toContain('isWindowBackgrounded:');
+    expect(preloadSource).toContain('onWindowBackground:');
     expect(preloadSource).toContain("contextBridge.exposeInMainWorld('ferryHost'");
     expect(preloadSource).toContain("send('ferry:connect-core', token)");
     expect(preloadSource).not.toMatch(/ipcRenderer\.(?:invoke|send)\(\s*\w+\s*,/);

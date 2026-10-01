@@ -9,6 +9,8 @@ import { chromium } from '@playwright/test';
 const packageRoot = resolve(import.meta.dirname, '..');
 const executable = join(packageRoot, 'release', 'win-unpacked', 'Ferry.exe');
 const userDataDirectory = await mkdtemp(join(tmpdir(), 'ferry-perf-startup-'));
+const runtimeMetrics = {};
+let dbQueryMs = null;
 const freePort = async () => {
   const server = createServer();
   await new Promise((resolveListen, reject) => {
@@ -183,6 +185,58 @@ async function launchAndMeasure(label, completeFirstRun) {
       });
     }
     const interactiveMs = Number((performance.now() - startedAt).toFixed(1));
+    if (label === 'Warm') {
+      const sampleIdle = async (stage) => {
+        const samples = [];
+        for (let index = 0; index < 60; index += 1) {
+          samples.push(await page.evaluate(() => window.ferryHost?.getProcessMetrics() ?? []));
+          await delay(1_000);
+        }
+        const processes = ['main', 'renderer', 'core'].map((role) => {
+          const values = samples.flat().filter((sample) => sample.role === role);
+          return {
+            role,
+            sampleCount: values.length,
+            averageCpuPercent: values.length
+              ? Number(
+                  (
+                    values.reduce((sum, sample) => sum + sample.cpuPercent, 0) / values.length
+                  ).toFixed(2),
+                )
+              : null,
+            rssBytes: values.at(-1)?.rssBytes ?? null,
+            averageRssBytes: values.length
+              ? Math.round(values.reduce((sum, sample) => sum + sample.rssBytes, 0) / values.length)
+              : null,
+          };
+        });
+        runtimeMetrics[stage] = { durationSeconds: 60, processes };
+      };
+      await sampleIdle('afterStartup');
+      const workspacePath = await mkdtemp(join(tmpdir(), 'ferry-perf-session-'));
+      try {
+        const session = await page.evaluate(async (path) => {
+          const client = window.ferryHybrid;
+          if (!client) throw new Error('Ferry client unavailable for session memory sample.');
+          const workspace = await client.workspaces.open(path);
+          const created = await client.sessions.create({ workspaceId: workspace.id });
+          const queryStartedAt = performance.now();
+          await client.sessions.list();
+          return {
+            id: created.id,
+            queryMs: Number((performance.now() - queryStartedAt).toFixed(2)),
+          };
+        }, workspacePath);
+        dbQueryMs = session.queryMs;
+        await page.evaluate((id) => {
+          location.hash = `#/s/${id}`;
+        }, session.id);
+        await page.locator('.transcript-viewport').waitFor({ state: 'visible', timeout: 30_000 });
+        await sampleIdle('afterSession');
+      } finally {
+        await rm(workspacePath, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+      }
+    }
     return { interactiveMs, firstRun: await skipSetup.isVisible().catch(() => false) };
   } finally {
     await browser?.close();
@@ -212,6 +266,8 @@ try {
     warmupInteractiveMs: warmup.interactiveMs,
     warmInteractiveMs: measured.interactiveMs,
     firstRunOnboarding: measured.firstRun,
+    idle: runtimeMetrics,
+    dbQuerySample: { query: 'sessions.list', elapsedMs: dbQueryMs },
   };
   console.log(JSON.stringify(result));
   if (measured.interactiveMs >= result.targetMs) process.exitCode = 1;

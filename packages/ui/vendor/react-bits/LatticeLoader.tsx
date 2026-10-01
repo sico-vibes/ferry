@@ -156,8 +156,26 @@ const LatticeLoader: React.FC<LatticeLoaderProps> = ({
     if (status !== 'working') return undefined;
     const startedAt = performance.now();
     paint(0);
-    const id = setInterval(() => paint(Math.floor((performance.now() - startedAt) / 100)), 100);
-    return () => clearInterval(id);
+    let id: ReturnType<typeof setInterval> | undefined;
+    const syncTimer = () => {
+      const active =
+        document.visibilityState === 'visible' &&
+        document.documentElement.dataset.windowBackgrounded !== 'true';
+      if (active && !id)
+        id = setInterval(() => paint(Math.floor((performance.now() - startedAt) / 100)), 100);
+      else if (!active && id) {
+        clearInterval(id);
+        id = undefined;
+      }
+    };
+    document.addEventListener('visibilitychange', syncTimer);
+    window.addEventListener('ferry:window-background', syncTimer);
+    syncTimer();
+    return () => {
+      if (id) clearInterval(id);
+      document.removeEventListener('visibilitychange', syncTimer);
+      window.removeEventListener('ferry:window-background', syncTimer);
+    };
   }, [status, elapsed]);
 
   useEffect(() => {

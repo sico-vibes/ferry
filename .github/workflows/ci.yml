@@ -40,3 +40,7 @@ jobs:
         run: pnpm exec prettier --check .
       - if: ${{ !cancelled() }}
         run: pnpm bench:optimizers
+      - if: ${{ !cancelled() }}
+        run: pnpm --filter @ferry/desktop build
+      - if: ${{ !cancelled() }}
+        run: node apps/desktop/scripts/perf-budget-warn.mjs

@@ -1,6 +1,6 @@
 # Performance and accessibility budget
 
-Scope: original B10 + A5.4 baseline. This document records the UI-first Ferry mock and local workspace tools; it does not include the later v0.10 performance wave.
+Scope: original B10 + A5.4 baseline and the v0.10 Wave P performance baseline. `pnpm perf` runs the startup, idle CPU/RSS, 10k transcript, 50k workspace, renderer chunk, DB query, and React Profiler measurements, then updates this document and `docs/perf-results.json`.
 
 ## Budgets
 
@@ -9,6 +9,9 @@ Scope: original B10 + A5.4 baseline. This document records the UI-first Ferry mo
 | Packaged startup, warm | < 2,000 ms to an interactive composer | `pnpm --filter @ferry/desktop perf:start`; performs one warm-up launch, then reports the second launch's JSON `warmInteractiveMs`. |
 | Long transcript | 10,000 messages; virtualized scroll and append; append < 100 ms and no long task > 100 ms | `pnpm --filter @ferry/desktop perf:long`; records append latency, p95 frame time, long tasks, rendered row count, and JS heap delta. |
 | Large repo | 50,000 files; repo map, glob, grep < 5,000 ms, list_dir, checkpoint snapshot | `pnpm --filter @ferry/desktop perf:workspace`; creates fixtures and checkpoint data under the OS temp directory, records per-operation latency and process memory, then removes both directories. |
+| Idle process footprint | 60 s CPU average and RSS for Electron main, renderer, and core after startup and after opening a session | `pnpm perf`; uses Electron process metrics sampled once per second. |
+| Renderer chunks and screen commits | JavaScript bytes per manifest chunk; React Profiler commit counts for Home, Session, Explore, and Settings | `pnpm perf`; chunk sizes come from the renderer build manifest and counts run in a dev-only harness. |
+| DB query sample | `sessions.list` elapsed time after opening a benchmark session | `pnpm perf`; includes the local core RPC round trip and storage read. |
 | Accessibility | WCAG 2.1 A/AA axe scan on all requested screens; no serious/critical violations; body/meta text ≥ 4.5:1 | `pnpm --filter @ferry/desktop test:e2e` includes the accessibility and keyboard flows. Token contrast is also tested by `@ferry/ui`. |
 
 Each `perf:start`, `perf:long`, and `perf:workspace` run prints one JSON summary line with a `benchmark` identifier. Workspace timings are in `operations[].elapsedMs`; `memoryBytes` uses Node's byte-valued `process.memoryUsage()` fields.

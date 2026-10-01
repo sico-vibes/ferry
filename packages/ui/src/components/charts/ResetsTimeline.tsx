@@ -25,11 +25,37 @@ export function ResetsTimeline({
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const timer = globalThis.setInterval(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const active = () =>
+      document.visibilityState === 'visible' &&
+      document.documentElement.dataset.windowBackgrounded !== 'true';
+    const stop = () => {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+    };
+    const tick = () => {
+      timer = undefined;
+      if (!active()) return;
       setNow(Date.now());
-    }, 60_000);
+      timer = globalThis.setTimeout(tick, 60_000);
+    };
+    const resume = () => {
+      stop();
+      if (active()) timer = globalThis.setTimeout(tick, 60_000);
+    };
+    const background = (event: Event) => {
+      document.documentElement.dataset.windowBackgrounded = String(
+        (event as CustomEvent<boolean>).detail,
+      );
+      resume();
+    };
+    document.addEventListener('visibilitychange', resume);
+    window.addEventListener('ferry:window-background', background);
+    resume();
     return () => {
-      clearInterval(timer);
+      stop();
+      document.removeEventListener('visibilitychange', resume);
+      window.removeEventListener('ferry:window-background', background);
     };
   }, []);
   const end = now + 86_400_000;
