@@ -29,6 +29,7 @@ import {
   SidebarSection,
   TagBadge,
   EmptyState,
+  ShowMoreList,
   Skeleton,
 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
@@ -238,28 +239,36 @@ export function Sidebar({
                       <FolderOpen size={14} />
                       <span>{workspace.name}</span>
                     </button>
-                    {isOpen &&
-                      items.map((session) => (
-                        <button
-                          className="context-session-row"
-                          key={session.id}
-                          onClick={() => {
-                            useUI.getState().openTab({ id: session.id, title: session.title });
-                            void navigate({
-                              to: '/s/$sessionId',
-                              params: { sessionId: session.id },
-                            });
-                          }}
-                        >
-                          {session.title}
-                          {session.status === 'interrupted' && (
-                            <span className="rounded-pill bg-warn/10 px-2 py-0.5 text-meta text-warn">
-                              Interrupted
-                            </span>
-                          )}
-                          <small>{relativeAgo(session.updatedAt)}</small>
-                        </button>
-                      ))}
+                    {isOpen && (
+                      <ShowMoreList
+                        items={items}
+                        groupKey={`sidebar:workspace:${workspace.id}`}
+                        label="sessions"
+                        listClassName=""
+                        renderItem={(session) => (
+                          <li className="list-none" key={session.id}>
+                            <button
+                              className="context-session-row"
+                              onClick={() => {
+                                useUI.getState().openTab({ id: session.id, title: session.title });
+                                void navigate({
+                                  to: '/s/$sessionId',
+                                  params: { sessionId: session.id },
+                                });
+                              }}
+                            >
+                              {session.title}
+                              {session.status === 'interrupted' && (
+                                <span className="rounded-pill bg-warn/10 px-2 py-0.5 text-meta text-warn">
+                                  Interrupted
+                                </span>
+                              )}
+                              <small>{relativeAgo(session.updatedAt)}</small>
+                            </button>
+                          </li>
+                        )}
+                      />
+                    )}
                   </section>
                 );
               })}
@@ -283,41 +292,46 @@ export function Sidebar({
               {providersLoading ? (
                 <Skeleton rows={4} />
               ) : (
-                providers
-                  .filter(
+                <ShowMoreList
+                  items={providers.filter(
                     (provider) =>
                       exploreFilter === 'All' || providerKind(provider.tag) === exploreFilter,
-                  )
-                  .map((provider) => (
-                    <button
-                      title={provider.name}
-                      className="context-provider-row"
-                      key={provider.id}
-                      onClick={() =>
-                        document
-                          .getElementById(`provider-${provider.id}`)
-                          ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                      }
-                    >
-                      <span
-                        className={`provider-health ${provider.health === 'ok' ? 'healthy' : provider.health === 'down' ? 'failed' : ''}`}
-                      />
-                      <span>{provider.name}</span>
-                      <TagBadge
-                        kind={
-                          provider.tag === 'paid'
-                            ? 'paid'
-                            : provider.tag === 'subscription_cli'
-                              ? 'cli'
-                              : provider.tag === 'caution'
-                                ? 'caution'
-                                : provider.tag === 'promo'
-                                  ? 'promo'
-                                  : 'legit'
+                  )}
+                  groupKey="sidebar:explore:providers"
+                  label="providers"
+                  listClassName=""
+                  renderItem={(provider) => (
+                    <li className="list-none" key={provider.id}>
+                      <button
+                        title={provider.name}
+                        className="context-provider-row"
+                        onClick={() =>
+                          document
+                            .getElementById(`provider-${provider.id}`)
+                            ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
                         }
-                      />
-                    </button>
-                  ))
+                      >
+                        <span
+                          className={`provider-health ${provider.health === 'ok' ? 'healthy' : provider.health === 'down' ? 'failed' : ''}`}
+                        />
+                        <span>{provider.name}</span>
+                        <TagBadge
+                          kind={
+                            provider.tag === 'paid'
+                              ? 'paid'
+                              : provider.tag === 'subscription_cli'
+                                ? 'cli'
+                                : provider.tag === 'caution'
+                                  ? 'caution'
+                                  : provider.tag === 'promo'
+                                    ? 'promo'
+                                    : 'legit'
+                          }
+                        />
+                      </button>
+                    </li>
+                  )}
+                />
               )}
               {!providers.length && !providersLoading && (
                 <EmptyState

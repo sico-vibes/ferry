@@ -12,7 +12,7 @@ import {
   Share2,
   Star,
 } from 'lucide-react';
-import { EmptyState, IconButton, KbdChip, NewChatButton, Skeleton } from '@ferry/ui';
+import { EmptyState, IconButton, KbdChip, NewChatButton, ShowMoreList, Skeleton } from '@ferry/ui';
 import { useFerryClient } from '../../data/client';
 import { keys, useSessionDetail, useSessions } from '../../data/queries';
 import { useUI } from '../../state/ui';
@@ -77,9 +77,13 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
           <MoreHorizontal size={16} />
         </button>
       </header>
-      <div>
-        {items.map((session) => (
-          <div className="chat-row" key={session.id}>
+      <ShowMoreList
+        items={items}
+        groupKey={`right-panel:${isSaved ? 'saved' : 'recent'}`}
+        label="chats"
+        listClassName=""
+        renderItem={(session) => (
+          <li className="chat-row list-none" key={session.id}>
             <button
               className="chat-row-main"
               onClick={() => {
@@ -103,9 +107,9 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
             >
               <Star size={16} fill={session.starred ? 'currentColor' : 'none'} />
             </button>
-          </div>
-        ))}
-      </div>
+          </li>
+        )}
+      />
     </section>
   );
   return (

@@ -3,9 +3,10 @@ import { createPortal } from 'react-dom';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Bell, Check, ChevronDown, Search, X } from 'lucide-react';
-import { DataUseBadge, Dialog, FerryMark, Pill, TagBadge } from '@ferry/ui';
+import { DataUseBadge, Dialog, FerryMark, Pill, ShowMoreList, TagBadge } from '@ferry/ui';
 import type { ModelRef, PartId, SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
+import { listAllModels } from '@ferry/client';
 import { keys, useSessions, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
@@ -356,18 +357,22 @@ export function ModelPickerPopover({
   });
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
-    queryFn: () => client.models.list(),
+    queryFn: () => listAllModels(client),
   });
   const { data: providers = [] } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
   const [localOpen, setLocalOpen] = useState(false);
+  const [modelQuery, setModelQuery] = useState('');
   const open = controlledOpen ?? localOpen;
   const setOpen = onOpenChange ?? setLocalOpen;
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const ModelCommand = useCmdk(open);
+  useEffect(() => {
+    if (!open) setModelQuery('');
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     const anchor = triggerRef.current?.getBoundingClientRect();
@@ -460,7 +465,12 @@ export function ModelPickerPopover({
             style={{ top: position.top, left: position.left }}
           >
             <ModelCommand label="Choose model" className="model-command">
-              <ModelCommand.Input aria-label="Search models" placeholder="Search models…" />
+              <ModelCommand.Input
+                aria-label="Search models"
+                onValueChange={setModelQuery}
+                placeholder="Search models…"
+                value={modelQuery}
+              />
               <ModelCommand.List>
                 <ModelCommand.Item
                   className="model-candidate auto"
@@ -481,9 +491,26 @@ export function ModelPickerPopover({
                       providers.find((provider) => provider.id === providerId)?.name ?? providerId
                     }
                   >
-                    {availableModels
-                      .filter((model) => model.providerId === providerId)
-                      .map((model) => {
+                    <ShowMoreList
+                      items={availableModels
+                        .filter((model) => model.providerId === providerId)
+                        .filter((model) => {
+                          const providerName =
+                            providers.find((provider) => provider.id === providerId)?.name ??
+                            providerId;
+                          const needle = modelQuery.trim().toLocaleLowerCase();
+                          return (
+                            !needle ||
+                            `${model.name} ${model.ref} ${model.tier} ${providerName}`
+                              .toLocaleLowerCase()
+                              .includes(needle)
+                          );
+                        })}
+                      groupKey={`model-picker:${providerId}`}
+                      label="models"
+                      forceExpand={modelQuery.trim().length > 0}
+                      renderList={(children) => <>{children}</>}
+                      renderItem={(model) => {
                         const candidate = candidateByRef.get(model.ref);
                         const provider = providers.find((item) => item.id === providerId);
                         const capacity = candidate?.stepsLeft ?? provider?.stepsLeftToday ?? null;
@@ -535,7 +562,8 @@ export function ModelPickerPopover({
                             </span>
                           </ModelCommand.Item>
                         );
-                      })}
+                      }}
+                    />
                   </ModelCommand.Group>
                 ))}
               </ModelCommand.List>

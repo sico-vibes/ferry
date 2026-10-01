@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ExternalLink, KeyRound, LogIn, LogOut, RefreshCw, Search } from 'lucide-react';
 import type { OAuthProvider } from '@ferry/shared';
+import { ShowMoreList } from '@ferry/ui';
 
 const groupLabels = [
   ['official', 'Official OAuth'],
@@ -63,8 +64,13 @@ export function OAuthProviderRows({
             <summary className="cursor-pointer py-1 text-label font-medium text-text-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
               {title} <span className="ml-1 text-meta text-text-3">{rows.length}</span>
             </summary>
-            <ul aria-label={title} className="mt-1 grid gap-1">
-              {rows.map((provider) => {
+            <ShowMoreList
+              items={rows}
+              groupKey={`oauth:${group}`}
+              label="providers"
+              ariaLabel={title}
+              listClassName="mt-1 grid gap-1"
+              renderItem={(provider) => {
                 const status =
                   provider.status ?? (provider.connected ? 'connected' : 'not_connected');
                 const available = provider.actionAvailable !== false;
@@ -214,8 +220,8 @@ export function OAuthProviderRows({
                     </div>
                   </li>
                 );
-              })}
-            </ul>
+              }}
+            />
           </details>
         );
       })}

@@ -14,6 +14,7 @@ import {
   DataUseBadge,
   TagBadge,
   Section,
+  ShowMoreList,
   Skeleton,
   Stack,
 } from '@ferry/ui';
@@ -53,6 +54,14 @@ export function ExploreCanvas() {
   const pushToast = useToasts((state) => state.push);
   const filter = useUI((state) => state.exploreFilter);
   const [search, setSearch] = useState('');
+  const [modelSearch, setModelSearch] = useState('');
+  const [modelOffset, setModelOffset] = useState(0);
+  const [modelLimit, setModelLimit] = useState(50);
+  const benchmarkFullList =
+    import.meta.env.DEV &&
+    new URLSearchParams(location.search).get('demo') === 'explore-perf' &&
+    new URLSearchParams(location.search).get('perfList') === 'all';
+  const effectiveModelLimit = benchmarkFullList ? 1_200 : modelLimit;
   const [modelTier, setModelTier] = useState<(typeof modelFilters)[number]>('All tiers');
   const [modelKind, setModelKind] = useState<(typeof freeFilters)[number]>('All');
   const [sort, setSort] = useState<{ key: ModelSort; ascending: boolean }>({
@@ -66,6 +75,9 @@ export function ExploreCanvas() {
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
   const [probing, setProbing] = useState<string | null>(null);
+  const [recentlyUpdatedProviderIds, setRecentlyUpdatedProviderIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const {
     data: providers = [],
     isLoading: providersLoading,
@@ -75,10 +87,21 @@ export function ExploreCanvas() {
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
-  const { data: models = [] } = useQuery({
-    queryKey: ['models'],
-    queryFn: () => client.models.list(),
+  const { data: modelPage = { items: [], total: 0 } } = useQuery({
+    queryKey: ['models', modelSearch, modelTier, modelKind, sort, modelOffset, effectiveModelLimit],
+    queryFn: () =>
+      client.models.page({
+        offset: modelOffset,
+        limit: effectiveModelLimit,
+        query: modelSearch,
+        filters: {
+          ...(modelTier !== 'All tiers' ? { tier: modelTier } : {}),
+          ...(modelKind !== 'All' ? { free: modelKind === 'Free' } : {}),
+        },
+        sort,
+      }),
   });
+  const { items: models, total: modelTotal } = modelPage;
   const { data: oauthProviders = [] } = useQuery({
     queryKey: ['oauth-providers'],
     queryFn: () => client.oauth.list(),
@@ -90,6 +113,7 @@ export function ExploreCanvas() {
 
   useEffect(() => {
     const off = client.on('provider.updated', (provider) => {
+      setRecentlyUpdatedProviderIds((current) => new Set(current).add(provider.id));
       cache.setQueryData<Provider[]>(['providers'], (current = []) =>
         current.map((item) => (item.id === provider.id ? provider : item)),
       );
@@ -128,27 +152,17 @@ export function ExploreCanvas() {
       (!query || provider.name.toLowerCase().includes(query) || provider.id.includes(query))
     );
   });
-  const visibleModels = useMemo(() => {
-    const names = new Map(providers.map((provider) => [provider.id, provider.name]));
-    return models
-      .filter(
-        (model) =>
-          (modelTier === 'All tiers' || model.tier === modelTier) &&
-          (modelKind === 'All' || (modelKind === 'Free' ? model.free : !model.free)),
-      )
-      .toSorted((left, right) => {
-        const a = left[sort.key];
-        const b = right[sort.key];
-        let result: number;
-        if (sort.key === 'providerId')
-          result = (names.get(left.providerId) ?? left.providerId).localeCompare(
-            names.get(right.providerId) ?? right.providerId,
-          );
-        else if (typeof a === 'string' && typeof b === 'string') result = a.localeCompare(b);
-        else result = Number(a ?? -1) - Number(b ?? -1);
-        return sort.ascending ? result : -result;
-      });
-  }, [modelKind, modelTier, models, providers, sort]);
+  const isProviderPriority = (provider: Provider) =>
+    recentlyUpdatedProviderIds.has(provider.id) ||
+    provider.keyStatus === 'invalid' ||
+    ['cooldown', 'down', 'auth_invalid', 'account_disabled'].includes(provider.health);
+  const pinnedProviders = visibleProviders.filter(isProviderPriority);
+  const providerListItems = [
+    ...pinnedProviders,
+    ...visibleProviders.filter((provider) => !isProviderPriority(provider)),
+  ];
+  const providerListInitialCount = Math.max(6, pinnedProviders.length);
+  const visibleModels = models;
 
   const openAdd = () => {
     setDialogMode('add');
@@ -193,6 +207,7 @@ export function ExploreCanvas() {
   };
   const sortModels = (key: ModelSort) => {
     setSort((current) => ({ key, ascending: current.key === key ? !current.ascending : true }));
+    setModelOffset(0);
   };
   const sortLabel = (key: ModelSort, label: string) => (
     <button
@@ -335,9 +350,18 @@ export function ExploreCanvas() {
             onAction={() => void refetchProviders()}
           />
         ) : visibleProviders.length > 0 ? (
-          <div className="provider-card-grid grid grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))] gap-3">
-            {visibleProviders.map((provider) => (
-              <div className="h-full min-w-0" id={`provider-${provider.id}`} key={provider.id}>
+          <ShowMoreList
+            items={providerListItems}
+            groupKey="explore:providers"
+            initialCount={providerListInitialCount}
+            label="providers"
+            listClassName="provider-card-grid grid grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))] gap-3"
+            renderItem={(provider) => (
+              <li
+                className="h-full min-w-0 list-none"
+                id={`provider-${provider.id}`}
+                key={provider.id}
+              >
                 <ProviderCard
                   onManageKey={() => {
                     openManage(provider);
@@ -356,9 +380,9 @@ export function ExploreCanvas() {
                     }}
                   />
                 )}
-              </div>
-            ))}
-          </div>
+              </li>
+            )}
+          />
         ) : providers.length === 0 ? (
           <EmptyState title="No providers connected" action="Add a provider" onAction={openAdd} />
         ) : (
@@ -391,6 +415,7 @@ export function ExploreCanvas() {
                   key={item}
                   onClick={() => {
                     setModelTier(item);
+                    setModelOffset(0);
                   }}
                   type="button"
                 >
@@ -406,6 +431,7 @@ export function ExploreCanvas() {
                   key={item}
                   onClick={() => {
                     setModelKind(item);
+                    setModelOffset(0);
                   }}
                   type="button"
                 >
@@ -414,6 +440,46 @@ export function ExploreCanvas() {
               ))}
             </div>
           </header>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex min-w-56 flex-1 items-center gap-2 rounded-pill border border-border-hair bg-panel px-3 py-2 text-meta text-text-3">
+              <Search aria-hidden="true" size={14} />
+              <span className="sr-only">Search models</span>
+              <input
+                aria-label="Search models"
+                className="min-w-0 flex-1 bg-transparent text-text-1 outline-none placeholder:text-text-3"
+                onChange={(event) => {
+                  setModelSearch(event.target.value);
+                  setModelOffset(0);
+                }}
+                placeholder="Search models"
+                type="search"
+                value={modelSearch}
+              />
+            </label>
+            <span aria-live="polite" className="text-meta text-text-3">
+              {modelTotal === 0
+                ? '0 models'
+                : `${String(modelOffset + 1)}–${String(Math.min(modelOffset + effectiveModelLimit, modelTotal))} of ${new Intl.NumberFormat().format(modelTotal)}`}
+            </span>
+            <label className="flex items-center gap-2 text-meta text-text-2">
+              Rows
+              <select
+                aria-label="Models per page"
+                className="rounded-pill border border-border-hair bg-panel px-2 py-1 text-text-1"
+                onChange={(event) => {
+                  setModelLimit(Number(event.target.value));
+                  setModelOffset(0);
+                }}
+                value={modelLimit}
+              >
+                {[25, 50, 100].map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <div
             className="model-table-scroll"
             tabIndex={0}
@@ -508,6 +574,28 @@ export function ExploreCanvas() {
               </p>
             )}
           </div>
+          <nav aria-label="Models pages" className="flex items-center justify-end gap-2">
+            <button
+              className="rounded-pill px-3 py-1 text-meta text-text-2 hover:bg-raised disabled:opacity-50"
+              disabled={modelOffset === 0}
+              onClick={() => {
+                setModelOffset(Math.max(0, modelOffset - modelLimit));
+              }}
+              type="button"
+            >
+              Previous
+            </button>
+            <button
+              className="rounded-pill px-3 py-1 text-meta text-text-2 hover:bg-raised disabled:opacity-50"
+              disabled={modelOffset + effectiveModelLimit >= modelTotal}
+              onClick={() => {
+                setModelOffset(modelOffset + effectiveModelLimit);
+              }}
+              type="button"
+            >
+              Next
+            </button>
+          </nav>
         </Section>
       </Stack>
       <Dialog.Root onOpenChange={closeDialog} open={dialogOpen && dialogMode === 'add'}>

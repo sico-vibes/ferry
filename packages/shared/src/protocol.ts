@@ -47,6 +47,7 @@ export const FERRY_METHODS = [
   'quota.history',
   'quota.handoffs',
   'models.list',
+  'models.page',
   'models.candidates',
   'models.select',
   'profiles.list',

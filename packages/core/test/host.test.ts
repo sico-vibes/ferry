@@ -420,8 +420,11 @@ describe('core host dispatcher and lifecycle', () => {
       });
       services.models.replace(providerId, []);
 
-      const models = await rpc.models.list(providerId);
-      expect(models.map((model) => model.ref)).toContain('sambanova/gpt-oss-120b');
+      const models = await rpc.models.page({ filters: { providerId }, limit: 100 });
+      expect(models.items.map((model) => model.ref)).toContain('sambanova/gpt-oss-120b');
+      const legacyModels = await rpc.models.list(providerId);
+      expect(Array.isArray(legacyModels)).toBe(true);
+      expect(legacyModels.map((model) => model.ref)).toContain('sambanova/gpt-oss-120b');
       expect(
         fake.requests.some(({ method, url }) => method === 'GET' && url.endsWith('/v1/models')),
       ).toBe(true);
@@ -653,7 +656,7 @@ describe('provider, model and quota RPC integration', () => {
       expect(connected.keyStatus).toBe('unchecked');
       expect(JSON.stringify(connected)).not.toContain(secret);
       await vi.waitFor(async () => {
-        expect(await rpc.models.list(providerId)).toEqual(
+        expect((await rpc.models.page({ filters: { providerId } })).items).toEqual(
           expect.arrayContaining([expect.objectContaining({ ref: 'openai/gpt-4o-mini' })]),
         );
       });
@@ -665,7 +668,7 @@ describe('provider, model and quota RPC integration', () => {
         );
       });
       expect(probeResult).toMatchObject({ ok: true, keyValid: true });
-      expect(await rpc.models.list(providerId)).not.toHaveLength(0);
+      expect((await rpc.models.page({ filters: { providerId } })).total).toBeGreaterThan(0);
       expect(probeResult.windows[0]).toMatchObject({ limit: 20, remaining: 13 });
       const capacity = await rpc.quota.capacity();
       expect(capacity.perProvider.find((item) => item.providerId === 'openai')).toMatchObject({

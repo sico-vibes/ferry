@@ -123,7 +123,7 @@ describe('QA-w2 core: key safety across every surface', () => {
       const probeResult = await h.rpc.providers.probe(ProviderIdSchema.parse('openai'));
       expect(probeResult.ok).toBe(true);
       const providers = await h.rpc.providers.list();
-      const models = await h.rpc.models.list();
+      const models = await h.rpc.models.page({ limit: 100 });
       const capacity = await h.rpc.quota.capacity();
       const history = await h.rpc.quota.history(30);
       const info = await h.rpc.system.info();

@@ -35,6 +35,7 @@ declare global {
     ferryPerfRenderCounts?: Record<string, number>;
     ferryPerfClient?: import('@ferry/client').FerryClient;
     ferryPerfNavigate?: (path: string) => Promise<unknown>;
+    ferryPerfModelCount?: number;
     ferryHybrid?: import('@ferry/client').HybridFerryClient;
     ferryEngineHello?: import('@ferry/shared').HelloResult;
     ferryRpcClient?: import('@ferry/client').RpcFerryClient;

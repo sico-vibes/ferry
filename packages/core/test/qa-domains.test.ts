@@ -223,10 +223,22 @@ describe('QA discovered models', () => {
     try {
       const providerId = ProviderIdSchema.parse('openrouter');
       await core.rpc.providers.setKey(providerId, 'fixture-key');
-      const models = await core.rpc.models.list(providerId);
-      const discovered = models.find((model) => model.ref === 'openrouter/custom/discovered-coder');
+      const models = await core.rpc.models.page({ filters: { providerId }, limit: 100 });
+      const discovered = models.items.find(
+        (model) => model.ref === 'openrouter/custom/discovered-coder',
+      );
       expect(discovered).toMatchObject({ toolCalling: true });
       expect(discovered?.capability?.toolCall).toBeUndefined();
+      const searched = await core.rpc.models.page({
+        query: 'discovered-coder',
+        filters: { providerId },
+        offset: 0,
+        limit: 1,
+      });
+      expect(searched).toMatchObject({
+        total: 1,
+        items: [{ ref: 'openrouter/custom/discovered-coder' }],
+      });
 
       const workspaceDir = join(core.dir, 'workspace');
       await mkdir(workspaceDir, { recursive: true });

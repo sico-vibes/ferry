@@ -255,6 +255,85 @@ describe('paid-call guardrails', () => {
     },
     30_000,
   );
+  it('keeps catalog pricing through paged model listing and requires paid confirmation', async () => {
+    const h = await startHarness({ turns: [textTurn('Paid answer')] });
+    try {
+      const providerId = ProviderIdSchema.parse('openrouter');
+      await h.rpc.providers.setBillingEnabled(providerId, true);
+      const catalogModel = h.services.catalog.models.find(
+        (item) =>
+          item.providerId === providerId &&
+          !item.free &&
+          item.toolCalling &&
+          (item.priceInPerM ?? 0) > 0 &&
+          (item.priceOutPerM ?? 0) > 0,
+      );
+      expect(catalogModel).toBeDefined();
+      if (!catalogModel) return;
+      const cachedModel = {
+        ...catalogModel,
+        free: false,
+        priceInPerM: 0,
+        priceOutPerM: 0,
+      };
+      h.services.models.replace(providerId, [cachedModel]);
+      const provider = h.services.providers.get(providerId);
+      expect(provider).toBeDefined();
+      if (!provider) return;
+      h.services.providers.put({
+        ...provider,
+        availableModels: [cachedModel],
+        modelCount: 1,
+        modelsVerifiedAt: h.services.clock.now().toISOString(),
+      });
+
+      const page = await h.rpc.models.page({ filters: { providerId }, limit: 2_000 });
+      const model = page.items.find((item) => item.ref === catalogModel.ref);
+      expect(model).toMatchObject({
+        ref: catalogModel.ref,
+        free: false,
+        priceInPerM: catalogModel.priceInPerM,
+        priceOutPerM: catalogModel.priceOutPerM,
+      });
+      if (!model) return;
+      expect(model.ref).not.toMatch(/:free(?:$|:)/i);
+
+      h.services.env.NODE_ENV = 'production';
+      const profile = BUILTIN_PROFILES.find((item) => item.name === 'Best Available');
+      expect(profile).toBeDefined();
+      if (!profile) return;
+      const session = await h.rpc.sessions.create({
+        workspaceId: h.workspaceId,
+        profileId: profile.id,
+      });
+      await h.rpc.models.select(session.id, model.ref);
+      await h.rpc.sessions.send(session.id, { text: 'use the priced paged model' });
+      await waitFor(async () => {
+        const detail = await h.rpc.sessions.get(session.id);
+        return detail.messages.some((message) =>
+          message.parts.some(
+            (part) => part.type === 'approval_request' && part.kind === 'paid_model',
+          ),
+        );
+      });
+
+      const requests = h.server.requests.filter((request) =>
+        request.url.endsWith('/chat/completions'),
+      );
+      expect(requests).toHaveLength(0);
+      const detail = await h.rpc.sessions.get(session.id);
+      const approval = detail.messages
+        .flatMap((message) => message.parts)
+        .find(
+          (part): part is Extract<MessagePart, { type: 'approval_request' }> =>
+            part.type === 'approval_request' && part.kind === 'paid_model',
+        );
+      expect(approval?.summary).toContain(model.name);
+      expect(approval?.detail).not.toContain('unknown-price allowance');
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
   it('records the approved preflight estimate when a paid stream omits token usage', async () => {
     const h = await startHarness({ turns: [textTurn('Paid stream without usage')] });
     try {

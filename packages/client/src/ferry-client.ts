@@ -10,6 +10,7 @@ import type {
   McpServerId,
   ModelCandidate,
   ModelInfo,
+  Tier,
   ModelRef,
   OptimizerStats,
   OAuthProvider,
@@ -143,6 +144,7 @@ export interface FerryClient {
   };
   models: {
     list(providerId?: ProviderId): Promise<ModelInfo[]>;
+    page(query?: ModelListQuery): Promise<ModelListResult>;
     candidates(sessionId: SessionId | null): Promise<ModelCandidate[]>;
     select(sessionId: SessionId, ref: ModelRef | 'auto'): Promise<void>;
   };
@@ -175,4 +177,42 @@ export interface FerryClient {
   };
   system: { info(): Promise<SystemInfo> };
   on<E extends keyof FerryEvents>(event: E, handler: (payload: FerryEvents[E]) => void): () => void;
+}
+
+export async function listAllModels(client: FerryClient): Promise<ModelInfo[]> {
+  const first = await client.models.page({ offset: 0, limit: 100 });
+  const remaining: ModelInfo[] = [];
+  for (let offset = first.items.length; offset < first.total; offset += 100) {
+    const page = await client.models.page({ offset, limit: 100 });
+    remaining.push(...page.items);
+    if (page.items.length === 0) break;
+  }
+  return [...first.items, ...remaining];
+}
+
+export type ModelListSort =
+  | 'name'
+  | 'providerId'
+  | 'tier'
+  | 'contextWindow'
+  | 'toolCalling'
+  | 'free'
+  | 'priceInPerM'
+  | 'priceOutPerM';
+
+export interface ModelListQuery {
+  offset?: number;
+  limit?: number;
+  query?: string;
+  filters?: {
+    providerId?: ProviderId;
+    tier?: Tier;
+    free?: boolean;
+  };
+  sort?: { key: ModelListSort; ascending?: boolean };
+}
+
+export interface ModelListResult {
+  items: ModelInfo[];
+  total: number;
 }

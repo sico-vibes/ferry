@@ -1,4 +1,4 @@
-import type { Message, SessionId } from '@ferry/shared';
+import type { Message, ModelInfo, SessionId } from '@ferry/shared';
 import type { MockFerryClient } from '@ferry/client';
 
 export function seedLongTranscript(client: MockFerryClient): SessionId | undefined {
@@ -50,6 +50,24 @@ export function seedLongTranscript(client: MockFerryClient): SessionId | undefin
   location.searchParams.set('demo', 'long');
   history.replaceState(null, '', location);
   return session.id;
+}
+
+export function seedExploreModels(client: MockFerryClient): void {
+  const state = client.__state();
+  const template = state.models[0];
+  if (!template) return;
+  const models: ModelInfo[] = Array.from({ length: 1_200 }, (_, index) => ({
+    ...structuredClone(template),
+    ref: `${template.providerId}/perf-model-${String(index + 1).padStart(4, '0')}` as ModelInfo['ref'],
+    name: `Performance model ${String(index + 1).padStart(4, '0')}`,
+  }));
+  state.models.splice(0, state.models.length, ...models);
+  const provider = state.providers.find((item) => item.id === template.providerId);
+  if (provider) {
+    provider.availableModels = structuredClone(models);
+    provider.modelCount = models.length;
+  }
+  window.ferryPerfModelCount = models.length;
 }
 
 export function seedExhaustedSession(client: MockFerryClient): SessionId | undefined {
