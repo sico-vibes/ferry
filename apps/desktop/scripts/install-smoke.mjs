@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { access, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -288,7 +288,7 @@ try {
   await mkdir(pathData, { recursive: true });
   await mkdir(legacyData, { recursive: true });
   const sentinel = join(pathData, 'remove-data-smoke.txt');
-  await (await import('node:fs/promises')).writeFile(sentinel, 'remove me', 'utf8');
+  await writeFile(sentinel, 'remove me', 'utf8');
   await uninstall(pathInstall, pathProfile, true);
   assert.equal(
     await exists(pathData),
@@ -334,9 +334,25 @@ try {
   if (tempRoot) {
     const resolvedTemp = resolve(tempRoot);
     const resolvedSystemTemp = resolve(tmpdir());
-    if (!resolvedTemp.toLowerCase().startsWith(`${resolvedSystemTemp.toLowerCase()}\\`))
-      throw new Error(`Refusing cleanup outside temp root: ${resolvedTemp}`);
-    await rm(resolvedTemp, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    if (!resolvedTemp.toLowerCase().startsWith(`${resolvedSystemTemp.toLowerCase()}\\`)) {
+      record(
+        'Remove temporary install profiles',
+        'FAIL',
+        `Refusing cleanup outside temp root: ${resolvedTemp}`,
+      );
+      process.exitCode = 1;
+    } else {
+      try {
+        await rm(resolvedTemp, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+      } catch (error) {
+        record(
+          'Remove temporary install profiles',
+          'FAIL',
+          error instanceof Error ? error.message : String(error),
+        );
+        process.exitCode = 1;
+      }
+    }
   }
   if (generatedUpgradeInstaller)
     await rm(generatedUpgradeInstaller, { force: true, maxRetries: 8, retryDelay: 100 }).catch(
