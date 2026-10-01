@@ -1,47 +1,62 @@
 # Ferry status
 
-Ferry is a Windows-first desktop and CLI coding agent with a local core, persistent SQLite data, provider routing, workspace tools, and native/ACP delegation. The desktop is connected to real core domains; the mock client remains for demos and UI tests.
+Last updated: 2026-10-01. Ferry is a Windows-first desktop + CLI coding agent: local core over JSON-RPC,
+SQLite storage, free-first provider routing with quota tracking and handoffs, workspace tools with
+checkpoints, measured token optimizers, delegation to Codex / OpenCode / Claude / ACP agents, a local
+OpenAI/Anthropic-compatible Gateway, and subscription OAuth (opt-in). Public beta channel on GitHub
+Releases (`v0.9.0-beta.N`, auto-published on every merge to `main`; installed apps auto-update).
 
-## Phases
+## Where we are
 
-| Phase | State | Current evidence |
+1. **Original master plan: complete** (integrated on `main` 2026-09-30; milestones below).
+2. **v0.10 upgrade waves: in progress** (`docs/plans/v0.10-upgrade.md`) — first batch finishing.
+3. **Next: full UI remake** (`docs/plans/ui-remake.md`, spec `design/DESIGN-v2.md`). Backend v0.10 work
+   resumes after the remake from the "Not started" rows below.
+
+## Milestones (original plan)
+
+| Milestone | Result | Evidence |
 |---|---|---|
-| A0 Bootstrap | Done | Workspace, CI, strict checks, design system |
-| A1 Client contract and mock data | Done | Typed client, fixtures, playback |
-| A2 UI kit | Done | Tokens, components, effects |
-| A3 Desktop shell and Home | Done | Electron, React renderer, core handoff |
-| A4 Screens and workflows | Done | Settings, providers, sessions, review, delegation |
-| A5 Polish and quality | Done | E2E, accessibility, packaging checks |
-| A6 Shippable desktop | Done | Packaged Windows installer and portable build |
-| B0 Local core and protocol | Done | JSON-RPC core and utility process |
-| B1 Persistent storage and settings | Done | SQLite repositories and migrations |
-| B2 Providers and catalog | Done | Provider adapters, model discovery, secret store |
-| B3 Quota and usage | Done | Capacity, observations, usage history |
-| B4 Routing and profiles | Done | Free-first, fallback, resilience, reliability |
-| B5 Agent loop and tools | Done | Planning, edits, permissions, recovery |
-| B6 Workspace and checkpoints | Done | Workspace jail, diff, restore |
-| B7 CLI | Done | Local engine, status, profiles, gateway commands |
-| B8 Desktop real-domain integration | Done | Desktop core connection and real-domain RPC |
-| B9 Delegation and review | Done | Codex, OpenCode, Claude, ACP, accept/reject/rework |
-| B10 Gateway | Done | OpenAI and Anthropic-compatible local API |
-| B11 Install, upgrade, uninstall | Implemented; live verification pending | Isolated Windows smoke covers clean install, upgrade persistence, keep/remove data, PATH, and registry cleanup |
+| M1 real free models finish tasks | ✅ 6/8 live evals on free tiers | `.dev/evals-archive`, `docs/OPTIMIZERS.md` |
+| M2 cross-provider handoff in the UI | ✅ live handoff chain | `design/screenshots/app/m2-live-handoff.png` |
+| M3 optimizer savings | ✅ 304,550 → 69,489 tokens on 23 realistic outputs (correctness-checked); live parity 6/8 vs 6/8 | `pnpm bench:optimizers`, `docs/OPTIMIZERS.md` |
+| M4 real delegations | ✅ Codex rework/accept + reject/restore, OpenCode accept, Claude accept | `scripts/live-delegation.mjs` |
+| M5 CLI | ✅ local engine default, `ferry status`, gateway commands | CLI tests |
+| B6.6 paid guardrails | ✅ confirmation (incl. zero/unknown-price billable), caps gate every candidate incl. handoffs, hard stop, spend vs caps | `design/screenshots/app/paid-*.png` |
+| B10 hardening | ✅ crash-resume + reconnect, DB salvage, offline mode, chaos; security review fixes (`docs/SECURITY-REVIEW.md`); perf budget + axe gate; catalog:check | e2e phases, `docs/PERFORMANCE.md` |
+| B11 release | ✅ unsigned NSIS + portable, auto-update beta channel, CLI on PATH; clean-VM install smoke workflow (installed-app checks via packaged-safe signals — latest fix awaiting its GitHub run) | `.github/workflows/beta.yml`, `install-smoke.yml` |
 
-## Milestones
+Quality gates on `main`: `pnpm check` (63 tasks) + desktop e2e in 5 isolated phases (web UI flows;
+real domains: core flows, crash resume, paid guardrails; Electron core smoke); GitHub CI on Windows +
+Ubuntu.
 
-| Milestone | State | Remaining evidence |
+## v0.10 waves (docs/plans/v0.10-upgrade.md)
+
+| Item | State | Branch / worktree |
 |---|---|---|
-| M1 Core and protocol | Done | - |
-| M2 Providers and routing | Done | Run the requested full gates for the latest routing changes |
-| M3 Desktop and CLI | Done | Installer smoke is authored; execute it on Windows with a built installer |
-| M4 Live delegation | Harness authored | Run against installed, authenticated native and ACP agents |
-| M5 Gateway | Implemented | Verify typed mid-stream provider failure handling through tests |
-| M6 Packaging and data lifecycle | Implemented | Run the full install/upgrade/uninstall matrix on Windows |
-| M7 Release readiness | In progress | Full checks and desktop E2E; confirm live harnesses and platform packaging |
+| RP1 reasoning-exposure matrix | ✅ on main | `docs/research/reasoning-matrix.md` |
+| P0 perf baseline + budgets, P2 no polling | ✅ green, awaiting integration | `wave/perf-a` · ferry-w5 |
+| U1 structured agent events | ✅ green, awaiting integration | `wave/u1-events` · ferry-w4 |
+| U5 thinking + tool-call timeline (+ paged "show full output") | verifying | `wave/u5-timeline` · ferry-w4 |
+| P1 pagination / Show more / virtualization | fixing a paid-guardrail regression | `wave/perf-b` · ferry-w3 |
+| U2 command palette + keybindings | fixing composer focus after palette New Chat | `wave/u2-palette` · ferry-w6 |
+| P3 caching + P6 storage/memory | picker re-render fixed; verifying | `wave/p3-caching` · ferry-w7 |
+| P4 lighter startup/bundle, P5 render hygiene, P7 smaller install | Not started | — |
+| U3 speed/honesty pass, U4 delegate safety (min versions, CODEX_HOME symlink) | Not started | — |
+| U6 subscription-CLI models + traits picker, U7 plan cards + plan mode | Not started | — |
+| Wave 3 (U8 worktree per thread, U9 per-turn checkpoints, U10 diff review, U11 git actions) | Not started | — |
+| Wave 4 (U12 rich CLI transports, U13 terminals, U14 sidebar shelves, U15 reconnect contract) | Not started | — |
+
+Integration rule: merge green lane branches on an integration branch in `C:\dev\ferry`, run all gates,
+fast-forward `main` only when green; migrations are numbered uniquely (0003 agent events, 0004 hot-query
+indexes) and must ship in all build targets.
 
 ## Known gaps
 
-- Provider availability, free limits, and model pricing change outside Ferry's control.
-- Live delegation requires the relevant agent CLI/ACP adapter to be installed and authenticated; the harness skips unavailable agents and does not inspect credential files.
-- The install smoke builds a higher-version installer and changes the current user's PATH only inside its opt-in test cycle; run it on a disposable Windows test account or a machine with no existing Ferry registry/config installation.
+- 2 s packaged start-up is a target, not met on cold CI runners (advisory warning; fails above 10 s).
+- grep and checkpoint snapshots on a 50k-file repo are slow on this laptop with Defender real-time
+  scanning (see `docs/PERFORMANCE.md`).
+- Gemini is not signed in on the dev machine, so ACP Gemini delegation is untested live.
 - Codex `/v1/responses` is not implemented by the Gateway.
-- Renderer bundle splitting and broader release-platform validation remain follow-up work.
+- Provider availability, free limits and model pricing change outside Ferry's control.
+- Code signing is deferred (the unsigned beta is a documented, accepted risk in `docs/SECURITY.md`).
