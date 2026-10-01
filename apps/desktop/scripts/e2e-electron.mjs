@@ -235,6 +235,11 @@ try {
     .getByRole('navigation', { name: 'Explore sections' })
     .getByRole('button', { name: 'Providers' })
     .click();
+  await page
+    .getByRole('region', { name: 'Provider filter' })
+    .getByRole('button', { name: 'All' })
+    .click();
+  await page.getByRole('textbox', { name: 'Search providers' }).fill('OpenAI');
   fake.options.responses = [
     {
       status: 429,
@@ -245,7 +250,9 @@ try {
       },
     },
   ];
-  await page.getByRole('button', { name: 'Test OpenAI API' }).click();
+  const openAiTestButton = page.getByRole('button', { name: 'Test OpenAI API' });
+  await expect(openAiTestButton).toBeVisible();
+  await openAiTestButton.click();
   await expect(page.getByText(/Cooldown/)).toBeVisible({ timeout: 15_000 });
   await page.evaluate(async () => {
     await window.ferryHybrid?.providers.removeKey('openai');

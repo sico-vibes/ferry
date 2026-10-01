@@ -41,6 +41,7 @@ import {
 } from '@ferry/ui';
 import { GitBranch } from 'lucide-react';
 import { useFerryClient } from '../data/client';
+import { listAllModels } from '@ferry/client';
 import {
   keys,
   useCapacity,
@@ -190,7 +191,7 @@ export function HomeCanvas() {
   const { data: capacity } = useCapacity();
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
-    queryFn: () => client.models.list(),
+    queryFn: () => listAllModels(client),
   });
   const { data: candidates = [] } = useQuery({
     queryKey: ['model-candidates', null],
@@ -817,7 +818,7 @@ export function SessionCanvas() {
   const { data: workspaces = [] } = useWorkspaces();
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
-    queryFn: () => client.models.list(),
+    queryFn: () => listAllModels(client),
   });
   const { data: providers = [] } = useQuery({
     queryKey: ['providers'],

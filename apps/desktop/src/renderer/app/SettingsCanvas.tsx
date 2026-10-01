@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useFerryClient } from '../data/client';
+import { listAllModels } from '@ferry/client';
 import { keys, useProfiles, useSettings } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
@@ -209,7 +210,7 @@ export function SettingsCanvas() {
   });
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
-    queryFn: () => client.models.list(),
+    queryFn: () => listAllModels(client),
   });
   const { data: lanes = [] } = useQuery({
     queryKey: ['lanes'],

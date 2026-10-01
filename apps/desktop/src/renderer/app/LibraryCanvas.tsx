@@ -20,6 +20,7 @@ import {
   Select,
   SegmentedControl,
   Skeleton,
+  ShowMoreList,
   Stack,
 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
@@ -389,12 +390,19 @@ export function LibraryCanvas() {
               </section>
               <section className="settings-group">
                 <h3>Recent sessions</h3>
-                {recent.slice(0, 5).map((session) => (
-                  <div className="session-row" key={session.id}>
-                    <span>{session.title}</span>
-                    <small>{ago(session.updatedAt)}</small>
-                  </div>
-                ))}
+                <ShowMoreList
+                  items={recent}
+                  groupKey={`library:workspace:${selected.id}:sessions`}
+                  initialCount={5}
+                  label="sessions"
+                  listClassName=""
+                  renderItem={(session) => (
+                    <li className="session-row list-none" key={session.id}>
+                      <span>{session.title}</span>
+                      <small>{ago(session.updatedAt)}</small>
+                    </li>
+                  )}
+                />
                 {!recent.length && (
                   <small className="muted">No sessions in this workspace yet.</small>
                 )}

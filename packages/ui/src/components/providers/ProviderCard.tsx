@@ -8,6 +8,7 @@ import { LatticeLoader } from '../feedback/LatticeLoader';
 import { TagBadge } from './TagBadge';
 import { QuotaWindowBar } from './QuotaWindowBar';
 import { DataUseBadge } from './DataUseBadge';
+import { ShowMoreList } from '../data/ShowMoreList';
 
 export function ProviderCard({
   provider,
@@ -106,11 +107,36 @@ export function ProviderCard({
           {provider.keyStatus === 'valid' ? <Check size={13} /> : <KeyRound size={13} />}
           {keyText}
         </p>
-        {provider.windows.slice(0, 3).map((window) => (
-          <QuotaWindowBar key={window.id} window={window} />
-        ))}
+        <ShowMoreList
+          items={provider.windows}
+          groupKey={`provider-card:${provider.id}:quota-windows`}
+          initialCount={3}
+          label="quota windows"
+          renderItem={(window) => (
+            <li className="list-none" key={window.id}>
+              <QuotaWindowBar window={window} />
+            </li>
+          )}
+        />
         {provider.windows.length === 0 && (
           <p className="text-meta text-text-2">Quota reported by provider when available</p>
+        )}
+        {provider.availableModels && provider.availableModels.length > 0 && (
+          <details className="text-meta text-text-2">
+            <summary className="cursor-pointer py-1">
+              Models <span className="text-text-3">{provider.availableModels.length}</span>
+            </summary>
+            <ShowMoreList
+              items={provider.availableModels}
+              groupKey={`provider-card:${provider.id}:models`}
+              label="models"
+              renderItem={(model) => (
+                <li className="truncate text-text-2" key={model.ref} title={model.name}>
+                  {model.name}
+                </li>
+              )}
+            />
+          </details>
         )}
         {
           <p className="flex flex-wrap items-start gap-1.5 text-[11px] leading-4 text-text-2">

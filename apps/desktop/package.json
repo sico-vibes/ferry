@@ -20,6 +20,7 @@
     "shot": "node scripts/shot.mjs",
     "perf:start": "node scripts/perf-startup.mjs",
     "perf:long": "node scripts/perf-long-transcript.mjs",
+    "perf:explore": "node scripts/perf-explore.mjs",
     "perf:workspace": "node --import tsx scripts/perf-workspace.mjs",
     "test:e2e": "node scripts/e2e-runner.mjs"
   },

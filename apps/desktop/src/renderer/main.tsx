@@ -164,13 +164,17 @@ const showEngineConnectionError = (error: unknown) => {
   );
 };
 const demoMode = new URLSearchParams(location.search).get('demo');
-if (demoMode === 'long' || demoMode === 'exhausted') {
-  void import('./perf-demo').then(({ seedExhaustedSession, seedLongTranscript }) => {
-    if (demoMode === 'long') seedLongTranscript(mock);
-    else seedExhaustedSession(mock);
-    if (window.ferryHost) console.warn('Ferry is using the Demo client for the performance demo.');
-    mountApp(mock);
-  });
+if (demoMode === 'long' || demoMode === 'exhausted' || demoMode === 'explore-perf') {
+  void import('./perf-demo').then(
+    ({ seedExhaustedSession, seedLongTranscript, seedExploreModels }) => {
+      if (demoMode === 'long') seedLongTranscript(mock);
+      else if (demoMode === 'exhausted') seedExhaustedSession(mock);
+      else seedExploreModels(mock);
+      if (window.ferryHost)
+        console.warn('Ferry is using the Demo client for the performance demo.');
+      mountApp(mock);
+    },
+  );
 } else if (window.ferryHost) {
   void bootstrapClient()
     .then((currentClient) => {

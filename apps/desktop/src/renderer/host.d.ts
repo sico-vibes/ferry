@@ -27,6 +27,7 @@ declare global {
     ferryPerfFrameTimes?: number[];
     ferryPerfMessageCount?: number;
     ferryPerfReady?: boolean;
+    ferryPerfModelCount?: number;
     ferryHybrid?: import('@ferry/client').HybridFerryClient;
     ferryEngineHello?: import('@ferry/shared').HelloResult;
     ferryRpcClient?: import('@ferry/client').RpcFerryClient;

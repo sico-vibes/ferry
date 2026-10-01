@@ -68,7 +68,7 @@ describe('ModelPickerPopover', () => {
     const selectedOption = screen.getByRole('option', { selected: true });
     const selectedNameElement = selectedOption.querySelector('strong');
     if (!selectedNameElement) throw new Error('Expected a selected model option');
-    const selectedName = selectedNameElement.textContent.trim();
+    const selectedName = selectedNameElement.firstChild?.textContent?.trim() ?? '';
     fireEvent.keyDown(search, { key: 'Enter' });
     await waitFor(() => {
       const trigger = screen.getByRole('button', { name: /Manual ·/ });
@@ -93,7 +93,7 @@ describe('ModelPickerPopover', () => {
     if (!mouseModel) throw new Error('Expected a manual model option');
     const mouseModelNameElement = mouseModel.querySelector('strong');
     if (!mouseModelNameElement) throw new Error('Expected a manual model name');
-    const mouseModelName = mouseModelNameElement.textContent.trim();
+    const mouseModelName = mouseModelNameElement.firstChild?.textContent?.trim() ?? '';
     fireEvent.click(mouseModel);
     await waitFor(() => {
       const trigger = screen.getByRole('button', { name: /Manual ·/ });

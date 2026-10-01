@@ -37,6 +37,7 @@ import { createMcpManager } from './mcp.js';
 import { McpServerConfigSchema } from '@ferry/extensions';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
+import { preserveCatalogBillingMetadata } from '../model-billing-metadata.js';
 import { createSessionDependencies } from '../session-deps.js';
 import { oauthModelCatalog } from '@ferry/oauth';
 import { z } from 'zod';
@@ -313,15 +314,18 @@ export function register(host: CoreHost, services: FerryServices): void {
           const saved = services.providers.get(model.providerId);
           return saved?.enabled && saved.keyStatus === 'valid';
         });
-        const availableModels = [
-          ...(services.env.NODE_ENV === 'test'
-            ? [
-                ...services.catalog.models,
-                ...configuredProviders.flatMap(({ provider: id }) => services.models.list(id)),
-              ]
-            : configuredProviders.flatMap(({ provider: id }) => services.models.list(id))),
-          ...configuredOauth,
-        ];
+        const availableModels = preserveCatalogBillingMetadata(
+          [
+            ...(services.env.NODE_ENV === 'test'
+              ? [
+                  ...services.catalog.models,
+                  ...configuredProviders.flatMap(({ provider: id }) => services.models.list(id)),
+                ]
+              : configuredProviders.flatMap(({ provider: id }) => services.models.list(id))),
+            ...configuredOauth,
+          ],
+          services.catalog.models,
+        );
         const preflightCapacity = preflight.capacity();
         const verifiedModelRefs = preflightCapacity.providers.flatMap((provider) =>
           provider.modelsVerifiedAt && provider.availableModels
@@ -511,14 +515,15 @@ export function register(host: CoreHost, services: FerryServices): void {
           } else host.emit('toast', { kind: event.tone, title: event.message, body: null });
         };
         const runtime = createSessionDependencies(services, emitAgentEvent);
+        const sessionCatalogModels = [
+          ...(services.env.NODE_ENV === 'test'
+            ? services.catalog.models
+            : configuredProviders.flatMap(({ provider: id }) => services.models.list(id))),
+          ...configuredOauth,
+        ];
         const sessionCatalog = {
           ...services.catalog,
-          models: [
-            ...(services.env.NODE_ENV === 'test'
-              ? services.catalog.models
-              : configuredProviders.flatMap(({ provider: id }) => services.models.list(id))),
-            ...configuredOauth,
-          ],
+          models: preserveCatalogBillingMetadata(sessionCatalogModels, services.catalog.models),
         };
         const rawProjectConfig = await readFile(join(workspace.path, '.ferry', 'config.json'))
           .then((bytes) => {

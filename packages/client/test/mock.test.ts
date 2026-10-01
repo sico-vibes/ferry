@@ -16,6 +16,7 @@ import {
   SkillSchema,
   TaskRecordSchema,
   WorkspaceSchema,
+  ProviderIdSchema,
 } from '@ferry/shared';
 import { createMockFerryClient } from '../src/mock/client.js';
 import { createFakeClock } from '../src/mock/clock.js';
@@ -23,6 +24,35 @@ import { memoryStorage } from '../src/mock/storage.js';
 import { createRng } from '../src/mock/rng.js';
 
 describe('MockFerryClient', () => {
+  it('keeps models.list as an array and filters by provider', async () => {
+    const client = createMockFerryClient();
+    const all = await client.models.list();
+    const openrouter = await client.models.list(ProviderIdSchema.parse('openrouter'));
+    expect(Array.isArray(all)).toBe(true);
+    expect(openrouter.every((model) => model.providerId === 'openrouter')).toBe(true);
+  });
+
+  it('applies model search, filters, sort, and paging with a matching total', async () => {
+    const client = createMockFerryClient();
+    const all = await client.models.page({ limit: 100 });
+    const expected = all.items
+      .filter(
+        (model) =>
+          model.free &&
+          `${model.name} ${model.ref} ${model.providerId}`.toLowerCase().includes('gpt'),
+      )
+      .toSorted((left, right) => left.name.localeCompare(right.name));
+    const page = await client.models.page({
+      offset: 1,
+      limit: 2,
+      query: 'gpt',
+      filters: { free: true },
+      sort: { key: 'name', ascending: true },
+    });
+    expect(page.total).toBe(expected.length);
+    expect(page.items).toEqual(expected.slice(1, 3));
+  });
+
   it('seeds schema-valid fixtures and expected capacity', async () => {
     const fake = createFakeClock(new Date('2026-09-23T21:47:00.000Z'));
     const c = createMockFerryClient({ clock: fake.clock });

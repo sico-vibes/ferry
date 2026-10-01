@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FerryClient } from '@ferry/client';
+import type { FerryClient, ModelListQuery } from '@ferry/client';
 import type { ModelInfo, Provider } from '@ferry/shared';
 import { FerryProvider } from '../../data/client';
 import { ExploreCanvas } from './Explore';
@@ -92,7 +92,7 @@ beforeEach(() => {
     models: [],
     errorKind: null,
   });
-  modelListSpy = vi.fn().mockResolvedValue([
+  const modelRows = [
     model(),
     model({
       ref: 'mistral/large' as ModelInfo['ref'],
@@ -100,7 +100,27 @@ beforeEach(() => {
       free: false,
       tier: 'T1',
     }),
-  ]);
+  ];
+  modelListSpy = vi.fn((query: ModelListQuery = {}) => {
+    const needle = query.query?.toLowerCase() ?? '';
+    const filtered = modelRows
+      .filter((item) => item.name.toLowerCase().includes(needle))
+      .filter((item) => !query.filters?.tier || item.tier === query.filters.tier)
+      .filter((item) => query.filters?.free === undefined || item.free === query.filters.free)
+      .toSorted((left, right) => {
+        const key = query.sort?.key ?? 'name';
+        const a = left[key];
+        const b = right[key];
+        const result =
+          typeof a === 'string' && typeof b === 'string'
+            ? a.localeCompare(b)
+            : Number(a ?? -1) - Number(b ?? -1);
+        return (query.sort?.ascending === false ? -1 : 1) * result;
+      });
+    const offset = query.offset ?? 0;
+    const limit = query.limit ?? 50;
+    return { items: filtered.slice(offset, offset + limit), total: filtered.length };
+  });
   oauthLoginSpy = vi.fn().mockResolvedValue(undefined);
   client = {
     providers: {
@@ -111,7 +131,8 @@ beforeEach(() => {
       setEnabled: vi.fn().mockResolvedValue(provider()),
     },
     models: {
-      list: modelListSpy,
+      list: vi.fn().mockResolvedValue(modelRows),
+      page: modelListSpy,
     },
     oauth: {
       list: vi.fn().mockResolvedValue([
@@ -182,6 +203,28 @@ describe('Explore providers and models', () => {
     );
   }, 20_000);
 
+  it('keeps providers needing attention visible above the collapsed group', async () => {
+    sessionStorage.removeItem('ferry:list:explore:providers');
+    providerListSpy.mockResolvedValue([
+      ...Array.from({ length: 7 }, (_, index) =>
+        provider({
+          id: `provider-${String(index + 1)}` as Provider['id'],
+          name: `Provider ${String(index + 1)}`,
+        }),
+      ),
+      provider({
+        id: 'provider-attention' as Provider['id'],
+        name: 'Provider needing attention',
+        health: 'down',
+      }),
+    ]);
+    setup();
+    expect(
+      await screen.findByRole('button', { name: 'Test Provider needing attention' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Show more providers (2)' })).toBeTruthy();
+  });
+
   it('saves and removes a provider key with validation', async () => {
     const user = userEvent.setup();
     providerListSpy.mockResolvedValue([provider()]);
@@ -218,5 +261,37 @@ describe('Explore providers and models', () => {
       .map((row) => row.querySelector('td')?.getAttribute('title') ?? '');
     expect(names[0]).toBe('Large');
     expect(screen.getAllByRole('row')[1]?.querySelector('td')?.textContent).toContain('coding n/a');
+  }, 20_000);
+
+  it('paginates models and resets to the first page when searching', async () => {
+    const user = userEvent.setup();
+    const allModels = Array.from({ length: 60 }, (_, index) =>
+      model({
+        ref: `mistral/model-${String(index + 1).padStart(2, '0')}` as ModelInfo['ref'],
+        name: `Model ${String(index + 1).padStart(2, '0')}`,
+      }),
+    );
+    modelListSpy.mockImplementation((query: ModelListQuery = {}) => {
+      const limit = query.limit ?? 50;
+      const offset = query.offset ?? 0;
+      const filtered = allModels.filter((item) =>
+        item.name.toLowerCase().includes(query.query?.toLowerCase() ?? ''),
+      );
+      return { items: filtered.slice(offset, offset + limit), total: filtered.length };
+    });
+    setup();
+    await screen.findByText('Model 01');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Models per page' }), '25');
+    expect(await screen.findByText('1–25 of 60')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    expect(await screen.findByText('26–50 of 60')).toBeTruthy();
+    expect(screen.getByText('Model 26')).toBeTruthy();
+    await user.type(screen.getByRole('searchbox', { name: 'Search models' }), 'Model 5');
+    await waitFor(() => {
+      expect(modelListSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({ offset: 0, query: 'Model 5' }),
+      );
+    });
+    expect(await screen.findByText('1–10 of 10')).toBeTruthy();
   }, 20_000);
 });

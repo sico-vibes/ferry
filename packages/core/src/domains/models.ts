@@ -11,12 +11,64 @@ import { modelSupportsTools } from '@ferry/router';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { getModelDiscovery } from './model-discovery.js';
+import { preserveCatalogBillingMetadata } from '../model-billing-metadata.js';
+import { z } from 'zod';
+
+const ModelListQuerySchema = z.object({
+  offset: z.number().int().nonnegative().default(0),
+  limit: z.number().int().min(1).max(2_000).default(50),
+  query: z.string().trim().default(''),
+  filters: z
+    .object({
+      providerId: ProviderIdSchema.optional(),
+      tier: z.enum(['T1', 'T2', 'T3']).optional(),
+      free: z.boolean().optional(),
+    })
+    .default({}),
+  sort: z
+    .object({
+      key: z
+        .enum([
+          'name',
+          'providerId',
+          'tier',
+          'contextWindow',
+          'toolCalling',
+          'free',
+          'priceInPerM',
+          'priceOutPerM',
+        ])
+        .default('name'),
+      ascending: z.boolean().default(true),
+    })
+    .default({ key: 'name', ascending: true }),
+});
 
 export function register(host: CoreHost, services: FerryServices): void {
   const modelDiscovery = getModelDiscovery(host, services);
   host.registerDomain('models', {
     async list(rawProviderId?: unknown) {
-      const providerId = ProviderIdSchema.optional().parse(rawProviderId);
+      const providerId =
+        rawProviderId === undefined ? undefined : ProviderIdSchema.parse(rawProviderId);
+      const enabled = services.catalog.providers
+        .filter((provider) => providerId === undefined || provider.provider === providerId)
+        .map((provider) => provider.provider)
+        .filter((id) => services.providers.get(id)?.enabled ?? false);
+
+      await Promise.all(enabled.map((id) => modelDiscovery.refreshIfStale(id)));
+      const cachedModels = enabled.flatMap((id) => services.models.list(id));
+      const oauthModels = oauthModelCatalog
+        .filter((model) => services.providers.get(model.providerId)?.enabled)
+        .filter((model) => providerId === undefined || model.providerId === providerId)
+        .map((model) => ModelInfoSchema.parse(model));
+      return preserveCatalogBillingMetadata(
+        [...cachedModels, ...oauthModels].map((model) => ModelInfoSchema.parse(model)),
+        services.catalog.models,
+      );
+    },
+    async page(rawQuery?: unknown) {
+      const { offset, limit, query, filters, sort } = ModelListQuerySchema.parse(rawQuery ?? {});
+      const providerId = filters.providerId;
       const enabled = services.catalog.providers
         .filter((provider) => providerId === undefined || provider.provider === providerId)
         .map((provider) => provider.provider)
@@ -28,15 +80,38 @@ export function register(host: CoreHost, services: FerryServices): void {
         .filter((model) => services.providers.get(model.providerId)?.enabled)
         .map((model) => ModelInfoSchema.parse(model));
 
-      return [...cachedModels, ...oauthModels]
+      const needle = query.toLocaleLowerCase();
+      const listedModels = preserveCatalogBillingMetadata(
+        [...cachedModels, ...oauthModels].map((model) => ModelInfoSchema.parse(model)),
+        services.catalog.models,
+      );
+      const filtered = listedModels
         .filter((model) => providerId === undefined || model.providerId === providerId)
+        .filter((model) => filters.tier === undefined || model.tier === filters.tier)
+        .filter((model) => filters.free === undefined || model.free === filters.free)
+        .filter(
+          (model) =>
+            !needle ||
+            `${model.name} ${model.ref} ${model.providerId}`.toLocaleLowerCase().includes(needle),
+        )
         .map((model) => ModelInfoSchema.parse(model));
+      const direction = sort.ascending ? 1 : -1;
+      filtered.sort((left, right) => {
+        const a = left[sort.key];
+        const b = right[sort.key];
+        const order =
+          typeof a === 'string' && typeof b === 'string'
+            ? a.localeCompare(b)
+            : Number(a ?? -1) - Number(b ?? -1);
+        return direction * (order || left.ref.localeCompare(right.ref));
+      });
+      return { items: filtered.slice(offset, offset + limit), total: filtered.length };
     },
     candidates(rawSessionId: unknown) {
       const sessionId = SessionIdSchema.parse(rawSessionId);
       const session = services.sessions.get(sessionId);
       if (!session) return [];
-      const models = services.catalog.providers.flatMap(({ provider, key_required }) => {
+      const cachedModels = services.catalog.providers.flatMap(({ provider, key_required }) => {
         const saved = services.providers.get(provider);
         const hasKey = Boolean(services.providerKeys.get(provider));
         const enabled = saved?.enabled ?? (hasKey || key_required === false);
@@ -44,6 +119,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           ? services.models.list(provider)
           : [];
       });
+      const models = preserveCatalogBillingMetadata(cachedModels, services.catalog.models);
       const enabled = models.filter((model) => modelSupportsTools(model));
       const oauthModels = oauthModelCatalog
         .filter((model) => services.providers.get(model.providerId)?.enabled)

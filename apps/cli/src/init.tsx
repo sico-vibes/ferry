@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { FerryClient } from '@ferry/client';
+import { listAllModels, type FerryClient } from '@ferry/client';
 import type { Profile, Provider } from '@ferry/shared';
 import { good, muted, warn } from './format.js';
 
@@ -41,7 +41,7 @@ export function detectGateCommands(cwd: string): string[] {
 export async function initDefaults(client: FerryClient, cwd: string): Promise<void> {
   const [providers, models, profiles] = await Promise.all([
     client.providers.list(),
-    client.models.list(),
+    listAllModels(client),
     client.profiles.list(),
   ]);
   const recommended = providers.filter(
@@ -96,7 +96,7 @@ export function InitWizard({
   const [keyIndex, setKeyIndex] = useState(0);
   const [message, setMessage] = useState('');
   React.useEffect(() => {
-    void Promise.all([client.providers.list(), client.models.list(), client.profiles.list()]).then(
+    void Promise.all([client.providers.list(), listAllModels(client), client.profiles.list()]).then(
       ([rows, models, profileRows]) => {
         setProviders(rows);
         setProfiles(profileRows);

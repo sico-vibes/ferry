@@ -1,6 +1,6 @@
 # Performance and accessibility budget
 
-Scope: original B10 + A5.4 baseline. This document records the UI-first Ferry mock and local workspace tools; it does not include the later v0.10 performance wave.
+Scope: original B10 + A5.4 baseline, plus the v0.10 P1 Explore large-list probe. This document records the UI-first Ferry mock and local workspace tools.
 
 ## Budgets
 
@@ -35,6 +35,18 @@ The 2026-09-30 baseline ran on the user's Windows laptop while under load, with 
 | Workspace process memory | report memory | Not recoverable: captured output ended before memory. | Not present in captured run2 output. | Not present in captured run3 output. | Script includes the complete `process.memoryUsage()` object in its final JSON summary. |
 
 The run2 capture `.dev/perf-run-2.txt` did not include repo-map, fixture-generation, or memory values. The run3 capture `.dev/perf-run-3.txt` did not reach list_dir, checkpoint, or memory because the ripgrep-only probe threw before those steps. The fixed workspace probe emits each operation as it completes, followed by the complete JSON summary. The machine was the user's Windows laptop under load with Microsoft Defender real-time scanning enabled, so file-heavy timings include that environmental cost.
+
+## P1 large Explore model list
+
+`pnpm --filter @ferry/desktop perf:explore` seeds 1,200 models and measures the Explore table in two browser navigations. The `perfList=all` development-only route reproduces the previous full-table render; the regular route records the paged result. Both results report navigation-start-to-rows and DOM-content-loaded-to-rows, along with row count and resource transfer size. The screenshot command is `pnpm --filter @ferry/desktop shot explore-paged`.
+
+| Metric | Before, full list | After, paged | Result |
+|---|---:|---:|---|
+| Models seeded | 1,200 | 1,200 | Same fixture |
+| Explore table rows rendered | 1,200 | 50 by default, 25–100 selectable | 96% fewer DOM rows at the default page size |
+| Navigation start to rows / DOM ready to rows | Not captured: Vite build could not start (`spawn EPERM`) | Not captured: probe could not start (`spawn EPERM`) | Attempted `perf:explore` after the compatibility fix; this sandbox still blocks the Vite/esbuild child process before either browser pass. Run outside the sandbox to record timings. |
+
+Long expandable groups reveal six items at a time and use a 100-item window, with session-scoped expansion state. Normal Explore pagination offers 25, 50, or 100 rows; only the development-only full-list baseline requests 1,200. The UI tests cover page navigation, search reset, expansion persistence, and the 100-row window.
 
 ## Earlier measurements in this checkout
 

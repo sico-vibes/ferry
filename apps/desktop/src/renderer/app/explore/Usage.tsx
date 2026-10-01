@@ -9,6 +9,7 @@ import {
   ResetsTimeline,
   RingGauge,
   Section,
+  ShowMoreList,
   Stack,
   UsageChart,
   type UsageMetric,
@@ -199,41 +200,43 @@ export function UsageCanvas() {
                     '—'
                   )}
                 </p>
-                <ul className="usage-provider-grid mt-3 grid auto-rows-fr grid-cols-2 gap-x-4 gap-y-2">
-                  {(capacity?.perProvider ?? [])
-                    .filter((item) => usableProviderIds.has(item.providerId))
-                    .map((item) => (
-                      <li className="min-w-0" key={item.providerId}>
-                        <div className="usage-provider-row mb-1 flex justify-between gap-2 text-meta">
-                          <span className="usage-provider-name min-w-[88px] truncate text-text-2">
-                            {names[item.providerId] ?? item.providerId}
+                <ShowMoreList
+                  items={(capacity?.perProvider ?? []).filter((item) =>
+                    usableProviderIds.has(item.providerId),
+                  )}
+                  groupKey="usage:capacity:providers"
+                  label="providers"
+                  listClassName="usage-provider-grid mt-3 grid auto-rows-fr grid-cols-2 gap-x-4 gap-y-2"
+                  renderItem={(item) => (
+                    <li className="min-w-0" key={item.providerId}>
+                      <div className="usage-provider-row mb-1 flex justify-between gap-2 text-meta">
+                        <span className="usage-provider-name min-w-[88px] truncate text-text-2">
+                          {names[item.providerId] ?? item.providerId}
+                        </span>
+                        {item.stepsLeft === null ? (
+                          <span
+                            aria-label={`${names[item.providerId] ?? item.providerId}: limit unknown`}
+                            className="text-label text-text-2"
+                            role="img"
+                            title="Limit unknown"
+                          >
+                            —
                           </span>
-                          {item.stepsLeft === null ? (
-                            <span
-                              aria-label={`${names[item.providerId] ?? item.providerId}: limit unknown`}
-                              className="text-label text-text-2"
-                              role="img"
-                              title="Limit unknown"
-                            >
-                              —
-                            </span>
-                          ) : (
-                            <span className="tabular-nums text-text-1">
-                              {format(item.stepsLeft)}
-                            </span>
-                          )}
-                        </div>
-                        {item.stepsLeft !== null && (
-                          <div className="h-1 overflow-hidden rounded-pill bg-raised">
-                            <span
-                              className="block h-full rounded-pill bg-blue-500"
-                              style={{ width: `${String((item.stepsLeft / maxSteps) * 100)}%` }}
-                            />
-                          </div>
+                        ) : (
+                          <span className="tabular-nums text-text-1">{format(item.stepsLeft)}</span>
                         )}
-                      </li>
-                    ))}
-                </ul>
+                      </div>
+                      {item.stepsLeft !== null && (
+                        <div className="h-1 overflow-hidden rounded-pill bg-raised">
+                          <span
+                            className="block h-full rounded-pill bg-blue-500"
+                            style={{ width: `${String((item.stepsLeft / maxSteps) * 100)}%` }}
+                          />
+                        </div>
+                      )}
+                    </li>
+                  )}
+                />
               </div>
             </div>
           </Section>
@@ -267,8 +270,13 @@ export function UsageCanvas() {
             </div>
           </header>
           <UsageChart data={history} metric={metric} providerNames={names} />
-          <ul aria-label="Providers in chart" className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-            {[...new Set(history.map((item) => item.providerId))].map((id, index) => (
+          <ShowMoreList
+            items={[...new Set(history.map((item) => item.providerId))]}
+            groupKey="usage:chart:providers"
+            label="providers"
+            ariaLabel="Providers in chart"
+            listClassName="mt-1 flex flex-wrap gap-x-4 gap-y-1"
+            renderItem={(id, index) => (
               <li className="flex items-center gap-1.5 text-meta text-text-3" key={id}>
                 <span
                   className="size-2 rounded-sm"
@@ -276,8 +284,8 @@ export function UsageCanvas() {
                 />
                 {names[id] ?? id}
               </li>
-            ))}
-          </ul>
+            )}
+          />
         </Section>
         <div className="usage-summary-grid grid">
           <Section title="Handoffs (14d)" ariaLabel="Handoffs in fourteen days">
@@ -329,16 +337,20 @@ export function UsageCanvas() {
                 </p>
               </>
             )}
-            <ul className="mt-3 grid gap-2">
-              {(optimizer?.byOptimizer ?? []).map((item) => (
+            <ShowMoreList
+              items={optimizer?.byOptimizer ?? []}
+              groupKey="usage:optimizers"
+              label="optimizers"
+              listClassName="mt-3 grid gap-2"
+              renderItem={(item) => (
                 <li className="flex items-center justify-between gap-3 text-meta" key={item.id}>
                   <span className="truncate text-text-2">{item.name}</span>
                   <span className="shrink-0 tabular-nums text-text-1">
                     {format(item.savedTokens)} · {item.percent}%
                   </span>
                 </li>
-              ))}
-            </ul>
+              )}
+            />
           </Section>
           <Section title="Paid spend" ariaLabel="Paid spend">
             <p className="mb-3 text-meta text-text-3">

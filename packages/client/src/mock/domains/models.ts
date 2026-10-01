@@ -9,8 +9,41 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
     async list(providerId) {
       await before();
       return state.models
-        .filter((m) => !providerId || m.providerId === providerId)
-        .map((m) => structuredClone(m));
+        .filter((model) => providerId === undefined || model.providerId === providerId)
+        .map((model) => structuredClone(model));
+    },
+    async page(query = {}) {
+      await before();
+      const {
+        offset = 0,
+        limit = 50,
+        query: search = '',
+        filters = {},
+        sort = { key: 'name' as const, ascending: true },
+      } = query;
+      const needle = search.trim().toLocaleLowerCase();
+      const filtered = state.models
+        .filter((model) => !filters.providerId || model.providerId === filters.providerId)
+        .filter((model) => !filters.tier || model.tier === filters.tier)
+        .filter((model) => filters.free === undefined || model.free === filters.free)
+        .filter(
+          (model) =>
+            !needle ||
+            `${model.name} ${model.ref} ${model.providerId}`.toLocaleLowerCase().includes(needle),
+        )
+        .toSorted((left, right) => {
+          const a = left[sort.key];
+          const b = right[sort.key];
+          const order =
+            typeof a === 'string' && typeof b === 'string'
+              ? a.localeCompare(b)
+              : Number(a ?? -1) - Number(b ?? -1);
+          return (sort.ascending === false ? -1 : 1) * (order || left.ref.localeCompare(right.ref));
+        });
+      return {
+        items: filtered.slice(offset, offset + limit).map((model) => structuredClone(model)),
+        total: filtered.length,
+      };
     },
     async candidates(sessionId) {
       await before();
