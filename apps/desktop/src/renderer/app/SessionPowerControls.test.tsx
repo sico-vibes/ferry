@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { createMockFerryClient } from '@ferry/client';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { FerryProvider } from '../data/client';
 import { keys } from '../data/queries';
@@ -119,5 +119,67 @@ describe('ModelPickerPopover', () => {
     expect(useUI.getState().density).toBe('compact');
     cleanup();
     useUI.getState().setDensity('comfortable');
+  });
+
+  it('creates and opens a session from the New Chat command', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    useUI.setState({ tabs: [], activeId: null, pendingComposerFocus: false });
+    render(
+      <FerryProvider client={client}>
+        <QueryClientProvider
+          client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        >
+          <CommandPalette />
+        </QueryClientProvider>
+      </FerryProvider>,
+    );
+    const workspaces = await client.workspaces.list();
+    const workspace = workspaces[0];
+    if (!workspace) throw new Error('Expected a fixture workspace');
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    await screen.findByRole('dialog', { name: 'Command palette' });
+    await screen.findByText(workspace.name);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '> New Chat' } });
+    fireEvent.click(await screen.findByRole('option', { name: /^New Chat$/ }));
+
+    await waitFor(() => {
+      const [tab] = useUI.getState().tabs;
+      expect(tab?.title).toBe('New Chat');
+      expect(useUI.getState().pendingComposerFocus).toBe(true);
+    });
+    const [tab] = useUI.getState().tabs;
+    const sessions = await client.sessions.list();
+    expect(
+      sessions.some((session) => session.id === tab?.id && session.workspaceId === workspace.id),
+    ).toBe(true);
+    useUI.setState({ tabs: [], activeId: null, pendingComposerFocus: false });
+  });
+
+  it('searches sessions and limits `>` queries to commands', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const sessions = await client.sessions.list();
+    const session = sessions[0];
+    if (!session) throw new Error('Expected a fixture session');
+    render(
+      <FerryProvider client={client}>
+        <QueryClientProvider
+          client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        >
+          <CommandPalette />
+        </QueryClientProvider>
+      </FerryProvider>,
+    );
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    const dialog = await screen.findByRole('dialog', { name: 'Command palette' });
+    const search = screen.getByRole('combobox');
+    expect(dialog.querySelector('[role="listbox"]')).toBeTruthy();
+    fireEvent.change(search, { target: { value: session.title } });
+    const recentSessions = await screen.findByRole('group', { name: 'Recent sessions' });
+    expect(await within(recentSessions).findByRole('option')).toBeTruthy();
+    fireEvent.change(search, { target: { value: '> New Chat' } });
+    await waitFor(() => {
+      expect(screen.queryByText('Recent sessions')).toBeNull();
+    });
+    expect(await screen.findByRole('option', { name: /^New Chat$/ })).toBeTruthy();
   });
 });

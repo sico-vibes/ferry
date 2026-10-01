@@ -813,6 +813,7 @@ export function SessionCanvas() {
   const navigate = useNavigate();
   const pushToast = useToasts((state) => state.push);
   const density = useUI((state) => state.density);
+  const pendingComposerFocus = useUI((state) => state.pendingComposerFocus);
   const { data, isLoading, isError } = useSessionDetail(sessionId);
   const { data: workspaces = [] } = useWorkspaces();
   const { data: models = [] } = useQuery({
@@ -825,6 +826,11 @@ export function SessionCanvas() {
   });
   const { data: profiles = [] } = useProfiles();
   const [prompt, setPrompt] = useState('');
+  useEffect(() => {
+    if (!pendingComposerFocus) return;
+    document.querySelector<HTMLTextAreaElement>('[aria-label="Message Ferry"]')?.focus();
+    useUI.getState().consumeComposerFocus();
+  }, [pendingComposerFocus, sessionId]);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const openModelPicker = useCallback(() => {
     setModelPickerOpen(true);

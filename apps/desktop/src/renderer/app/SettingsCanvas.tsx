@@ -26,6 +26,7 @@ import type { UpdateSnapshot } from '../../main/update-state.js';
 import { Info } from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
 import { OAuthProviderRows } from './OAuthProviderRows';
+import { saveKeybindings, useKeybindings } from '../state/keybindings';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
 const settingsPageCopy: Record<string, { title: string; description: string }> = {
   General: { title: 'Settings', description: 'Control how Ferry works across your workspaces.' },
@@ -157,6 +158,11 @@ export function SettingsCanvas() {
   const cache = useQueryClient();
   const navigate = useNavigate();
   const toast = useToasts((state) => state.push);
+  const keybindings = useKeybindings();
+  const [keybindingsDraft, setKeybindingsDraft] = useState(keybindings.content);
+  useEffect(() => {
+    setKeybindingsDraft(keybindings.content);
+  }, [keybindings.content]);
   const section = useUI((state) => state.settingsSection);
   const [confirm, setConfirm] = useState('');
   const [confirmAction, setConfirmAction] = useState<(() => void | Promise<void>) | null>(null);
@@ -399,6 +405,52 @@ export function SettingsCanvas() {
                 Run onboarding again
               </Pill>
             </SettingRow>
+          </Group>
+          <Group title="Keyboard shortcuts">
+            <p className="muted">
+              Edit keybindings.json in Ferry's config folder. Changes reload automatically.
+            </p>
+            <p className="text-meta">{keybindings.path}</p>
+            {keybindings.errors.map((error) => (
+              <p className="text-meta text-warn" key={error}>
+                {error}
+              </p>
+            ))}
+            <label className="grid gap-2 text-label" htmlFor="keybindings-json">
+              keybindings.json
+            </label>
+            <textarea
+              id="keybindings-json"
+              className="w-full min-h-36 rounded-control border border-line bg-panel p-3 font-mono text-meta text-text-1"
+              value={keybindingsDraft}
+              onChange={(event) => {
+                setKeybindingsDraft(event.target.value);
+              }}
+            />
+            <Pill
+              size="sm"
+              onClick={() => {
+                saveKeybindings(keybindingsDraft)
+                  .then((errors) => {
+                    if (errors.length)
+                      toast({
+                        kind: 'error',
+                        title: 'Keybindings validation failed',
+                        body: errors.join('; '),
+                      });
+                    else toast({ kind: 'success', title: 'Keybindings saved', body: null });
+                  })
+                  .catch((error: unknown) => {
+                    toast({
+                      kind: 'error',
+                      title: 'Could not save keybindings',
+                      body: error instanceof Error ? error.message : String(error),
+                    });
+                  });
+              }}
+            >
+              Save keybindings
+            </Pill>
           </Group>
           <Group title="Quick access">
             <p className="muted">Your Ferry setup stays local to this demo client.</p>

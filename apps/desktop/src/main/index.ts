@@ -10,8 +10,8 @@ import {
   type UtilityProcess,
 } from 'electron';
 import updater, { type NsisUpdater } from 'electron-updater';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { access, mkdir, readdir, rename, rm } from 'node:fs/promises';
+import { existsSync, readFileSync, watch, writeFileSync } from 'node:fs';
+import { access, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -413,6 +413,55 @@ ipcMain.handle('ferry:open-folder', async (event, ...args: unknown[]) => {
   return OpenFolderResultSchema.parse(result.canceled ? null : (result.filePaths[0] ?? null));
 });
 
+const keybindingsPath = join(app.getPath('userData'), 'keybindings.json');
+const readKeybindings = async (): Promise<{
+  path: string;
+  content: string;
+  error: string | null;
+}> => {
+  try {
+    return { path: keybindingsPath, content: await readFile(keybindingsPath, 'utf8'), error: null };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    const content =
+      JSON.stringify(
+        { $schema: 'https://ferry.dev/schemas/keybindings.json', bindings: [] },
+        null,
+        2,
+      ) + '\n';
+    await writeFile(keybindingsPath, content, 'utf8');
+    return { path: keybindingsPath, content, error: null };
+  }
+};
+ipcMain.handle('ferry:keybindings-read', async (event, ...args: unknown[]) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  EmptyIpcArgsSchema.parse(args);
+  return readKeybindings();
+});
+ipcMain.handle('ferry:keybindings-write', async (event, content: unknown) => {
+  if (!isTrustedSender(event) || typeof content !== 'string')
+    throw new Error('Invalid keybindings request');
+  await mkdir(join(app.getPath('userData')), { recursive: true });
+  await writeFile(keybindingsPath, content, 'utf8');
+  return readKeybindings();
+});
+let keybindingsWatcher: ReturnType<typeof watch> | undefined;
+const watchKeybindings = () => {
+  keybindingsWatcher?.close();
+  keybindingsWatcher = watch(join(app.getPath('userData')), (_event, filename) => {
+    if (filename?.toString() !== 'keybindings.json' || !mainWindow) return;
+    void readFile(keybindingsPath, 'utf8')
+      .then((content) => {
+        mainWindow?.webContents.send('ferry:keybindings-changed', {
+          path: keybindingsPath,
+          content,
+          error: null,
+        });
+      })
+      .catch(() => undefined);
+  });
+};
+
 const consumedHandoffTokens = new Set<string>();
 ipcMain.on('ferry:connect-core', (event, rawToken: unknown) => {
   if (!isTrustedSender(event)) {
@@ -496,6 +545,8 @@ ipcMain.handle('ferry:update-download', async (event, ...args: unknown[]) => {
 app
   .whenReady()
   .then(async () => {
+    await mkdir(app.getPath('userData'), { recursive: true });
+    watchKeybindings();
     updateController.setAutoDownload(readAutoDownloadPreference());
     autoUpdater.autoDownload = readAutoDownloadPreference();
     if (app.isPackaged && !e2eUserDataPath) {

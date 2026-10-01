@@ -928,7 +928,7 @@ try {
       ]);
       await composer.fill('Continue with a forced provider handoff.');
       await composer.press('Enter');
-      const handoff = page.getByRole('button', { name: /Switched .*rate_limit/ });
+      const handoff = page.getByRole('button', { name: /Switched .*rate_limit/ }).first();
       try {
         await expect(handoff).toBeVisible({ timeout: 30_000 });
       } catch (error) {
@@ -973,7 +973,7 @@ try {
         throw error;
       }
       await handoff.click();
-      await expect(page.getByText(/HTTP 429/)).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByText(/HTTP 429/).first()).toBeVisible({ timeout: 30_000 });
       const handoffEvidence = await page.evaluate(
         async (sessionId) => ({
           parts: window.e2eHandoffParts,
@@ -1398,16 +1398,18 @@ try {
       );
       try {
         await expect
-          .poll(async () =>
-            page.evaluate(
-              async ({ sessionId, partId }) => {
-                const detail = await window.ferryRpcClient.sessions.get(sessionId);
-                return detail.messages
-                  .flatMap((message) => message.parts)
-                  .find((part) => part.type === 'approval_request' && part.id === partId)?.state;
-              },
-              { sessionId: livePaidSessionId, partId: pendingPaidApproval },
-            ),
+          .poll(
+            async () =>
+              page.evaluate(
+                async ({ sessionId, partId }) => {
+                  const detail = await window.ferryRpcClient.sessions.get(sessionId);
+                  return detail.messages
+                    .flatMap((message) => message.parts)
+                    .find((part) => part.type === 'approval_request' && part.id === partId)?.state;
+                },
+                { sessionId: livePaidSessionId, partId: pendingPaidApproval },
+              ),
+            { timeout: 30_000 },
           )
           .toBe('allowed_once');
         await approvePendingRequestsUntilIdle(page, livePaidSessionId, { timeout: 30_000 });
