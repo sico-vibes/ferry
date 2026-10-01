@@ -265,7 +265,7 @@ export function ToolCallBlock({
             >
               <GitBranch size={13} />
               <span className="flex-1 truncate">{change.path}</span>
-              <span className="text-success">+{change.additions}</span>
+              <span className="text-success-legacy">+{change.additions}</span>
               <span className="text-danger">−{change.deletions}</span>
             </button>
           ))}

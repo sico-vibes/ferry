@@ -27,7 +27,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "catalog:sync-datasets": "node scripts/catalog-sync-datasets.mjs",
-    "catalog:check": "node scripts/catalog-check.mjs"
+    "catalog:check": "node scripts/catalog-check.mjs",
+    "ui:gallery": "pnpm --filter @ferry/ui shot:gallery"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

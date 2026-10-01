@@ -33,7 +33,7 @@
   --blue-glow: rgba(61, 132, 236, 0.24);
   --star: #efbc0b;
   --warn: #744300;
-  --success: #187241;
+  --legacy-success: #187241;
   --danger: #b42318;
   --grad-signature: linear-gradient(90deg, #245fae 0%, #89566c 36%, #92522f 64%, #776700 100%);
   --grad-composer: linear-gradient(

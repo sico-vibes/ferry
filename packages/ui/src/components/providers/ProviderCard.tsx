@@ -44,7 +44,7 @@ export function ProviderCard({
         ? 'bg-warn'
         : provider.health === 'unknown'
           ? 'bg-text-3'
-          : 'bg-success';
+          : 'bg-success-legacy';
   const keyText = terminalHealth
     ? 'Needs attention: re-enter key'
     : provider.keyStatus === 'valid'
@@ -102,7 +102,7 @@ export function ProviderCard({
         )}
         {trialNote && <p className="text-meta text-text-2">{trialNote}</p>}
         <p
-          className={`flex items-center gap-1.5 text-meta ${provider.keyStatus === 'invalid' ? 'text-danger' : provider.keyStatus === 'valid' ? 'text-success' : 'text-text-2'}`}
+          className={`flex items-center gap-1.5 text-meta ${provider.keyStatus === 'invalid' ? 'text-danger' : provider.keyStatus === 'valid' ? 'text-success-legacy' : 'text-text-2'}`}
         >
           {provider.keyStatus === 'valid' ? <Check size={13} /> : <KeyRound size={13} />}
           {keyText}

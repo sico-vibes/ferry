@@ -9,7 +9,9 @@
   ],
   "exports": {
     ".": "./src/index.ts",
-    "./styles.css": "./src/styles/index.css"
+    "./styles.css": "./src/styles/index.css",
+    "./ui": "./src/components/ui/index.tsx",
+    "./theme": "./src/lib/theme.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -29,6 +31,7 @@
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
+    "geist": "1.7.2",
     "lucide-react": "1.47.0",
     "motion": "13.4.1",
     "radix-ui": "1.6.7",
@@ -40,6 +43,7 @@
     "remark-gfm": "4.0.1",
     "shiki": "4.4.3",
     "simple-icons": "16.32.0",
+    "sonner": "2.0.8",
     "tailwind-merge": "3.7.0",
     "tailwindcss": "4.3.3",
     "vite": "7.3.6"
@@ -52,6 +56,7 @@
     "@testing-library/user-event": "14.6.7",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "axe-core": "4.13.0",
     "jsdom": "30.1.1"
   }
 }

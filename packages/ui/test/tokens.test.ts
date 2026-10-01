@@ -54,7 +54,7 @@ function parseCssTokens(css: string): ReadonlyMap<string, string> {
 }
 
 function normalize(value: string): string {
-  return value.endsWith('px') ? value.slice(0, -2) : value;
+  return value.toLowerCase().replace(/\s+/g, '').replace(/px$/, '');
 }
 
 const designedTokens = parseDesignTokens(
@@ -67,6 +67,40 @@ const lightCssTokens = parseCssTokens(
   readFileSync(resolve(packageDirectory, '../src/styles/light-tokens.css'), 'utf8'),
 );
 
+const v2TokenNames = new Set([
+  '--background',
+  '--foreground',
+  '--card',
+  '--card-foreground',
+  '--popover',
+  '--popover-foreground',
+  '--primary',
+  '--primary-foreground',
+  '--secondary',
+  '--secondary-foreground',
+  '--muted',
+  '--muted-foreground',
+  '--accent',
+  '--accent-foreground',
+  '--destructive',
+  '--destructive-foreground',
+  '--border',
+  '--input',
+  '--ring',
+  '--success',
+  '--warning',
+  '--sidebar',
+  '--sidebar-foreground',
+  '--sidebar-primary',
+  '--sidebar-primary-foreground',
+  '--sidebar-accent',
+  '--sidebar-accent-foreground',
+  '--sidebar-border',
+  '--sidebar-ring',
+  '--radius',
+  '--shadow-popover',
+]);
+
 describe('design tokens', () => {
   it('parses the design spec tokens (sanity check on the parser)', () => {
     expect(designedTokens.size).toBeGreaterThan(0);
@@ -76,28 +110,25 @@ describe('design tokens', () => {
 
   it('defines every DESIGN.md section 2.1-2.6 token with its exact value', () => {
     for (const [name, value] of designedTokens) {
-      expect(cssTokens.has(name), `missing token ${name}`).toBe(true);
-      expect(normalize(cssTokens.get(name) ?? ''), name).toBe(normalize(value));
+      const cssName = name === '--success' ? '--legacy-success' : name;
+      expect(cssTokens.has(cssName), `missing token ${cssName}`).toBe(true);
+      expect(normalize(cssTokens.get(cssName) ?? ''), name).toBe(normalize(value));
     }
   });
 
-  it('introduces no tokens beyond DESIGN.md section 2.1-2.6', () => {
-    const extras = [...cssTokens.keys()].filter((name) => !designedTokens.has(name));
+  it('introduces only the documented v2 and legacy compatibility tokens', () => {
+    const allowed = new Set([...v2TokenNames, '--legacy-success']);
+    const extras = [...cssTokens.keys()].filter(
+      (name) => !designedTokens.has(name) && !allowed.has(name),
+    );
     expect(extras, `unexpected tokens: ${extras.join(', ')}`).toEqual([]);
   });
-  it('mirrors every token from all dark token sheets in the light sheet', () => {
-    for (const sheet of ['tokens.css', 'effects.css', 'brand.css']) {
-      const css = readFileSync(resolve(packageDirectory, `../src/styles/${sheet}`), 'utf8');
-      for (const [name] of parseCssTokens(css)) {
-        expect(lightCssTokens.has(name), `missing light token ${name}`).toBe(true);
-      }
-    }
-  });
 
-  it('mirrors every dark token into the light theme', () => {
+  it('mirrors legacy tokens from the dark sheets into the light sheet', () => {
     for (const sheet of ['tokens.css', 'effects.css', 'brand.css']) {
       const css = readFileSync(resolve(packageDirectory, `../src/styles/${sheet}`), 'utf8');
       for (const [name] of parseCssTokens(css)) {
+        if (v2TokenNames.has(name)) continue;
         expect(lightCssTokens.has(name), `missing light token ${name}`).toBe(true);
       }
     }

@@ -2,7 +2,7 @@ import { cn } from '../../lib/cn';
 
 const labels = { exact: 'Exact', estimated: 'Estimated', learned: 'Learned', unknown: 'Unknown' };
 const colors = {
-  exact: 'bg-success',
+  exact: 'bg-success-legacy',
   estimated: 'bg-blue-500',
   learned: 'bg-[var(--brand-lilac)]',
   unknown: 'bg-text-3',

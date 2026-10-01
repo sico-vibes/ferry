@@ -9,7 +9,7 @@ export function AdaptedStatusMark({ status, label }: { status: StatusMarkState; 
   const Icon = icons[status];
   const color =
     status === 'succeeded'
-      ? 'text-success'
+      ? 'text-success-legacy'
       : status === 'failed' || status === 'denied'
         ? 'text-danger'
         : 'text-text-3';

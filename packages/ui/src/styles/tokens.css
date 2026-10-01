@@ -1,39 +1,48 @@
 :root {
-  --bg-app: #1C1D20;
-  --bg-rail-tile: #2B2C30;
-  --bg-rail-tile-active: #35363B;
+  --bg-app: #1c1d20;
+  --bg-rail-tile: #2b2c30;
+  --bg-rail-tile-active: #35363b;
   --bg-panel: #151821;
-  --bg-panel-grad: linear-gradient(180deg,#151A29 0%,#15181F 100%);
+  --bg-panel-grad: linear-gradient(180deg, #151a29 0%, #15181f 100%);
   --bg-canvas: #141418;
-  --bg-card: #1D1D22;
-  --bg-raised: #2E2E33;
+  --bg-card: #1d1d22;
+  --bg-raised: #2e2e33;
   --bg-input: #141418;
-  --bg-pill-dark: #050B13;
-  --bg-capacity: linear-gradient(135deg,#182A46 0%,#121B2E 100%);
-  --border-hair: rgba(255,255,255,0.06);
-  --border-soft: rgba(255,255,255,0.09);
-  --border-strong: rgba(255,255,255,0.14);
-  --highlight-top: inset 0 1px 0 rgba(255,255,255,0.04);
-  --fade-line: linear-gradient(90deg,transparent,rgba(255,255,255,0.12),transparent);
-  --text-1: #EDEEF2;
-  --text-2: #A3A6B0;
-  --text-3: #9C9EA7;
-  --text-link: #60A5FA;
-  --text-on-gradient: #FFFFFF;
-  --text-on-send: #0B0C0F;
-  --blue-500: #3D84EC;
-  --blue-600: #3069AE;
-  --blue-mini: #5594C9;
-  --blue-glow: rgba(61,132,236,0.55);
-  --star: #EFBC0B;
-  --warn: #F5A524;
-  --success: #22C55E;
-  --danger: #EF4444;
-  --grad-signature: linear-gradient(90deg,#3D84EC 0%,#C97C8E 36%,#E08A4C 64%,#D9C12A 100%);
-  --grad-composer: linear-gradient(100deg,#8E8830 0%,#A99A55 14%,#B0674A 42%,#8F593D 55%,#655971 75%,#476192 90%,#3F608D 100%);
-  --grad-headline: linear-gradient(90deg,#E9A23B 0%,#E6B24A 40%,#8FB2FF 70%,#3D84EC 100%);
-  --grad-send: linear-gradient(90deg,#CFB32B 0%,#8FB86A 45%,#4286EB 100%);
-  --grad-avatar: conic-gradient(from 200deg,#E8C547,#B68F66,#4286EB,#E8C547);
+  --bg-pill-dark: #050b13;
+  --bg-capacity: linear-gradient(135deg, #182a46 0%, #121b2e 100%);
+  --border-hair: rgba(255, 255, 255, 0.06);
+  --border-soft: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --highlight-top: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --fade-line: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.12), transparent);
+  --text-1: #edeef2;
+  --text-2: #a3a6b0;
+  --text-3: #9c9ea7;
+  --text-link: #60a5fa;
+  --text-on-gradient: #ffffff;
+  --text-on-send: #0b0c0f;
+  --blue-500: #3d84ec;
+  --blue-600: #3069ae;
+  --blue-mini: #5594c9;
+  --blue-glow: rgba(61, 132, 236, 0.55);
+  --star: #efbc0b;
+  --warn: #f5a524;
+  --legacy-success: #22c55e;
+  --danger: #ef4444;
+  --grad-signature: linear-gradient(90deg, #3d84ec 0%, #c97c8e 36%, #e08a4c 64%, #d9c12a 100%);
+  --grad-composer: linear-gradient(
+    100deg,
+    #8e8830 0%,
+    #a99a55 14%,
+    #b0674a 42%,
+    #8f593d 55%,
+    #655971 75%,
+    #476192 90%,
+    #3f608d 100%
+  );
+  --grad-headline: linear-gradient(90deg, #e9a23b 0%, #e6b24a 40%, #8fb2ff 70%, #3d84ec 100%);
+  --grad-send: linear-gradient(90deg, #cfb32b 0%, #8fb86a 45%, #4286eb 100%);
+  --grad-avatar: conic-gradient(from 200deg, #e8c547, #b68f66, #4286eb, #e8c547);
   --r-window: 12px;
   --r-panel: 18px;
   --r-canvas: 20px;
@@ -42,4 +51,106 @@
   --r-input: 12px;
   --r-item: 12px;
   --r-pill: 999px;
+
+  /* Semantic utility defaults preserve the legacy palette outside v2 roots. */
+  --background: var(--bg-app);
+  --foreground: var(--text-1);
+  --card: var(--bg-card);
+  --card-foreground: var(--text-1);
+  --popover: var(--bg-card);
+  --popover-foreground: var(--text-1);
+  --primary: var(--blue-500);
+  --primary-foreground: var(--text-on-gradient);
+  --secondary: var(--bg-raised);
+  --secondary-foreground: var(--text-1);
+  --muted: var(--bg-raised);
+  --muted-foreground: var(--text-2);
+  --accent: var(--bg-raised);
+  --accent-foreground: var(--text-1);
+  --destructive: var(--danger);
+  --destructive-foreground: var(--text-on-gradient);
+  --border: var(--border-soft);
+  --input: var(--border-soft);
+  --ring: var(--blue-500);
+  --success: var(--legacy-success);
+  --warning: var(--warn);
+  --sidebar: var(--bg-panel);
+  --sidebar-foreground: var(--text-1);
+  --sidebar-primary: var(--blue-500);
+  --sidebar-primary-foreground: var(--text-on-gradient);
+  --sidebar-accent: var(--bg-raised);
+  --sidebar-accent-foreground: var(--text-1);
+  --sidebar-border: var(--border-soft);
+  --sidebar-ring: var(--blue-500);
+  --radius: var(--r-input);
+  --shadow-popover: none;
+}
+
+.ferry-ui {
+  color-scheme: dark;
+  --background: #0f0e14;
+  --foreground: #edecf2;
+  --card: #17161d;
+  --card-foreground: #edecf2;
+  --popover: #17161d;
+  --popover-foreground: #edecf2;
+  --primary: #6d5bd0;
+  --primary-foreground: #ffffff;
+  --secondary: #1e1d25;
+  --secondary-foreground: #edecf2;
+  --muted: #1e1d25;
+  --muted-foreground: #a19eae;
+  --accent: rgba(143, 122, 224, 0.14);
+  --accent-foreground: #c8b5f5;
+  --destructive: #e12d31;
+  --destructive-foreground: #ffffff;
+  --border: #6a6581;
+  --input: #6a6581;
+  --ring: #8f7ae0;
+  --success: #3dd68c;
+  --warning: #f5a524;
+  --sidebar: #131219;
+  --sidebar-foreground: #edecf2;
+  --sidebar-primary: #6d5bd0;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgba(143, 122, 224, 0.14);
+  --sidebar-accent-foreground: #c8b5f5;
+  --sidebar-border: #6a6581;
+  --sidebar-ring: #8f7ae0;
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.ferry-ui.light,
+.light .ferry-ui:not(.dark) {
+  color-scheme: light;
+  --background: #fafafc;
+  --foreground: #17151e;
+  --card: #ffffff;
+  --card-foreground: #17151e;
+  --popover: #ffffff;
+  --popover-foreground: #17151e;
+  --primary: #5b47b8;
+  --primary-foreground: #ffffff;
+  --secondary: #efeef4;
+  --secondary-foreground: #17151e;
+  --muted: #efeef4;
+  --muted-foreground: #5e5a6b;
+  --accent: rgba(101, 82, 163, 0.1);
+  --accent-foreground: #4a3a99;
+  --destructive: #ce2c31;
+  --destructive-foreground: #ffffff;
+  --border: #8c84a9;
+  --input: #8c84a9;
+  --ring: #6552a3;
+  --success: #197b48;
+  --warning: #a35a00;
+  --sidebar: #f4f3f8;
+  --sidebar-foreground: #17151e;
+  --sidebar-primary: #5b47b8;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgba(101, 82, 163, 0.1);
+  --sidebar-accent-foreground: #4a3a99;
+  --sidebar-border: #8c84a9;
+  --sidebar-ring: #6552a3;
+  --shadow-popover: 0 8px 24px rgba(23, 21, 30, 0.1);
 }

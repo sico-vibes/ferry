@@ -25,7 +25,7 @@ export const Composer = () => (
     <div className="flex min-h-[148px] flex-col justify-between p-3">
       <div className="text-body text-text-3">Ask Ferry to build, fix or explain…</div>
       <div className="flex items-center justify-between">
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <button className="rounded-pill border border-border-soft px-3 py-1 text-label text-text-2">
             ↗ Attach
           </button>
@@ -33,7 +33,7 @@ export const Composer = () => (
             ◉ Best Available
           </button>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <button className="rounded-pill border border-border-soft px-3 py-1 text-label text-text-2">
             Voice
           </button>
