@@ -90,7 +90,7 @@ const child = spawn(
   ],
   {
     cwd: packageRoot,
-    env: process.env,
+    env: { ...process.env, FERRY_INSTALL_SMOKE: 'true' },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   },
@@ -143,7 +143,12 @@ const finish = async (error) => {
     process.exitCode = 1;
   }
   if (error) {
-    console.error(error.message);
+    const handoffLines = output.split(/\r?\n/).filter((line) => line.includes('FERRY_HANDOFF'));
+    console.error(
+      handoffLines.length
+        ? `${error.message}\nMain-process handoff trace:\n${handoffLines.join('\n')}`
+        : error.message,
+    );
     if (output) console.error(output.trim());
     process.exitCode = 1;
   }

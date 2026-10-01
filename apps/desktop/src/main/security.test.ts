@@ -121,6 +121,39 @@ describe('Electron security boundary', () => {
     ).toBe(false);
   });
 
+  it('canonicalizes Windows short paths, drive casing, escaped tildes, and asar renderer paths', () => {
+    const canonicalizeWindowsPath = (value: string) =>
+      value
+        .replace(/^([a-z]):/i, (_match, drive: string) => `${drive.toUpperCase()}:`)
+        .replace(/\\Users\\RUNNER~1(?=\\|$)/i, '\\Users\\runneradmin');
+    const windows = { platform: 'win32' as const, canonicalize: canonicalizeWindowsPath };
+
+    expect(
+      isTrustedRendererOrigin(
+        'file:///C:/Users/RUNNER~1/AppData/Local/Temp/ferry/app.asar/out/renderer/index.html#/explore',
+        undefined,
+        'file:///C:/Users/runneradmin/AppData/Local/Temp/ferry/app.asar/out/renderer/index.html',
+        windows,
+      ),
+    ).toBe(true);
+    expect(
+      isTrustedRendererOrigin(
+        'file:///c:/Ferry/renderer/index.html',
+        undefined,
+        'file:///C:/Ferry/renderer/index.html',
+        windows,
+      ),
+    ).toBe(true);
+    expect(
+      isTrustedRendererOrigin(
+        'file:///C:/Users/RUNNER%7E1/AppData/Local/Ferry/renderer/index.html',
+        undefined,
+        'file:///C:/Users/runneradmin/AppData/Local/Ferry/renderer/index.html',
+        windows,
+      ),
+    ).toBe(true);
+  });
+
   it('accepts opaque file MessageEvent origins only for the token-bound main window', () => {
     expect(isExpectedCorePortOrigin('file:', 'null', 'null')).toBe(true);
     expect(isExpectedCorePortOrigin('file:', 'file://', 'null')).toBe(false);
@@ -155,6 +188,11 @@ describe('Electron security boundary', () => {
     expect(mainSource).toContain('if (!coreProcess || !coreListening)');
     expect(mainSource).toContain("message.type === 'ferry:core-listening'");
     expect(mainSource).toContain('for (const connector of coreConnectors.splice(0))');
+    expect(mainSource).toContain("canonicalizePath(join(import.meta.dirname, 'core-entry.js'))");
+    expect(mainSource).toContain("process.env.FERRY_INSTALL_SMOKE === 'true'");
+    expect(mainSource).toContain(
+      'const e2eTracing = Boolean(process.env.FERRY_E2E_USER_DATA_DIR) || installSmoke',
+    );
   });
 
   it('requests a replacement core port before waiting for the core ready event', async () => {

@@ -21,6 +21,7 @@ import {
   FERRY_DOMAINS,
   OpenFolderResultSchema,
 } from '@ferry/shared';
+import { canonicalizePath } from '@ferry/shared/node-paths';
 import {
   WINDOW_BACKGROUND,
   WINDOW_LIGHT_BACKGROUND,
@@ -73,7 +74,8 @@ const coreConnectors: PendingCoreConnector[] = [];
 let coreGeneration = 0;
 let nextCorePortId = 0;
 let nextCoreConnectId = 0;
-const e2eTracing = Boolean(process.env.FERRY_E2E_USER_DATA_DIR);
+const installSmoke = process.env.FERRY_INSTALL_SMOKE === 'true';
+const e2eTracing = Boolean(process.env.FERRY_E2E_USER_DATA_DIR) || installSmoke;
 function traceCore(event: string, details: Record<string, unknown>): void {
   if (e2eTracing) console.log(`FERRY_HANDOFF ${JSON.stringify({ event, ...details })}`);
 }
@@ -264,7 +266,7 @@ function launchCore(): void {
   if (shuttingDown) return;
   coreGeneration += 1;
   const generation = coreGeneration;
-  const coreEntry = join(import.meta.dirname, 'core-entry.js');
+  const coreEntry = canonicalizePath(join(import.meta.dirname, 'core-entry.js'));
   const coreEnvironment = buildCoreEnvironment(process.env, app.isPackaged);
   coreEnvironment.FERRY_REAL_DOMAINS ??= FERRY_DOMAINS.join(',');
   coreEnvironment.FERRY_CORE_DATA_DIR =
@@ -274,9 +276,9 @@ function launchCore(): void {
   const child = utilityProcess.fork(coreEntry, [], {
     serviceName: 'Ferry Core',
     env: coreEnvironment,
-    stdio: process.env.FERRY_E2E_USER_DATA_DIR ? 'pipe' : 'inherit',
+    stdio: e2eTracing ? 'pipe' : 'inherit',
   });
-  if (process.env.FERRY_E2E_USER_DATA_DIR)
+  if (e2eTracing)
     child.stderr?.on('data', (chunk: unknown) => {
       console.error('FERRY_CORE_STDERR ' + String(chunk));
     });
@@ -303,8 +305,7 @@ function launchCore(): void {
         traceCore('e2e-core-only-channel-created', { coreGeneration: generation });
         child.postMessage({ type: 'ferry:attach' }, [channel.port1]);
         channel.port2.on('message', (event) => {
-          if (process.env.FERRY_E2E_USER_DATA_DIR)
-            console.error('FERRY_CORE_MESSAGE ' + JSON.stringify(event.data));
+          if (e2eTracing) console.error('FERRY_CORE_MESSAGE ' + JSON.stringify(event.data));
         });
         channel.port2.start();
       }
@@ -603,8 +604,10 @@ app
       autoUpdater.allowPrerelease = releaseChannel.allowPrerelease;
       autoUpdater.autoDownload = updateController.getSnapshot().autoDownload;
       (autoUpdater as NsisUpdater).verifyUpdateCodeSignature = () => Promise.resolve(null);
-      void updateController.check();
-      setInterval(() => void updateController.check(), 6 * 60 * 60 * 1000).unref();
+      if (!installSmoke) {
+        void updateController.check();
+        setInterval(() => void updateController.check(), 6 * 60 * 60 * 1000).unref();
+      }
     }
     session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
       callback(false);
