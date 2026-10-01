@@ -31,12 +31,15 @@ export interface PersistedLayout {
 export interface UIState extends PersistedLayout {
   tabs: OpenTab[];
   activeId: SessionId | null;
+  pendingComposerFocus: boolean;
   rightTab: RightTab;
   density: Density;
   settingsSection: SettingsSection;
   selectedWorkspaceId: string | null;
   exploreFilter: 'All' | 'Free' | 'Credits' | 'Paid' | 'CLI';
   openTab: (tab: OpenTab) => void;
+  requestComposerFocus: () => void;
+  consumeComposerFocus: () => void;
   setActive: (id: SessionId) => void;
   renameTab: (id: SessionId, title: string) => void;
   closeTab: (id: SessionId) => void;

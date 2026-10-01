@@ -7,10 +7,13 @@ import { DataUseBadge, Dialog, FerryMark, Pill, ShowMoreList, TagBadge } from '@
 import type { ModelRef, PartId, SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { listAllModels } from '@ferry/client';
-import { keys, useSessions, useWorkspaces } from '../data/queries';
+import { keys, useSessions, useSettings, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
-import { useUI } from '../state/ui';
+import { useUI, type SettingsSection } from '../state/ui';
 import { ModelQualityBadge } from './ModelQualityBadge';
+import { matchesKeybinding } from '@ferry/config/keybindings';
+import { useKeybindings } from '../state/keybindings';
+import { scorePaletteMatch } from './paletteSearch';
 
 export function SessionPowerControls() {
   return (
@@ -153,13 +156,31 @@ export function CommandPalette() {
   const pushToast = useToasts((state) => state.push);
   const { data: sessions = [] } = useSessions();
   const { data: workspaces = [] } = useWorkspaces();
+  const { data: settings } = useSettings();
   const activeId = useUI((state) => state.activeId);
   const density = useUI((state) => state.density);
   const [open, setOpen] = useState(false);
+  const [searchValue, setSearchValue] = useState('');
+  const { bindings } = useKeybindings();
   const PaletteCommand = useCmdk(open);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      const target = event.target;
+      const editableFocus =
+        target instanceof HTMLElement &&
+        (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+      const terminalFocus =
+        target instanceof HTMLElement && Boolean(target.closest('.xterm, [data-terminal-focus]'));
+      const binding = bindings.find((item) => item.command === 'palette.open');
+      if (
+        binding &&
+        matchesKeybinding(binding, event, {
+          editableFocus,
+          terminalFocus,
+          paletteOpen: open,
+          isDesktop: Boolean(window.ferryHost),
+        })
+      ) {
         event.preventDefault();
         setOpen((value) => !value);
       }
@@ -168,19 +189,42 @@ export function CommandPalette() {
     return () => {
       window.removeEventListener('keydown', handler);
     };
-  }, []);
+  }, [bindings, open]);
   const run = async (action: string) => {
     setOpen(false);
+    if (action.startsWith('settings:')) {
+      useUI.getState().setSettingsSection(action.slice('settings:'.length) as SettingsSection);
+      await navigate({ to: '/settings' });
+      return;
+    }
+    if (action.startsWith('explore:')) {
+      useUI
+        .getState()
+        .setExploreFilter(
+          action.slice('explore:'.length) as 'All' | 'Free' | 'Credits' | 'Paid' | 'CLI',
+        );
+      await navigate({ to: '/explore' });
+      return;
+    }
     switch (action) {
       case 'new': {
-        const workspace = workspaces[0];
+        const availableWorkspaces = workspaces.length ? workspaces : await client.workspaces.list();
+        const workspace = availableWorkspaces[0];
         if (!workspace) {
-          pushToast({ kind: 'warning', title: 'Add a folder first', body: null });
+          pushToast({
+            kind: 'warning',
+            title: 'Add a folder first',
+            body: 'Choose a workspace before starting a chat.',
+          });
           return;
         }
-        const session = await client.sessions.create({ workspaceId: workspace.id });
+        const session = await client.sessions.create({
+          workspaceId: workspace.id,
+          ...(settings ? { profileId: settings.activeProfileId } : {}),
+        });
         useUI.getState().openTab({ id: session.id, title: session.title });
         await cache.invalidateQueries({ queryKey: keys.sessions });
+        useUI.getState().requestComposerFocus();
         await navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
         break;
       }
@@ -199,6 +243,28 @@ export function CommandPalette() {
       }
       case 'density':
         useUI.getState().setDensity(density === 'compact' ? 'comfortable' : 'compact');
+        break;
+      case 'sidebar':
+        useUI.getState().toggleLeft();
+        break;
+      case 'panel':
+        useUI.getState().toggleRight();
+        break;
+      case 'terminal':
+        useUI.getState().toggleBottom();
+        break;
+      case 'theme': {
+        const settings = await client.settings.get();
+        const theme = settings.theme === 'dark' ? 'light' : 'dark';
+        await client.settings.update({ theme });
+        await cache.invalidateQueries({ queryKey: keys.settings });
+        break;
+      }
+      case 'model':
+        if (activeId)
+          window.dispatchEvent(
+            new CustomEvent('ferry:open-model-picker', { detail: { sessionId: activeId } }),
+          );
         break;
       case 'explore':
         await navigate({ to: '/explore' });
@@ -253,14 +319,43 @@ export function CommandPalette() {
     }
   };
   const actions: { id: string; label: string; shortcut: string }[] = [
-    { id: 'new', label: 'New chat', shortcut: 'Ctrl N' },
+    { id: 'new', label: 'New Chat', shortcut: 'Ctrl N' },
     { id: 'folder', label: 'Open folder', shortcut: '' },
     { id: 'profile', label: 'Switch profile', shortcut: '' },
     { id: 'density', label: `Toggle density (${density})`, shortcut: '' },
+    { id: 'sidebar', label: 'Toggle sidebar', shortcut: 'Ctrl+B' },
+    { id: 'panel', label: 'Toggle right panel', shortcut: 'Ctrl+Shift+B' },
+    { id: 'terminal', label: 'Toggle terminal', shortcut: 'Ctrl+`' },
+    { id: 'theme', label: 'Toggle theme', shortcut: '' },
+    { id: 'model', label: 'Switch model', shortcut: '' },
     { id: 'explore', label: 'Go to Explore', shortcut: '' },
+    ...(['All', 'Free', 'Credits', 'Paid', 'CLI'] as const).map((filter) => ({
+      id: `explore:${filter}`,
+      label: `Explore ${filter}`,
+      shortcut: '',
+    })),
     { id: 'usage', label: 'Go to Usage', shortcut: '' },
     { id: 'library', label: 'Go to Library', shortcut: '' },
     { id: 'settings', label: 'Go to Settings', shortcut: '' },
+    ...[
+      'General',
+      'Profiles',
+      'Providers & Keys',
+      'Gateway',
+      'Advanced',
+      'Optimizers',
+      'Delegation',
+      'Permissions',
+      'Skills',
+      'MCP',
+      'Data & Privacy',
+      'Developer',
+      'About',
+    ].map((section) => ({
+      id: `settings:${section}`,
+      label: `Settings ${section}`,
+      shortcut: '',
+    })),
     { id: 'shortcuts', label: 'Keyboard shortcuts', shortcut: 'Ctrl /' },
     { id: 'delegate', label: 'Delegate current task…', shortcut: '' },
     { id: 'checkpoint', label: 'Restore last checkpoint', shortcut: '' },
@@ -268,59 +363,80 @@ export function CommandPalette() {
   return (
     <Dialog
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(value) => {
+        setOpen(value);
+        if (!value) setSearchValue('');
+      }}
       title="Command palette"
       description="Find a Ferry action, session, or workspace."
       contentClassName="command-dialog"
     >
       {PaletteCommand ? (
-        <PaletteCommand label="Command palette" className="command-palette">
+        <PaletteCommand
+          label="Command palette"
+          className="command-palette"
+          filter={scorePaletteMatch}
+        >
           <div className="command-search">
             <Search size={15} />
-            <PaletteCommand.Input autoFocus placeholder="Search actions and sessions…" />
+            <PaletteCommand.Input
+              autoFocus
+              value={searchValue}
+              onValueChange={setSearchValue}
+              placeholder="Search actions and sessions…"
+            />
           </div>
           <PaletteCommand.List>
             <PaletteCommand.Empty>No results.</PaletteCommand.Empty>
-            <PaletteCommand.Group heading="Actions">
-              {actions.map(({ id, label, shortcut }) => (
-                <PaletteCommand.Item key={id} value={label} onSelect={() => void run(id)}>
-                  {label}
-                  <kbd>{shortcut}</kbd>
-                </PaletteCommand.Item>
-              ))}
-            </PaletteCommand.Group>
-            <PaletteCommand.Group heading="Recent sessions">
-              {sessions
-                .slice()
-                .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-                .map((session) => (
+            {!searchValue.trim().startsWith('>') && (
+              <PaletteCommand.Group heading="Recent sessions">
+                {sessions
+                  .slice()
+                  .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+                  .map((session) => (
+                    <PaletteCommand.Item
+                      key={`recent-${session.id}`}
+                      value={`${session.title} ${session.preview} ${session.id}`}
+                      onSelect={() => {
+                        setOpen(false);
+                        useUI.getState().openTab({ id: session.id, title: session.title });
+                        void navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
+                      }}
+                    >
+                      {session.title}
+                      <small>{session.preview}</small>
+                    </PaletteCommand.Item>
+                  ))}
+              </PaletteCommand.Group>
+            )}
+            {!searchValue.trim().startsWith('>') && (
+              <PaletteCommand.Group heading="Workspaces">
+                {workspaces.map((workspace) => (
                   <PaletteCommand.Item
-                    key={session.id}
-                    value={`${session.title} ${session.preview}`}
+                    key={workspace.id}
+                    value={`${workspace.name} ${workspace.path}`}
                     onSelect={() => {
                       setOpen(false);
-                      useUI.getState().openTab({ id: session.id, title: session.title });
-                      void navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
+                      localStorage.setItem('ferry.libraryWorkspace', workspace.id);
+                      void navigate({ to: '/library' });
                     }}
                   >
-                    {session.title}
-                    <small>{session.preview}</small>
+                    {workspace.name}
+                    <small>{workspace.path}</small>
                   </PaletteCommand.Item>
                 ))}
-            </PaletteCommand.Group>
-            <PaletteCommand.Group heading="Workspaces">
-              {workspaces.map((workspace) => (
+              </PaletteCommand.Group>
+            )}
+            <PaletteCommand.Group heading="Commands">
+              {actions.map(({ id, label, shortcut }) => (
                 <PaletteCommand.Item
-                  key={workspace.id}
-                  value={`${workspace.name} ${workspace.path}`}
-                  onSelect={() => {
-                    setOpen(false);
-                    localStorage.setItem('ferry.libraryWorkspace', workspace.id);
-                    void navigate({ to: '/library' });
-                  }}
+                  key={id}
+                  value={label}
+                  aria-label={label}
+                  onSelect={() => void run(id)}
                 >
-                  {workspace.name}
-                  <small>{workspace.path}</small>
+                  {label}
+                  <kbd>{shortcut}</kbd>
                 </PaletteCommand.Item>
               ))}
             </PaletteCommand.Group>
@@ -367,6 +483,16 @@ export function ModelPickerPopover({
   const [modelQuery, setModelQuery] = useState('');
   const open = controlledOpen ?? localOpen;
   const setOpen = onOpenChange ?? setLocalOpen;
+  useEffect(() => {
+    const openPicker = (event: Event) => {
+      const id = (event as CustomEvent<{ sessionId: string }>).detail.sessionId;
+      if (id === sessionId) setOpen(true);
+    };
+    window.addEventListener('ferry:open-model-picker', openPicker);
+    return () => {
+      window.removeEventListener('ferry:open-model-picker', openPicker);
+    };
+  }, [sessionId, setOpen]);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const ModelCommand = useCmdk(open);

@@ -41,6 +41,32 @@ contextBridge.exposeInMainWorld('ferryHost', {
       .filter(Boolean) ?? [],
   openFolder: (): Promise<string | null> =>
     ipcRenderer.invoke('ferry:open-folder') as Promise<string | null>,
+  readKeybindings: (): Promise<{ path: string; content: string; error: string | null }> =>
+    ipcRenderer.invoke('ferry:keybindings-read') as Promise<{
+      path: string;
+      content: string;
+      error: string | null;
+    }>,
+  writeKeybindings: (
+    content: string,
+  ): Promise<{ path: string; content: string; error: string | null }> =>
+    ipcRenderer.invoke('ferry:keybindings-write', content) as Promise<{
+      path: string;
+      content: string;
+      error: string | null;
+    }>,
+  onKeybindingsChanged: (
+    handler: (value: { path: string; content: string; error: string | null }) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      value: { path: string; content: string; error: string | null },
+    ) => {
+      handler(value);
+    };
+    ipcRenderer.on('ferry:keybindings-changed', listener);
+    return () => ipcRenderer.removeListener('ferry:keybindings-changed', listener);
+  },
   getUpdateState: (): Promise<import('../main/update-state.js').UpdateSnapshot> =>
     ipcRenderer.invoke('ferry:update-state') as Promise<
       import('../main/update-state.js').UpdateSnapshot

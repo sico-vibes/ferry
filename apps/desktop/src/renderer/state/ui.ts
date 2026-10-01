@@ -63,6 +63,7 @@ export const useUI = create<UIState>((set) => {
         )
       : [],
     activeId: typeof saved.activeId === 'string' ? saved.activeId : null,
+    pendingComposerFocus: false,
     ...savedLayout,
     rightTab: saved.rightTab === 'plan' || saved.rightTab === 'changes' ? saved.rightTab : 'chats',
     density: saved.density === 'compact' ? 'compact' : 'comfortable',
@@ -72,5 +73,11 @@ export const useUI = create<UIState>((set) => {
     ...createLayoutSlice(update),
     ...createTabsSlice(update),
     ...createPreferencesSlice(update),
+    requestComposerFocus: () => {
+      update(() => ({ pendingComposerFocus: true }));
+    },
+    consumeComposerFocus: () => {
+      update(() => ({ pendingComposerFocus: false }));
+    },
   };
 });

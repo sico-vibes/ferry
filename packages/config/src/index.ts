@@ -7,6 +7,14 @@ import { SettingsSchema, type Settings } from '@ferry/shared';
 import { z } from 'zod';
 import { redactKnownSecretText } from '@ferry/shared';
 import { canonicalizePath } from '@ferry/shared/node-paths';
+export {
+  DEFAULT_KEYBINDINGS,
+  KeybindingSchema,
+  KeybindingsFileSchema,
+  matchesKeybinding,
+  parseKeybindings,
+} from './keybindings';
+export type { Keybinding, KeybindingContext, KeybindingsValidation } from './keybindings';
 
 export interface DataPaths {
   home: string;

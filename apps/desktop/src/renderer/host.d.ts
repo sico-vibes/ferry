@@ -9,6 +9,13 @@ declare global {
       e2eDiagnosticsEnabled?: boolean;
       realDomainsFromEnvironment(): string[];
       openFolder(): Promise<string | null>;
+      readKeybindings(): Promise<{ path: string; content: string; error: string | null }>;
+      writeKeybindings(
+        content: string,
+      ): Promise<{ path: string; content: string; error: string | null }>;
+      onKeybindingsChanged(
+        handler: (value: { path: string; content: string; error: string | null }) => void,
+      ): () => void;
       getUpdateState(): Promise<import('../main/update-state.js').UpdateSnapshot>;
       checkForUpdates(): Promise<import('../main/update-state.js').UpdateSnapshot>;
       setAutoDownload(enabled: boolean): Promise<import('../main/update-state.js').UpdateSnapshot>;

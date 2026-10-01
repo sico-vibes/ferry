@@ -5,7 +5,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./keybindings": "./src/keybindings.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

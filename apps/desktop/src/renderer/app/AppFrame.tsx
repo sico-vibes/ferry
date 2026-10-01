@@ -15,6 +15,9 @@ import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
 import { ConfigurationSheet } from './ConfigurationSheet';
 import type { SessionId } from '@ferry/shared';
 import type { UpdateSnapshot } from '../../main/update-state.js';
+import { initializeKeybindings } from '../state/keybindings';
+import { useKeybindings } from '../state/keybindings';
+import { matchesKeybinding } from '@ferry/config/keybindings';
 
 export function AppFrame({ children }: { children: React.ReactNode }) {
   const client = useFerryClient();
@@ -111,6 +114,12 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     () => localStorage.getItem('ferry.simulateOffline') === 'true',
   );
   const [networkOnline, setNetworkOnline] = useState(() => navigator.onLine);
+  const { bindings } = useKeybindings();
+  useEffect(() => {
+    return initializeKeybindings((message) => {
+      pushToast({ kind: 'error', title: 'Keybindings could not be loaded', body: message });
+    });
+  }, [pushToast]);
   useEffect(() => {
     const online = () => {
       setNetworkOnline(true);
@@ -198,30 +207,42 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (!event.ctrlKey) return;
-      const key = event.key.toLowerCase();
-      if (key === '/') {
+      const target = event.target;
+      const context = {
+        editableFocus:
+          target instanceof HTMLElement &&
+          (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)),
+        terminalFocus:
+          target instanceof HTMLElement && Boolean(target.closest('.xterm, [data-terminal-focus]')),
+        paletteOpen: Boolean(document.querySelector('.command-dialog')),
+        isDesktop: Boolean(window.ferryHost),
+      };
+      const matches = (command: string) => {
+        const binding = bindings.find((item) => item.command === command);
+        return binding ? matchesKeybinding(binding, event, context) : false;
+      };
+      if (matches('shortcuts.open')) {
         event.preventDefault();
         setShortcutsOpen(true);
-      } else if (key === 'n') {
+      } else if (matches('chat.new')) {
         event.preventDefault();
         void createChat();
-      } else if (key === 'b' && event.shiftKey) {
+      } else if (matches('panel.toggle')) {
         event.preventDefault();
         useUI.getState().toggleRight();
-      } else if (key === 'b') {
+      } else if (matches('sidebar.toggle')) {
         event.preventDefault();
         useUI.getState().toggleLeft();
-      } else if (key === 'f') {
+      } else if (matches('search.open')) {
         event.preventDefault();
         if (useUI.getState().rightCollapsed) useUI.getState().toggleRight();
         requestAnimationFrame(() =>
           document.querySelector<HTMLInputElement>('[aria-label="Search chats"]')?.focus(),
         );
-      } else if (key === 'w' && activeId) {
+      } else if (matches('tab.close') && activeId) {
         event.preventDefault();
         requestCloseTab(activeId);
-      } else if (key === 'tab' && tabs.length > 1) {
+      } else if (matches('tab.next') && tabs.length > 1) {
         event.preventDefault();
         const index = tabs.findIndex((tab) => tab.id === activeId);
         const next = tabs[(index + 1) % tabs.length];
@@ -229,7 +250,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           setActive(next.id);
           void navigate({ to: '/s/$sessionId', params: { sessionId: next.id } });
         }
-      } else if (key === '`') {
+      } else if (matches('terminal.toggle')) {
         event.preventDefault();
         useUI.getState().toggleBottom();
       }
@@ -240,6 +261,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     };
   }, [
     activeId,
+    bindings,
     cache,
     closeTab,
     createChat,

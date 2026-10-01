@@ -1397,16 +1397,18 @@ try {
       );
       try {
         await expect
-          .poll(async () =>
-            page.evaluate(
-              async ({ sessionId, partId }) => {
-                const detail = await window.ferryRpcClient.sessions.get(sessionId);
-                return detail.messages
-                  .flatMap((message) => message.parts)
-                  .find((part) => part.type === 'approval_request' && part.id === partId)?.state;
-              },
-              { sessionId: livePaidSessionId, partId: pendingPaidApproval },
-            ),
+          .poll(
+            async () =>
+              page.evaluate(
+                async ({ sessionId, partId }) => {
+                  const detail = await window.ferryRpcClient.sessions.get(sessionId);
+                  return detail.messages
+                    .flatMap((message) => message.parts)
+                    .find((part) => part.type === 'approval_request' && part.id === partId)?.state;
+                },
+                { sessionId: livePaidSessionId, partId: pendingPaidApproval },
+              ),
+            { timeout: 30_000 },
           )
           .toBe('allowed_once');
         await approvePendingRequestsUntilIdle(page, livePaidSessionId, { timeout: 30_000 });

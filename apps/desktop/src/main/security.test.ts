@@ -58,7 +58,7 @@ describe('Electron security boundary', () => {
   });
 
   it('guards all IPC handlers and exposes only named preload capabilities', () => {
-    expect(mainSource.match(/ipcMain\.handle\(/g)).toHaveLength(8);
+    expect(mainSource.match(/ipcMain\.handle\(/g)).toHaveLength(10);
     expect(mainSource.match(/ipcMain\.on\(/g)).toHaveLength(2);
     expect(mainSource).toContain('isTrustedSender(event)');
     expect(mainSource).toContain('event.sender === mainWindow.webContents');
@@ -81,7 +81,18 @@ describe('Electron security boundary', () => {
     expect(preloadSource).toContain('getProcessMetrics:');
     expect(preloadSource).toContain('isWindowBackgrounded:');
     expect(preloadSource).toContain('onWindowBackground:');
+    expect(mainSource).toContain("ipcMain.handle('ferry:keybindings-read'");
+    expect(mainSource).toContain("ipcMain.handle('ferry:keybindings-write'");
+    expect(mainSource).toMatch(
+      /ipcMain\.handle\('ferry:keybindings-read',[\s\S]*?if \(!isTrustedSender\(event\)\)/,
+    );
+    expect(mainSource).toMatch(
+      /ipcMain\.handle\('ferry:keybindings-write',[\s\S]*?if \(!isTrustedSender\(event\)/,
+    );
     expect(preloadSource).toContain("contextBridge.exposeInMainWorld('ferryHost'");
+    expect(preloadSource).toContain('readKeybindings:');
+    expect(preloadSource).toContain('writeKeybindings:');
+    expect(preloadSource).toContain('onKeybindingsChanged:');
     expect(preloadSource).toContain("send('ferry:connect-core', token)");
     expect(preloadSource).not.toMatch(/ipcRenderer\.(?:invoke|send)\(\s*\w+\s*,/);
     expect(preloadSource).not.toContain('invoke(channel');
