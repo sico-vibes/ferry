@@ -10,6 +10,7 @@ import {
   WorkspaceIdSchema,
 } from './ids.js';
 import { ProviderFailureFamilySchema } from './quota.js';
+import { AgentEventSchema } from './agent-event.js';
 export const SessionStatusSchema = z.enum([
   'idle',
   'running',
@@ -34,6 +35,7 @@ export const SessionSchema = z.object({
   inFlight: z.boolean().optional(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
+  agentEvents: z.array(AgentEventSchema).default([]),
 });
 export type Session = z.infer<typeof SessionSchema>;
 export const FileChangeSchema = z.object({
@@ -164,6 +166,62 @@ export const SessionDetailSchema = z.object({
   taskRecord: TaskRecordSchema,
 });
 export type SessionDetail = z.infer<typeof SessionDetailSchema>;
+export const ReadOutputInputSchema = z.object({
+  sessionId: SessionIdSchema,
+  handle: z.string().min(1).max(200),
+  range: z
+    .object({
+      start: z.number().int().nonnegative(),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(32 * 1024)
+        .optional(),
+    })
+    .optional(),
+  grep: z.string().max(512).optional(),
+});
+export type ReadOutputInput = z.infer<typeof ReadOutputInputSchema>;
+export const ReadOutputPageSchema = z.object({
+  text: z.string(),
+  start: z.number().int().nonnegative(),
+  end: z.number().int().nonnegative(),
+  totalLength: z.number().int().nonnegative(),
+  hasMore: z.boolean(),
+});
+export type ReadOutputPage = z.infer<typeof ReadOutputPageSchema>;
+export const MAX_RECOVERY_OUTPUT_PAGE_BYTES = 32 * 1024;
+export function readOutputPage(content: string, input: ReadOutputInput): ReadOutputPage {
+  const grep = input.grep?.toLocaleLowerCase();
+  const text = grep
+    ? content
+        .split(/(?<=\n)/)
+        .filter((line) => line.toLocaleLowerCase().includes(grep))
+        .join('')
+    : content;
+  const start = Math.min(input.range?.start ?? 0, text.length);
+  const requestedEnd = Math.min(
+    start + (input.range?.limit ?? MAX_RECOVERY_OUTPUT_PAGE_BYTES),
+    text.length,
+  );
+  let end = start;
+  let bytes = 0;
+  for (const point of text.slice(start, requestedEnd)) {
+    const size = point.codePointAt(0) ?? 0;
+    const pointBytes = size <= 0x7f ? 1 : size <= 0x7ff ? 2 : size <= 0xffff ? 3 : 4;
+    if (bytes + pointBytes > MAX_RECOVERY_OUTPUT_PAGE_BYTES) break;
+    bytes += pointBytes;
+    end += point.length;
+  }
+  return {
+    text: text.slice(start, end),
+    start,
+    end,
+    totalLength: text.length,
+    hasMore: end < text.length,
+  };
+}
 export const CheckpointSchema = z.object({
   id: CheckpointIdSchema,
   sessionId: SessionIdSchema,

@@ -18,6 +18,9 @@ import {
   TaskRecordSchema,
   CheckpointIdSchema,
   newId,
+  ReadOutputInputSchema,
+  readOutputPage,
+  isProtectedWorkspacePath,
 } from '@ferry/shared';
 import type { MessagePart, ModelInfo, Profile, Provider, Session, SessionId } from '@ferry/shared';
 import {
@@ -219,6 +222,57 @@ export function register(host: CoreHost, services: FerryServices): void {
       const detail = store.load(id);
       if (!detail) throw rpcDomainError(-32044, 'not_found', `Session not found: ${id}`);
       return SessionDetailSchema.parse(detail);
+    },
+    async readOutput(rawInput: unknown) {
+      const input = ReadOutputInputSchema.parse(rawInput);
+      const session = requireSession(input.sessionId);
+      const workspace = services.workspaces.get(session.workspaceId);
+      if (!workspace) throw rpcDomainError(-32044, 'not_found', 'Session workspace is unavailable');
+      const jail = new WorkspaceJail(workspace.path);
+      try {
+        await jail.initialize();
+      } catch {
+        throw rpcDomainError(-32044, 'not_found', 'Session workspace is unavailable');
+      }
+      const row = services.db.client
+        .prepare('SELECT data_json FROM optimizer_blobs WHERE id=?')
+        .get(input.handle) as { data_json: string } | undefined;
+      if (!row) throw rpcDomainError(-32044, 'not_found', 'Output handle not found');
+      let blob: {
+        sessionId?: string;
+        workspaceId?: string;
+        content?: unknown;
+        sourcePath?: unknown;
+        command?: unknown;
+      };
+      try {
+        blob = JSON.parse(row.data_json) as typeof blob;
+      } catch {
+        throw rpcDomainError(-32044, 'not_found', 'Output handle not found');
+      }
+      if (
+        blob.sessionId !== session.id ||
+        (blob.workspaceId !== undefined && blob.workspaceId !== session.workspaceId) ||
+        typeof blob.content !== 'string'
+      )
+        throw rpcDomainError(-32044, 'not_found', 'Output handle not found');
+      if (typeof blob.sourcePath === 'string') {
+        if (isProtectedWorkspacePath(blob.sourcePath))
+          throw rpcDomainError(-32044, 'not_found', 'Output handle not found');
+        try {
+          await jail.resolve(blob.sourcePath);
+        } catch {
+          throw rpcDomainError(-32044, 'not_found', 'Output handle not found');
+        }
+      }
+      if (
+        typeof blob.command === 'string' &&
+        blob.command
+          .split(/[\s"'`|&;<>()[\]]+/)
+          .some((path) => path && isProtectedWorkspacePath(path))
+      )
+        throw rpcDomainError(-32044, 'not_found', 'Output handle not found');
+      return readOutputPage(blob.content, input);
     },
     create(rawInput: unknown) {
       const input = CreateSchema.parse(rawInput);
@@ -485,6 +539,7 @@ export function register(host: CoreHost, services: FerryServices): void {
               partId: PartIdSchema.parse(event.partId),
               textDelta: event.text,
             });
+          else if (event.type === 'agent.event') host.emit('agent.event', event);
           else if (event.type === 'session.part') {
             host.emit('session.part', event);
             if (event.part.type === 'approval_request' && event.part.state === 'pending')
@@ -1036,16 +1091,25 @@ export function register(host: CoreHost, services: FerryServices): void {
                 { once: true },
               );
             }),
-          filterOutput: async (name, output, command) => {
+          filterOutput: async (name, output, command, sourcePath) => {
             const { optimizeOutput } = await import('@ferry/optimizer');
             const result = optimizeOutput(command ?? name, output);
+            if (sourcePath && isProtectedWorkspacePath(sourcePath))
+              return { text: result.output, filtered: result.output !== output };
             const handle = result.output === output ? undefined : newId('recovery');
             if (handle)
               services.db.client
                 .prepare('INSERT INTO optimizer_blobs (id,data_json,updated_at) VALUES (?,?,?)')
                 .run(
                   handle,
-                  JSON.stringify({ id: handle, sessionId: session.id, content: output }),
+                  JSON.stringify({
+                    id: handle,
+                    sessionId: session.id,
+                    workspaceId: session.workspaceId,
+                    ...(sourcePath ? { sourcePath } : {}),
+                    ...(command ? { command } : {}),
+                    content: output,
+                  }),
                   services.clock.now().toISOString(),
                 );
             return {
@@ -1054,12 +1118,37 @@ export function register(host: CoreHost, services: FerryServices): void {
               ...(handle ? { recoveryHandle: handle } : {}),
             };
           },
-          readRecovery: (handle) => {
+          readRecovery: async (handle) => {
             const row = services.db.client
               .prepare('SELECT data_json FROM optimizer_blobs WHERE id=?')
               .get(handle) as { data_json: string } | undefined;
-            if (!row) return Promise.resolve(undefined);
-            return Promise.resolve((JSON.parse(row.data_json) as { content?: string }).content);
+            if (!row) return undefined;
+            try {
+              const blob = JSON.parse(row.data_json) as {
+                sessionId?: string;
+                workspaceId?: string;
+                sourcePath?: string;
+                command?: string;
+                content?: string;
+              };
+              if (
+                blob.sessionId !== session.id ||
+                (blob.workspaceId !== undefined && blob.workspaceId !== session.workspaceId) ||
+                isProtectedWorkspacePath(blob.sourcePath ?? '') ||
+                blob.command?.split(/[\s"'`|&;<>()[\]]+/).some(isProtectedWorkspacePath)
+              )
+                return undefined;
+              if (blob.sourcePath !== undefined) {
+                try {
+                  await new WorkspaceJail(workspace.path).resolve(blob.sourcePath);
+                } catch {
+                  return undefined;
+                }
+              }
+              return blob.content;
+            } catch {
+              return undefined;
+            }
           },
         });
         void loop

@@ -52,6 +52,15 @@ const samples = {
     part: MessagePart;
   },
   'session.delta': { sessionId, messageId, partId, textDelta: 'delta' },
+  'agent.event': {
+    sessionId,
+    event: {
+      id: 'event_test',
+      type: 'text',
+      content: 'hello',
+      timestamp: '2026-09-23T10:00:00.000Z',
+    },
+  },
   'routing.explain': {
     sessionId,
     selected: 'google/gemini-3.8-flash',

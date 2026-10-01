@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { RunIdSchema, SessionIdSchema } from './ids.js';
 import { FileChangeSchema } from './session.js';
+import { AgentEventSchema } from './agent-event.js';
 export const LaneSchema = z.object({
   name: z.string(),
   implementer: z.enum(['codex', 'opencode', 'claude', 'acp', 'ferry']),
@@ -55,6 +56,7 @@ export const DelegationRunSchema = z.object({
   startedAt: z.iso.datetime(),
   finishedAt: z.iso.datetime().nullable(),
   progress: z.array(z.object({ at: z.iso.datetime(), text: z.string() })),
+  events: z.array(AgentEventSchema).default([]),
   finalMessage: z.string().nullable(),
   touchedFiles: z.array(FileChangeSchema),
   gateResults: z.array(GateResultSchema),

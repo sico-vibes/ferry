@@ -44,6 +44,21 @@ export function useFerryEvents(): void {
         const current = cache.getQueryData<SessionDetail>(key);
         if (current) cache.setQueryData(key, { ...current, session });
       }),
+      client.on('agent.event', ({ sessionId, event }) => {
+        const key = keys.session(sessionId);
+        const current = cache.getQueryData<SessionDetail>(key);
+        if (current) {
+          if (!current.session.agentEvents.some((item) => item.id === event.id)) {
+            cache.setQueryData(key, {
+              ...current,
+              session: {
+                ...current.session,
+                agentEvents: [...current.session.agentEvents, event].slice(-2_000),
+              },
+            });
+          }
+        } else void cache.invalidateQueries({ queryKey: key });
+      }),
       client.on('session.message', ({ sessionId, message }) => {
         const key = keys.session(sessionId);
         const current = cache.getQueryData<SessionDetail>(key);

@@ -209,6 +209,7 @@ describe('QA delegate: lifecycle', () => {
       startedAt: new Date().toISOString(),
       finishedAt: null,
       progress: [],
+      events: [],
       finalMessage: null,
       touchedFiles: [],
       gateResults: [],

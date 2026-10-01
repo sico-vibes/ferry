@@ -59,6 +59,9 @@ import {
   type TaskRecord,
   type UsageRecord,
   type RoutingSettings,
+  type AgentEvent as StructuredAgentEvent,
+  normalizeInlineThinking,
+  normalizeReasoningPart,
 } from '@ferry/shared';
 import type { Catalog } from '@ferry/catalog';
 import type { RawCallObservation } from '@ferry/providers';
@@ -80,6 +83,7 @@ import {
 } from './role-plan.js';
 
 export type AgentEvent =
+  | { type: 'agent.event'; sessionId: string; event: StructuredAgentEvent }
   | { type: 'session.message'; message: Message }
   | { type: 'session.part'; sessionId: string; messageId: string; part: MessagePart }
   | { type: 'session.delta'; sessionId: string; messageId: string; partId: string; text: string }
@@ -105,6 +109,7 @@ export interface ModelToolCall {
 export interface GeneratedStep {
   text?: string;
   reasoning?: string;
+  reasoningAvailable?: boolean;
   toolCalls?: ModelToolCall[];
   inputTokens?: number;
   outputTokens?: number;
@@ -118,6 +123,7 @@ export interface StepGeneratorInput {
   signal: AbortSignal;
   onProgress?: () => void;
   onDelta: (text: string) => void;
+  onReasoning?: (text: string) => void;
   modelHints: ModelHints;
 }
 export type StepGenerator = (input: StepGeneratorInput) => Promise<GeneratedStep>;
@@ -167,6 +173,7 @@ export interface AgentOptions {
     name: string,
     text: string,
     command?: string,
+    sourcePath?: string,
   ) => Promise<{ text: string; filtered: boolean; recoveryHandle?: string }>;
   readRecovery?: (handle: string) => Promise<string | undefined>;
   title?: (prompt: string, signal: AbortSignal) => Promise<string>;
@@ -277,6 +284,11 @@ export class AgentLoop {
     return this.options.routingNow?.() ?? Date.now();
   }
 
+  private emitStructuredEvent(sessionId: string, event: StructuredAgentEvent): void {
+    this.options.store.appendAgentEvent(sessionId, event);
+    this.options.emit({ type: 'agent.event', sessionId, event });
+  }
+
   async run({ sessionId, signal: outerSignal, resume = false }: RunInput): Promise<RunResult> {
     if (this.options.routingSettings?.().cooldownReasons)
       await this.options.probeHeuristicCooldowns?.();
@@ -367,8 +379,9 @@ export class AgentLoop {
           }
         }
       },
-      filterOutput: async (name, text, command) => {
-        if (this.options.filterOutput) return this.options.filterOutput(name, text, command);
+      filterOutput: async (name, text, command, sourcePath) => {
+        if (this.options.filterOutput)
+          return this.options.filterOutput(name, text, command, sourcePath);
         const result = optimizeOutput(command ?? name, text, {
           sessionId,
           blobStore: this.recoveryStore,
@@ -755,6 +768,28 @@ export class AgentLoop {
               this.options.stepTimeoutMs ?? 120_000,
               releaseOnce,
             );
+            const inlineReasoning = normalizeInlineThinking(generated.text ?? '');
+            if (inlineReasoning.thinking) {
+              generated.text = inlineReasoning.text;
+              generated.reasoning = [generated.reasoning, inlineReasoning.thinking]
+                .filter(Boolean)
+                .join('\n');
+              generated.reasoningAvailable = true;
+            }
+            if (generated.text)
+              this.emitStructuredEvent(sessionId, {
+                id: newId('event'),
+                type: 'text',
+                content: generated.text,
+                timestamp: new Date().toISOString(),
+              });
+            if (generated.reasoning)
+              this.emitStructuredEvent(sessionId, {
+                id: newId('event'),
+                type: 'thinking',
+                content: generated.reasoning,
+                timestamp: new Date().toISOString(),
+              });
             generationComplete = true;
             modelAttempts.push({
               model: model.ref,
@@ -1053,6 +1088,13 @@ export class AgentLoop {
           outputTokens: generated.outputTokens ?? 0,
           status: 'success',
         });
+        this.emitStructuredEvent(sessionId, {
+          id: newId('event'),
+          type: 'usage',
+          inputTokens: generated.inputTokens ?? 0,
+          outputTokens: generated.outputTokens ?? 0,
+          timestamp: new Date().toISOString(),
+        });
         pendingPaidRelease?.();
         pendingPaidRelease = undefined;
         pendingPaidUsageId = undefined;
@@ -1062,6 +1104,15 @@ export class AgentLoop {
           this.options.store
             .load(sessionId)
             ?.messages.find((message) => message.id === assistant.id)?.parts ?? [];
+        if (generated.reasoningAvailable === false)
+          this.emitStructuredEvent(sessionId, {
+            id: newId('event'),
+            type: 'status',
+            status: 'reasoning_unavailable',
+            message: 'This model did not expose reasoning content.',
+            reasoningAvailable: false,
+            timestamp: new Date().toISOString(),
+          });
         if (generated.reasoning)
           parts = [
             ...parts,
@@ -1247,6 +1298,15 @@ export class AgentLoop {
           };
           this.addPart(sessionId, toolPart);
           const start = Date.now();
+          const eventCallId = call.toolCallId ?? call.id ?? toolPart.id;
+          this.emitStructuredEvent(sessionId, {
+            id: newId('event'),
+            type: 'tool_use',
+            callId: eventCallId,
+            tool: call.name,
+            input: parsed.value,
+            timestamp: new Date().toISOString(),
+          });
           try {
             const result = await raceAbort(
               Promise.resolve(definition.execute(parsed.value, { signal, task: taskRecord })),
@@ -1289,6 +1349,16 @@ export class AgentLoop {
             }));
             toolPart.durationMs = Date.now() - start;
             this.replacePart(sessionId, toolPart);
+            this.emitStructuredEvent(sessionId, {
+              id: newId('event'),
+              type: 'tool_result',
+              callId: eventCallId,
+              output: output.text,
+              timestamp: new Date().toISOString(),
+              durationMs: toolPart.durationMs,
+              truncated: output.filtered,
+              ...(output.recoveryHandle ? { recoveryHandle: output.recoveryHandle } : {}),
+            });
             this.noteToolCall(selectedRef);
             if (output.filtered)
               this.options.emit({
@@ -1309,6 +1379,14 @@ export class AgentLoop {
               recoveryHandle: null,
             };
             this.replacePart(sessionId, toolPart);
+            this.emitStructuredEvent(sessionId, {
+              id: newId('event'),
+              type: 'tool_result',
+              callId: eventCallId,
+              output: toolPart.output.text,
+              timestamp: new Date().toISOString(),
+              durationMs: toolPart.durationMs,
+            });
             retryErrors.push(`Tool ${call.name} failed: ${toolPart.output.text}`);
           }
         }
@@ -1366,6 +1444,12 @@ export class AgentLoop {
       const message = poolExhausted
         ? error.message
         : formatAttemptSummary(attemptFailures, providerDetail);
+      this.emitStructuredEvent(sessionId, {
+        id: newId('event'),
+        type: 'error',
+        message,
+        timestamp: new Date().toISOString(),
+      });
       const nextCapacity = poolExhausted
         ? message.split('Next free capacity: ')[1]?.replace(/\. Wait or add a provider\.$/, '')
         : undefined;
@@ -1678,6 +1762,13 @@ export class AgentLoop {
       status: 'idle',
       inFlight: false,
     });
+    this.emitStructuredEvent(sessionId, {
+      id: newId('event'),
+      type: 'status',
+      status,
+      message: `Agent run ${status}.`,
+      timestamp: new Date().toISOString(),
+    });
     this.options.emit({ type: 'session.updated', session });
     return { session, taskRecord, steps, tokens, status };
   }
@@ -1790,7 +1881,16 @@ export function createStepGenerator(
     { providerId: model.providerId, model: model.ref },
     options.providerFetch ?? globalThis.fetch,
   );
-  return async ({ system, messages, tools, signal, onDelta, onProgress, modelHints }) => {
+  return async ({
+    system,
+    messages,
+    tools,
+    signal,
+    onDelta,
+    onReasoning,
+    onProgress,
+    modelHints,
+  }) => {
     const sdkTools: Record<string, unknown> = Object.fromEntries(
       tools.map((definition) => [
         definition.name,
@@ -1843,12 +1943,35 @@ export function createStepGenerator(
       onError: () => undefined,
     });
     let text = '';
+    let reasoning = '';
+    let reasoningAvailable = false;
     for await (const part of result.stream) {
       onProgress?.();
       if (part.type === 'error') throw part.error;
-      if (part.type !== 'text-delta') continue;
-      text += part.text;
-      onDelta(part.text);
+      const streamPart = part as unknown as {
+        type: string;
+        text?: string;
+        delta?: string;
+        reasoning?: string;
+        reasoning_content?: string;
+        thought?: boolean;
+      };
+      const exposedReasoning =
+        normalizeReasoningPart(streamPart) ??
+        streamPart.reasoning_content ??
+        (streamPart.type === 'reasoning-delta' ||
+        streamPart.type === 'reasoning' ||
+        streamPart.thought
+          ? (streamPart.delta ?? streamPart.text ?? streamPart.reasoning)
+          : undefined);
+      if (typeof exposedReasoning === 'string' && exposedReasoning) {
+        reasoningAvailable = true;
+        reasoning += exposedReasoning;
+        onReasoning?.(exposedReasoning);
+      } else if (streamPart.type === 'text-delta' && typeof streamPart.text === 'string') {
+        text += streamPart.text;
+        onDelta(streamPart.text);
+      }
     }
     const [usage, rawCalls] = await Promise.all([result.usage, result.toolCalls]);
     const calls = z
@@ -1864,6 +1987,8 @@ export function createStepGenerator(
       .parse(rawCalls);
     return {
       text,
+      ...(reasoning ? { reasoning } : {}),
+      reasoningAvailable,
       toolCalls: calls.map((call) => {
         const providerOptions = call.providerOptions ?? call.providerMetadata;
         return {

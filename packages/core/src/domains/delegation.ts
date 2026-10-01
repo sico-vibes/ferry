@@ -11,6 +11,7 @@ import {
   RunIdSchema,
   SessionIdSchema,
   newId,
+  isProtectedWorkspacePath,
   type DelegationRun,
   type RunId,
   type Workspace,
@@ -183,6 +184,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         startedAt: now,
         finishedAt: null,
         progress: [],
+        events: [],
         finalMessage: null,
         touchedFiles: [],
         gateResults: [],
@@ -204,6 +206,43 @@ export function register(host: CoreHost, services: FerryServices): void {
         lane,
         brief: delegationBrief,
         cwd: workspace.path,
+        onRecoveryOutput: (event, output) => {
+          const use = (services.delegations.get(runId)?.events ?? []).find(
+            (item) => item.type === 'tool_use' && item.callId === event.callId,
+          );
+          const args =
+            use?.type === 'tool_use' && use.input && typeof use.input === 'object'
+              ? (use.input as Record<string, unknown>)
+              : {};
+          const sourcePath =
+            typeof args.path === 'string'
+              ? args.path
+              : typeof args.file_path === 'string'
+                ? args.file_path
+                : undefined;
+          const command = typeof args.command === 'string' ? args.command : undefined;
+          if (
+            isProtectedWorkspacePath(sourcePath ?? '') ||
+            command?.split(/[\s"'`|&;<>()[\]]+/).some(isProtectedWorkspacePath)
+          )
+            return null;
+          const handle = newId('recovery');
+          services.db.client
+            .prepare('INSERT INTO optimizer_blobs (id,data_json,updated_at) VALUES (?,?,?)')
+            .run(
+              handle,
+              JSON.stringify({
+                id: handle,
+                sessionId,
+                workspaceId: workspace.id,
+                ...(sourcePath ? { sourcePath } : {}),
+                ...(command ? { command } : {}),
+                content: output,
+              }),
+              services.clock.now().toISOString(),
+            );
+          return handle;
+        },
         checkpointDiff: async () => {
           const diff = await shadow.diff(beforeId);
           return (diff.match(/^diff --git a\/(.+?) b\//gm) ?? []).map((line) => ({

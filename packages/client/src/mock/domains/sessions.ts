@@ -1,5 +1,5 @@
 import type { FerryClient } from '../../ferry-client.js';
-import { SessionSchema } from '@ferry/shared';
+import { ReadOutputInputSchema, readOutputPage, SessionSchema } from '@ferry/shared';
 import type { Message, SessionId } from '@ferry/shared';
 import type { MockDeps } from './deps.js';
 import type { MockStore } from '../types.js';
@@ -40,6 +40,26 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
     async get(id) {
       await before();
       return structuredClone(sessionDetail(id));
+    },
+    async readOutput(rawInput) {
+      await before();
+      const input = ReadOutputInputSchema.parse(rawInput);
+      const current = session(input.sessionId);
+      const messageOutput = (state.messages.get(current.id) ?? [])
+        .flatMap((message) => message.parts)
+        .find((part) => part.type === 'tool_call' && part.output?.recoveryHandle === input.handle);
+      const eventOutput = state.delegationRuns
+        .filter((run) => run.sessionId === current.id)
+        .flatMap((run) => run.events)
+        .find((event) => event.type === 'tool_result' && event.recoveryHandle === input.handle);
+      const content =
+        messageOutput?.type === 'tool_call'
+          ? messageOutput.output?.text
+          : eventOutput?.type === 'tool_result'
+            ? eventOutput.output
+            : undefined;
+      if (content === undefined) throw new Error('Output handle not found');
+      return readOutputPage(content, input);
     },
     async create(i) {
       await before();

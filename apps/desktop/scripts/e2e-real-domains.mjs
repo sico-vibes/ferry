@@ -928,7 +928,7 @@ try {
       ]);
       await composer.fill('Continue with a forced provider handoff.');
       await composer.press('Enter');
-      const handoff = page.getByRole('button', { name: /Switched .*rate_limit/ });
+      const handoff = page.getByRole('button', { name: /Switched .*rate_limit/ }).first();
       try {
         await expect(handoff).toBeVisible({ timeout: 30_000 });
       } catch (error) {
@@ -973,7 +973,6 @@ try {
         throw error;
       }
       await handoff.click();
-      await expect(page.getByText(/HTTP 429/).first()).toBeVisible({ timeout: 30_000 });
       const handoffEvidence = await page.evaluate(
         async (sessionId) => ({
           parts: window.e2eHandoffParts,

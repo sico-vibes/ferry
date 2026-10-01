@@ -7,7 +7,7 @@ import { ProviderIdSchema, SettingsSchema, SystemInfoSchema } from '@ferry/share
 import type { CheckpointId, Session, SessionId, WorkspaceId } from '@ferry/shared';
 import { canonicalizePath } from '@ferry/shared/node-paths';
 import { ShadowCheckpoints, WorkspaceJail } from '@ferry/workspace';
-import { openDatabase } from '@ferry/storage';
+import { openDatabase, STORAGE_SCHEMA_VERSION } from '@ferry/storage';
 import { FakeOpenAIServer } from '@ferry/testkit';
 import { CoreHost, createCoreHost, createMemoryTransportPair } from '../src/index.js';
 import { modelHintsFromRegistry } from '../src/session-deps.js';
@@ -161,8 +161,10 @@ describe('QA settings domain', () => {
     first.close();
     const second = await openDatabase(join(dir, 'db', 'ferry.sqlite'));
     try {
-      expect(Number(version)).toBe(2);
-      expect(Number(second.client.pragma('user_version', { simple: true }))).toBe(2);
+      expect(Number(version)).toBe(STORAGE_SCHEMA_VERSION);
+      expect(Number(second.client.pragma('user_version', { simple: true }))).toBe(
+        STORAGE_SCHEMA_VERSION,
+      );
     } finally {
       second.close();
     }
@@ -554,6 +556,7 @@ describe('QA system domain', () => {
       );
       expect(core.rpc.implementedMethods).toContain('settings.update');
       expect(core.rpc.implementedMethods).toContain('sessions.send');
+      expect(core.rpc.implementedMethods).toContain('sessions.readOutput');
     } finally {
       await core.close();
     }

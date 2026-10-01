@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"content":[{"type":"text","text":"Claude answer"},{"type":"thinking","thinking":"considering"},{"type":"tool_use","id":"call-claude","name":"Read","input":{"file_path":"README.md"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call-claude","content":"file contents"}]}}

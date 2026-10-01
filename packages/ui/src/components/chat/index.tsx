@@ -20,7 +20,14 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
-import type { FileChange, MessagePart, PlanItem, ToolName, ToolOutput } from '@ferry/shared';
+import type {
+  AgentEvent,
+  FileChange,
+  MessagePart,
+  PlanItem,
+  ToolName,
+  ToolOutput,
+} from '@ferry/shared';
 import { FerryMark } from '../../brand/FerryMark';
 import { CountUp } from '../data/CountUp';
 import { ReactBitsThinkingLine } from './ThinkingLine';
@@ -29,6 +36,8 @@ import { ShinyText } from '../../effects/ShinyText';
 import { cn } from '../../lib/cn';
 import { Pill, focusRingClass } from '../primitives';
 import { Tooltip } from '../forms';
+import { AgentTimeline } from './AgentTimeline';
+export { AgentTimeline, buildTimelineLanes } from './AgentTimeline';
 
 const MarkdownContent = lazy(() =>
   import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })),
@@ -298,7 +307,7 @@ export function ToolStepGroup({
   onOpenDiff,
 }: {
   parts: Extract<MessagePart, { type: 'tool_call' }>[];
-  onShowFull?: (text: string) => void;
+  onShowFull?: (handle: string) => void;
   onOpenDiff?: () => void;
 }) {
   const failed = parts.some((part) => part.status === 'failed');
@@ -366,9 +375,8 @@ export function ToolStepGroup({
               {...(onShowFull
                 ? {
                     onShowFull: () => {
-                      onShowFull(
-                        `${part.output?.text ?? ''}\n\nFull output restored from recovery handle.`,
-                      );
+                      const handle = part.output?.recoveryHandle;
+                      if (handle) onShowFull(handle);
                     },
                   }
                 : {})}
@@ -475,6 +483,8 @@ export function DelegationCard({
   status,
   progress,
   usage,
+  events = [],
+  onShowFull,
   onReviewDiff,
   onCancel,
 }: {
@@ -483,6 +493,8 @@ export function DelegationCard({
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   progress: string;
   usage: string;
+  events?: AgentEvent[];
+  onShowFull?: (handle: string) => void;
   onReviewDiff?: () => void;
   onCancel?: () => void;
 }) {
@@ -497,6 +509,7 @@ export function DelegationCard({
         </Pill>
       </header>
       <p className="text-label text-text-2">{progress}</p>
+      <AgentTimeline events={events} {...(onShowFull ? { onShowFull } : {})} />
       <footer className="flex items-center justify-between">
         <span className="text-meta text-text-3">{usage}</span>
         <span className="flex gap-2">

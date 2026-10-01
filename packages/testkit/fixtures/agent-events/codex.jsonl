@@ -1,0 +1,4 @@
+{"type":"item.agentMessage.delta","delta":"Codex answer"}
+{"type":"item.started","item":{"id":"call-codex","type":"commandExecution","command":"git status"}}
+{"type":"item.completed","item":{"id":"call-codex","type":"commandExecution","aggregatedOutput":"clean"}}
+{"type":"turn.completed","usage":{"input_tokens":12,"output_tokens":4}}

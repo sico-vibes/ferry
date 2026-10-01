@@ -62,6 +62,7 @@ export interface ToolRegistryOptions {
     tool: string,
     text: string,
     command?: string,
+    sourcePath?: string,
   ) => Promise<{ text: string; filtered: boolean; recoveryHandle?: string }>;
   readRecovery?: (handle: string) => Promise<string | undefined>;
   sources?: readonly ToolSource[];
@@ -300,7 +301,12 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
           const result = await original(args, context);
           const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
           cachedReads.set(key, { value: result, step: options.stepNumber?.() ?? 1 });
-          const filtered = (await options.filterOutput?.(actionTool, text)) ?? {
+          const filtered = (await options.filterOutput?.(
+            actionTool,
+            text,
+            undefined,
+            (args as z.infer<typeof ReadFileSchema> | z.infer<typeof ListDirSchema>).path,
+          )) ?? {
             text,
             filtered: false,
           };
@@ -330,6 +336,9 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
           text,
           definition.name === 'run_command'
             ? (args as z.infer<typeof CommandSchema>).command
+            : undefined,
+          definition.name === 'read_file' || definition.name === 'list_dir'
+            ? (args as z.infer<typeof ReadFileSchema> | z.infer<typeof ListDirSchema>).path
             : undefined,
         )) ?? {
           text,

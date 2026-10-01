@@ -12,6 +12,7 @@ import {
   runRetention,
   salvageReadableTables,
   SettingsRepository,
+  STORAGE_SCHEMA_VERSION,
   UsageDailyRepository,
 } from '../src/index.js';
 
@@ -31,10 +32,10 @@ describe('QA storage: migrations and corruption', () => {
     const dir = await tempDir();
     const file = join(dir, 'nested', 'ferry.sqlite');
     const first = await openDatabase(file);
-    expect(first.client.pragma('user_version', { simple: true })).toBe(2);
+    expect(first.client.pragma('user_version', { simple: true })).toBe(STORAGE_SCHEMA_VERSION);
     first.close();
     const second = await openDatabase(file);
-    expect(second.client.pragma('user_version', { simple: true })).toBe(2);
+    expect(second.client.pragma('user_version', { simple: true })).toBe(STORAGE_SCHEMA_VERSION);
     second.close();
   });
 

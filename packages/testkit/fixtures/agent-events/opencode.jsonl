@@ -1,0 +1,4 @@
+{"type":"text","part":{"text":"OpenCode answer"}}
+{"type":"tool","part":{"id":"call-opencode","tool":"read","state":{"status":"running","input":{"file":"README.md"}}}}
+{"type":"tool","part":{"id":"call-opencode","tool":"read","state":{"status":"completed","output":"file contents"}}}
+{"type":"step-finish","reason":"stop","tokens":{"input":100,"output":24}}

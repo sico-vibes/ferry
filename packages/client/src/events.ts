@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   CapacitySummarySchema,
   DelegationRunSchema,
+  AgentEventSchema,
   MessageIdSchema,
   MessagePartSchema,
   MessageSchema,
@@ -18,6 +19,7 @@ import {
 import type {
   CapacitySummary,
   DelegationRun,
+  AgentEvent,
   Message,
   MessagePart,
   Provider,
@@ -53,6 +55,7 @@ export const FerryEventSchemas = {
     partId: PartIdSchema,
     textDelta: z.string(),
   }),
+  'agent.event': z.object({ sessionId: SessionIdSchema, event: AgentEventSchema }),
   'routing.explain': z.object({
     sessionId: SessionIdSchema,
     selected: z.string(),
@@ -140,6 +143,7 @@ export interface FerryEvents {
     partId: import('@ferry/shared').PartId;
     textDelta: string;
   };
+  'agent.event': { sessionId: import('@ferry/shared').SessionId; event: AgentEvent };
   'routing.explain': {
     sessionId: import('@ferry/shared').SessionId;
     selected: string;

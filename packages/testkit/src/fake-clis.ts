@@ -41,12 +41,24 @@ function stream(name: FakeCliName, finalText: string): unknown[] {
       { type: 'step-start', part: { id: 'step_fake' } },
       {
         type: 'tool',
-        callID: 'call_fake',
-        tool: 'bash',
-        state: {
-          status: 'completed',
-          input: { command: 'node test.js' },
-          output: 'failed as expected',
+        part: {
+          id: 'call_fake',
+          callID: 'call_fake',
+          tool: 'bash',
+          state: { status: 'running', input: { command: 'node test.js' } },
+        },
+      },
+      {
+        type: 'tool',
+        part: {
+          id: 'call_fake',
+          callID: 'call_fake',
+          tool: 'bash',
+          state: {
+            status: 'completed',
+            input: { command: 'node test.js' },
+            output: 'failed as expected',
+          },
         },
       },
       { type: 'step-finish', reason: 'stop', tokens: { input: 100, output: 24 } },
