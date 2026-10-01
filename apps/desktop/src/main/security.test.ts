@@ -154,6 +154,27 @@ describe('Electron security boundary', () => {
     ).toBe(true);
   });
 
+  it('uses case-sensitive POSIX renderer paths', () => {
+    const posix = { platform: 'linux' as const, canonicalize: (value: string) => value };
+
+    expect(
+      isTrustedRendererOrigin(
+        'file:///opt/Ferry/renderer/index.html',
+        undefined,
+        'file:///opt/ferry/renderer/index.html',
+        posix,
+      ),
+    ).toBe(false);
+    expect(
+      isTrustedRendererOrigin(
+        'file:///opt/ferry/renderer/index.html',
+        undefined,
+        'file:///opt/ferry/renderer/index.html',
+        posix,
+      ),
+    ).toBe(true);
+  });
+
   it('accepts opaque file MessageEvent origins only for the token-bound main window', () => {
     expect(isExpectedCorePortOrigin('file:', 'null', 'null')).toBe(true);
     expect(isExpectedCorePortOrigin('file:', 'file://', 'null')).toBe(false);

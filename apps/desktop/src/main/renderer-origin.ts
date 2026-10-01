@@ -1,4 +1,5 @@
 import { canonicalizePath } from '@ferry/shared/node-paths';
+import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 interface FileUrlComparisonOptions {
@@ -28,10 +29,17 @@ export function isTrustedRendererOrigin(
     )
       return false;
 
+    const isWindows = (options.platform ?? process.platform) === 'win32';
+    const pathApi = isWindows ? path.win32 : path.posix;
     const canonicalize = options.canonicalize ?? canonicalizePath;
-    const actualPath = pathToFileURL(canonicalize(fileURLToPath(actual))).href;
-    const expectedPath = pathToFileURL(canonicalize(fileURLToPath(expected))).href;
-    return options.platform === 'win32' || (!options.platform && process.platform === 'win32')
+    const toCanonicalFileUrl = (fileUrl: URL) => {
+      const filePath = fileURLToPath(fileUrl, { windows: isWindows });
+      const normalizedPath = pathApi.normalize(canonicalize(filePath));
+      return pathToFileURL(normalizedPath, { windows: isWindows }).href;
+    };
+    const actualPath = toCanonicalFileUrl(actual);
+    const expectedPath = toCanonicalFileUrl(expected);
+    return isWindows
       ? actualPath.toLowerCase() === expectedPath.toLowerCase()
       : actualPath === expectedPath;
   } catch {
