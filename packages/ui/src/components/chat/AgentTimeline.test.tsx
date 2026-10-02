@@ -45,7 +45,7 @@ describe('AgentTimeline', () => {
     expect(lanes.tools.slice(1).every((item) => 'call' in item)).toBe(true);
   });
 
-  it('keeps thinking collapsed until expanded and shows its character and token counts', () => {
+  it('keeps activity details collapsed until expanded', () => {
     render(
       <AgentTimeline
         events={[
@@ -60,12 +60,13 @@ describe('AgentTimeline', () => {
     );
     const toggle = screen.getByRole('button', { name: /Reviewing the changed files/ });
     assert.equal(toggle.getAttribute('aria-expanded'), 'false');
-    assert.ok(screen.getByText('28 chars · ~7 tokens'));
+    assert.equal(screen.queryByText('28 chars · ~7 tokens'), null);
     fireEvent.click(toggle);
     assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+    assert.ok(screen.getByText('28 chars · ~7 tokens'));
   });
 
-  it('shows one reasoning-unavailable note for the turn', () => {
+  it('keeps the reasoning-unavailable note inside the collapsed activity', () => {
     render(
       <AgentTimeline
         events={[
@@ -86,7 +87,51 @@ describe('AgentTimeline', () => {
         ]}
       />,
     );
+    assert.equal(screen.queryByText('This model doesn’t share its reasoning.'), null);
+    fireEvent.click(screen.getByRole('button', { name: /Worked for|Working/ }));
     assert.equal(screen.getAllByText('This model doesn’t share its reasoning.').length, 1);
+  });
+
+  it('shows only the answer outside a collapsed activity chain', () => {
+    render(
+      <>
+        <AgentTimeline
+          events={[
+            {
+              id: 'answer',
+              type: 'text',
+              timestamp: '2026-09-30T10:00:00.000Z',
+              content: 'answer text',
+            },
+            call('tool-1', 'run_command'),
+            result('tool-1', 'command output'),
+          ]}
+        />
+        <p>Visible answer</p>
+      </>,
+    );
+    assert.ok(screen.getByText('Visible answer'));
+    assert.equal(screen.queryByText('answer text'), null);
+    assert.equal(screen.queryByText('command output'), null);
+  });
+
+  it('keeps resolved approval and handoff summaries inside the disclosure', () => {
+    render(
+      <AgentTimeline
+        events={[]}
+        activity={
+          <>
+            <p>Allowed: python routines/runner.py --list</p>
+            <p>Switched to Llama 3.3 70B - rate limit on Qwen3.8 27B</p>
+          </>
+        }
+      />,
+    );
+    assert.equal(screen.queryByText('Allowed: python routines/runner.py --list'), null);
+    assert.equal(screen.queryByText(/Switched to Llama/), null);
+    fireEvent.click(screen.getByRole('button', { name: /Worked for/ }));
+    assert.ok(screen.getByText('Allowed: python routines/runner.py --list'));
+    assert.ok(screen.getByText(/Switched to Llama/));
   });
 
   it('offers a full-output action with the recovery handle for truncated output', () => {
@@ -97,6 +142,7 @@ describe('AgentTimeline', () => {
         onShowFull={onShowFull}
       />,
     );
+    fireEvent.click(screen.getByRole('button', { name: /Worked for/ }));
     fireEvent.click(screen.getByRole('button', { name: /read file/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Show full output' }));
     assert.equal(onShowFull.mock.calls[0]?.[0], 'recovery:test');
@@ -139,7 +185,8 @@ describe('AgentTimeline', () => {
         },
       ];
       render(<AgentTimeline events={events} />);
-      expect(screen.getByText(`${source} fixture answer`)).toBeTruthy();
+      expect(screen.queryByText(`${source} fixture answer`)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /Worked for/ }));
       fireEvent.click(screen.getByRole('button', { name: /read file/ }));
       expect(screen.getByText('fixture output')).toBeTruthy();
     },

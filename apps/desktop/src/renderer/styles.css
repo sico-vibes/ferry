@@ -4211,6 +4211,9 @@ body {
 }
 .ferry-tooltip {
   z-index: 50;
+  max-width: min(360px, calc(100vw - 24px));
+  overflow-wrap: anywhere;
+  white-space: normal;
   border: 1px solid var(--border-soft);
   border-radius: 8px;
   background: var(--bg-raised);
@@ -5812,6 +5815,25 @@ button:not(:disabled):active,
 @media (max-width: 600px) {
   .v2-onboarding-provider-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+.v2-message-actions {
+  display: flex;
+  gap: var(--space-2);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease-out;
+}
+.transcript-message:has(.message-answer:hover) .v2-message-actions,
+.transcript-message:has(.message-answer:focus-within) .v2-message-actions,
+.v2-message-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .v2-message-actions {
+    transition: none;
   }
 }
 
