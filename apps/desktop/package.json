@@ -74,6 +74,7 @@
     "monaco-editor": "0.56.0",
     "motion": "13.4.1",
     "radix-ui": "1.6.7",
+    "rcedit": "5.0.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-is": "19.3.0",
