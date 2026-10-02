@@ -4,6 +4,7 @@ import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 
 const modelsMaxAgeMs = 24 * 60 * 60 * 1000;
+const retryDelaysMs = [60_000, 120_000, 300_000, 900_000, 3_600_000] as const;
 
 function baseUrlFor(services: FerryServices, id: string): string | undefined {
   const envName = `FERRY_PROVIDER_BASE_URL_${id.replace(/[^a-z0-9]/gi, '_').toUpperCase()}`;
@@ -18,6 +19,19 @@ function isLoopbackUrl(value: string | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+function discoveryErrorClass(
+  error: unknown,
+): 'auth' | 'network' | 'server' | 'not_found' | 'unknown' {
+  const message = error instanceof Error ? error.message : String(error);
+  const status = /HTTP\s+(\d{3})/i.exec(message)?.[1];
+  if (status === '401' || status === '403') return 'auth';
+  if (status === '404') return 'not_found';
+  if (status && Number(status) >= 500) return 'server';
+  if (error instanceof TypeError || /fetch|network|socket|timeout|ECONN/i.test(message))
+    return 'network';
+  return 'unknown';
 }
 
 export interface ModelDiscovery {
@@ -52,8 +66,7 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
       const key = (await services.secrets.get(id)) ?? '';
       const keylessEnabled = limits.key_required === false && current.enabled;
       const endpointDeclared = limits.models_endpoint === '/models';
-      if (!key && !keylessEnabled) return;
-      if (!key && !endpointDeclared && !keylessEnabled) return;
+      if (!key && !keylessEnabled && !endpointDeclared) return;
 
       try {
         const providerId = ProviderIdSchema.parse(id);
@@ -73,11 +86,58 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
           availableModels: models,
           modelCount: models.length,
           modelsVerifiedAt: fetchedAt,
+          discoveryFailedAt: null,
+          discoveryFailures: 0,
+          discoveryErrorClass: null,
+          discoveryUnsupported: false,
         };
         services.providers.put(updated);
-        host.emit('provider.updated', updated);
+        if (
+          saved.keyStatus !== updated.keyStatus ||
+          saved.health !== updated.health ||
+          saved.discoveryUnsupported ||
+          saved.discoveryFailures ||
+          saved.modelsVerifiedAt !== updated.modelsVerifiedAt ||
+          saved.modelCount !== updated.modelCount
+        )
+          host.emit('provider.updated', updated);
       } catch (error) {
-        services.logger.warn({ err: error, providerId: id }, 'Provider model discovery failed');
+        if (controller.signal.aborted) return;
+        const saved = services.providers.get(id);
+        if (!saved) return;
+        const errorClass = discoveryErrorClass(error);
+        const failedAt = services.clock.now().toISOString();
+        const failures = (saved.discoveryFailures ?? 0) + 1;
+        const unsupported = errorClass === 'not_found';
+        const authFailure = errorClass === 'auth';
+        const updated = {
+          ...saved,
+          discoveryFailedAt: failedAt,
+          discoveryFailures: failures,
+          discoveryErrorClass: errorClass,
+          ...(unsupported ? { discoveryUnsupported: true, modelsVerifiedAt: failedAt } : {}),
+          ...(authFailure
+            ? { keyStatus: 'invalid' as const, health: 'auth_invalid' as const }
+            : {}),
+        };
+        services.providers.put(updated);
+        const delayMs =
+          retryDelaysMs[Math.min(failures - 1, retryDelaysMs.length - 1)] ?? 3_600_000;
+        services.logger.warn(
+          {
+            providerId: id,
+            errorClass,
+            failures,
+            retryInMs: unsupported || authFailure ? null : delayMs,
+          },
+          'Provider model discovery failed',
+        );
+        if (
+          saved.keyStatus !== updated.keyStatus ||
+          saved.health !== updated.health ||
+          saved.discoveryUnsupported !== updated.discoveryUnsupported
+        )
+          host.emit('provider.updated', updated);
       }
     })().finally(() => {
       inFlight.delete(id);
@@ -88,18 +148,29 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
     return task;
   };
 
-  const refreshIfStale = async (id: string): Promise<void> => {
+  const refreshIfStale = (id: string): Promise<void> => {
     const saved = services.providers.get(id);
-    const fetchedAt = saved?.modelsVerifiedAt ? Date.parse(saved.modelsVerifiedAt) : Number.NaN;
-    const needsHealthRecovery = Boolean(
-      saved && (['auth_invalid', 'down'].includes(saved.health) || saved.keyStatus === 'invalid'),
-    );
+    if (
+      !saved ||
+      saved.discoveryUnsupported ||
+      saved.health === 'auth_invalid' ||
+      saved.keyStatus === 'invalid'
+    )
+      return Promise.resolve();
+    const failedAt = saved.discoveryFailedAt ? Date.parse(saved.discoveryFailedAt) : Number.NaN;
+    const failures = saved.discoveryFailures ?? 0;
+    const retryDelay = retryDelaysMs[Math.min(Math.max(0, failures - 1), retryDelaysMs.length - 1)];
+    if (
+      Number.isFinite(failedAt) &&
+      retryDelay !== undefined &&
+      services.clock.now().getTime() - failedAt < retryDelay
+    )
+      return Promise.resolve();
+    const fetchedAt = saved.modelsVerifiedAt ? Date.parse(saved.modelsVerifiedAt) : Number.NaN;
     const stale =
-      needsHealthRecovery ||
-      services.models.list(id).length === 0 ||
-      !Number.isFinite(fetchedAt) ||
-      services.clock.now().getTime() - fetchedAt >= modelsMaxAgeMs;
-    if (stale) await refresh(id);
+      !Number.isFinite(fetchedAt) || services.clock.now().getTime() - fetchedAt >= modelsMaxAgeMs;
+    if (stale) void refresh(id).catch(() => undefined);
+    return Promise.resolve();
   };
 
   const discovery: ModelDiscovery = {

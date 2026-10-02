@@ -69,6 +69,10 @@ function providerRecord(services: FerryServices, id: string): Provider {
     modelCount,
     ...(availableModels ? { availableModels } : {}),
     modelsVerifiedAt: saved?.modelsVerifiedAt ?? null,
+    discoveryFailedAt: saved?.discoveryFailedAt ?? null,
+    discoveryFailures: saved?.discoveryFailures ?? 0,
+    discoveryErrorClass: saved?.discoveryErrorClass ?? null,
+    discoveryUnsupported: saved?.discoveryUnsupported ?? false,
     freeTierUnsupported: saved?.freeTierUnsupported ?? false,
     excludedModelRefs: saved?.excludedModelRefs ?? [],
     windows: services.quota.getWindows(id),
@@ -182,6 +186,10 @@ export function register(host: CoreHost, services: FerryServices): void {
         enabled: true,
         availableModels: [],
         modelsVerifiedAt: null,
+        discoveryFailedAt: null,
+        discoveryFailures: 0,
+        discoveryErrorClass: null,
+        discoveryUnsupported: false,
         freeTierUnsupported: false,
         excludedModelRefs: [],
       });
@@ -232,12 +240,16 @@ export function register(host: CoreHost, services: FerryServices): void {
         cooldownUntil: null,
         availableModels: [],
         modelsVerifiedAt: null,
+        discoveryFailedAt: null,
+        discoveryFailures: 0,
+        discoveryErrorClass: null,
+        discoveryUnsupported: false,
         freeTierUnsupported: false,
         excludedModelRefs: [],
       });
       services.models.replace(id, []);
       host.emit('provider.updated', provider);
-      void modelDiscovery.refresh(id);
+      void modelDiscovery.refresh(id).catch(() => undefined);
       return provider;
     },
     async removeKey(rawId: unknown) {

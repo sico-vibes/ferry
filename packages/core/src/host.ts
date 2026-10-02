@@ -18,6 +18,7 @@ import { startCoreWebSocketServer, type CoreWebSocketHandle } from './websocket.
 import { ZodError } from 'zod';
 import { redactKnownSecretText, redactKnownSecrets } from '@ferry/shared';
 import { canonicalizePath } from '@ferry/shared/node-paths';
+import { performance } from 'node:perf_hooks';
 
 const lockRecoveryGraceMs = 5_000;
 
@@ -98,6 +99,10 @@ export class CoreHost {
   #websocket: CoreWebSocketHandle | undefined;
   #started = false;
   #stopped = false;
+  #activeRpcMethods = new Map<string, number>();
+  #eventLoopLagMs = 0;
+  #lagTimer: ReturnType<typeof setTimeout> | undefined;
+  #lagWarningIssued = false;
 
   constructor(readonly options: CoreOptions) {
     this.dataDir = canonicalizePath(options.dataDir);
@@ -185,6 +190,7 @@ export class CoreHost {
       }
     };
     this.#started = true;
+    this.#startLagMonitor();
     if (this.options.transport)
       this.#unsubscribe = this.options.transport.subscribe((message) => {
         void this.handleMessage(message);
@@ -219,6 +225,8 @@ export class CoreHost {
   async stop(): Promise<void> {
     if (!this.#started) return;
     this.#started = false;
+    if (this.#lagTimer) clearTimeout(this.#lagTimer);
+    this.#lagTimer = undefined;
     await Promise.allSettled(
       [...this.#shutdownHandlers].map((handler) => Promise.resolve().then(handler)),
     );
@@ -297,6 +305,11 @@ export class CoreHost {
         platform: process.platform,
         dataDir: trustedTransport ? this.dataDir : null,
         realDomains: this.realDomains,
+        coreBusy: {
+          busy: this.#eventLoopLagMs > 200 || this.#activeRpcMethods.size > 0,
+          eventLoopLagMs: this.#eventLoopLagMs,
+          activeRpcMethod: [...this.#activeRpcMethods.keys()].at(-1) ?? null,
+        },
       };
       return SystemInfoSchema.parse(info);
     }
@@ -329,12 +342,46 @@ export class CoreHost {
         `Method is not implemented: ${request.method}`,
       );
     const schema = FERRY_METHOD_PARAMS_SCHEMAS[request.method];
-    if (schema) {
-      const parsed = schema.safeParse(request.params ?? []);
-      if (!parsed.success) throw new DispatchError(-32010, 'validation', parsed.error.message);
-      return await handler(...parsed.data);
+    this.#activeRpcMethods.set(
+      request.method,
+      (this.#activeRpcMethods.get(request.method) ?? 0) + 1,
+    );
+    try {
+      if (schema) {
+        const parsed = schema.safeParse(request.params ?? []);
+        if (!parsed.success) throw new DispatchError(-32010, 'validation', parsed.error.message);
+        return await handler(...parsed.data);
+      }
+      return await handler(...(request.params ?? []));
+    } finally {
+      const count = this.#activeRpcMethods.get(request.method) ?? 0;
+      if (count <= 1) this.#activeRpcMethods.delete(request.method);
+      else this.#activeRpcMethods.set(request.method, count - 1);
     }
-    return await handler(...(request.params ?? []));
+  }
+
+  #startLagMonitor(): void {
+    let expected = performance.now() + 250;
+    const tick = () => {
+      if (!this.#started) return;
+      const now = performance.now();
+      this.#eventLoopLagMs = Math.max(0, now - expected);
+      if (this.#eventLoopLagMs > 200 && !this.#lagWarningIssued) {
+        this.#lagWarningIssued = true;
+        this.options.services?.logger.warn(
+          {
+            lagMs: Math.round(this.#eventLoopLagMs),
+            method: [...this.#activeRpcMethods.keys()].at(-1) ?? 'none',
+          },
+          'Core event loop lag exceeded 200 ms',
+        );
+      }
+      expected = now + 250;
+      this.#lagTimer = setTimeout(tick, 250);
+      this.#lagTimer.unref();
+    };
+    this.#lagTimer = setTimeout(tick, 250);
+    this.#lagTimer.unref();
   }
 }
 

@@ -55,6 +55,13 @@ export const ProviderSchema = z.object({
   modelCount: z.number().int().nonnegative(),
   availableModels: z.array(z.lazy(() => ModelInfoSchema)).optional(),
   modelsVerifiedAt: z.iso.datetime().nullable().optional(),
+  discoveryFailedAt: z.iso.datetime().nullable().optional(),
+  discoveryFailures: z.number().int().nonnegative().optional(),
+  discoveryErrorClass: z
+    .enum(['auth', 'network', 'server', 'not_found', 'unknown'])
+    .nullable()
+    .optional(),
+  discoveryUnsupported: z.boolean().optional(),
   freeTierUnsupported: z.boolean().optional(),
   excludedModelRefs: z.array(ModelRefSchema).optional(),
   windows: z.array(QuotaWindowSchema),

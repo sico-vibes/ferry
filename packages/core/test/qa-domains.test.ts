@@ -25,13 +25,18 @@ interface Harness {
   close(): Promise<void>;
 }
 
-async function makeCore(name: string, env?: NodeJS.ProcessEnv): Promise<Harness> {
+async function makeCore(
+  name: string,
+  env?: NodeJS.ProcessEnv,
+  clock?: { now(): Date },
+): Promise<Harness> {
   const dir = join(dataDir, name);
   const [coreTransport, clientTransport] = createMemoryTransportPair();
   const host = await createCoreHost({
     dataDir: dir,
     transport: coreTransport,
     ...(env ? { env } : {}),
+    ...(clock ? { clock } : {}),
   });
   const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
   await rpc.hello;
@@ -226,6 +231,73 @@ describe('QA settings domain', () => {
 });
 
 describe('QA discovered models', () => {
+  it('returns cached catalog models immediately and backs discovery failures off per provider', async () => {
+    let now = new Date('2026-10-02T10:00:00.000Z');
+    const clock = { now: () => new Date(now) };
+    const providerId = ProviderIdSchema.parse('openrouter');
+    let calls = 0;
+    let releaseFirst: ((response: Response) => void) | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => {
+        calls += 1;
+        if (calls === 1)
+          return new Promise<Response>((resolve) => {
+            releaseFirst = resolve;
+          });
+        if (calls === 2)
+          return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+        return Promise.resolve(new Response('{}', { status: 401 }));
+      }),
+    );
+    const core = await makeCore(
+      'models-discovery-backoff',
+      {
+        NODE_ENV: 'test',
+        FERRY_TEST_KEYRING_NAMESPACE: 'models-discovery-backoff',
+        FERRY_PROVIDER_BASE_URL_OPENROUTER: 'http://127.0.0.1:4100/openrouter/v1',
+      },
+      clock,
+    );
+    const waitFor = async (condition: () => boolean) => {
+      const deadline = Date.now() + 2_000;
+      while (!condition()) {
+        if (Date.now() >= deadline) throw new Error('Timed out waiting for discovery state');
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+    };
+    try {
+      await core.rpc.providers.setKey(providerId, 'fixture-key');
+      await waitFor(() => calls === 1);
+      const read = await core.rpc.models.page({ filters: { providerId }, limit: 10 });
+      expect(read.items.length).toBeGreaterThan(0);
+      expect(calls).toBe(1);
+
+      releaseFirst?.(new Response('{}', { status: 503 }));
+      const services = core.host.options.services;
+      if (!services) throw new Error('Core services were not created');
+      await waitFor(() => services.providers.get('openrouter')?.discoveryFailures === 1);
+      await core.rpc.models.list(providerId);
+      expect(calls).toBe(1);
+
+      now = new Date(now.getTime() + 60_001);
+      await core.rpc.models.page({ filters: { providerId }, limit: 10 });
+      await waitFor(() => calls === 2);
+      await waitFor(() => services.providers.get('openrouter')?.discoveryFailures === 0);
+      expect(services.providers.get('openrouter')?.discoveryFailedAt).toBeNull();
+
+      now = new Date(now.getTime() + 24 * 60 * 60 * 1000 + 1);
+      await core.rpc.models.list(providerId);
+      await waitFor(() => calls === 3);
+      await waitFor(() => services.providers.get('openrouter')?.keyStatus === 'invalid');
+      await core.rpc.models.list(providerId);
+      expect(calls).toBe(3);
+    } finally {
+      vi.unstubAllGlobals();
+      await core.close();
+    }
+  }, 30_000);
+
   it('binds the selected model registry protocol and edit format into ModelHints', () => {
     expect(
       modelHintsFromRegistry({

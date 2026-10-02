@@ -32,6 +32,8 @@ import {
 } from '@ferry/router';
 import { oauthModelCatalog, streamOAuthStep } from '@ferry/oauth';
 import type { FerryServices } from './services.js';
+import type { CoreHost } from './host.js';
+import { getModelDiscovery } from './domains/model-discovery.js';
 import { z } from 'zod';
 
 const providerKeyPresence = new WeakMap<FerryServices, Map<string, boolean>>();
@@ -71,6 +73,7 @@ export interface UsageSink {
 export function createSessionDependencies(
   services: FerryServices,
   emit: (event: AgentEvent) => void,
+  host?: CoreHost,
 ): {
   gateway: ModelGateway;
   usage: UsageSink;
@@ -80,6 +83,9 @@ export function createSessionDependencies(
   providerFetch: typeof globalThis.fetch;
   observe: (observation: RawCallObservation) => void;
 } {
+  const modelDiscovery = host ? getModelDiscovery(host, services) : undefined;
+  const cooldownProbeBackoff = new Map<string, { failures: number; retryAt: number }>();
+  const cooldownProbeDelays = [60_000, 120_000, 300_000, 900_000, 3_600_000] as const;
   const apiKeys: Record<string, string> = {};
   const loadedApiKeys = new Set<string>();
   const providerBaseUrls = Object.fromEntries(
@@ -334,6 +340,8 @@ export function createSessionDependencies(
           continue;
         const providerId = ProviderIdSchema.safeParse(cooldown.id);
         if (!providerId.success) continue;
+        const backoff = cooldownProbeBackoff.get(providerId.data);
+        if (backoff && backoff.retryAt > now) continue;
         const key = await services.secrets.get(providerId.data);
         if (!key) continue;
         const baseUrl = providerBaseUrls[providerId.data];
@@ -342,7 +350,18 @@ export function createSessionDependencies(
           key,
           ...(baseUrl ? [{ baseUrl }] : []),
         ).catch(() => null);
-        if (!result?.ok) continue;
+        if (!result?.ok) {
+          const failures = (backoff?.failures ?? 0) + 1;
+          cooldownProbeBackoff.set(providerId.data, {
+            failures,
+            retryAt:
+              now +
+              (cooldownProbeDelays[Math.min(failures - 1, cooldownProbeDelays.length - 1)] ??
+                3_600_000),
+          });
+          continue;
+        }
+        cooldownProbeBackoff.delete(providerId.data);
         services.cooldowns.delete(providerId.data);
         const saved = services.providers.get(providerId.data);
         if (saved)
@@ -362,11 +381,19 @@ export function createSessionDependencies(
           return enabled && (hasProviderKey(services, provider) || key_required === false);
         },
       );
+      configuredProviders.forEach(({ provider }) => {
+        if (modelDiscovery) void modelDiscovery.refreshIfStale(provider);
+      });
       const available = configuredProviders.flatMap(({ provider }) => {
         const saved = services.providers.get(provider);
-        return services.models
-          .list(provider)
-          .filter((model) => !saved?.excludedModelRefs?.includes(model.ref));
+        const cached = services.models.list(provider);
+        const cachedRefs = new Set(cached.map((model) => model.ref));
+        const catalogModels = services.catalog.models.filter(
+          (model) => model.providerId === provider && !cachedRefs.has(model.ref),
+        );
+        return [...cached, ...catalogModels].filter(
+          (model) => !saved?.excludedModelRefs?.includes(model.ref),
+        );
       });
       const oauthRoutingEnabled =
         (services.settings.get('global') as { allowSubscriptionOAuthRouting?: boolean } | undefined)

@@ -82,5 +82,12 @@ export const SystemInfoSchema = z.object({
   platform: z.enum(['win32', 'darwin', 'linux', 'web']),
   dataDir: z.string().nullable(),
   realDomains: z.array(z.string()),
+  coreBusy: z
+    .object({
+      busy: z.boolean(),
+      eventLoopLagMs: z.number().nonnegative(),
+      activeRpcMethod: z.string().nullable(),
+    })
+    .optional(),
 });
 export type SystemInfo = z.infer<typeof SystemInfoSchema>;
