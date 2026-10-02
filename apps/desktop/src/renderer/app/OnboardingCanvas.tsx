@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, FolderOpen } from 'lucide-react';
-import { FerryMark, Pill, RadioCards, TextField } from '@ferry/ui';
+import { FolderOpen } from 'lucide-react';
+import { FerryMark, UiV2 } from '@ferry/ui';
 import type { ProviderId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { keys } from '../data/queries';
@@ -147,6 +147,35 @@ export function OnboardingCanvas() {
     }));
     await cache.invalidateQueries({ queryKey: ['providers'] });
   };
+  const renderProviderOptions = (ids: readonly string[], label: string) => (
+    <div className="v2-onboarding-provider-grid" role="group" aria-label={label}>
+      {ids.map((id) => {
+        const provider = providers.find((item) => item.id === id);
+        const info = providerDetails[id];
+        const name = provider?.name ?? id;
+        const isSelected = selected.includes(id);
+        return (
+          <div className="v2-onboarding-provider" data-selected={isSelected} key={id}>
+            <UiV2.Checkbox
+              id={'provider-' + id}
+              checked={isSelected}
+              aria-label={'Select ' + name}
+              onCheckedChange={(checked) => {
+                setSelected((current) =>
+                  checked ? [...current, id] : current.filter((item) => item !== id),
+                );
+              }}
+            />
+            <label className="v2-onboarding-provider-copy" htmlFor={'provider-' + id}>
+              <strong>{name}</strong>
+              {info?.limit && <small>{info.limit}</small>}
+              {info?.tag && <small className="v2-onboarding-provider-tag">{info.tag}</small>}
+            </label>
+          </div>
+        );
+      })}
+    </div>
+  );
   const chooseFolder = async () => {
     const path = await openFolder();
     if (path) {
@@ -190,76 +219,27 @@ export function OnboardingCanvas() {
               </div>
               <h1>Code with Ferry.</h1>
               <p>Connect a provider, choose a project, and start your first session.</p>
-              <Pill
-                variant="blue-tint"
+              <UiV2.Button
                 onClick={() => {
                   setStep(1);
                 }}
               >
                 Continue
-              </Pill>
+              </UiV2.Button>
             </div>
           )}
           {step === 1 && (
             <div className="onboarding-step">
               <h1>Add a free provider</h1>
               <p>Pick the free providers Ferry can use. Add keys now or come back later.</p>
-              <RadioCards
-                multi
-                value={selected}
-                onValueChange={(value) => {
-                  setSelected(value as string[]);
-                }}
-                options={recommended.map((id) => {
-                  const provider = providers.find((item) => item.id === id);
-                  const info = providerDetails[id];
-                  return {
-                    value: id,
-                    title: provider?.name ?? id,
-                    ...(info?.limit ? { description: info.limit } : {}),
-                    ...(info?.tag ? { badge: info.tag } : {}),
-                  };
-                })}
-              />
+              {renderProviderOptions(recommended, 'Recommended providers')}
               <details className="grid gap-3">
                 <summary className="text-label cursor-pointer">More free providers</summary>
-                <RadioCards
-                  multi
-                  value={selected}
-                  onValueChange={(value) => {
-                    setSelected(value as string[]);
-                  }}
-                  options={moreFreeProviders.map((id) => {
-                    const provider = providers.find((item) => item.id === id);
-                    const info = providerDetails[id];
-                    return {
-                      value: id,
-                      title: provider?.name ?? id,
-                      ...(info?.limit ? { description: info.limit } : {}),
-                      ...(info?.tag ? { badge: info.tag } : {}),
-                    };
-                  })}
-                />
+                {renderProviderOptions(moreFreeProviders, 'More free providers')}
               </details>
               <details className="grid gap-3">
                 <summary className="text-label cursor-pointer">Credits &amp; trials</summary>
-                <RadioCards
-                  multi
-                  value={selected}
-                  onValueChange={(value) => {
-                    setSelected(value as string[]);
-                  }}
-                  options={creditsProviders.map((id) => {
-                    const provider = providers.find((item) => item.id === id);
-                    const info = providerDetails[id];
-                    return {
-                      value: id,
-                      title: provider?.name ?? id,
-                      ...(info?.limit ? { description: info.limit } : {}),
-                      ...(info?.tag ? { badge: info.tag } : {}),
-                    };
-                  })}
-                />
+                {renderProviderOptions(creditsProviders, 'Credits and trials')}
               </details>
               <details className="grid gap-3">
                 <summary className="text-label cursor-pointer">Unavailable</summary>
@@ -291,25 +271,33 @@ export function OnboardingCanvas() {
                       </a>
                     </div>
                     {id === 'cloudflare-workers-ai' && (
-                      <TextField
-                        label="Cloudflare account ID"
-                        value={cloudflareAccountId}
-                        onChange={(value) => {
-                          setCloudflareAccountId(value);
-                        }}
-                        placeholder="Account ID"
-                      />
+                      <label className="v2-onboarding-field">
+                        <span>Cloudflare account ID</span>
+                        <UiV2.Input
+                          value={cloudflareAccountId}
+                          onChange={(event) => {
+                            setCloudflareAccountId(event.target.value);
+                          }}
+                          placeholder="Account ID"
+                        />
+                      </label>
                     )}
                     {!keyless && (
-                      <TextField
-                        label={`${provider?.name ?? id} API key${id === 'llm7' ? ' (optional)' : ''}`}
-                        masked
-                        value={keysByProvider[id] ?? ''}
-                        onChange={(value) => {
-                          setKeysByProvider((old) => ({ ...old, [id]: value }));
-                        }}
-                        placeholder="Paste API key"
-                      />
+                      <label className="v2-onboarding-field">
+                        <span>
+                          {(provider?.name ?? id) +
+                            ' API key' +
+                            (id === 'llm7' ? ' (optional)' : '')}
+                        </span>
+                        <UiV2.Input
+                          type="password"
+                          value={keysByProvider[id] ?? ''}
+                          onChange={(event) => {
+                            setKeysByProvider((old) => ({ ...old, [id]: event.target.value }));
+                          }}
+                          placeholder="Paste API key"
+                        />
+                      </label>
                     )}
                     {keyless && (
                       <small className="muted">No key required for anonymous access.</small>
@@ -321,39 +309,39 @@ export function OnboardingCanvas() {
                     )}
                     <div className="button-row">
                       {!keyless && (
-                        <Pill size="sm" onClick={() => void saveKey(id)}>
+                        <UiV2.Button size="sm" variant="secondary" onClick={() => void saveKey(id)}>
                           Save key
-                        </Pill>
+                        </UiV2.Button>
                       )}
-                      <Pill
+                      <UiV2.Button
                         size="sm"
+                        variant="secondary"
                         aria-label={`Test ${provider?.name ?? id}`}
                         onClick={() => void testProvider(id)}
-                        leadingIcon={<Check size={13} />}
                       >
                         Test
-                      </Pill>
+                      </UiV2.Button>
                       {tested[id] && <small className="muted">{tested[id]}</small>}
                     </div>
                   </div>
                 );
               })}
               <div className="onboarding-actions">
-                <Pill
+                <UiV2.Button
+                  variant="ghost"
                   onClick={() => {
                     setStep(0);
                   }}
                 >
                   Back
-                </Pill>
-                <Pill
-                  variant="blue-tint"
+                </UiV2.Button>
+                <UiV2.Button
                   onClick={() => {
                     setStep(2);
                   }}
                 >
                   Continue
-                </Pill>
+                </UiV2.Button>
               </div>
             </div>
           )}
@@ -368,16 +356,15 @@ export function OnboardingCanvas() {
                 Library.
               </p>
               <div className="onboarding-actions">
-                <Pill
+                <UiV2.Button
+                  variant="ghost"
                   onClick={() => {
                     setStep(1);
                   }}
                 >
                   Back
-                </Pill>
-                <Pill variant="blue-tint" onClick={() => void finish()}>
-                  Continue
-                </Pill>
+                </UiV2.Button>
+                <UiV2.Button onClick={() => void finish()}>Continue</UiV2.Button>
               </div>
               <button className="text-button" onClick={() => void chooseFolder()}>
                 Open folder

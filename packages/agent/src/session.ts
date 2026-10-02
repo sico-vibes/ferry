@@ -160,7 +160,30 @@ export class SessionStore {
   }
 
   replaceMessage(message: Message): void {
-    this.repositories.messages.put(MessageSchema.parse(message));
+    const current = this.repositories.messages.get(message.id);
+    const currentApprovals =
+      current?.sessionId === message.sessionId
+        ? current.parts.filter((part) => part.type === 'approval_request')
+        : [];
+    const incomingParts = message.parts.map((part) => {
+      if (part.type !== 'approval_request') return part;
+      const persisted = currentApprovals.find((candidate) => candidate.id === part.id);
+      return persisted?.type === 'approval_request' && persisted.state !== 'pending'
+        ? persisted
+        : part;
+    });
+    const incomingApprovalIds = new Set(
+      incomingParts.filter((part) => part.type === 'approval_request').map((part) => part.id),
+    );
+    this.repositories.messages.put(
+      MessageSchema.parse({
+        ...message,
+        parts: [
+          ...incomingParts,
+          ...currentApprovals.filter((part) => !incomingApprovalIds.has(part.id)),
+        ],
+      }),
+    );
   }
 
   saveTask(task: TaskRecord): void {

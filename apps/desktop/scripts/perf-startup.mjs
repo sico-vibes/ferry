@@ -131,7 +131,6 @@ async function launchAndMeasure(label, completeFirstRun) {
       if (location.hash !== '#/') location.hash = '#/';
     });
     const composer = page.locator('textarea[aria-label="Message Ferry"]');
-    const getStarted = page.getByRole('button', { name: /Get started/i });
     const skipSetup = page.getByRole('button', { name: 'Skip setup' });
     try {
       await page.waitForFunction(
@@ -141,8 +140,7 @@ async function launchAndMeasure(label, completeFirstRun) {
           return (
             visible(document.querySelector('textarea[aria-label="Message Ferry"]')) ||
             [...document.querySelectorAll('button')].some(
-              (button) =>
-                visible(button) && /^(get started|skip setup)$/i.test(button.innerText.trim()),
+              (button) => visible(button) && /^skip setup$/i.test(button.innerText.trim()),
             )
           );
         },
@@ -163,14 +161,7 @@ async function launchAndMeasure(label, completeFirstRun) {
     }
     try {
       if (completeFirstRun && !(await composer.isVisible())) {
-        if (await getStarted.isVisible().catch(() => false)) {
-          await getStarted.click();
-          await page.getByRole('button', { name: 'Continue', exact: true }).click();
-          await page.getByRole('button', { name: 'Continue', exact: true }).click();
-          await page.getByRole('button', { name: 'Finish setup', exact: true }).click();
-        } else if (await skipSetup.isVisible().catch(() => false)) {
-          await skipSetup.click();
-        }
+        if (await skipSetup.isVisible().catch(() => false)) await skipSetup.click();
         await composer.waitFor({ state: 'visible', timeout: 30_000 });
       }
       if (!(await composer.isVisible()))

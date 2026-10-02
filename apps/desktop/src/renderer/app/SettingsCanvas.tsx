@@ -10,19 +10,18 @@ import {
   Checkbox,
   Dialog,
   FerryMark,
-  Pill,
+  UiV2,
   Section,
   SegmentedControl,
   Select,
   Slider,
   Switch,
-  TextField,
 } from '@ferry/ui';
 import { FERRY_DOMAINS } from '@ferry/shared';
 import type { Profile, Provider, StepKind, Tier } from '@ferry/shared';
 import type { RoutingSettings } from '@ferry/shared';
 import type { UpdateSnapshot } from '../../main/update-state.js';
-import { Info } from 'lucide-react';
+import { Eye, EyeOff, Info } from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
 import { OAuthProviderRows } from './OAuthProviderRows';
 import { saveKeybindings, useKeybindings } from '../state/keybindings';
@@ -164,6 +163,60 @@ function isPermissionRule(
   );
 }
 
+function SettingsInput({
+  label,
+  value,
+  onChange,
+  helper,
+  error,
+  masked = false,
+  placeholder,
+  type = 'text',
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  helper?: string;
+  error?: string;
+  masked?: boolean;
+  placeholder?: string;
+  type?: string;
+}) {
+  const [shown, setShown] = useState(false);
+  return (
+    <label className="v2-settings-field">
+      <span>{label}</span>
+      <span className="v2-settings-input-wrap">
+        <UiV2.Input
+          type={masked && !shown ? 'password' : type}
+          value={value}
+          placeholder={placeholder}
+          onChange={(event) => {
+            onChange(event.target.value);
+          }}
+          aria-invalid={Boolean(error)}
+        />
+        {masked && (
+          <UiV2.Button
+            size="icon"
+            variant="ghost"
+            aria-label={shown ? 'Hide value' : 'Show value'}
+            onClick={() => {
+              setShown(!shown);
+            }}
+          >
+            {shown ? <EyeOff size={15} /> : <Eye size={15} />}
+          </UiV2.Button>
+        )}
+      </span>
+      {error ? (
+        <small className="text-destructive">{error}</small>
+      ) : helper ? (
+        <small className="text-muted-foreground">{helper}</small>
+      ) : null}
+    </label>
+  );
+}
 export function SettingsCanvas() {
   const client = useFerryClient();
   const cache = useQueryClient();
@@ -263,6 +316,7 @@ export function SettingsCanvas() {
     queryKey: ['system-info'],
     queryFn: () => client.system.info(),
   });
+  const appVersion = (window.ferryHost?.versions as { app?: string } | undefined)?.app;
   const gatewayQuery = useQuery({
     queryKey: ['gateway-settings'],
     queryFn: () => client.gateway.settings(),
@@ -461,7 +515,7 @@ export function SettingsCanvas() {
                 />
               </SettingRow>
               <SettingRow title="First run" helper="Review the provider and workspace setup again.">
-                <Pill
+                <UiV2.Button
                   size="sm"
                   onClick={() => {
                     localStorage.removeItem('ferry.onboardingStep');
@@ -472,7 +526,7 @@ export function SettingsCanvas() {
                   }}
                 >
                   Run onboarding again
-                </Pill>
+                </UiV2.Button>
               </SettingRow>
             </Group>
           )}
@@ -498,7 +552,7 @@ export function SettingsCanvas() {
               }}
             />
             {keybindingsDraft !== keybindings.content && (
-              <Pill
+              <UiV2.Button
                 size="sm"
                 onClick={() => {
                   saveKeybindings(keybindingsDraft)
@@ -521,7 +575,7 @@ export function SettingsCanvas() {
                 }}
               >
                 Save changes
-              </Pill>
+              </UiV2.Button>
             )}
           </Group>
           {section === 'General' && (
@@ -550,7 +604,7 @@ export function SettingsCanvas() {
                 <small>{profile.description}</small>
               </button>
             ))}
-            <Pill
+            <UiV2.Button
               size="sm"
               onClick={() => {
                 const source = profiles[0];
@@ -566,7 +620,7 @@ export function SettingsCanvas() {
               }}
             >
               New profile
-            </Pill>
+            </UiV2.Button>
           </div>
           {profileDraft ? (
             <div className="profile-editor">
@@ -576,7 +630,7 @@ export function SettingsCanvas() {
                   <p>Edit routing and spending limits.</p>
                 </div>
                 <div className="button-row">
-                  <Pill
+                  <UiV2.Button
                     size="sm"
                     onClick={() => {
                       const clone = {
@@ -590,8 +644,8 @@ export function SettingsCanvas() {
                     }}
                   >
                     Duplicate
-                  </Pill>
-                  <Pill
+                  </UiV2.Button>
+                  <UiV2.Button
                     size="sm"
                     disabled={profileDraft.builtin}
                     onClick={() => {
@@ -611,18 +665,18 @@ export function SettingsCanvas() {
                     }}
                   >
                     Delete
-                  </Pill>
+                  </UiV2.Button>
                   {(!profiles.find((item) => item.id === profileDraft.id) ||
                     JSON.stringify(profileDraft) !==
                       JSON.stringify(profiles.find((item) => item.id === profileDraft.id))) && (
-                    <Pill size="sm" variant="blue-tint" onClick={() => void saveProfile()}>
+                    <UiV2.Button size="sm" variant="default" onClick={() => void saveProfile()}>
                       Save changes
-                    </Pill>
+                    </UiV2.Button>
                   )}
                 </div>
               </div>
               <div className="form-grid">
-                <TextField
+                <SettingsInput
                   label="Name"
                   value={profileDraft.name}
                   onChange={(value) => {
@@ -639,7 +693,7 @@ export function SettingsCanvas() {
                     (value) => ({ value, label: value }),
                   )}
                 />
-                <TextField
+                <SettingsInput
                   label="Description"
                   value={profileDraft.description}
                   onChange={(value) => {
@@ -687,14 +741,14 @@ export function SettingsCanvas() {
                 then tries scored eligible models.
               </p>
               {profileDraft.fallbackChain === undefined ? (
-                <Pill
+                <UiV2.Button
                   size="sm"
                   onClick={() => {
                     mutateProfile('fallbackChain', []);
                   }}
                 >
                   Add fallback order
-                </Pill>
+                </UiV2.Button>
               ) : (
                 <>
                   <div className="profile-chain-list">
@@ -737,7 +791,7 @@ export function SettingsCanvas() {
                         <div className="profile-chain-patterns">
                           {entry.patterns.map((pattern, patternIndex) => (
                             <div className="button-row" key={`${pattern}-${String(patternIndex)}`}>
-                              <TextField
+                              <SettingsInput
                                 label={`Model pattern ${String(patternIndex + 1)}`}
                                 value={pattern}
                                 onChange={(value) => {
@@ -748,7 +802,7 @@ export function SettingsCanvas() {
                                   mutateProfile('fallbackChain', next);
                                 }}
                               />
-                              <Pill
+                              <UiV2.Button
                                 size="sm"
                                 variant="outline"
                                 onClick={() => {
@@ -761,10 +815,10 @@ export function SettingsCanvas() {
                                 }}
                               >
                                 Remove
-                              </Pill>
+                              </UiV2.Button>
                             </div>
                           ))}
-                          <Pill
+                          <UiV2.Button
                             size="sm"
                             variant="outline"
                             onClick={() => {
@@ -777,9 +831,9 @@ export function SettingsCanvas() {
                             }}
                           >
                             Add model pattern
-                          </Pill>
+                          </UiV2.Button>
                         </div>
-                        <Pill
+                        <UiV2.Button
                           size="sm"
                           variant="outline"
                           onClick={() => {
@@ -790,11 +844,11 @@ export function SettingsCanvas() {
                           }}
                         >
                           Remove provider
-                        </Pill>
+                        </UiV2.Button>
                       </div>
                     ))}
                   </div>
-                  <Pill
+                  <UiV2.Button
                     size="sm"
                     variant="outline"
                     onClick={() => {
@@ -809,7 +863,7 @@ export function SettingsCanvas() {
                     }}
                   >
                     Add provider
-                  </Pill>
+                  </UiV2.Button>
                 </>
               )}
               <h3>Allowed providers</h3>
@@ -927,7 +981,7 @@ export function SettingsCanvas() {
                 />
               </SettingRow>
               <div className="form-grid">
-                <TextField
+                <SettingsInput
                   label="Session cap ($)"
                   value={profileDraft.caps.sessionUsd?.toString() ?? ''}
                   placeholder="No cap"
@@ -938,7 +992,7 @@ export function SettingsCanvas() {
                     });
                   }}
                 />
-                <TextField
+                <SettingsInput
                   label="Daily cap ($)"
                   value={profileDraft.caps.dailyUsd?.toString() ?? ''}
                   placeholder="No cap"
@@ -949,7 +1003,7 @@ export function SettingsCanvas() {
                     });
                   }}
                 />
-                <TextField
+                <SettingsInput
                   label="Monthly cap ($)"
                   value={profileDraft.caps.monthlyUsd?.toString() ?? ''}
                   placeholder="No cap"
@@ -1065,22 +1119,22 @@ export function SettingsCanvas() {
                     </small>
                   </div>
                   <span className={`status-pill ${statusTone}`}>{status}</span>
-                  <Pill
+                  <UiV2.Button
                     size="sm"
                     onClick={() => {
                       setKeyProvider(provider);
                     }}
                   >
                     Manage key
-                  </Pill>
-                  <Pill
+                  </UiV2.Button>
+                  <UiV2.Button
                     size="sm"
                     disabled={testingProvider === provider.id || !provider.enabled}
                     variant="outline"
                     onClick={() => void testProvider(provider)}
                   >
                     {testingProvider === provider.id ? 'Testing…' : 'Test'}
-                  </Pill>
+                  </UiV2.Button>
                   <span
                     className="provider-key-toggle"
                     title={toggleApplicable ? undefined : 'Manage subscription access in Explore.'}
@@ -1161,9 +1215,9 @@ export function SettingsCanvas() {
               }
             />
           </SettingRow>
-          <Pill size="sm" variant="outline" onClick={() => void navigate({ to: '/models' })}>
+          <UiV2.Button size="sm" variant="outline" onClick={() => void navigate({ to: '/models' })}>
             Open Models
-          </Pill>
+          </UiV2.Button>
         </Group>
       );
     if (section === 'Gateway')
@@ -1188,7 +1242,7 @@ export function SettingsCanvas() {
               title="Port"
               helper={`Status: ${gatewayStatus?.running ? `Running at ${String(gatewayStatus.url)}` : 'Stopped'}${gatewayStatus?.port && gatewayStatus.port !== gatewayPort ? ` Port ${String(gatewayPort)} was busy; using ${String(gatewayStatus.port)}` : ''}`}
             >
-              <TextField
+              <SettingsInput
                 label="Port"
                 value={String(gatewayPort)}
                 onChange={(value) => {
@@ -1213,7 +1267,7 @@ export function SettingsCanvas() {
             </p>
           </Group>
           <Group title="Create a Ferry key">
-            <TextField
+            <SettingsInput
               label="Key name"
               value={gatewayName}
               onChange={setGatewayName}
@@ -1233,9 +1287,9 @@ export function SettingsCanvas() {
                   .map((profile) => ({ value: profile.id, label: profile.name })),
               ]}
             />
-            <Pill disabled={!gatewayName.trim()} onClick={() => void createGatewayKey()}>
+            <UiV2.Button disabled={!gatewayName.trim()} onClick={() => void createGatewayKey()}>
               Create key
-            </Pill>
+            </UiV2.Button>
           </Group>
           <Group title="Gateway keys">
             {(gatewayKeysQuery.data ?? []).map((key) => (
@@ -1256,7 +1310,7 @@ export function SettingsCanvas() {
                             ? `Last used ${new Date(key.lastUsedAt).toLocaleString()}`
                             : 'Never used'}
                         </p>
-                        <TextField
+                        <SettingsInput
                           label="Allowed model IDs (blank means all enabled models)"
                           value={draft.allowedModels}
                           onChange={(value) => {
@@ -1285,7 +1339,7 @@ export function SettingsCanvas() {
                               .map((profile) => ({ value: profile.id, label: profile.name })),
                           ]}
                         />
-                        <TextField
+                        <SettingsInput
                           label="Requests per minute (blank means unlimited)"
                           value={draft.rateLimit}
                           onChange={(value) => {
@@ -1295,7 +1349,7 @@ export function SettingsCanvas() {
                             }));
                           }}
                         />
-                        <Pill
+                        <UiV2.Button
                           onClick={() => {
                             const rateLimit = draft.rateLimit.trim()
                               ? Number(draft.rateLimit)
@@ -1324,7 +1378,7 @@ export function SettingsCanvas() {
                           }}
                         >
                           Save key settings
-                        </Pill>
+                        </UiV2.Button>
                         <Switch
                           label="Compress tool results"
                           checked={key.compressToolResults}
@@ -1348,7 +1402,7 @@ export function SettingsCanvas() {
                   })()}
                 </div>
                 {!key.revokedAt && (
-                  <Pill
+                  <UiV2.Button
                     variant="outline"
                     onClick={() =>
                       void client.gateway
@@ -1357,7 +1411,7 @@ export function SettingsCanvas() {
                     }
                   >
                     Revoke
-                  </Pill>
+                  </UiV2.Button>
                 )}
               </div>
             ))}
@@ -1405,7 +1459,7 @@ export function SettingsCanvas() {
               Global limits apply across every profile. Profile limits can make these stricter.
             </p>
             <div className="form-grid">
-              <TextField
+              <SettingsInput
                 label="Global session cap ($)"
                 value={settings?.paidCaps.sessionUsd?.toString() ?? ''}
                 placeholder="No cap"
@@ -1416,7 +1470,7 @@ export function SettingsCanvas() {
                   })
                 }
               />
-              <TextField
+              <SettingsInput
                 label="Global daily cap ($)"
                 value={settings?.paidCaps.dailyUsd?.toString() ?? ''}
                 placeholder="No cap"
@@ -1427,7 +1481,7 @@ export function SettingsCanvas() {
                   })
                 }
               />
-              <TextField
+              <SettingsInput
                 label="Global monthly cap ($)"
                 value={settings?.paidCaps.monthlyUsd?.toString() ?? ''}
                 placeholder="No cap"
@@ -1564,7 +1618,7 @@ export function SettingsCanvas() {
                   <span>{Math.round((settings?.routing.rampFloor ?? 0.1) * 100)}%</span>
                 </div>
               </SettingRow>
-              <Pill
+              <UiV2.Button
                 size="sm"
                 variant="outline"
                 onClick={() =>
@@ -1581,7 +1635,7 @@ export function SettingsCanvas() {
                 }
               >
                 Reset tune defaults
-              </Pill>
+              </UiV2.Button>
             </details>
           </Group>
         </>
@@ -1824,7 +1878,7 @@ export function SettingsCanvas() {
               />
             </SettingRow>
             <div className="button-row">
-              <Pill
+              <UiV2.Button
                 size="sm"
                 onClick={() => {
                   toast({
@@ -1835,15 +1889,15 @@ export function SettingsCanvas() {
                 }}
               >
                 Export data
-              </Pill>
-              <Pill
+              </UiV2.Button>
+              <UiV2.Button
                 size="sm"
                 onClick={() => {
                   setConfirm('Delete local data?');
                 }}
               >
                 Delete local data
-              </Pill>
+              </UiV2.Button>
             </div>
           </Group>
           <Group title="Integrations">
@@ -1864,14 +1918,14 @@ export function SettingsCanvas() {
                 </div>
               </SettingRow>
             ))}
-            <Pill
+            <UiV2.Button
               size="sm"
               onClick={() => {
                 setAddMcp(true);
               }}
             >
               Add server
-            </Pill>
+            </UiV2.Button>
           </Group>
           <Group title="Local workflows">
             <p className="muted">Enable local instructions and reusable workflows.</p>
@@ -1916,7 +1970,7 @@ export function SettingsCanvas() {
             </div>
             <div>
               <strong>Ferry</strong>
-              <p>Version {window.ferryHost?.versions.app ?? info?.version ?? '0.9.0'}</p>
+              <p>Version {appVersion ?? info?.version ?? 'unknown'}</p>
               <p>
                 Channel {window.ferryHost?.channel ?? 'beta'} · Commit{' '}
                 {window.ferryHost?.commit ?? 'unknown'}
@@ -1965,7 +2019,7 @@ export function SettingsCanvas() {
                 }
               >
                 <div className="button-row">
-                  <Pill
+                  <UiV2.Button
                     size="sm"
                     variant="outline"
                     onClick={() => {
@@ -1979,30 +2033,30 @@ export function SettingsCanvas() {
                     }}
                   >
                     {checkingUpdates ? 'Checking…' : 'Check for updates'}
-                  </Pill>
+                  </UiV2.Button>
                   {updateState.status === 'available' && !updateState.autoDownload && (
-                    <Pill
+                    <UiV2.Button
                       size="sm"
-                      variant="blue-tint"
+                      variant="default"
                       onClick={() => {
                         void window.ferryHost?.downloadUpdate().then(setUpdateState);
                       }}
                     >
                       Download update
-                    </Pill>
+                    </UiV2.Button>
                   )}
                 </div>
               </SettingRow>
               {updateState.status === 'downloaded' && (
-                <Pill
+                <UiV2.Button
                   size="sm"
-                  variant="blue-tint"
+                  variant="default"
                   onClick={() => {
                     void window.ferryHost?.installUpdate();
                   }}
                 >
                   Restart to update
-                </Pill>
+                </UiV2.Button>
               )}
             </>
           )}
@@ -2041,12 +2095,13 @@ export function SettingsCanvas() {
       <main className="v2-settings-content">
         <header className="v2-settings-header">
           <div>
-            <h1>{pageCopy.title}</h1>
+            <h1 className="sr-only">Settings</h1>
+            <h2>{pageCopy.title}</h2>
             <p>{pageCopy.description}</p>
           </div>
           <div className="v2-settings-actions">
             {section === 'General' && (
-              <Pill
+              <UiV2.Button
                 onClick={() => {
                   setConfirm('Reset layout?');
                   setConfirmAction(() => () => {
@@ -2060,12 +2115,12 @@ export function SettingsCanvas() {
                 }}
               >
                 Reset layout
-              </Pill>
+              </UiV2.Button>
             )}
             {pendingSettings && (
-              <Pill variant="blue-tint" onClick={() => void saveSettings()}>
+              <UiV2.Button variant="default" onClick={() => void saveSettings()}>
                 Save changes
-              </Pill>
+              </UiV2.Button>
             )}
           </div>
         </header>
@@ -2090,16 +2145,16 @@ export function SettingsCanvas() {
         description="Review this change before confirming."
       >
         <div className="button-row dialog-actions">
-          <Pill
+          <UiV2.Button
             onClick={() => {
               setConfirm('');
               setConfirmAction(null);
             }}
           >
             Cancel
-          </Pill>
-          <Pill
-            variant="blue-tint"
+          </UiV2.Button>
+          <UiV2.Button
+            variant="default"
             onClick={() => {
               setConfirm('');
               const action = confirmAction;
@@ -2114,7 +2169,7 @@ export function SettingsCanvas() {
             }}
           >
             Confirm
-          </Pill>
+          </UiV2.Button>
         </div>
       </Dialog>
       <Dialog
@@ -2124,23 +2179,28 @@ export function SettingsCanvas() {
         description="Add a local command or remote server URL. This demo records the setup request only."
       >
         <div className="dialog-form">
-          <TextField label="Name" value={mcpName} onChange={setMcpName} placeholder="Local tools" />
-          <TextField
+          <SettingsInput
+            label="Name"
+            value={mcpName}
+            onChange={setMcpName}
+            placeholder="Local tools"
+          />
+          <SettingsInput
             label="Command or URL"
             value={mcpAddress}
             onChange={setMcpAddress}
             placeholder="npx server or https://…"
           />
           <div className="button-row dialog-actions">
-            <Pill
+            <UiV2.Button
               onClick={() => {
                 setAddMcp(false);
               }}
             >
               Cancel
-            </Pill>
-            <Pill
-              variant="blue-tint"
+            </UiV2.Button>
+            <UiV2.Button
+              variant="default"
               onClick={() => {
                 setAddMcp(false);
                 toast({
@@ -2153,7 +2213,7 @@ export function SettingsCanvas() {
               }}
             >
               Add server
-            </Pill>
+            </UiV2.Button>
           </div>
         </div>
       </Dialog>
@@ -2168,15 +2228,17 @@ export function SettingsCanvas() {
         <div className="dialog-form">
           <pre>{gatewaySecret}</pre>
           <div className="button-row dialog-actions">
-            <Pill onClick={() => void navigator.clipboard.writeText(gatewaySecret)}>Copy key</Pill>
-            <Pill
-              variant="blue-tint"
+            <UiV2.Button onClick={() => void navigator.clipboard.writeText(gatewaySecret)}>
+              Copy key
+            </UiV2.Button>
+            <UiV2.Button
+              variant="default"
               onClick={() => {
                 setGatewaySecret('');
               }}
             >
               Done
-            </Pill>
+            </UiV2.Button>
           </div>
         </div>
       </Dialog>
@@ -2298,14 +2360,14 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
           </button>
         </div>
       ))}
-      <Pill
+      <UiV2.Button
         size="sm"
         onClick={() => {
           persist([...rules, { effect: 'ask', pattern: 'npm test*', tool: 'run_command' }]);
         }}
       >
         Add rule
-      </Pill>
+      </UiV2.Button>
     </Group>
   );
 }

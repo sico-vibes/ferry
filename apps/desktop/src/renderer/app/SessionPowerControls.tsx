@@ -3,7 +3,7 @@ import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Bell, Check, ChevronDown, Search, X } from 'lucide-react';
 import { Popover as PopoverPrimitive } from 'radix-ui';
-import { DataUseBadge, Dialog, FerryMark, Pill, ShowMoreList, Skeleton, TagBadge } from '@ferry/ui';
+import { DataUseBadge, Dialog, FerryMark, ShowMoreList, Skeleton, TagBadge, UiV2 } from '@ferry/ui';
 import type { ModelRef, PartId, ProfileId, SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { listAllModels } from '@ferry/client';
@@ -108,26 +108,26 @@ export function ApprovalsTray({ activeSessionId }: { activeSessionId?: string | 
                 <p>{part.summary}</p>
                 <small>{part.risk} risk</small>
                 <div>
-                  <Pill
+                  <UiV2.Button
                     size="sm"
-                    variant="blue-tint"
+                    variant="default"
                     onClick={() => {
                       void respond(session.id, part.id, 'allow_once');
                     }}
                   >
                     Allow once
-                  </Pill>
-                  <Pill
+                  </UiV2.Button>
+                  <UiV2.Button
                     size="sm"
-                    variant="warm-outline"
+                    variant="outline"
                     onClick={() => {
                       void respond(session.id, part.id, 'deny');
                     }}
                   >
                     Deny
-                  </Pill>
+                  </UiV2.Button>
                   <button
-                    className="text-link text-meta"
+                    className="text-primary text-meta"
                     onClick={() => {
                       void navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
                       setOpen(false);

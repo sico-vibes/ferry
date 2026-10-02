@@ -34,8 +34,9 @@ async function readV2Surfaces(page) {
 }
 
 export async function run(page, { url, expect }) {
-  await page.goto(new URL('/settings', url).href);
-  await page.getByRole('radio', { name: 'Dark' }).click();
+  await page.goto(new URL('/', url).href);
+  await page.getByRole('button', { name: 'User menu', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: 'Dark', exact: true }).click();
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
 
   const darkValues = {};
@@ -48,8 +49,9 @@ export async function run(page, { url, expect }) {
     darkValues[route] = await readV2Surfaces(page);
   }
 
-  await page.goto(new URL('/settings', url).href);
-  await page.getByRole('radio', { name: 'Light' }).click();
+  await page.goto(new URL('/', url).href);
+  await page.getByRole('button', { name: 'User menu', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: 'Light', exact: true }).click();
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
 
   for (const [route, readyRole, readyName] of [

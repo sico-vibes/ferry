@@ -16,7 +16,7 @@ export async function run(page, ctx) {
   await ctx.expect(page.getByRole('region', { name: 'Delegation review' })).toBeVisible();
   await ctx.expect(page.locator('.review-toolbar')).toBeInViewport();
   await ctx.expect(page.getByRole('button', { name: 'Back to session' })).toBeInViewport();
-  await ctx.expect(page.getByText('Gate results')).toBeVisible();
+  await ctx.expect(page.getByText('Gate results', { exact: true })).toBeVisible();
   await ctx
     .expect(page.getByRole('navigation', { name: 'Changed files' }).getByRole('button').first())
     .toBeVisible();

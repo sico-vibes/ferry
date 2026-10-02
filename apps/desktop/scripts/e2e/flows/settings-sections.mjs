@@ -19,8 +19,8 @@ export async function run(page, ctx) {
   for (const [name, marker] of sections) {
     await nav.getByRole('button', { name, exact: true }).click();
     const main = page.getByRole('main').last();
-    await ctx.expect(main.locator('h1')).toHaveCount(1);
-    await ctx.expect(main.locator('h1')).toBeVisible();
+    await ctx.expect(main.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
+    await ctx.expect(main.getByRole('heading', { name, exact: true, level: 2 })).toBeVisible();
     await ctx.expect(main.getByText(marker, { exact: false }).first()).toBeVisible({
       timeout: 10_000,
     });

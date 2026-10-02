@@ -120,10 +120,9 @@ try {
   });
   page.on('pageerror', (error) => pageErrors.push(error.message.replaceAll(fakeKey, '[REDACTED]')));
   await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => undefined);
-  const getStarted = page.getByRole('button', { name: /Get started/ });
-  await expect(getStarted.or(page.getByRole('button', { name: 'Models' })).first()).toBeVisible({
-    timeout: 20_000,
-  });
+  const skipSetup = page.getByRole('button', { name: 'Skip setup' });
+  const primaryNavigation = page.getByRole('navigation', { name: 'Primary' });
+  await expect(skipSetup.or(primaryNavigation).first()).toBeVisible({ timeout: 20_000 });
   const coreBootstrapTimeoutMs = 15_000;
   try {
     await page.waitForFunction(
@@ -149,12 +148,8 @@ try {
   const realDomains = await page.evaluate(() => window.ferryEngineHello?.realDomains ?? []);
   assert.ok(realDomains.length > 0, 'Electron hello must include real domains');
   console.log(`Electron renderer real client connected with ${String(realDomains.length)} domains`);
-  if (await getStarted.isVisible().catch(() => false)) {
-    await getStarted.click();
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await page.getByRole('button', { name: 'Finish setup' }).click();
-  }
+  if (await skipSetup.isVisible().catch(() => false)) await skipSetup.click();
+  await primaryNavigation.waitFor({ state: 'visible' });
   await page.getByRole('button', { name: 'Models', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Models', exact: true })).toBeVisible();
   await page.getByRole('button', { name: /Add provider/ }).click();

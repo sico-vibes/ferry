@@ -2,7 +2,7 @@ import { Profiler, useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { ChevronRight } from 'lucide-react';
-import { Dialog, Pill, UiV2 } from '@ferry/ui';
+import { Dialog, UiV2 } from '@ferry/ui';
 import type { SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { useFerryEvents } from '../data/events';
@@ -316,7 +316,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     };
   }, [toastItems, dismissToast]);
 
-  if (onboardingPage) return <main className="v2-onboarding-shell">{children}</main>;
+  if (onboardingPage) return <main className="ferry-ui v2-onboarding-shell">{children}</main>;
 
   return (
     <div
@@ -455,21 +455,21 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
         description="This session is still running. Stop it or keep it running in the background."
       >
         <div className="button-row dialog-actions">
-          <Pill
+          <UiV2.Button
             onClick={() => {
               if (closePrompt) closeAndNavigate(closePrompt, false);
             }}
           >
             Keep running in background
-          </Pill>
-          <Pill
-            variant="warm-outline"
+          </UiV2.Button>
+          <UiV2.Button
+            variant="outline"
             onClick={() => {
               if (closePrompt) closeAndNavigate(closePrompt, true);
             }}
           >
             Stop
-          </Pill>
+          </UiV2.Button>
         </div>
       </Dialog>
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />

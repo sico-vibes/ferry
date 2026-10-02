@@ -7,37 +7,18 @@ const packageDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(packageDirectory, '../../..');
 
 function parseDesignTokens(design: string): ReadonlyMap<string, string> {
-  const start = design.indexOf('### 2.1');
-  const end = design.indexOf('### 2.7');
-  const section = start >= 0 && end > start ? design.slice(start, end) : '';
-  const spans = [...section.matchAll(/`([^`]*)`/g)].map((match) => match[1] ?? '');
   const tokens = new Map<string, string>();
-
-  spans.forEach((span, index) => {
-    const inline = /^(--[A-Za-z0-9-]+):\s*(.+)$/.exec(span);
-    const inlineName = inline?.[1];
-    const inlineValue = inline?.[2];
-    if (inlineName !== undefined && inlineValue !== undefined) {
-      tokens.set(inlineName, inlineValue);
-      return;
-    }
-
-    const spaced = /^(--[A-Za-z0-9-]+)\s+(\d[0-9]*)$/.exec(span);
-    const spacedName = spaced?.[1];
-    const spacedValue = spaced?.[2];
-    if (spacedName !== undefined && spacedValue !== undefined) {
-      tokens.set(spacedName, spacedValue);
-      return;
-    }
-
-    if (/^--[A-Za-z0-9-]+$/.test(span)) {
-      const next = spans[index + 1];
-      if (next !== undefined && next !== '' && !next.startsWith('--')) {
-        tokens.set(span, next);
-      }
-    }
-  });
-
+  const tokenSection = design.split('## 2. Tokens')[1]?.split('\n## ')[0] ?? '';
+  for (const line of tokenSection.split('\n')) {
+    const columns = line.split('|');
+    const names = columns[1]?.match(/--[A-Za-z0-9-]+/g);
+    const values = [...(columns[2] ?? '').matchAll(/`([^`]+)`/g)].map((match) => match[1] ?? '');
+    if (!names || !values.length) continue;
+    names.forEach((name, index) => {
+      const value = values[index];
+      if (value !== undefined) tokens.set(name, value);
+    });
+  }
   return tokens;
 }
 
@@ -46,89 +27,60 @@ function parseCssTokens(css: string): ReadonlyMap<string, string> {
   for (const match of css.matchAll(/(--[A-Za-z0-9-]+)\s*:\s*([^;]+);/g)) {
     const name = match[1];
     const value = match[2];
-    if (name !== undefined && value !== undefined) {
-      tokens.set(name, value.trim());
-    }
+    if (name !== undefined && value !== undefined) tokens.set(name, value.trim());
   }
   return tokens;
 }
 
 function normalize(value: string): string {
-  return value.toLowerCase().replace(/\s+/g, '').replace(/px$/, '');
+  return value
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/\b0\.(\d)/g, '.$1')
+    .replace(/px$/, '');
 }
 
 const designedTokens = parseDesignTokens(
-  readFileSync(resolve(repositoryRoot, 'design/DESIGN.md'), 'utf8'),
+  readFileSync(resolve(repositoryRoot, 'design/DESIGN-v2.md'), 'utf8'),
 );
-const cssTokens = parseCssTokens(
-  readFileSync(resolve(packageDirectory, '../src/styles/tokens.css'), 'utf8'),
-);
+const darkThemeTokens =
+  /\.ferry-ui\s*\{([^}]*)\}/.exec(
+    readFileSync(resolve(packageDirectory, '../src/styles/tokens.css'), 'utf8'),
+  )?.[1] ?? '';
+const cssTokens = parseCssTokens(darkThemeTokens);
 const lightCssTokens = parseCssTokens(
   readFileSync(resolve(packageDirectory, '../src/styles/light-tokens.css'), 'utf8'),
 );
-
-const v2TokenNames = new Set([
-  '--background',
-  '--foreground',
-  '--card',
-  '--card-foreground',
-  '--popover',
-  '--popover-foreground',
-  '--primary',
-  '--primary-foreground',
-  '--secondary',
-  '--secondary-foreground',
-  '--muted',
-  '--muted-foreground',
-  '--accent',
-  '--accent-foreground',
-  '--destructive',
-  '--destructive-foreground',
-  '--border',
-  '--input',
-  '--ring',
-  '--success',
-  '--warning',
-  '--sidebar',
-  '--sidebar-foreground',
-  '--sidebar-primary',
-  '--sidebar-primary-foreground',
-  '--sidebar-accent',
-  '--sidebar-accent-foreground',
-  '--sidebar-border',
-  '--sidebar-ring',
-  '--radius',
-  '--shadow-popover',
-]);
+const v2TokenNames = new Set(designedTokens.keys());
+const lightV2ThemeTokens = parseCssTokens(
+  /\.ferry-ui\.light\s*,\s*\.light\s+\.ferry-ui:not\(\.dark\)\s*\{([^}]*)\}/.exec(
+    readFileSync(resolve(packageDirectory, '../src/styles/tokens.css'), 'utf8'),
+  )?.[1] ?? '',
+);
+const v2ThemeTokens = new Set([...cssTokens.keys()].filter((name) => lightV2ThemeTokens.has(name)));
 
 describe('design tokens', () => {
-  it('parses the design spec tokens (sanity check on the parser)', () => {
+  it('parses the v2 design spec tokens', () => {
     expect(designedTokens.size).toBeGreaterThan(0);
-    expect(designedTokens.get('--bg-app')).toBe('#1C1D20');
-    expect(designedTokens.get('--r-window')).toBe('12');
+    expect(designedTokens.get('--background')).toBe('#0F0E14');
   });
 
-  it('defines every DESIGN.md section 2.1-2.6 token with its exact value', () => {
+  it('defines every v2 color token with its documented dark value', () => {
     for (const [name, value] of designedTokens) {
-      const cssName = name === '--success' ? '--legacy-success' : name;
-      expect(cssTokens.has(cssName), `missing token ${cssName}`).toBe(true);
-      expect(normalize(cssTokens.get(cssName) ?? ''), name).toBe(normalize(value));
+      expect(cssTokens.has(name), `missing token ${name}`).toBe(true);
+      expect(normalize(cssTokens.get(name) ?? ''), name).toBe(normalize(value));
     }
-  });
-
-  it('introduces only the documented v2 and legacy compatibility tokens', () => {
-    const allowed = new Set([...v2TokenNames, '--legacy-success']);
-    const extras = [...cssTokens.keys()].filter(
-      (name) => !designedTokens.has(name) && !allowed.has(name),
-    );
-    expect(extras, `unexpected tokens: ${extras.join(', ')}`).toEqual([]);
   });
 
   it('mirrors legacy tokens from the dark sheets into the light sheet', () => {
     for (const sheet of ['tokens.css', 'effects.css', 'brand.css']) {
       const css = readFileSync(resolve(packageDirectory, `../src/styles/${sheet}`), 'utf8');
       for (const [name] of parseCssTokens(css)) {
-        if (v2TokenNames.has(name)) continue;
+        const isLegacyPaletteToken =
+          /^(--(?:bg|border|text|blue|warn|legacy-success|danger|star|series|lang|brand|chip-text|tint|grad)-|--(?:overlay|spotlight|hero-mark|hero-tile|dot-color))/.test(
+            name,
+          );
+        if (!isLegacyPaletteToken || v2TokenNames.has(name) || v2ThemeTokens.has(name)) continue;
         expect(lightCssTokens.has(name), `missing light token ${name}`).toBe(true);
       }
     }

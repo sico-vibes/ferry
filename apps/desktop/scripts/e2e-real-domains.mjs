@@ -312,10 +312,9 @@ async function startEmbeddedCore() {
       const text = message.text();
       if (/FERRY_(PRELOAD|RENDERER|RPC)/.test(text)) console.log(`[E2E_RENDERER] ${text}`);
     });
-    const onboardingContinue = page.getByRole('button', { name: 'Continue', exact: true });
-    await expect(
-      onboardingContinue.or(page.getByRole('button', { name: 'Models' })).first(),
-    ).toBeVisible({
+    const skipSetup = page.getByRole('button', { name: 'Skip setup' });
+    const primaryNavigation = page.getByRole('navigation', { name: 'Primary' });
+    await expect(skipSetup.or(primaryNavigation).first()).toBeVisible({
       timeout: 20_000,
     });
     await page.waitForFunction(
@@ -329,12 +328,8 @@ async function startEmbeddedCore() {
     const helloDomains = await page.evaluate(() => window.ferryEngineHello?.realDomains ?? []);
     assert.ok(helloDomains.length > 0, 'File renderer hello must include real domains');
     console.log(`File renderer real client connected with ${String(helloDomains.length)} domains`);
-    if (await onboardingContinue.isVisible().catch(() => false)) {
-      await onboardingContinue.click();
-      await page.getByRole('button', { name: 'Continue' }).click();
-      await page.getByRole('button', { name: 'Continue' }).click();
-      await page.getByRole('button', { name: 'Skip setup' }).click();
-    }
+    if (await skipSetup.isVisible().catch(() => false)) await skipSetup.click();
+    await primaryNavigation.waitFor({ state: 'visible' });
     await page.getByRole('button', { name: 'Library', exact: true }).click();
     await page.waitForFunction(() => Boolean(window.ferryRpcClient), undefined, {
       timeout: 30_000,
@@ -653,6 +648,12 @@ try {
       page = core.page;
       activePage = page;
       await openRenderer(page);
+      await page.getByRole('button', { name: 'Library', exact: true }).click();
+      const reopenedProject = page.getByRole('button', {
+        name: `Open project ${fixtureRepoName}`,
+        exact: true,
+      });
+      await reopenedProject.click();
       await expect(page.getByRole('heading', { name: fixtureRepoName }).last()).toBeVisible();
       await page.waitForFunction(
         async () =>
@@ -867,7 +868,7 @@ try {
       }));
       expect(sessionUsage.history.some((point) => point.requests > 0)).toBe(true);
       await page.getByRole('button', { name: 'Models', exact: true }).click();
-      await page.getByRole('button', { name: 'Usage', exact: true }).click();
+      await page.getByRole('tab', { name: 'Usage', exact: true }).click();
       const usageDashboard = page.getByRole('region', { name: 'Usage dashboard' });
       await expect(usageDashboard).toBeVisible();
       await expect(

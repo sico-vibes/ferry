@@ -194,6 +194,70 @@ describe('paid-call guardrails', () => {
   }, 30_000);
 
   it.each([
+    { label: 'immediate completion', delayMs: 0 },
+    { label: 'delayed completion', delayMs: 150 },
+  ])(
+    'persists paid approval after $label',
+    async ({ delayMs }) => {
+      const h = await startHarness({ turns: [textTurn('Paid answer', { delayMs })] });
+      try {
+        await h.rpc.providers.setBillingEnabled(ProviderIdSchema.parse('openrouter'), true);
+        const catalogModel = h.services.catalog.models.find(
+          (item) => item.providerId === 'openrouter' && !item.free && item.toolCalling,
+        );
+        expect(catalogModel).toBeDefined();
+        if (!catalogModel) return;
+        const model = Object.assign(catalogModel, {
+          free: false,
+          priceInPerM: 0.5,
+          priceOutPerM: 1,
+        });
+        const profile = BUILTIN_PROFILES.find((item) => item.name === 'Best Available');
+        expect(profile).toBeDefined();
+        if (!profile) return;
+        const session = await h.rpc.sessions.create({
+          workspaceId: h.workspaceId,
+          profileId: profile.id,
+        });
+        await h.rpc.models.select(session.id, model.ref);
+        await h.rpc.sessions.send(session.id, { text: 'use paid provider' });
+        await waitFor(async () => {
+          const detail = await h.rpc.sessions.get(session.id);
+          return detail.session.status === 'awaiting_approval';
+        });
+        const beforeApproval = await h.rpc.sessions.get(session.id);
+        const approval = beforeApproval.messages
+          .flatMap((message) => message.parts)
+          .find(
+            (part): part is Extract<MessagePart, { type: 'approval_request' }> =>
+              part.type === 'approval_request' && part.kind === 'paid_model',
+          );
+        expect(approval?.state).toBe('pending');
+        if (!approval) return;
+
+        await h.rpc.approvals.respond(session.id, approval.id, 'allow_once');
+        await waitFor(async () => (await h.rpc.sessions.get(session.id)).session.status === 'idle');
+        const afterCompletion = await h.rpc.sessions.get(session.id);
+        const persistedApproval = afterCompletion.messages
+          .flatMap((message) => message.parts)
+          .find((part) => part.id === approval.id);
+        expect(persistedApproval).toMatchObject({
+          type: 'approval_request',
+          kind: 'paid_model',
+          state: 'allowed_once',
+        });
+        expect(
+          afterCompletion.messages.some((message) =>
+            message.parts.some((part) => part.type === 'text' && part.text.includes('Paid answer')),
+          ),
+        ).toBe(true);
+      } finally {
+        await h.close();
+      }
+    },
+    30_000,
+  );
+  it.each([
     { priceInPerM: 0.5, priceOutPerM: 1 },
     { priceInPerM: 0, priceOutPerM: 0 },
   ])(

@@ -131,10 +131,7 @@ describe('Library, settings, and onboarding screens', () => {
     await client.settings.update({ onboardingComplete: false });
     localStorage.removeItem('ferry.onboardingStep');
     await renderRoute('onboarding', client);
-    await userEvent.click(await screen.findByRole('button', { name: /^Continue$/ }));
-    await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Skip setup' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Skip setup' }));
     await waitFor(async () => {
       const settings = await client.settings.get();
       const autoFree = (await client.profiles.list()).find((item) => item.name === 'Auto-Free');

@@ -74,7 +74,7 @@ export async function run(page, { url, expect }) {
     )
     .toBe(true);
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('heading', { name: 'Routing', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Routing', exact: true, level: 2 })).toBeVisible();
 
   await page.goto(new URL('/s/session_3', url).href, { waitUntil: 'domcontentloaded' });
   const drawerToggle = page.getByRole('button', { name: 'Toggle drawer' });

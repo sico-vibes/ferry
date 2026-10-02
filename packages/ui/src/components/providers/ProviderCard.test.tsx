@@ -25,7 +25,8 @@ const provider: Provider = {
 describe('ProviderCard', () => {
   it('exposes provider key status and actions', () => {
     render(<ProviderCard provider={provider} onTest={vi.fn()} onManageKey={vi.fn()} />);
-    expect(screen.getByText('Key: missing')).toBeTruthy();
+    expect(screen.getByText('Available')).toBeTruthy();
+    expect(screen.getByText('Key missing')).toBeTruthy();
     expect(screen.getByText('Free')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Test Gemini API' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Manage key' })).toBeTruthy();
@@ -33,13 +34,13 @@ describe('ProviderCard', () => {
 
   it('describes providers without a daily step cap', () => {
     render(<ProviderCard provider={{ ...provider, stepsLeftToday: null }} />);
-    expect(screen.getByText('Rate-limited · no daily cap')).toBeTruthy();
+    expect(screen.getByText('Rate limited, no daily cap')).toBeTruthy();
   });
 
   it('explains terminal authentication health and points to key recovery', () => {
     render(<ProviderCard provider={{ ...provider, health: 'auth_invalid' }} />);
     expect(screen.getByText('Needs attention')).toBeTruthy();
-    expect(screen.getByText('Needs attention: re-enter key')).toBeTruthy();
+    expect(screen.getByText('Needs attention: enter the key again')).toBeTruthy();
   });
 
   it('shows honest training and temporary-promotion labels on provider cards', () => {
@@ -53,6 +54,7 @@ describe('ProviderCard', () => {
       />,
     );
     expect(screen.getByText('May train on your prompts')).toBeTruthy();
-    expect(screen.getByText('Promotional — may end without notice.')).toBeTruthy();
+    expect(screen.getByText(/providers that use them to improve services/i)).toBeTruthy();
+    expect(screen.getByText('Promotional access may end without notice.')).toBeTruthy();
   });
 });

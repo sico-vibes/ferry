@@ -25,7 +25,8 @@ export async function run(page, { url, expect }) {
   };
   const scan = async (route, state = '') => {
     await page.goto(new URL(route, url).href, { waitUntil: 'domcontentloaded' });
-    await page.getByRole('navigation', { name: 'Primary' }).waitFor();
+    if (route === '/onboarding') await page.getByRole('button', { name: 'Skip setup' }).waitFor();
+    else await page.getByRole('navigation', { name: 'Primary' }).waitFor();
     if (state === 'palette') {
       await page.keyboard.press('Control+k');
       await page.getByRole('dialog').waitFor();
@@ -71,6 +72,7 @@ export async function run(page, { url, expect }) {
       page.getByRole('heading', {
         name: section,
         exact: true,
+        level: 2,
       }),
     ).toBeVisible();
     await audit(`/settings (${section})`);

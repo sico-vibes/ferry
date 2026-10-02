@@ -163,8 +163,10 @@ try {
 
     await page.goto(`${url}/onboarding`);
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
-    await page.getByRole('button', { name: 'Gemini API' }).click();
-    await page.getByRole('button', { name: 'OpenRouter (free models)' }).click();
+    await page.getByRole('checkbox', { name: 'Select Gemini API', exact: true }).check();
+    await page
+      .getByRole('checkbox', { name: 'Select OpenRouter (free models)', exact: true })
+      .check();
     await page.getByLabel('Gemini API API key', { exact: true }).fill('demo-onboarding-gemini-key');
     await page.getByRole('button', { name: 'Save key' }).first().click();
     await page.getByRole('button', { name: 'Test Gemini API', exact: true }).click();
@@ -176,7 +178,6 @@ try {
     await page.getByRole('button', { name: 'Test OpenRouter (free models)', exact: true }).click();
     await page.getByRole('button', { name: 'Continue' }).click();
     await page.getByRole('button', { name: 'Continue' }).click();
-    await page.getByRole('button', { name: 'Skip setup' }).click();
     await expect(page).toHaveURL(new URL('/', url).href);
 
     await page.goto(`${url}/settings`);

@@ -1,4 +1,4 @@
-import { Dialog, Pill } from '@ferry/ui';
+import { Dialog, UiV2 } from '@ferry/ui';
 import { useKeybindings } from '../state/keybindings';
 const labels: Record<string, string> = {
   'chat.new': 'New chat',
@@ -45,13 +45,13 @@ export function KeyboardShortcutsDialog({
           </p>
         ))}
         <div className="button-row dialog-actions">
-          <Pill
+          <UiV2.Button
             onClick={() => {
               onOpenChange(false);
             }}
           >
             Done
-          </Pill>
+          </UiV2.Button>
         </div>
       </div>
     </Dialog>

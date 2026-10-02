@@ -13,9 +13,10 @@ const OnboardingCanvas = lazy(() =>
 
 function HomeRoute() {
   const { data: settings } = useSettings();
+  if (!settings) return <RouteLoading />;
   return (
     <Suspense fallback={<RouteLoading />}>
-      {settings?.onboardingComplete === false ? <OnboardingCanvas /> : <HomeCanvas />}
+      {!settings.onboardingComplete ? <OnboardingCanvas /> : <HomeCanvas />}
     </Suspense>
   );
 }

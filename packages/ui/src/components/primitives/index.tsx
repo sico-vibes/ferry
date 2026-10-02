@@ -63,6 +63,7 @@ const pillStyles = cva(
         outline: 'border-border-soft bg-transparent text-text-1',
         dark: 'border-border-soft bg-pill text-text-1',
         'blue-tint': 'border-transparent bg-blue-tint text-link',
+        primary: 'border-transparent bg-primary text-primary-foreground',
         send: 'border-transparent bg-[image:var(--grad-send)] text-[var(--text-on-send)] font-semibold',
         'warm-outline': 'border-[var(--border-warm)] bg-pill text-text-1',
       },

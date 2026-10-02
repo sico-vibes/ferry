@@ -138,7 +138,7 @@ export function ProviderKeyDialog({
         <div className="grid gap-4">
           {provider?.signupUrl && (
             <a
-              className="text-label text-link"
+              className="text-label text-primary"
               href={provider.signupUrl}
               target="_blank"
               rel="noreferrer"

@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 describe('SettingsCanvas', () => {
-  it('renders one page heading for each Settings section', async () => {
+  it('keeps Settings as the page heading and renders each section as a second-level heading', async () => {
     const sections = [
       ['General', 'General'],
       ['Profiles', 'Profiles'],
@@ -51,8 +51,8 @@ describe('SettingsCanvas', () => {
       cleanup();
       useUI.setState({ settingsSection: section });
       mount();
-      await screen.findByRole('heading', { name: title });
-      expect(screen.getAllByRole('heading', { name: title })).toHaveLength(1);
+      expect(await screen.findByRole('heading', { name: 'Settings', level: 1 })).toBeTruthy();
+      expect(await screen.findByRole('heading', { name: title, level: 2 })).toBeTruthy();
     }
   });
 
@@ -173,6 +173,14 @@ describe('SettingsCanvas', () => {
   it('shows the connected core details and disables domains with no registered handlers', async () => {
     useUI.setState({ settingsSection: 'About' });
     window.ferryHost = {
+      versions: { app: '0.9.0', electron: '40.0.0' },
+      getUpdateState: vi.fn().mockResolvedValue({
+        status: 'idle',
+        version: null,
+        error: null,
+        autoDownload: true,
+      }),
+      onUpdateState: vi.fn(() => () => undefined),
       getEngineStatus: vi.fn().mockResolvedValue({ status: 'connected', pid: 4321 }),
     } as never;
     window.ferryEngineHello = {
