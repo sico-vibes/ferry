@@ -14,6 +14,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type {
   AgentEvent,
   MessagePart,
+  ModelRef,
   Provider,
   RunId,
   SessionDetail,
@@ -23,48 +24,35 @@ import {
   ApprovalCard,
   AgentTimeline,
   AssistantMessage,
-  CanvasHeaderActions,
   CanvasPanel,
   CheckpointMarker,
   Composer,
-  ContinueRow,
   DelegationCard,
-  Disclaimer,
   EmptyState,
-  Skeleton,
   ErrorPart,
-  Hero,
+  FerryMark,
   HandoffMarker,
   MarkdownPart,
-  ModelPickerTrigger,
-  PinnedChatsRow,
   ReasoningPart,
   StreamingCursor,
-  SuggestionChips,
   ToolCallBlock,
   ToolStepGroup,
   dataUseStatus,
   groupParts,
   UserMessage,
 } from '@ferry/ui';
-import { GitBranch } from 'lucide-react';
+import { Bug, BookOpenText, FlaskConical, ListChecks } from 'lucide-react';
 import { useFerryClient } from '../data/client';
 import { listAllModels } from '@ferry/client';
-import {
-  keys,
-  useCapacity,
-  useProfiles,
-  useSessionDetail,
-  useSessions,
-  useSettings,
-  useWorkspaces,
-} from '../data/queries';
+import { keys, useProfiles, useSessionDetail, useSettings, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
-import { ModelPickerPopover } from './SessionPowerControls';
+import { ComposerModelChip } from './SessionPowerControls';
 import { FullOutputDialog } from './FullOutputDialog';
+import { useDisplayName } from './useDisplayName';
 
 const starters: Record<string, string> = {
+  'Fix a failing test': 'Find and fix the failing tests in this repo.',
   'Explain this repo': 'Explain how this repository is structured and where the main flows live.',
   'Fix failing tests': 'Find and fix the failing tests in this repo.',
   'Write tests': 'Add focused tests for the behavior that is currently missing.',
@@ -125,14 +113,6 @@ function shortModel(
   if (!ref) return models[0]?.name.split(' ').slice(-1)[0] ?? 'GLM-5.3';
   const model = models.find((item) => item.ref === ref);
   return model?.name ?? ref.split('/').at(-1) ?? ref;
-}
-
-function relativeDate(value: string): string {
-  const delta = Math.max(0, Date.now() - new Date(value).getTime());
-  if (delta < 60_000) return 'Just now';
-  if (delta < 3_600_000) return `${String(Math.floor(delta / 60_000))}m ago`;
-  if (delta < 86_400_000) return `${String(Math.floor(delta / 3_600_000))}h ago`;
-  return `${String(Math.floor(delta / 86_400_000))}d ago`;
 }
 
 function timelineEventsByTurn(
@@ -239,226 +219,118 @@ export function HomeCanvas() {
   const navigate = useNavigate();
   const pushToast = useToasts((state) => state.push);
   const openTab = useUI((state) => state.openTab);
-  const { data: sessions = [], isLoading: sessionsLoading } = useSessions();
+  const selectedWorkspaceId = useUI((state) => state.selectedWorkspaceId);
+  const pendingComposerFocus = useUI((state) => state.pendingComposerFocus);
+  const consumeComposerFocus = useCallback(() => {
+    useUI.getState().consumeComposerFocus();
+  }, []);
   const { data: workspaces = [] } = useWorkspaces();
   const { data: profiles = [] } = useProfiles();
-  const { data: settings } = useSettings();
-  const { data: capacity } = useCapacity();
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
     queryFn: () => listAllModels(client),
   });
-  const { data: candidates = [] } = useQuery({
-    queryKey: ['model-candidates', null],
-    queryFn: () => client.models.candidates(null),
-  });
+  const { data: settings } = useSettings();
+  const displayName = useDisplayName();
   const [prompt, setPrompt] = useState('');
-  const activeProfile = profiles.find((profile) => profile.id === settings?.activeProfileId);
-  const pinned = sessions.filter((session) => session.pinned).slice(0, 5);
-  const recent = [...sessions]
-    .filter((session) => session.status !== 'error')
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, 3);
-  const compactHome =
-    !sessionsLoading &&
-    sessions.length > 0 &&
-    settings?.homeStyle !== 'hero' &&
-    (settings?.homeStyle === 'compact' || sessions.length >= 3 || settings?.onboardingComplete);
+  const [draftProfileId, setDraftProfileId] = useState<string | null>(null);
+  const [draftModelRef, setDraftModelRef] = useState<ModelRef | null>(null);
+  const activeProfile = profiles.find(
+    (profile) => profile.id === (draftProfileId ?? settings?.activeProfileId),
+  );
+  const activeModel = models[0]?.name ?? 'GLM-5.3';
+  const draftModel = models.find((model) => model.ref === draftModelRef);
+  const selectedWorkspace =
+    workspaces.find((item) => item.id === selectedWorkspaceId) ?? workspaces[0];
+  useEffect(() => {
+    document.querySelector<HTMLTextAreaElement>('[aria-label="Message Ferry"]')?.focus();
+  }, []);
   const send = async () => {
     const text = prompt.trim();
-    const workspace = workspaces[0];
+    const workspace = selectedWorkspace;
     if (!text || !workspace) return;
-    const session = await client.sessions.create({
-      workspaceId: workspace.id,
-      ...(settings?.activeProfileId ? { profileId: settings.activeProfileId } : {}),
-    });
-    openTab({ id: session.id, title: session.title });
-    warnOAuthUseOnce(`app:${session.id}`, session.modelRef, pushToast);
     try {
+      const profileId = activeProfile?.id;
+      const session = await client.sessions.create({
+        workspaceId: workspace.id,
+        ...(profileId ? { profileId } : {}),
+      });
+      if (draftModelRef) await client.models.select(session.id, draftModelRef);
+      openTab({ id: session.id, title: session.title });
+      warnOAuthUseOnce(`app:${session.id}`, draftModelRef ?? session.modelRef, pushToast);
       await client.sessions.send(session.id, { text });
+      await cache.invalidateQueries({ queryKey: keys.sessions });
+      setPrompt('');
+      await navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
     } catch (error) {
       pushToast({
         kind: 'error',
-        title: 'Message could not be sent',
+        title: 'Chat could not be started',
         body: error instanceof Error ? error.message : String(error),
       });
-      return;
     }
-    await cache.invalidateQueries({ queryKey: keys.sessions });
-    setPrompt('');
-    await navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
-  };
-  const cycleProfile = async () => {
-    const pinnedProfiles = profiles.filter((profile) => profile.pinned);
-    if (!pinnedProfiles.length) return;
-    const current = pinnedProfiles.findIndex((profile) => profile.id === settings?.activeProfileId);
-    const next = pinnedProfiles[(current + 1) % pinnedProfiles.length];
-    if (!next) return;
-    await client.profiles.activate(next.id);
-    await cache.invalidateQueries({ queryKey: keys.profiles });
-    await cache.invalidateQueries({ queryKey: keys.settings });
-  };
-  const go = (id: SessionId, title: string) => {
-    openTab({ id, title });
-    void navigate({ to: '/s/$sessionId', params: { sessionId: id } });
   };
   return (
-    <CanvasPanel
-      header={
-        <>
-          <ModelPickerTrigger mode="auto" modelName={shortModel(candidates[0]?.ref, models)} />
-          <CanvasHeaderActions
-            onMore={() => {
-              pushToast({
-                kind: 'info',
-                title: 'Canvas actions',
-                body: 'More actions are coming later.',
-              });
-            }}
-            onLink={() => {
-              void navigator.clipboard.writeText(window.location.href);
-            }}
-            onShare={() => {
-              pushToast({ kind: 'info', title: 'Share', body: 'There is nothing to share yet.' });
-            }}
-          />
-        </>
-      }
-      className="home-canvas"
-    >
-      <div className={`home-content${compactHome ? ' home-content-compact' : ''}`}>
-        {!compactHome && (
-          <Hero
-            title={['Build bigger with Ferry,', 'every free model, one seamless task.']}
-            subtitle="Ferry routes each step to the model that still has room, and carries your task across when one runs dry."
-          />
-        )}
-        {sessionsLoading ? (
-          <Skeleton rows={2} />
-        ) : (
-          sessions.length === 0 && (
-            <EmptyState
-              title="No sessions yet"
-              action="Start your first chat"
-              onAction={() =>
-                document.querySelector<HTMLTextAreaElement>('[aria-label="Message Ferry"]')?.focus()
-              }
-            />
-          )
-        )}
-        {capacity?.stepsLeftToday === 0 && (
-          <div className="capacity-exhausted">
-            <div>
-              <strong>All free capacity is used</strong>
-              <span>Earliest reset in 2h 13m.</span>
-            </div>
-            <button onClick={() => void navigate({ to: '/explore' })}>Add provider</button>
-          </div>
-        )}
-        {compactHome && (
-          <div className="home-composer-slot">
-            <Composer
-              value={prompt}
-              onChange={setPrompt}
-              onSend={() => void send()}
-              onStop={() => undefined}
-              running={false}
-              banner={
-                capacity?.banner
-                  ? {
-                      text: capacity.banner.text,
-                      actionLabel: capacity.banner.actionLabel,
-                      onAction: () =>
-                        void navigate({
-                          to:
-                            capacity.banner?.action === 'open_usage'
-                              ? '/explore/usage'
-                              : '/explore',
-                        }),
-                    }
-                  : null
-              }
-              profileName={activeProfile?.name ?? 'Best Available'}
-              onProfileClick={() => void cycleProfile()}
-              onAttach={() => {
-                pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
+    <CanvasPanel dots={false} className="home-canvas v2-home-canvas">
+      <div className="v2-home-layout">
+        <div className="v2-home-greeting">
+          <FerryMark size={36} variant="brand" />
+          <h1>{displayName ? `Good morning, ${displayName}.` : 'Good morning.'}</h1>
+        </div>
+        <Composer
+          value={prompt}
+          focusRequested={pendingComposerFocus}
+          onFocusRequestConsumed={consumeComposerFocus}
+          onChange={setPrompt}
+          onSend={() => void send()}
+          onStop={() => undefined}
+          running={false}
+          profileName={activeProfile?.name ?? 'Auto profile'}
+          profileControl={
+            <ComposerModelChip
+              sessionId={null}
+              profileName={activeProfile?.name ?? 'Auto profile'}
+              {...(activeProfile ? { activeProfileId: activeProfile.id } : {})}
+              profiles={profiles}
+              mode={draftModelRef ? 'manual' : 'auto'}
+              modelName={draftModel?.name ?? activeModel}
+              onProfileSelect={setDraftProfileId}
+              onModelSelect={(ref) => {
+                setDraftModelRef(ref === 'auto' ? null : ref);
               }}
             />
-          </div>
-        )}
-        {compactHome && (
-          <div className="home-continue-slot">
-            <ContinueRow
-              cards={recent.map((session) => ({
-                language:
-                  workspaces.find((workspace) => workspace.id === session.workspaceId)?.language ??
-                  'other',
-                title: session.title,
-                snippet: session.preview,
-                date: relativeDate(session.updatedAt),
-                status: session.status,
-                repo:
-                  workspaces.find((workspace) => workspace.id === session.workspaceId)?.name ??
-                  'Workspace',
-                onClick: () => {
-                  go(session.id, session.title);
-                },
-              }))}
-            />
-          </div>
-        )}
-        <div className="home-pinned-slot">
-          <PinnedChatsRow
-            cards={pinned.map((session) => ({
-              language:
-                workspaces.find((workspace) => workspace.id === session.workspaceId)?.language ??
-                'other',
-              title: session.title,
-              snippet: session.preview,
-              date: relativeDate(session.updatedAt),
-              onClick: () => {
-                go(session.id, session.title);
-              },
-            }))}
-            onSeeAll={() => void navigate({ to: '/library' })}
-          />
-        </div>
-        <div className="home-chips-slot">
-          <SuggestionChips
-            onSelect={(label) => {
-              setPrompt(starters[label] ?? label);
-            }}
-          />
-        </div>
-        {!compactHome && (
-          <Composer
-            value={prompt}
-            onChange={setPrompt}
-            onSend={() => void send()}
-            onStop={() => undefined}
-            running={false}
-            banner={
-              capacity?.banner
-                ? {
-                    text: capacity.banner.text,
-                    actionLabel: capacity.banner.actionLabel,
-                    onAction: () =>
-                      void navigate({
-                        to:
-                          capacity.banner?.action === 'open_usage' ? '/explore/usage' : '/explore',
-                      }),
-                  }
-                : null
-            }
-            profileName={activeProfile?.name ?? 'Best Available'}
-            onProfileClick={() => void cycleProfile()}
-            onAttach={() => {
-              pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
-            }}
-          />
-        )}
-        <div className="home-disclaimer-slot">
-          <Disclaimer />
+          }
+          workspaceName={selectedWorkspace?.name ?? 'Choose workspace'}
+          workspaceMenuItems={workspaces.map((workspace) => ({
+            label: workspace.name,
+            onSelect: () => {
+              useUI.getState().setSelectedWorkspace(workspace.id);
+            },
+          }))}
+          onAttach={() => {
+            pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
+          }}
+        />
+        <div className="v2-quick-starts" aria-label="Quick starts">
+          {(
+            [
+              ['Fix a failing test', Bug],
+              ['Explain this repo', BookOpenText],
+              ['Write tests', FlaskConical],
+              ['Plan a feature', ListChecks],
+            ] as const
+          ).map(([label, Icon]) => (
+            <button
+              className="v2-quick-start"
+              key={label}
+              onClick={() => {
+                setPrompt(starters[label] ?? label);
+              }}
+            >
+              <Icon aria-hidden="true" />
+              {label}
+            </button>
+          ))}
         </div>
       </div>
     </CanvasPanel>
@@ -775,6 +647,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   sessionId,
   canRetry,
   streamPartId,
+  isRunning,
   onFullOutput,
   onPickModel,
   measureElement,
@@ -788,11 +661,13 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   sessionId: SessionId;
   canRetry: boolean;
   streamPartId: string | null;
+  isRunning: boolean;
   onFullOutput: (handle: string) => void;
   onPickModel: () => void;
   measureElement: (element: HTMLElement | null) => void;
 }) {
   const client = useFerryClient();
+  const cache = useQueryClient();
   const navigate = useNavigate();
   const setRightTab = useUI((state) => state.setRightTab);
   const streamingText = useStreamedText(streamPartId);
@@ -801,6 +676,30 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   const timelineHasTools = timelineEvents.some((event) => event.type === 'tool_use');
   const timelineHasThinking = timelineEvents.some((event) => event.type === 'thinking');
   const timelineHasText = timelineEvents.some((event) => event.type === 'text');
+  const messageText = message.parts
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text)
+    .join('');
+  const copyMessage = () => void navigator.clipboard.writeText(messageText);
+  const retryMessage = async () => {
+    try {
+      const detail = await client.sessions.get(sessionId);
+      const lastUserMessage = detail.messages.filter((item) => item.role === 'user').at(-1);
+      const text = lastUserMessage?.parts
+        .filter((part) => part.type === 'text')
+        .map((part) => part.text)
+        .join('\n');
+      if (!text) return;
+      await client.sessions.send(sessionId, { text });
+      await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+    } catch (error) {
+      useToasts.getState().push({
+        kind: 'error',
+        title: 'Retry failed',
+        body: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
   return (
     <div
       className="transcript-message"
@@ -853,7 +752,13 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
                 }}
               />
             ) : part.type === 'reasoning' ? (
-              <ReasoningPart key={part.id} text={part.text} steps={planSteps} />
+              <ReasoningPart
+                key={part.id}
+                text={part.text}
+                steps={planSteps}
+                running={isRunning}
+                startedAt={message.createdAt}
+              />
             ) : (
               <PartView
                 key={part.id}
@@ -882,6 +787,16 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
           {streamingText !== null && streamingPartIsInMessage && <StreamingCursor />}
         </AssistantMessage>
       )}
+      <div className="v2-message-actions">
+        <button aria-label="Copy message" onClick={copyMessage} type="button">
+          Copy
+        </button>
+        {message.role === 'assistant' && canRetry && (
+          <button aria-label="Retry response" onClick={() => void retryMessage()} type="button">
+            Retry
+          </button>
+        )}
+      </div>
     </div>
   );
 });
@@ -895,6 +810,9 @@ export function SessionCanvas() {
   const pushToast = useToasts((state) => state.push);
   const density = useUI((state) => state.density);
   const pendingComposerFocus = useUI((state) => state.pendingComposerFocus);
+  const consumeComposerFocus = useCallback(() => {
+    useUI.getState().consumeComposerFocus();
+  }, []);
   const { data, isLoading, isError } = useSessionDetail(sessionId);
   const { data: workspaces = [] } = useWorkspaces();
   const { data: models = [] } = useQuery({
@@ -907,11 +825,6 @@ export function SessionCanvas() {
   });
   const { data: profiles = [] } = useProfiles();
   const [prompt, setPrompt] = useState('');
-  useEffect(() => {
-    if (!pendingComposerFocus) return;
-    document.querySelector<HTMLTextAreaElement>('[aria-label="Message Ferry"]')?.focus();
-    useUI.getState().consumeComposerFocus();
-  }, [pendingComposerFocus, sessionId]);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const openModelPicker = useCallback(() => {
     setModelPickerOpen(true);
@@ -927,6 +840,13 @@ export function SessionCanvas() {
   const [newOutputCount, setNewOutputCount] = useState(0);
   const [atBottom, setAtBottom] = useState(true);
   const messages = data?.messages ?? [];
+  const pendingApprovalIndex = useMemo(
+    () =>
+      messages.findIndex((message) =>
+        message.parts.some((part) => part.type === 'approval_request' && part.state === 'pending'),
+      ),
+    [messages],
+  );
   const timelineByMessage = useMemo(
     () => timelineEventsByTurn(messages, data?.session.agentEvents ?? []),
     [data?.session.agentEvents, messages],
@@ -1143,6 +1063,26 @@ export function SessionCanvas() {
       cancelAnimationFrame(frame);
     };
   }, [initialTailReady, messages.length, virtualizer]);
+  useLayoutEffect(() => {
+    if (!initialTailReady || pendingApprovalIndex < 0) return;
+    pinnedToBottom.current = true;
+    setAtBottom(true);
+    virtualizer.scrollToIndex(pendingApprovalIndex, { align: 'end' });
+    const frame = requestAnimationFrame(() => {
+      const element = viewport.current;
+      const approvalMessage = element?.querySelector<HTMLElement>(
+        `.transcript-message[data-index="${String(pendingApprovalIndex)}"]`,
+      );
+      if (!element || !approvalMessage) return;
+      virtualizer.measureElement(approvalMessage);
+      const delta =
+        approvalMessage.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom;
+      if (Math.abs(delta) > 2) element.scrollTop += delta;
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [initialTailReady, pendingApprovalIndex, virtualizer]);
   useEffect(() => {
     if (data?.session.title) useUI.getState().renameTab(sessionId, data.session.title);
   }, [data?.session.title, sessionId]);
@@ -1292,62 +1232,70 @@ export function SessionCanvas() {
       </section>
     );
   }
+  const renderComposer = () => (
+    <Composer
+      value={prompt}
+      focusRequested={pendingComposerFocus}
+      onFocusRequestConsumed={consumeComposerFocus}
+      onChange={setPrompt}
+      onSend={() => void send()}
+      onStop={() => void client.sessions.cancel(sessionId)}
+      running={running}
+      profileName={
+        profiles.find((profile) => profile.id === data?.session.profileId)?.name ?? 'Best Available'
+      }
+      profileControl={
+        <ComposerModelChip
+          sessionId={sessionId}
+          profileName={
+            profiles.find((profile) => profile.id === data?.session.profileId)?.name ??
+            'Best Available'
+          }
+          mode={data?.session.pinnedModelRef ? 'manual' : 'auto'}
+          modelName={currentModel}
+          open={modelPickerOpen}
+          onOpenChange={setModelPickerOpen}
+          profiles={profiles}
+          {...(data?.session.profileId ? { activeProfileId: data.session.profileId } : {})}
+          onProfileSelect={(profileId) => {
+            void activateProfile(profileId);
+          }}
+        />
+      }
+      {...(workspace?.name ? { workspaceName: workspace.name } : {})}
+      onWorkspaceClick={() => {
+        if (workspace) localStorage.setItem('ferry.libraryWorkspace', workspace.id);
+        void navigate({ to: '/library' });
+      }}
+      profileMenuItems={[
+        ...profiles
+          .filter((profile) => profile.pinned)
+          .map((profile) => ({
+            label: profile.name,
+            onSelect: () => void activateProfile(profile.id),
+          })),
+        { separator: true },
+        {
+          label: 'Manage profiles…',
+          onSelect: () => {
+            useUI.getState().setSettingsSection('Profiles');
+            void navigate({ to: '/settings' });
+          },
+        },
+      ]}
+      onAttach={() => {
+        pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
+      }}
+    />
+  );
   return (
     <CanvasPanel
       dots={false}
       overflowContained
-      header={
-        <>
-          <div className="session-toolbar-primary flex min-w-0 items-center gap-2">
-            <ModelPickerPopover
-              sessionId={sessionId}
-              mode={data?.session.pinnedModelRef ? 'manual' : 'auto'}
-              modelName={currentModel}
-              open={modelPickerOpen}
-              onOpenChange={setModelPickerOpen}
-            />
-            {workspace && (
-              <button
-                aria-label={`Open ${workspace.name} in Library`}
-                className="repo-context-pill"
-                onClick={() => {
-                  localStorage.setItem('ferry.libraryWorkspace', workspace.id);
-                  void navigate({ to: '/library' });
-                }}
-                type="button"
-              >
-                <GitBranch size={13} />
-                {workspace.name} · {workspace.gitBranch ?? 'no branch'}
-              </button>
-            )}
-          </div>
-          <div className="session-toolbar-actions flex items-center gap-1">
-            <CanvasHeaderActions
-              moreItems={[
-                {
-                  label: 'Copy link',
-                  onSelect: () => void navigator.clipboard.writeText(window.location.href),
-                },
-                { separator: true },
-                {
-                  label: density === 'compact' ? 'Comfortable density' : 'Compact density',
-                  onSelect: () => {
-                    useUI.getState().setDensity(density === 'compact' ? 'comfortable' : 'compact');
-                  },
-                },
-              ]}
-              onLink={() => void navigator.clipboard.writeText(window.location.href)}
-              onShare={() => {
-                pushToast({ kind: 'info', title: 'Share', body: 'There is nothing to share yet.' });
-              }}
-            />
-          </div>
-        </>
-      }
-      className={`session-canvas ${density === 'compact' ? 'density-compact' : ''}`}
+      className={`session-canvas v2-session-canvas ${density === 'compact' ? 'density-compact' : ''}`}
     >
       <div
-        className="transcript-viewport"
+        className={`transcript-viewport ${messages.length === 0 ? 'is-empty' : ''}`}
         data-at-bottom={atBottom}
         data-new-output-count={newOutputCount}
         data-session-status={data?.session.status ?? 'loading'}
@@ -1388,7 +1336,13 @@ export function SessionCanvas() {
         }}
       >
         {messages.length === 0 && (
-          <div className="session-empty">{data?.session.title ?? 'Loading session…'}</div>
+          <div className="session-empty">
+            <div className="session-empty-greeting">
+              <FerryMark size={32} variant="brand" />
+              <span>What would you like to work on?</span>
+            </div>
+            {renderComposer()}
+          </div>
         )}
         <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
           {virtualizer.getVirtualItems().map((item) => {
@@ -1407,6 +1361,7 @@ export function SessionCanvas() {
                 sessionId={sessionId}
                 canRetry={data?.session.status === 'error'}
                 streamPartId={streamPartId}
+                isRunning={running}
                 onFullOutput={setFullOutput}
                 onPickModel={openModelPicker}
                 measureElement={virtualizer.measureElement}
@@ -1434,37 +1389,7 @@ export function SessionCanvas() {
           </button>
         </div>
       )}
-      <Composer
-        value={prompt}
-        onChange={setPrompt}
-        onSend={() => void send()}
-        onStop={() => void client.sessions.cancel(sessionId)}
-        running={running}
-        profileName={
-          profiles.find((profile) => profile.id === data?.session.profileId)?.name ??
-          'Best Available'
-        }
-        onProfileClick={() => undefined}
-        profileMenuItems={[
-          ...profiles
-            .filter((profile) => profile.pinned)
-            .map((profile) => ({
-              label: profile.name,
-              onSelect: () => void activateProfile(profile.id),
-            })),
-          { separator: true },
-          {
-            label: 'Manage profiles…',
-            onSelect: () => {
-              useUI.getState().setSettingsSection('Profiles');
-              void navigate({ to: '/settings' });
-            },
-          },
-        ]}
-        onAttach={() => {
-          pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
-        }}
-      />
+      {messages.length > 0 && renderComposer()}
       {fullOutput !== null && data?.session && (
         <FullOutputDialog
           client={client}

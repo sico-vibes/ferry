@@ -133,7 +133,11 @@ describe('Library, settings, and onboarding screens', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
     await userEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
     await waitFor(async () => {
-      expect((await client.settings.get()).onboardingComplete).toBe(true);
+      const settings = await client.settings.get();
+      const autoFree = (await client.profiles.list()).find((item) => item.name === 'Auto-Free');
+      expect(settings.onboardingComplete).toBe(true);
+      expect(autoFree).toBeDefined();
+      expect(settings.activeProfileId).toBe(autoFree?.id);
     });
   }, 15000);
 

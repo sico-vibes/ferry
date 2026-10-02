@@ -24,6 +24,7 @@ import { useUI } from '../../state/ui';
 import { ProviderKeyDialog } from '../ProviderKeyDialog';
 import { ModelQualityBadge } from '../ModelQualityBadge';
 import { OAuthProviderRows } from '../OAuthProviderRows';
+import { ProviderFilterNav } from '../LegacyContextNav';
 
 type ModelSort =
   | 'name'
@@ -264,8 +265,9 @@ export function ExploreCanvas() {
   return (
     <section
       aria-label="Explore providers and models"
-      className="canvas page-scroll-canvas min-h-0 p-5"
+      className="canvas page-scroll-canvas min-h-0 p-5 legacy-context-page"
     >
+      <ProviderFilterNav />
       <Stack className="page-content mx-auto w-full max-w-[1200px]" gap={4}>
         <PageHeader
           title="Providers"

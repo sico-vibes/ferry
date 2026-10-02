@@ -13,53 +13,47 @@ try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.goto(url);
     await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
-    await expect(
-      page.getByRole('main').getByRole('button', { name: 'Best Available' }),
-    ).toBeVisible();
-    await expect(page.getByText('Saved topics')).toBeVisible();
-    await expect(page.getByRole('img', { name: /capacity remaining/i })).toBeVisible();
-    const rightBefore = await page.locator('.right-panel').boundingBox();
-    const resize = page.getByRole('separator', { name: 'Resize right panel' });
-    const resizeBox = await resize.boundingBox();
-    if (!rightBefore || !resizeBox) throw new Error('Right panel resize handle is missing');
-    await page.mouse.move(resizeBox.x + resizeBox.width / 2, resizeBox.y + 120);
-    await page.mouse.down();
-    await page.mouse.move(resizeBox.x + resizeBox.width / 2 - 60, resizeBox.y + 120);
-    await page.mouse.up();
-    await expect
-      .poll(async () => (await page.locator('.right-panel').boundingBox())?.width)
-      .toBeGreaterThan(rightBefore.width + 40);
-    const gridColumns = () =>
-      page
-        .locator('.app-grid')
-        .evaluate(
-          (element) => getComputedStyle(element).gridTemplateColumns.trim().split(/\s+/).length,
-        );
-    await page.getByRole('button', { name: 'Collapse sidebar' }).click();
-    await expect(page.getByRole('button', { name: 'Show sidebar' })).toBeVisible();
-    await expect.poll(gridColumns).toBe(3);
-    await expect
-      .poll(async () => (await page.locator('.center-column').boundingBox())?.width)
-      .toBeGreaterThan(650);
-    await page.getByRole('button', { name: 'Show sidebar' }).click();
-    await page.getByRole('button', { name: 'Collapse right panel' }).click();
-    await expect(page.getByRole('button', { name: 'Show panel' })).toBeVisible();
-    await expect.poll(gridColumns).toBe(3);
-    await expect
-      .poll(async () => (await page.locator('.center-column').boundingBox())?.width)
-      .toBeGreaterThan(650);
-    await page.getByRole('button', { name: 'Collapse sidebar' }).click();
-    await expect.poll(gridColumns).toBe(2);
-    await expect
-      .poll(async () => (await page.locator('.center-column').boundingBox())?.width)
-      .toBeGreaterThan(1100);
-    await page.getByRole('button', { name: 'Show sidebar' }).click();
-    await page.getByRole('button', { name: 'Show panel' }).click();
-    await expect(page.getByRole('button', { name: 'Collapse right panel' })).toBeVisible();
+    const profileChipElement = page.locator('main button.v2-composer-chip');
+    const profileChipName = await profileChipElement.getAttribute('aria-label');
+    if (!profileChipName) throw new Error('Expected the composer chip to have an accessible name');
+    const profileChip = page
+      .getByRole('main')
+      .getByRole('button', { name: profileChipName, exact: true });
+    await expect(profileChip).toBeVisible();
+    await profileChip.click();
+    const modelPicker = page.locator('[role="dialog"][aria-label="Choose model"]');
+    await expect(modelPicker).toHaveCount(1);
+    await expect(modelPicker).toBeVisible();
+    const modelList = modelPicker.getByRole('listbox', { name: 'Suggestions' });
+    const profileGroup = modelList.locator('[cmdk-group]', {
+      has: page.locator('[cmdk-group-heading]', { hasText: /^Profile$/ }),
+    });
+    await expect(profileGroup.getByRole('option', { name: /Best Available/ })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(modelPicker).toHaveCount(0);
+    await expect(page.getByRole('progressbar', { name: /capacity remaining/i })).toBeVisible();
+    const chatRow = page.locator('.v2-chat-open[data-session-id]').first();
+    const title = await chatRow.innerText();
+    await chatRow.click();
+    await expect(page.locator('.v2-chat-open[aria-current="page"][data-session-id]')).toHaveCount(
+      1,
+    );
+    const drawerToggle = page.getByRole('button', { name: 'Toggle drawer' });
+    if ((await drawerToggle.getAttribute('aria-expanded')) === 'true') await drawerToggle.click();
+    await drawerToggle.click();
+    await expect(page.getByRole('heading', { name: 'Session details' })).toBeVisible();
+    await page.getByRole('button', { name: 'Close drawer' }).click();
+    await expect(page.getByRole('heading', { name: 'Session details' })).toBeHidden();
+    const sidebarToggle = page.getByRole('button', { name: /^(Collapse|Expand) sidebar$/ });
+    if ((await sidebarToggle.getAttribute('aria-expanded')) === 'false')
+      await sidebarToggle.click();
+    await sidebarToggle.click();
+    await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
+    await page.getByRole('button', { name: 'Expand sidebar' }).click();
     await page
       .getByRole('textbox', { name: 'Message Ferry' })
       .fill('Switch models after quota handoff');
-    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByRole('button', { name: /Switched.*nvidia/ })).toBeVisible({
       timeout: 10_000,
     });
@@ -67,27 +61,77 @@ try {
       timeout: 10_000,
     });
     await page.getByRole('textbox', { name: 'Message Ferry' }).fill('Fix the flaky tests');
-    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
     await page.getByRole('button', { name: 'Allow once' }).click({ timeout: 10_000 });
     await expect(page.getByText(/Checkpoint/)).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/full suite passed/i).last()).toBeVisible({ timeout: 10_000 });
-    await page.getByRole('button', { name: 'Open terminal panel' }).click();
+    if ((await drawerToggle.getAttribute('aria-expanded')) === 'true') await drawerToggle.click();
+    await drawerToggle.click();
+    await page
+      .getByRole('tablist', { name: 'Session drawer tabs' })
+      .getByRole('tab', { name: 'Terminal' })
+      .click();
     await page.locator('.xterm-helper-textarea').click();
     await page.keyboard.type('git status');
     await page.keyboard.press('Enter');
     await expect(page.getByText('working tree clean')).toBeVisible();
-    const title = await page.locator('[role="tablist"] [role="tab"]').first().innerText();
+    const firstUnpinnedChatRow = page
+      .locator('.v2-chat-row')
+      .filter({ hasNot: page.getByRole('img', { name: 'Pinned', exact: true }) })
+      .first();
+    await expect(firstUnpinnedChatRow).toBeVisible();
+    const unpinnedChatTitle = (
+      await firstUnpinnedChatRow.locator('.v2-chat-open').innerText()
+    ).trim();
+    const pinnedChatRow = page.locator('.v2-chat-row').filter({
+      has: page.getByRole('button', {
+        name: `Chat actions for ${unpinnedChatTitle}`,
+        exact: true,
+      }),
+    });
+    const originalIndex = await page
+      .locator('.v2-chat-row')
+      .evaluateAll(
+        (rows, targetTitle) =>
+          rows.findIndex((row) => row.querySelector('.v2-chat-open')?.textContent === targetTitle),
+        unpinnedChatTitle,
+      );
     await page
-      .getByRole('button', { name: `Save ${title}` })
-      .first()
+      .getByRole('button', { name: `Chat actions for ${unpinnedChatTitle}`, exact: true })
       .click();
+    await page.getByRole('menuitem', { name: 'Pin', exact: true }).click();
+    await expect(pinnedChatRow.getByRole('img', { name: 'Pinned', exact: true })).toBeVisible();
+    const pinnedBlockOrder = await page.locator('.v2-chat-row').evaluateAll((rows, targetTitle) => {
+      const isPinned = (row) => row.querySelector('[aria-label="Pinned"]') !== null;
+      return {
+        targetIndex: rows.findIndex(
+          (row) => row.querySelector('.v2-chat-open')?.textContent?.trim() === targetTitle,
+        ),
+        pinnedCount: rows.filter(isPinned).length,
+        firstUnpinnedIndex: rows.findIndex((row) => !isPinned(row)),
+      };
+    }, unpinnedChatTitle);
+    expect(pinnedBlockOrder.targetIndex).toBeLessThan(pinnedBlockOrder.pinnedCount);
+    expect(pinnedBlockOrder.targetIndex).toBeLessThan(pinnedBlockOrder.firstUnpinnedIndex);
     await page
-      .getByRole('navigation', { name: 'Right panel tabs' })
-      .getByRole('button', { name: 'Chats' })
+      .getByRole('button', { name: `Chat actions for ${unpinnedChatTitle}`, exact: true })
       .click();
-    await expect(page.getByText('Saved topics')).toBeVisible();
-    await expect(page.getByRole('button', { name: `Unsave ${title}` }).first()).toBeVisible();
-    await page.getByRole('button', { name: 'Explore', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Unpin', exact: true }).click();
+    await expect(pinnedChatRow.getByRole('img', { name: 'Pinned', exact: true })).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page
+          .locator('.v2-chat-row')
+          .evaluateAll(
+            (rows, targetTitle) =>
+              rows.findIndex(
+                (row) => row.querySelector('.v2-chat-open')?.textContent === targetTitle,
+              ),
+            unpinnedChatTitle,
+          ),
+      )
+      .toBe(originalIndex);
+    await page.getByRole('button', { name: 'Models', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible();
     await expect(page.getByRole('navigation', { name: 'Provider filters' })).toBeVisible();
     await page
@@ -127,17 +171,17 @@ try {
       .getByRole('textbox', { name: 'Gemini API API key' })
       .fill('demo-onboarding-gemini-key');
     await page.getByRole('button', { name: 'Save key' }).first().click();
-    await page.getByRole('button', { name: 'Test' }).first().click();
+    await page.getByRole('button', { name: 'Test Gemini API', exact: true }).click();
     await expect(page.getByText('Connected')).toBeVisible();
     await page
       .getByRole('textbox', { name: 'OpenRouter (free models) API key' })
       .fill('demo-onboarding-openrouter-key');
     await page.getByRole('button', { name: 'Save key' }).nth(1).click();
-    await page.getByRole('button', { name: 'Test' }).nth(1).click();
+    await page.getByRole('button', { name: 'Test OpenRouter (free models)', exact: true }).click();
     await page.getByRole('button', { name: 'Continue' }).click();
     await page.getByRole('button', { name: 'Continue' }).click();
     await page.getByRole('button', { name: 'Skip for now' }).click();
-    await expect(page.getByRole('region', { name: 'Continue', exact: true })).toBeVisible();
+    await expect(page).toHaveURL(new URL('/', url).href);
 
     await page.goto(`${url}/settings`);
     await page

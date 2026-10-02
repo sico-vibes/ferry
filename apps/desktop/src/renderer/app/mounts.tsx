@@ -10,6 +10,7 @@ const BottomPanel = lazy(() =>
 export interface AppMountContext {
   bottomOpen: boolean;
   fullCanvasPage: boolean;
+  onNewChat: () => Promise<void>;
 }
 function BottomPanelMount({ bottomOpen, fullCanvasPage }: AppMountContext) {
   return bottomOpen && !fullCanvasPage ? (
@@ -18,8 +19,8 @@ function BottomPanelMount({ bottomOpen, fullCanvasPage }: AppMountContext) {
     </Suspense>
   ) : null;
 }
-function SessionControlsMount() {
-  return <SessionPowerControls />;
+function SessionControlsMount({ onNewChat }: AppMountContext) {
+  return <SessionPowerControls onNewChat={onNewChat} />;
 }
 function ToasterMount() {
   const messages = useToasts((state) => state.items);

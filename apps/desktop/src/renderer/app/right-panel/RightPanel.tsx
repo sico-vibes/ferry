@@ -16,6 +16,7 @@ import { EmptyState, IconButton, KbdChip, NewChatButton, ShowMoreList, Skeleton 
 import { useFerryClient } from '../../data/client';
 import { keys, useSessionDetail, useSessions } from '../../data/queries';
 import { useUI } from '../../state/ui';
+import type { SessionId } from '@ferry/shared';
 
 export function editedAt(iso: string, now = Date.now()): string {
   const date = new Date(iso);
@@ -32,7 +33,13 @@ export function editedAt(iso: string, now = Date.now()): string {
   return `Edited ${relative.format(Math.round(delta / length), unit)}`;
 }
 
-export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
+export function RightPanel({
+  onNewChat,
+  sessionId,
+}: {
+  onNewChat: () => void;
+  sessionId?: SessionId;
+}) {
   const [search, setSearch] = useState('');
   const input = useRef<HTMLInputElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
@@ -49,7 +56,10 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
   const setRightTab = useUI((state) => state.setRightTab);
   const activeId = useUI((state) => state.activeId);
   const scrollKey = `${activeId ?? 'none'}:${rightTab}`;
-  const { data: activeSession } = useSessionDetail(activeId ?? ('' as never));
+  const currentSessionId = sessionId ?? activeId;
+  const { data: activeSession, isLoading: activeSessionLoading } = useSessionDetail(
+    currentSessionId ?? ('' as never),
+  );
   useLayoutEffect(() => {
     const element = scroll.current;
     if (!element) return;
@@ -287,6 +297,10 @@ export function RightPanel({ onNewChat }: { onNewChat: () => void }) {
                   </p>
                 )}
               </>
+            ) : activeSessionLoading ? (
+              <p className="empty-search">Loading this session's plan…</p>
+            ) : currentSessionId ? (
+              <p className="empty-search">No plan has been added to this session yet.</p>
             ) : (
               <p className="empty-search">Open a session to see its live plan.</p>
             )}

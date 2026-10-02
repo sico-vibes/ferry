@@ -217,7 +217,7 @@ export function AgentTimeline({
       className="grid gap-3 rounded-xl border border-border-hair bg-raised/40 p-3 md:grid-cols-2"
     >
       <div className="min-w-0 space-y-2">
-        <h3 className="text-meta font-medium uppercase tracking-wide text-text-3">Model</h3>
+        <h3 className="text-meta font-medium text-text-3">Model</h3>
         {unavailable && (
           <p className="text-meta text-text-3">This model doesn’t share its reasoning.</p>
         )}
@@ -247,7 +247,7 @@ export function AgentTimeline({
         )}
       </div>
       <div className="min-w-0 space-y-2">
-        <h3 className="text-meta font-medium uppercase tracking-wide text-text-3">Tools</h3>
+        <h3 className="text-meta font-medium text-text-3">Tools</h3>
         {lanes.tools.map((item) => (
           <ToolItem
             item={item}

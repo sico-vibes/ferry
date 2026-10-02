@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FerryProvider } from '../data/client';
 import { useUI } from '../state/ui';
+import { DEFAULT_LAYOUT } from '../state/ui-layout';
 import { SettingsCanvas } from './SettingsCanvas';
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
@@ -31,6 +32,32 @@ afterEach(() => {
 });
 
 describe('SettingsCanvas', () => {
+  it('renders one page heading for each Settings section', async () => {
+    const sections = [
+      ['General', 'Settings'],
+      ['Profiles', 'Profiles'],
+      ['Providers & Keys', 'Providers & Keys'],
+      ['Gateway', 'Gateway'],
+      ['Advanced', 'Advanced'],
+      ['Optimizers', 'Optimizers'],
+      ['Delegation', 'Delegation'],
+      ['Permissions', 'Permissions'],
+      ['Skills', 'Skills'],
+      ['MCP', 'MCP'],
+      ['Data & Privacy', 'Data & Privacy'],
+      ['Developer', 'Developer'],
+      ['About', 'About'],
+    ] as const;
+
+    for (const [section, title] of sections) {
+      cleanup();
+      useUI.setState({ settingsSection: section });
+      mount();
+      await screen.findByRole('heading', { name: title });
+      expect(screen.getAllByRole('heading', { name: title })).toHaveLength(1);
+    }
+  });
+
   it('resets the persisted layout from Settings → General', () => {
     useUI.setState({
       settingsSection: 'General',
@@ -44,11 +71,7 @@ describe('SettingsCanvas', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     expect(useUI.getState()).toMatchObject({
-      leftCollapsed: false,
-      rightCollapsed: false,
-      rightWidth: 300,
-      bottomOpen: false,
-      bottomHeight: 260,
+      ...DEFAULT_LAYOUT,
     });
   });
 

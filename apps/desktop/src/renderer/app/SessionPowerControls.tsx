@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Bell, Check, ChevronDown, Search, X } from 'lucide-react';
+import { Popover as PopoverPrimitive } from 'radix-ui';
 import { DataUseBadge, Dialog, FerryMark, Pill, ShowMoreList, TagBadge } from '@ferry/ui';
-import type { ModelRef, PartId, SessionId } from '@ferry/shared';
+import type { ModelRef, PartId, ProfileId, SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { listAllModels } from '@ferry/client';
-import { keys, useSessions, useSettings, useWorkspaces } from '../data/queries';
+import { keys, useSessions, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI, type SettingsSection } from '../state/ui';
 import { ModelQualityBadge } from './ModelQualityBadge';
@@ -15,13 +15,8 @@ import { matchesKeybinding } from '@ferry/config/keybindings';
 import { useKeybindings } from '../state/keybindings';
 import { scorePaletteMatch } from './paletteSearch';
 
-export function SessionPowerControls() {
-  return (
-    <>
-      <ApprovalsTray />
-      <CommandPalette />
-    </>
-  );
+export function SessionPowerControls({ onNewChat }: { onNewChat: () => Promise<void> }) {
+  return <CommandPalette onNewChat={onNewChat} />;
 }
 
 function useCmdk(open: boolean) {
@@ -39,7 +34,7 @@ function useCmdk(open: boolean) {
   return CommandModule;
 }
 
-function ApprovalsTray() {
+export function ApprovalsTray({ activeSessionId }: { activeSessionId?: string | null }) {
   const client = useFerryClient();
   const navigate = useNavigate();
   const cache = useQueryClient();
@@ -67,6 +62,7 @@ function ApprovalsTray() {
     return detail.messages.flatMap((message) =>
       message.parts
         .filter((part) => part.type === 'approval_request' && part.state === 'pending')
+        .filter(() => detail.session.id !== activeSessionId)
         .map((part) => ({ session: detail.session, part })),
     );
   });
@@ -74,8 +70,8 @@ function ApprovalsTray() {
     await client.approvals.respond(sessionId, partId as PartId, decision);
     await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
   };
-  return (
-    <div className="relative">
+  return pending.length ? (
+    <div className="relative v2-approvals-anchor">
       <button
         aria-label={`Approvals${pending.length ? `, ${String(pending.length)} pending` : ''}`}
         className="relative inline-flex size-8 items-center justify-center rounded-full text-text-2 hover:bg-icon-circle"
@@ -146,21 +142,21 @@ function ApprovalsTray() {
         </div>
       )}
     </div>
-  );
+  ) : null;
 }
 
-export function CommandPalette() {
+export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }) {
   const client = useFerryClient();
   const navigate = useNavigate();
   const cache = useQueryClient();
   const pushToast = useToasts((state) => state.push);
   const { data: sessions = [] } = useSessions();
   const { data: workspaces = [] } = useWorkspaces();
-  const { data: settings } = useSettings();
   const activeId = useUI((state) => state.activeId);
   const density = useUI((state) => state.density);
   const [open, setOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
+  const actionAfterClose = useRef<(() => void | Promise<void>) | null>(null);
   const { bindings } = useKeybindings();
   const PaletteCommand = useCmdk(open);
   useEffect(() => {
@@ -186,12 +182,16 @@ export function CommandPalette() {
       }
     };
     window.addEventListener('keydown', handler);
+    const openPalette = () => {
+      setOpen(true);
+    };
+    window.addEventListener('ferry:open-command-palette', openPalette);
     return () => {
       window.removeEventListener('keydown', handler);
+      window.removeEventListener('ferry:open-command-palette', openPalette);
     };
   }, [bindings, open]);
-  const run = async (action: string) => {
-    setOpen(false);
+  const runAction = async (action: string) => {
     if (action.startsWith('settings:')) {
       useUI.getState().setSettingsSection(action.slice('settings:'.length) as SettingsSection);
       await navigate({ to: '/settings' });
@@ -208,24 +208,7 @@ export function CommandPalette() {
     }
     switch (action) {
       case 'new': {
-        const availableWorkspaces = workspaces.length ? workspaces : await client.workspaces.list();
-        const workspace = availableWorkspaces[0];
-        if (!workspace) {
-          pushToast({
-            kind: 'warning',
-            title: 'Add a folder first',
-            body: 'Choose a workspace before starting a chat.',
-          });
-          return;
-        }
-        const session = await client.sessions.create({
-          workspaceId: workspace.id,
-          ...(settings ? { profileId: settings.activeProfileId } : {}),
-        });
-        useUI.getState().openTab({ id: session.id, title: session.title });
-        await cache.invalidateQueries({ queryKey: keys.sessions });
-        useUI.getState().requestComposerFocus();
-        await navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
+        await onNewChat();
         break;
       }
       case 'folder': {
@@ -318,17 +301,24 @@ export function CommandPalette() {
       }
     }
   };
+  const closeThenRun = (action: () => void | Promise<void>) => {
+    actionAfterClose.current = action;
+    setOpen(false);
+  };
+  const run = (action: string) => {
+    closeThenRun(() => runAction(action));
+  };
   const actions: { id: string; label: string; shortcut: string }[] = [
     { id: 'new', label: 'New Chat', shortcut: 'Ctrl N' },
     { id: 'folder', label: 'Open folder', shortcut: '' },
     { id: 'profile', label: 'Switch profile', shortcut: '' },
     { id: 'density', label: `Toggle density (${density})`, shortcut: '' },
     { id: 'sidebar', label: 'Toggle sidebar', shortcut: 'Ctrl+B' },
-    { id: 'panel', label: 'Toggle right panel', shortcut: 'Ctrl+Shift+B' },
+    { id: 'panel', label: 'Toggle right panel', shortcut: 'Ctrl+.' },
     { id: 'terminal', label: 'Toggle terminal', shortcut: 'Ctrl+`' },
     { id: 'theme', label: 'Toggle theme', shortcut: '' },
     { id: 'model', label: 'Switch model', shortcut: '' },
-    { id: 'explore', label: 'Go to Explore', shortcut: '' },
+    { id: 'explore', label: 'Go to Models', shortcut: '' },
     ...(['All', 'Free', 'Credits', 'Paid', 'CLI'] as const).map((filter) => ({
       id: `explore:${filter}`,
       label: `Explore ${filter}`,
@@ -370,6 +360,12 @@ export function CommandPalette() {
       title="Command palette"
       description="Find a Ferry action, session, or workspace."
       contentClassName="command-dialog"
+      onCloseAutoFocus={(event) => {
+        event.preventDefault();
+        const action = actionAfterClose.current;
+        actionAfterClose.current = null;
+        if (action) window.requestAnimationFrame(() => void action());
+      }}
     >
       {PaletteCommand ? (
         <PaletteCommand
@@ -398,9 +394,10 @@ export function CommandPalette() {
                       key={`recent-${session.id}`}
                       value={`${session.title} ${session.preview} ${session.id}`}
                       onSelect={() => {
-                        setOpen(false);
-                        useUI.getState().openTab({ id: session.id, title: session.title });
-                        void navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
+                        closeThenRun(() => {
+                          useUI.getState().openTab({ id: session.id, title: session.title });
+                          void navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
+                        });
                       }}
                     >
                       {session.title}
@@ -416,9 +413,10 @@ export function CommandPalette() {
                     key={workspace.id}
                     value={`${workspace.name} ${workspace.path}`}
                     onSelect={() => {
-                      setOpen(false);
-                      localStorage.setItem('ferry.libraryWorkspace', workspace.id);
-                      void navigate({ to: '/library' });
+                      closeThenRun(() => {
+                        localStorage.setItem('ferry.libraryWorkspace', workspace.id);
+                        void navigate({ to: '/library' });
+                      });
                     }}
                   >
                     {workspace.name}
@@ -433,7 +431,9 @@ export function CommandPalette() {
                   key={id}
                   value={label}
                   aria-label={label}
-                  onSelect={() => void run(id)}
+                  onSelect={() => {
+                    run(id);
+                  }}
                 >
                   {label}
                   <kbd>{shortcut}</kbd>
@@ -451,25 +451,45 @@ export function CommandPalette() {
   );
 }
 
-export function ModelPickerPopover({
+export function ComposerModelChip({
   sessionId,
+  profileName = 'Profile',
+  activeProfileId,
   modelName,
   mode,
   open: controlledOpen,
   onOpenChange,
+  profiles = [],
+  onProfileSelect,
+  onModelSelect,
 }: {
-  sessionId: SessionId;
+  sessionId: SessionId | null;
+  profileName?: string;
+  activeProfileId?: ProfileId;
   modelName: string;
   mode: 'auto' | 'manual';
+  profiles?: { id: ProfileId; name: string; pinned: boolean }[];
+  onProfileSelect?: (profileId: ProfileId) => void;
+  onModelSelect?: (ref: ModelRef | 'auto') => void;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
+  const dialogId = useId();
   const client = useFerryClient();
   const cache = useQueryClient();
   const pushToast = useToasts((state) => state.push);
+  const [localOpen, setLocalOpen] = useState(false);
+  const [modelQuery, setModelQuery] = useState('');
+  const [commandValue, setCommandValue] = useState('');
+  const open = controlledOpen ?? localOpen;
+  const setOpen = onOpenChange ?? setLocalOpen;
+  const candidateQueryKey = useMemo(() => ['model-candidates', sessionId] as const, [sessionId]);
   const { data: candidates = [] } = useQuery({
-    queryKey: ['model-candidates', sessionId],
+    queryKey: candidateQueryKey,
     queryFn: () => client.models.candidates(sessionId),
+    staleTime: 20_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
@@ -479,10 +499,12 @@ export function ModelPickerPopover({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
-  const [localOpen, setLocalOpen] = useState(false);
-  const [modelQuery, setModelQuery] = useState('');
-  const open = controlledOpen ?? localOpen;
-  const setOpen = onOpenChange ?? setLocalOpen;
+  const candidateSnapshot = useRef(candidates);
+  const wasOpen = useRef(false);
+  if (open && !wasOpen.current) candidateSnapshot.current = candidates;
+  if (!open) candidateSnapshot.current = candidates;
+  wasOpen.current = open;
+  const visibleCandidates = open ? candidateSnapshot.current : candidates;
   useEffect(() => {
     const openPicker = (event: Event) => {
       const id = (event as CustomEvent<{ sessionId: string }>).detail.sessionId;
@@ -493,40 +515,17 @@ export function ModelPickerPopover({
       window.removeEventListener('ferry:open-model-picker', openPicker);
     };
   }, [sessionId, setOpen]);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const [position, setPosition] = useState({ top: 0, left: 0 });
   const ModelCommand = useCmdk(open);
   useEffect(() => {
-    if (!open) setModelQuery('');
-  }, [open]);
-  useEffect(() => {
-    if (!open) return;
-    const anchor = triggerRef.current?.getBoundingClientRect();
-    if (anchor)
-      setPosition({
-        top: anchor.bottom + 8,
-        left: Math.max(16, Math.min(anchor.left, window.innerWidth - 456)),
-      });
-    const close = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    const outside = (event: PointerEvent) => {
-      if (
-        !(event.target instanceof Node) ||
-        triggerRef.current?.contains(event.target) ||
-        document.querySelector('.model-picker-popover')?.contains(event.target)
-      )
-        return;
-      setOpen(false);
-    };
-    window.addEventListener('keydown', close);
-    window.addEventListener('pointerdown', outside);
-    return () => {
-      window.removeEventListener('keydown', close);
-      window.removeEventListener('pointerdown', outside);
-    };
-  }, [open]);
-  const autoModel = models.find((model) => model.ref === candidates[0]?.ref)?.name ?? modelName;
+    if (open) {
+      const activeProfile = profiles.find((profile) => profile.id === activeProfileId);
+      setCommandValue(activeProfile ? `profile ${activeProfile.name}` : '');
+    } else {
+      setModelQuery('');
+    }
+  }, [activeProfileId, open, profiles]);
+  const autoModel =
+    models.find((model) => model.ref === visibleCandidates[0]?.ref)?.name ?? modelName;
   const configuredProviderIds = new Set(
     providers
       .filter(
@@ -536,7 +535,7 @@ export function ModelPickerPopover({
       .map((provider) => provider.id),
   );
   const availableModels = models.filter((model) => configuredProviderIds.has(model.providerId));
-  const candidateByRef = new Map(candidates.map((candidate) => [candidate.ref, candidate]));
+  const candidateByRef = new Map(visibleCandidates.map((candidate) => [candidate.ref, candidate]));
   const grouped = useMemo(
     () => [...new Set(availableModels.map((model) => model.providerId))],
     [availableModels],
@@ -547,9 +546,12 @@ export function ModelPickerPopover({
     selectionInFlight.current = ref;
     setOpen(false);
     try {
-      await client.models.select(sessionId, ref);
-      await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
-      await cache.invalidateQueries({ queryKey: ['model-candidates', sessionId] });
+      if (onModelSelect) onModelSelect(ref);
+      else if (sessionId) {
+        await client.models.select(sessionId, ref);
+        await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+        await cache.invalidateQueries({ queryKey: ['model-candidates', sessionId] });
+      }
     } catch (error) {
       pushToast({
         kind: 'error',
@@ -562,35 +564,41 @@ export function ModelPickerPopover({
     }
   };
   return (
-    <div className="relative">
-      <button
-        ref={triggerRef}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-controls="model-picker-dialog"
-        className="inline-flex items-center gap-2 rounded-pill px-2 py-1 text-body font-medium text-text-1 hover:bg-icon-circle"
-        onClick={() => {
-          setOpen(!open);
-        }}
-        type="button"
-      >
-        <FerryMark className="text-text-2" decorative size={14} variant="mono" />
-        <span>
-          {mode === 'auto' ? 'Auto' : 'Manual'} · {mode === 'auto' ? autoModel : modelName}
-        </span>
-        <ChevronDown aria-hidden="true" size={14} />
-      </button>
-      {open &&
-        ModelCommand &&
-        createPortal(
-          <div
+    <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
+      <PopoverPrimitive.Trigger asChild>
+        <button
+          aria-controls={dialogId}
+          aria-label={mode === 'auto' ? `Auto · ${autoModel}` : modelName}
+          className="v2-composer-chip inline-flex items-center gap-2 rounded-pill px-2 py-1 text-body font-medium text-text-1 hover:bg-icon-circle"
+          type="button"
+        >
+          <FerryMark className="text-text-2" decorative size={14} variant="mono" />
+          <span>{profileName}</span>
+          <span className="text-text-3">{mode === 'auto' ? `Auto · ${autoModel}` : modelName}</span>
+          <ChevronDown aria-hidden="true" size={14} />
+        </button>
+      </PopoverPrimitive.Trigger>
+      {open && ModelCommand ? (
+        <PopoverPrimitive.Portal>
+          <PopoverPrimitive.Content
+            align="start"
             aria-label="Choose model"
             className="model-picker-popover"
-            id="model-picker-dialog"
+            collisionPadding={12}
+            id={dialogId}
             role="dialog"
-            style={{ top: position.top, left: position.left }}
+            side="top"
+            sideOffset={8}
+            style={{
+              maxHeight: 'min(560px, var(--radix-popover-content-available-height))',
+            }}
           >
-            <ModelCommand label="Choose model" className="model-command">
+            <ModelCommand
+              label="Choose model"
+              className="model-command"
+              value={commandValue}
+              onValueChange={setCommandValue}
+            >
               <ModelCommand.Input
                 aria-label="Search models"
                 onValueChange={setModelQuery}
@@ -598,6 +606,28 @@ export function ModelPickerPopover({
                 value={modelQuery}
               />
               <ModelCommand.List>
+                {profiles.length > 0 ? (
+                  <ModelCommand.Group heading="Profile">
+                    {profiles.map((profile) => (
+                      <ModelCommand.Item
+                        className="model-candidate"
+                        key={profile.id}
+                        value={`profile ${profile.name}`}
+                        onSelect={() => {
+                          onProfileSelect?.(profile.id);
+                          setOpen(false);
+                        }}
+                      >
+                        <strong>{profile.name}</strong>
+                        {profile.id === activeProfileId ? (
+                          <Check aria-hidden="true" size={14} />
+                        ) : (
+                          <span>Profile</span>
+                        )}
+                      </ModelCommand.Item>
+                    ))}
+                  </ModelCommand.Group>
+                ) : null}
                 <ModelCommand.Item
                   className="model-candidate auto"
                   value={`Auto ${autoModel}`}
@@ -607,7 +637,7 @@ export function ModelPickerPopover({
                   <strong>Auto (recommended)</strong>
                   <span>{autoModel} · Router’s current pick</span>
                   <small>
-                    {candidates[0]?.explanation ?? 'Ferry selects the best available model.'}
+                    {visibleCandidates[0]?.explanation ?? 'Ferry selects the best available model.'}
                   </small>
                 </ModelCommand.Item>
                 {grouped.map((providerId) => (
@@ -694,9 +724,9 @@ export function ModelPickerPopover({
                 ))}
               </ModelCommand.List>
             </ModelCommand>
-          </div>,
-          document.body,
-        )}
-    </div>
+          </PopoverPrimitive.Content>
+        </PopoverPrimitive.Portal>
+      ) : null}
+    </PopoverPrimitive.Root>
   );
 }

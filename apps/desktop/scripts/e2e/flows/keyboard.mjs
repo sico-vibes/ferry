@@ -51,8 +51,8 @@ export async function run(page, { url, expect }) {
   await page.getByRole('navigation', { name: 'Primary' }).waitFor();
   await tabUntil(
     page,
-    () => document.activeElement?.textContent?.trim() === 'Explore',
-    'Explore navigation',
+    () => document.activeElement?.textContent?.trim() === 'Models',
+    'Models navigation',
   );
   await page.keyboard.press('Enter');
   await page.waitForURL(/\/explore/);
@@ -74,22 +74,20 @@ export async function run(page, { url, expect }) {
     )
     .toBe(true);
   await page.keyboard.press('Enter');
-  await expect(page.locator('h1').filter({ hasText: 'Advanced' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Advanced', exact: true })).toBeVisible();
 
   await page.goto(new URL('/s/session_3', url).href, { waitUntil: 'domcontentloaded' });
-  await tabUntil(
-    page,
-    () =>
-      document.activeElement?.matches('button') &&
-      (document.activeElement.textContent?.includes('Configuration') ?? false),
-    'Configuration',
-  );
-  await page.keyboard.press('Enter');
-  await expect(page.getByRole('dialog', { name: 'Configuration' })).toBeVisible();
+  const drawerToggle = page.getByRole('button', { name: 'Toggle drawer' });
+  if ((await drawerToggle.getAttribute('aria-expanded')) === 'true') await drawerToggle.click();
+  await expect(drawerToggle).toHaveAttribute('aria-expanded', 'false');
+  await page.keyboard.press('Control+.');
+  await expect(drawerToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('tablist', { name: 'Session drawer tabs' })).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog', { name: 'Configuration' })).toBeHidden();
+  await expect(drawerToggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('tablist', { name: 'Session drawer tabs' })).toBeHidden();
 
-  const modelPicker = page.locator('button[aria-haspopup="dialog"]').filter({ hasText: 'Auto' });
+  const modelPicker = page.getByRole('button', { name: /Auto/ });
   await expect(modelPicker).toBeVisible();
   await expect(modelPicker).toBeEnabled();
   await tabUntil(

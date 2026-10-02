@@ -28,6 +28,7 @@ import { Info } from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
 import { OAuthProviderRows } from './OAuthProviderRows';
 import { saveKeybindings, useKeybindings } from '../state/keybindings';
+import { SettingsSectionNav } from './LegacyContextNav';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
 const settingsPageCopy: Record<string, { title: string; description: string }> = {
   General: { title: 'Settings', description: 'Control how Ferry works across your workspaces.' },
@@ -951,7 +952,7 @@ export function SettingsCanvas() {
       );
     if (section === 'Providers & Keys')
       return (
-        <Group title="Providers & Keys">
+        <Group>
           <p className="muted">
             Keys are stored by the local client. Free tier data use depends on each provider's
             terms.
@@ -1957,34 +1958,37 @@ export function SettingsCanvas() {
       description: 'Control how Ferry works across your workspaces.',
     } as const);
   return (
-    <section className="canvas settings-page">
+    <section className="canvas settings-page legacy-context-page">
+      <SettingsSectionNav />
       <Stack className="settings-page-content" gap={4}>
-        <PageHeader
-          eyebrow="PREFERENCES"
-          title={pageCopy.title}
-          subtitle={pageCopy.description}
-          actions={
-            section === 'General' ? (
-              <Pill
-                onClick={() => {
-                  setConfirm('Reset layout?');
-                  setConfirmAction(() => () => {
-                    useUI.getState().resetLayout();
-                    toast({
-                      kind: 'success',
-                      title: 'Layout reset',
-                      body: 'Panel sizes and positions are back to default.',
+        <main className="settings-content settings-content-framed">
+          <PageHeader
+            eyebrow="PREFERENCES"
+            title={pageCopy.title}
+            subtitle={pageCopy.description}
+            actions={
+              section === 'General' ? (
+                <Pill
+                  onClick={() => {
+                    setConfirm('Reset layout?');
+                    setConfirmAction(() => () => {
+                      useUI.getState().resetLayout();
+                      toast({
+                        kind: 'success',
+                        title: 'Layout reset',
+                        body: 'Panel sizes and positions are back to default.',
+                      });
                     });
-                  });
-                }}
-                variant="outline"
-              >
-                Reset layout
-              </Pill>
-            ) : undefined
-          }
-        />
-        <main className="settings-content settings-content-framed">{body()}</main>
+                  }}
+                  variant="outline"
+                >
+                  Reset layout
+                </Pill>
+              ) : undefined
+            }
+          />
+          {body()}
+        </main>
       </Stack>
       <ProviderKeyDialog
         provider={keyProvider}
@@ -2099,9 +2103,12 @@ export function SettingsCanvas() {
   );
 }
 
-function Group({ title, children }: { title: string; children: React.ReactNode }) {
+function Group({ title, children }: { title?: string; children: React.ReactNode }) {
+  const section = useUI((state) => state.settingsSection);
+  const sectionTitle = settingsPageCopy[section]?.title;
+  const visibleTitle = title === sectionTitle ? undefined : title;
   return (
-    <Section title={title} className="settings-group-card">
+    <Section {...(visibleTitle ? { title: visibleTitle } : {})} className="settings-group-card">
       {children}
     </Section>
   );

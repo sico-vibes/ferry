@@ -16,6 +16,7 @@ import {
 } from '@ferry/ui';
 import type { HandoffStat } from '@ferry/shared';
 import { useFerryClient } from '../../data/client';
+import { ProviderFilterNav } from '../LegacyContextNav';
 
 const reasons: Record<HandoffStat['reason'], string> = {
   quota: 'Quota exhausted',
@@ -146,7 +147,11 @@ export function UsageCanvas() {
   }, [cache, client]);
 
   return (
-    <section aria-label="Usage dashboard" className="canvas page-scroll-canvas min-h-0 p-5">
+    <section
+      aria-label="Usage dashboard"
+      className="canvas page-scroll-canvas min-h-0 p-5 legacy-context-page"
+    >
+      <ProviderFilterNav />
       <Stack className="page-content mx-auto w-full max-w-[1200px]" gap={4}>
         <PageHeader
           title="Usage"

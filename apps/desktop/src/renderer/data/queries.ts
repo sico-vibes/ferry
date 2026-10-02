@@ -10,6 +10,7 @@ export const keys = {
   capacity: ['capacity'] as const,
   mcp: ['mcp'] as const,
   workspaces: ['workspaces'] as const,
+  system: ['system'] as const,
 };
 
 export function useSessions(query?: string) {
@@ -34,6 +35,10 @@ export function useProfiles() {
 export function useSettings() {
   const client = useFerryClient();
   return useQuery({ queryKey: keys.settings, queryFn: () => client.settings.get() });
+}
+export function useSystemInfo() {
+  const client = useFerryClient();
+  return useQuery({ queryKey: keys.system, queryFn: () => client.system.info() });
 }
 export function useCapacity() {
   const client = useFerryClient();

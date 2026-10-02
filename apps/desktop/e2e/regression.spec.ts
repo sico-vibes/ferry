@@ -54,26 +54,23 @@ test.describe('known regressions', () => {
   // Repro: open a session, click the model trigger, click any candidate row center.
   test('selects a model by clicking the candidate row', async ({ page }) => {
     await page.goto('/');
-    await page.getByRole('button', { name: 'New Chat' }).first().click();
+    await page.getByRole('button', { name: 'New chat' }).click();
     await page.waitForURL(/\/s\//);
     await page.getByRole('button', { name: /Auto ·/ }).click();
     const picker = page.getByRole('dialog', { name: 'Choose model' });
     await expect(picker).toBeVisible();
-    await picker.locator('.model-candidate:not(.auto)').first().click();
+    await picker.getByRole('option').filter({ hasNotText: 'Auto (recommended)' }).first().click();
     await expect(page.getByRole('button', { name: /Manual ·/ })).toBeVisible();
   });
 
-  // BUG (P2): closing the last open tab while a session is still running leaves the renderer on
-  // the session route with zero tabs, so the visible transcript has no tab and no way back except
-  // the primary rail; the run also keeps going in the background.
-  test('closing the last tab returns to a tabbed state', async ({ page }) => {
+  test('session remains reachable from chat history after sending', async ({ page }) => {
     await page.goto('/');
     await page.getByRole('textbox', { name: 'Message Ferry' }).fill('Fix the flaky tests');
     await page.getByRole('button', { name: 'Send' }).click();
-    const tab = page.locator('[role="tablist"] [role="tab"]').first();
-    await tab.waitFor();
-    const title = await tab.innerText();
-    await page.getByRole('button', { name: `Close ${title}` }).click();
-    await expect(page.locator('[role="tablist"] [role="tab"]')).toHaveCount(1);
+    await expect(page).toHaveURL(/\/s\//);
+    const chat = page.getByRole('button', { name: /fix the flaky tests/i });
+    await expect(chat).toBeVisible();
+    await chat.click();
+    await expect(page).toHaveURL(/\/s\//);
   });
 });

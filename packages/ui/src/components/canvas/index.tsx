@@ -1,11 +1,11 @@
-import { useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import {
   ArrowUpRight,
-  AudioLines,
   BookOpenText,
   Code2,
   ChevronDown,
   FlaskConical,
+  FolderOpen,
   GitPullRequest,
   Lightbulb,
   Link,
@@ -13,6 +13,7 @@ import {
   MoreHorizontal,
   Pin,
   Send,
+  Sparkles,
   Share2,
   Square,
   Timer,
@@ -21,7 +22,6 @@ import {
 } from 'lucide-react';
 import { AmbientGlow } from '../../effects/AmbientGlow';
 import { DotGrid } from '../../effects/DotGrid';
-import { GradientBorder } from '../../effects/GradientBorder';
 import { GradientText } from '../../effects/GradientText';
 import { cn } from '../../lib/cn';
 import { Spotlight } from '../../effects/Spotlight';
@@ -363,8 +363,14 @@ export interface ComposerProps {
     separator?: boolean;
     onSelect?: () => void;
   }[];
+  profileControl?: ReactNode;
+  workspaceName?: string;
+  workspaceMenuItems?: { label: string; onSelect: () => void }[];
+  onWorkspaceClick?: () => void;
   onAttach?: () => void;
   placeholder?: string;
+  focusRequested?: boolean;
+  onFocusRequestConsumed?: () => void;
 }
 export function Composer({
   value,
@@ -376,10 +382,37 @@ export function Composer({
   profileName,
   onProfileClick,
   profileMenuItems,
+  profileControl,
+  workspaceName,
+  workspaceMenuItems,
+  onWorkspaceClick,
   onAttach,
   placeholder = 'Ask Ferry to build, fix or explain…',
+  focusRequested = false,
+  onFocusRequestConsumed,
 }: ComposerProps) {
   const area = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!focusRequested) return;
+    let frame = 0;
+    const startedAt = performance.now();
+    const focusWhenReady = () => {
+      const textarea = area.current;
+      const modalOpen = document.querySelector('[role="dialog"][data-state="open"]');
+      if (!modalOpen) textarea?.focus();
+      if (textarea && document.activeElement === textarea) {
+        onFocusRequestConsumed?.();
+        return;
+      }
+      if (performance.now() - startedAt < 1000) {
+        frame = window.requestAnimationFrame(focusWhenReady);
+      }
+    };
+    frame = window.requestAnimationFrame(focusWhenReady);
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [focusRequested, onFocusRequestConsumed]);
   function resize() {
     const el = area.current;
     if (el) {
@@ -394,40 +427,26 @@ export function Composer({
       else if (value.trim()) onSend();
     }
   }
-  const topBand = {
-    height: banner ? 30 : 3,
-    content: banner ? (
-      <div className="flex h-full items-center justify-between gap-3 px-3 text-label font-medium text-white/90 composer-banner-content">
-        <span className="flex min-w-0 items-center gap-2 truncate">
-          <Timer size={14} />
-          {banner.text}
-        </span>
-        <button
-          className="flex shrink-0 items-center gap-1 font-semibold text-warn hover:brightness-125"
-          onClick={banner.onAction}
-          type="button"
-        >
-          {banner.actionLabel}
-          <ArrowUpRight size={14} />
-        </button>
-      </div>
-    ) : null,
-  };
   return (
-    <div className="mt-auto pt-5">
-      <GradientBorder
-        className="w-full"
-        gradient="composer"
-        width={3}
-        radius="panel"
-        shimmer
-        topBand={topBand}
-      >
-        <div className="flex min-h-[148px] flex-col rounded-[14px] bg-input p-3">
+    <div className="v2-composer-wrap">
+      {banner && (
+        <div className="v2-composer-banner" role="status">
+          <span>
+            <Timer size={14} />
+            {banner.text}
+          </span>
+          <button onClick={banner.onAction} type="button">
+            {banner.actionLabel}
+            <ArrowUpRight size={14} />
+          </button>
+        </div>
+      )}
+      <div className="v2-composer">
+        <div className="v2-composer-input-row">
+          <Sparkles aria-hidden="true" />
           <textarea
             aria-label="Message Ferry"
-            data-audit-spacing="intentional"
-            className="min-h-11 max-h-60 w-full resize-none bg-transparent px-0.5 py-0.5 text-body text-text-1 placeholder:text-text-3 focus:outline-none"
+            className="v2-composer-input border-0 shadow-none outline-none focus-visible:ring-0"
             onChange={(e) => {
               onChange(e.currentTarget.value);
               resize();
@@ -435,72 +454,90 @@ export function Composer({
             onKeyDown={keyDown}
             placeholder={placeholder}
             ref={area}
-            rows={2}
+            rows={1}
             value={value}
           />
-          <div className="mt-auto flex items-center justify-between gap-2 pt-3">
-            <div className="flex gap-2">
-              <Pill
-                className="h-7 px-3 text-[12px] leading-4 font-medium"
-                leadingIcon={<Link size={14} />}
-                onClick={onAttach}
-              >
-                Attach
-              </Pill>
-              {profileMenuItems ? (
+        </div>
+        <div className="v2-composer-toolbar">
+          <div className="v2-composer-tools">
+            <button
+              className="v2-composer-tool"
+              aria-label="Attach file"
+              onClick={onAttach}
+              type="button"
+            >
+              <Link aria-hidden="true" />
+              Attach
+            </button>
+            {profileControl ??
+              (profileMenuItems ? (
                 <DropdownMenu
+                  align="start"
+                  clampHeight
                   trigger={
-                    <Pill
-                      className="h-7 border-transparent bg-blue-tint px-3 text-[12px] leading-4 font-medium text-link"
-                      leadingIcon={<Lightbulb size={14} />}
-                    >
+                    <button className="v2-composer-chip text-[14px]" type="button">
+                      <Lightbulb aria-hidden="true" />
                       {profileName}
-                    </Pill>
+                      <ChevronDown aria-hidden="true" />
+                    </button>
                   }
                   items={profileMenuItems}
+                  side="top"
                 />
               ) : (
-                <Pill
-                  className="h-7 border-transparent bg-blue-tint px-3 text-[12px] leading-4 font-medium text-link"
+                <button
+                  className="v2-composer-chip text-[14px]"
                   onClick={onProfileClick}
-                  leadingIcon={<Lightbulb size={14} />}
+                  type="button"
                 >
+                  <Lightbulb aria-hidden="true" />
                   {profileName}
-                </Pill>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <span title="Voice input is coming soon">
-                <Pill
-                  className="h-7 px-3 text-[12px] leading-4 font-medium"
-                  disabled
-                  leadingIcon={<AudioLines size={14} />}
-                >
-                  Voice
-                </Pill>
-              </span>
-              {running ? (
-                <Pill
-                  className="h-[30px] px-3 text-[12.5px] leading-4 font-semibold"
-                  onClick={onStop}
-                >
-                  <Square size={14} fill="currentColor" />
-                  Stop
-                </Pill>
+                  <ChevronDown aria-hidden="true" />
+                </button>
+              ))}
+            {workspaceName &&
+              (workspaceMenuItems?.length ? (
+                <DropdownMenu
+                  align="start"
+                  clampHeight
+                  trigger={
+                    <button className="v2-composer-tool" type="button">
+                      <FolderOpen aria-hidden="true" />
+                      {workspaceName}
+                      <ChevronDown aria-hidden="true" />
+                    </button>
+                  }
+                  items={workspaceMenuItems}
+                  side="top"
+                />
               ) : (
-                <Pill
-                  className="h-[30px] border-transparent bg-[image:var(--grad-send)] px-3 text-[12.5px] leading-4 font-semibold text-[var(--text-on-send)] disabled:opacity-60 disabled:saturate-[0.8]"
-                  disabled={!value.trim()}
-                  onClick={onSend}
-                  trailingIcon={<Send size={14} />}
-                >
-                  Send
-                </Pill>
-              )}
-            </div>
+                <button className="v2-composer-tool" onClick={onWorkspaceClick} type="button">
+                  <FolderOpen aria-hidden="true" />
+                  {workspaceName}
+                  <ChevronDown aria-hidden="true" />
+                </button>
+              ))}
+          </div>
+          <div className="v2-composer-send">
+            {running ? (
+              <button aria-label="Stop" className="v2-send-button" onClick={onStop} type="button">
+                <Square aria-hidden="true" />
+              </button>
+            ) : (
+              <button
+                aria-label="Send"
+                className="v2-send-button"
+                disabled={!value.trim()}
+                onClick={onSend}
+                type="button"
+              >
+                <Send aria-hidden="true" />
+              </button>
+            )}
           </div>
         </div>
-      </GradientBorder>
+      </div>
+      <p className="v2-disclaimer">Ferry can make mistakes. Check changes before you use them.</p>
     </div>
   );
 }

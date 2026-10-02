@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMockFerryClient } from '@ferry/client';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FerryProvider } from '../data/client';
 import { useFerryEvents } from '../data/events';
-import { Sidebar } from './Sidebar';
+import { LibraryWorkspaceNav, ProviderFilterNav, SettingsSectionNav } from './LegacyContextNav';
 import { RightPanel } from './right-panel/RightPanel';
 import { useUI } from '../state/ui';
+import { DEFAULT_LAYOUT } from '../state/ui-layout';
 import { clampBottomHeight, clampRightWidth, parsePersistedLayout } from '../state/ui';
 import { mockShellOutput } from './BottomPanel';
 
@@ -37,7 +38,7 @@ afterEach(() => {
     tabs: [],
     activeId: null,
     leftCollapsed: false,
-    rightCollapsed: false,
+    rightCollapsed: DEFAULT_LAYOUT.rightCollapsed,
     rightTab: 'chats',
     rightWidth: 300,
     bottomOpen: false,
@@ -82,14 +83,9 @@ describe('desktop frame interactions', () => {
       bottomHeight: 200,
       bottomTab: 'agent-log',
     });
-    expect(parsePersistedLayout({ leftCollapsed: 'collapsed', rightWidth: Number.NaN })).toEqual({
-      leftCollapsed: false,
-      rightCollapsed: false,
-      rightWidth: 300,
-      bottomOpen: false,
-      bottomHeight: 260,
-      bottomTab: 'terminal',
-    });
+    expect(parsePersistedLayout({ leftCollapsed: 'collapsed', rightWidth: Number.NaN })).toEqual(
+      DEFAULT_LAYOUT,
+    );
 
     useUI.getState().toggleLeft();
     useUI.getState().toggleRight();
@@ -98,7 +94,7 @@ describe('desktop frame interactions', () => {
     useUI.getState().resetLayout();
     expect(useUI.getState()).toMatchObject({
       leftCollapsed: false,
-      rightCollapsed: false,
+      rightCollapsed: DEFAULT_LAYOUT.rightCollapsed,
       rightWidth: 300,
       bottomOpen: false,
       bottomHeight: 260,
@@ -112,61 +108,17 @@ describe('desktop frame interactions', () => {
     expect(mockShellOutput('nonsense')).toBe('mock shell: command not available in demo');
   });
 
-  it('routes rail navigation to Explore', async () => {
-    mount(<Sidebar />);
-    await screen.findByText('Best Available');
-    fireEvent.click(screen.getByRole('button', { name: 'Explore' }));
-    expect(navigateMock).toHaveBeenCalledWith({ to: '/explore' });
-  });
-
-  it('switches sidebar content for Library, Explore, and Settings destinations', async () => {
-    const library = mount(<Sidebar activeNav="library" />);
+  it('renders contextual navigation for legacy pages', async () => {
+    const library = mount(<LibraryWorkspaceNav />);
     expect(await screen.findByRole('button', { name: /Open folder/ })).toBeTruthy();
     expect(await screen.findByText('ferry-web')).toBeTruthy();
     library.unmount();
-    mount(<Sidebar activeNav="explore" />);
+    mount(<ProviderFilterNav />);
     expect(await screen.findByRole('navigation', { name: 'Provider filters' })).toBeTruthy();
     expect(await screen.findByText(/Gemini API/)).toBeTruthy();
     cleanup();
-    mount(<Sidebar activeNav={null} />);
+    mount(<SettingsSectionNav />);
     expect(await screen.findByRole('navigation', { name: 'Settings sections' })).toBeTruthy();
-  });
-
-  it('creates a session and opens a tab from New Chat', async () => {
-    mount(<Sidebar />);
-    await screen.findByText('Best Available');
-    fireEvent.click(screen.getByRole('button', { name: 'New chat from sidebar' }));
-    await waitFor(() => {
-      expect(useUI.getState().tabs).toHaveLength(1);
-    });
-    expect(useUI.getState().tabs[0]?.title).toBe('New Chat');
-  });
-
-  it('activates the selected pinned profile', async () => {
-    mount(<Sidebar />);
-    const fast = await screen.findByRole('button', { name: 'Fast' });
-    fireEvent.click(fast);
-    await waitFor(() => {
-      expect(fast.getAttribute('aria-current')).toBe('true');
-    });
-  });
-
-  it('updates the live capacity card from quota events', async () => {
-    const client = createMockFerryClient({ behavior: 'test' });
-    mount(<Sidebar />, client);
-    await screen.findByText('Best Available');
-    const capacity = await client.quota.capacity();
-    const provider = client.__store().providers[0];
-    if (!provider) throw new Error('No provider fixtures available');
-    act(() => {
-      client.__store().consumeSteps(provider.id, 20);
-    });
-    const updated = await client.quota.capacity();
-    if (updated.stepsLeftToday === capacity.stepsLeftToday)
-      throw new Error('Expected the test quota to change');
-    await screen.findByRole('button', {
-      name: new RegExp(`${String(updated.stepsLeftToday)} steps left today`),
-    });
   });
 
   it('filters chats from the right panel search field', async () => {

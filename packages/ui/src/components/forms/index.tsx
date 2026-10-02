@@ -25,6 +25,7 @@ export function Dialog({
   trigger,
   contentClassName,
   onOpenAutoFocus,
+  onCloseAutoFocus,
 }: {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -34,6 +35,7 @@ export function Dialog({
   trigger?: ReactNode;
   contentClassName?: string;
   onOpenAutoFocus?: React.ComponentProps<typeof DialogPrimitive.Content>['onOpenAutoFocus'];
+  onCloseAutoFocus?: React.ComponentProps<typeof DialogPrimitive.Content>['onCloseAutoFocus'];
 }) {
   return (
     <DialogPrimitive.Root
@@ -46,6 +48,7 @@ export function Dialog({
         <DialogPrimitive.Content
           className={cn('ferry-dialog', surface, contentClassName)}
           onOpenAutoFocus={onOpenAutoFocus}
+          onCloseAutoFocus={onCloseAutoFocus}
           tabIndex={-1}
         >
           <header className="ferry-dialog-head">
@@ -91,6 +94,9 @@ export function Tooltip({ children, content }: { children: ReactNode; content: R
 export function DropdownMenu({
   trigger,
   items,
+  side,
+  align,
+  clampHeight = false,
 }: {
   trigger: ReactNode;
   items: {
@@ -101,12 +107,29 @@ export function DropdownMenu({
     icon?: ReactNode;
     danger?: boolean;
   }[];
+  side?: 'top' | 'right' | 'bottom' | 'left';
+  align?: 'start' | 'center' | 'end';
+  clampHeight?: boolean;
 }) {
   return (
     <MenuPrimitive.Root>
       <MenuPrimitive.Trigger asChild>{trigger}</MenuPrimitive.Trigger>
       <MenuPrimitive.Portal>
-        <MenuPrimitive.Content sideOffset={6} className={cn('ferry-menu', surface)}>
+        <MenuPrimitive.Content
+          {...(align === undefined ? {} : { align })}
+          collisionPadding={12}
+          {...(side === undefined ? {} : { side })}
+          sideOffset={6}
+          className={cn('ferry-menu', surface)}
+          style={
+            clampHeight
+              ? {
+                  maxHeight: 'min(560px, var(--radix-dropdown-menu-content-available-height))',
+                  overflowY: 'auto',
+                }
+              : undefined
+          }
+        >
           {items.map((item, index) =>
             item.separator ? (
               <MenuPrimitive.Separator

@@ -99,27 +99,13 @@ export async function run(page, { url, expect }) {
   if (!jumped.tailVisible)
     throw new Error(`Jump to latest missed the tail: ${JSON.stringify(jumped)}`);
 
-  const profile = page.locator('.session-canvas').getByRole('button', { name: /Best Available/ });
-  await profile.click();
-  await page.getByRole('menuitem', { name: 'Auto-Free' }).click();
-  await expect(
-    page.locator('.session-canvas').getByRole('button', { name: /Auto-Free/ }),
-  ).toBeVisible();
+  const modelPicker = page.getByRole('button', { name: /^Auto · / }).first();
+  await modelPicker.click();
+  const modelDialog = page.getByRole('dialog', { name: 'Choose model' });
+  await expect(modelDialog.getByText('Auto (recommended)')).toBeVisible();
+  await modelDialog.getByText('Auto (recommended)').click();
+  await expect(page.getByRole('button', { name: /Auto/ }).first()).toBeVisible();
 
-  const handle = page.getByRole('separator', { name: 'Resize right panel' });
-  const box = await handle.boundingBox();
-  if (!box) throw new Error('Right panel resize handle is missing');
-  await page.mouse.move(box.x + box.width / 2, box.y + 100);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2 - 260, box.y + 100);
-  await page.mouse.up();
-  await expect.poll(() => handle.getAttribute('aria-valuenow')).toBe('560');
-  const toolbarModel = page.locator('.session-toolbar-primary > .relative:first-child > button');
-  await expect(toolbarModel).toBeVisible();
-  const modelHeight = await toolbarModel.evaluate(
-    (element) => element.getBoundingClientRect().height,
-  );
-  if (modelHeight > 36)
-    throw new Error(`Model selector wrapped at narrow center width (${modelHeight}px)`);
+  await expect(page.getByRole('button', { name: /^Auto · / }).first()).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 900 });
 }

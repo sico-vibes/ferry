@@ -187,10 +187,12 @@ export const SheetTrigger = DialogTrigger;
 export function SheetContent({
   side = 'right',
   className,
+  overlayClassName,
   children,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   side?: 'top' | 'right' | 'bottom' | 'left';
+  overlayClassName?: string;
 }) {
   const position = {
     top: 'inset-x-0 top-0 border-b',
@@ -200,7 +202,7 @@ export function SheetContent({
   }[side];
   return (
     <DialogPortal>
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         className={cn(
           'ferry-ui fixed z-50 bg-card p-6 text-card-foreground shadow-[var(--shadow-popover)] transition duration-200 ease-out data-[state=open]:animate-[ferry-ui-fade-in_200ms_ease-out_both] data-[state=closed]:animate-[ferry-ui-fade-out_200ms_ease-in_both] motion-reduce:animate-none motion-reduce:transition-none',

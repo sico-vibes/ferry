@@ -86,6 +86,39 @@ describe('QA settings domain', () => {
     }
   }, 30_000);
 
+  it('repairs stale active profiles on read and rejects unknown profile updates', async () => {
+    const core = await makeCore('settings-profile-repair');
+    try {
+      const services = core.host.options.services;
+      if (!services) throw new Error('Core services were not created');
+      const current = await core.rpc.settings.get();
+      services.settings.put('global', { ...current, activeProfileId: 'profile_free' });
+
+      const repaired = await core.rpc.settings.get();
+      expect(repaired.activeProfileId).toBe('profile_builtin_auto_free');
+      expect(services.settings.get('global')).toMatchObject({
+        activeProfileId: 'profile_builtin_auto_free',
+      });
+      const workspacePath = join(dataDir, 'settings-profile-repair-workspace');
+      await mkdir(workspacePath, { recursive: true });
+      const workspace = await core.rpc.workspaces.open(workspacePath);
+      services.settings.put('global', { ...repaired, activeProfileId: 'profile_free' });
+      const session = await core.rpc.sessions.create({ workspaceId: workspace.id });
+      expect(session.profileId).toBe('profile_builtin_auto_free');
+
+      const error = await errorOf(
+        core.rpc.settings.update({ activeProfileId: 'profile_free' } as never),
+      );
+      expect(error).toMatchObject({
+        code: -32044,
+        kind: 'not_found',
+        message: 'Profile not found: profile_free',
+      });
+    } finally {
+      await core.close();
+    }
+  }, 30_000);
+
   it('merges nested optimizers/developer patches instead of replacing them', async () => {
     const core = await makeCore('settings-merge');
     try {

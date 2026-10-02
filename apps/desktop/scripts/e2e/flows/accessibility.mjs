@@ -66,7 +66,12 @@ export async function run(page, { url, expect }) {
     'About',
   ]) {
     await settingsNav.getByRole('button', { name: section, exact: true }).click();
-    await page.locator('.settings-content').waitFor();
+    await expect(
+      page.getByRole('heading', {
+        name: section === 'General' ? 'Settings' : section,
+        exact: true,
+      }),
+    ).toBeVisible();
     await audit(`/settings (${section})`);
   }
   await scan('/', 'palette');

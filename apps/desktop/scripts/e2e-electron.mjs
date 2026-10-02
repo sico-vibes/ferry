@@ -121,7 +121,7 @@ try {
   page.on('pageerror', (error) => pageErrors.push(error.message.replaceAll(fakeKey, '[REDACTED]')));
   await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => undefined);
   const getStarted = page.getByRole('button', { name: /Get started/ });
-  await expect(getStarted.or(page.getByRole('button', { name: 'Explore' })).first()).toBeVisible({
+  await expect(getStarted.or(page.getByRole('button', { name: 'Models' })).first()).toBeVisible({
     timeout: 20_000,
   });
   const coreBootstrapTimeoutMs = 15_000;
@@ -155,7 +155,7 @@ try {
     await page.getByRole('button', { name: 'Continue' }).click();
     await page.getByRole('button', { name: 'Finish setup' }).click();
   }
-  await page.getByRole('button', { name: 'Explore', exact: true }).click();
+  await page.getByRole('button', { name: 'Models', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Explore providers and models' })).toBeVisible();
   await page
     .getByRole('region', { name: 'Explore providers and models' })

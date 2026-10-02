@@ -2,8 +2,11 @@ export const name = 'empty-search';
 export async function run(page, ctx) {
   await page.goto(ctx.url);
   await page.getByRole('navigation', { name: 'Primary' }).waitFor();
-  await page.getByRole('textbox', { name: 'Search chats' }).fill('zzz-no-such-chat');
-  await ctx.expect(page.getByText('No chats match that search.')).toBeVisible();
-  await page.getByRole('button', { name: 'Clear search' }).click();
-  await ctx.expect(page.getByText('Saved topics')).toBeVisible();
+  await page.keyboard.press('Control+k');
+  const palette = page.getByRole('dialog', { name: 'Command palette' });
+  const search = palette.getByRole('combobox');
+  await search.fill('zzz-no-such-chat');
+  await ctx.expect(palette.getByText('No results.')).toBeVisible();
+  await search.fill('');
+  await ctx.expect(palette.getByRole('group', { name: 'Recent sessions' })).toBeVisible();
 }

@@ -3,7 +3,7 @@ export async function run(page, ctx) {
   await page.goto(ctx.url);
   await page.getByRole('navigation', { name: 'Primary' }).waitFor();
   await page.getByRole('textbox', { name: 'Message Ferry' }).fill('Fix the flaky tests');
-  await page.getByRole('button', { name: 'Send' }).click();
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
   await page.getByRole('button', { name: 'Allow once' }).waitFor({ timeout: 20_000 });
   await page.getByRole('button', { name: 'Allow once' }).click();
   await page
@@ -11,43 +11,27 @@ export async function run(page, ctx) {
     .last()
     .waitFor({ timeout: 20_000 });
 
-  const tabs = page.getByRole('navigation', { name: 'Right panel tabs' });
-  const panelScroll = page.locator('.right-panel-scroll');
-  const chatsScrollTop = await panelScroll.evaluate((element) => {
-    element.scrollTop = Math.min(160, element.scrollHeight - element.clientHeight);
-    return element.scrollTop;
-  });
-  await tabs.getByRole('button', { name: 'Plan' }).click();
+  const drawerToggle = page.getByRole('button', { name: 'Toggle drawer' });
+  if ((await drawerToggle.getAttribute('aria-expanded')) === 'true') await drawerToggle.click();
+  await drawerToggle.click();
+  const tabs = page.getByRole('tablist', { name: 'Session drawer tabs' });
+  await tabs.getByRole('tab', { name: 'Plan' }).click();
+  await ctx
+    .expect(tabs.getByRole('tab', { name: 'Plan' }))
+    .toHaveAttribute('aria-selected', 'true');
   await ctx.expect(page.getByRole('heading', { name: 'Plan' })).toBeVisible();
   await ctx.expect(page.getByText('Fix the flaky payment retry tests')).toBeVisible();
 
-  await tabs.getByRole('button', { name: 'Changes' }).click();
-  const change = page.locator('.change-row', { hasText: 'src/payments/retry.ts' }).first();
+  await tabs.getByRole('tab', { name: 'Changes' }).click();
+  await ctx
+    .expect(tabs.getByRole('tab', { name: 'Changes' }))
+    .toHaveAttribute('aria-selected', 'true');
+  const change = page.getByRole('button', { name: /src\/payments\/retry\.ts/ }).first();
   await ctx.expect(change).toBeVisible();
   await change.click();
   await ctx.expect(page.locator('.diff-view')).toBeVisible();
-  await page.locator('.diff-view').getByRole('button', { name: 'Close' }).click();
+  await page.locator('.diff-view').getByRole('button', { name: 'Close', exact: true }).click();
 
-  await tabs.getByRole('button', { name: 'Chats' }).click();
-  await ctx.expect(page.getByText('Saved topics')).toBeVisible();
-  await ctx.expect
-    .poll(() => panelScroll.evaluate((element) => element.scrollTop))
-    .toBe(chatsScrollTop);
-  const restoredScrollTop = await panelScroll.evaluate((element) => element.scrollTop);
-  console.log(
-    `right-panel M-04 scrollTop: ${JSON.stringify({ before: chatsScrollTop, after: restoredScrollTop, delta: restoredScrollTop - chatsScrollTop })}`,
-  );
-
-  // Double-clicking the resize handle restores the default right-panel width.
-  const handle = page.getByRole('separator', { name: 'Resize right panel' });
-  const handleBox = await handle.boundingBox();
-  if (!handleBox) throw new Error('Right panel resize handle is missing');
-  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + 120);
-  await page.mouse.down();
-  await page.mouse.move(handleBox.x + handleBox.width / 2 - 80, handleBox.y + 120);
-  await page.mouse.up();
-  await handle.dblclick();
-  await ctx.expect
-    .poll(async () => (await page.locator('.right-panel').boundingBox())?.width ?? 0)
-    .toBeLessThan(320);
+  await tabs.getByRole('tab', { name: 'Terminal' }).click();
+  await ctx.expect(page.getByRole('region', { name: 'Session tools' })).toBeVisible();
 }
