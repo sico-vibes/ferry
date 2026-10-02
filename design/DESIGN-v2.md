@@ -43,7 +43,8 @@ every surface in both themes, adjusting lightness only (keep hue).
 | `--sidebar` | `#131219` | `#F4F3F8` | sidebar |
 | `--card` | `#17161D` | `#FFFFFF` | composer, cards, menus |
 | `--muted` | `#1E1D25` | `#EFEEF4` | hover, chips, inputs |
-| `--border` | `#2A2833` | `#E3E1EA` | region borders, inputs |
+| `--border` | `rgba(255,255,255,.06)` | `rgba(23,21,30,.07)` | hairlines only (row separators inside a group, card edge where tone alone is not enough) |
+| `--input` | `rgba(255,255,255,.12)` | `rgba(23,21,30,.14)` | form fields (text inputs, selects, checkboxes) — must stay identifiable (WCAG 1.4.11) |
 | `--foreground` | `#EDECF2` | `#17151E` | primary text |
 | `--muted-foreground` | `#A19EAE` | `#5E5A6B` | secondary text |
 | `--primary` | `#6D5BD0` | `#5B47B8` | primary button, active item, focus |
@@ -63,7 +64,7 @@ Letter-spacing: −0.01em at ≥20 px, 0 otherwise. Tabular numbers for counts, 
 
 **Spacing** (4 px base): 4 · 8 · 12 · 16 · 20 · 24 · 32 · 48 · 64. **Radius by hierarchy:**
 6 (inputs inside cards, kbd), 10 (buttons, chips, list rows), 14 (cards, composer, menus, dialogs),
-full (badges, avatar, send button). **Elevation:** borders only in-app; one soft shadow for floating
+full (badges, avatar, send button). **Separation (seamless, user decision 2026-10-02):** regions and elements are separated by **surface tone and spacing, not solid outlines**. No divider line between sidebar and content (sidebar tone `--sidebar` vs `--background` does it), no rule under the header, no rule between sections (use 24–32 px spacing). Cards, composer, tool groups and menus sit on `--card` (one step lighter than the canvas) with at most a `--border` hairline; never a full-strength stroke. Rows inside a group: spacing or a `--border` hairline. Strong outlines are reserved for the focus ring (`--ring`) and form inputs (`--input`). **Elevation:** one soft shadow for floating
 layers (menus, dialogs, drawer) — `0 8px 24px rgba(0,0,0,.28)` dark / `0 8px 24px rgba(23,21,30,.10)` light.
 **Icons:** lucide, 16 px in rows/buttons, 18 px in nav, stroke 1.75. **Motion:** 150 ms ease-out for
 hover/press/expand, 200 ms for drawer/dialog; honour reduced motion; no ambient animation.
