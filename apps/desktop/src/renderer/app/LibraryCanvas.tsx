@@ -27,6 +27,7 @@ import { useFerryClient } from '../data/client';
 import { keys, useProfiles, useSessions, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
+import { LibraryWorkspaceNav } from './LegacyContextNav';
 
 function ago(value: string) {
   const hours = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 3600000));
@@ -106,7 +107,8 @@ export function LibraryCanvas() {
     toast({ kind: 'success', title: 'Path copied', body: path });
   };
   return (
-    <section className="canvas ferry-page page-scroll-canvas">
+    <section className="canvas ferry-page page-scroll-canvas legacy-context-page">
+      <LibraryWorkspaceNav />
       <Stack className="library-page-content mx-auto w-full" gap={4}>
         <PageHeader
           eyebrow="WORKSPACES"
@@ -161,6 +163,8 @@ export function LibraryCanvas() {
                   />
                 </div>
                 <button
+                  aria-description={workspace.path}
+                  aria-label={workspace.name}
                   aria-pressed={selected?.id === workspace.id}
                   className="workspace-select"
                   onClick={() => {

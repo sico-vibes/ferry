@@ -13,6 +13,7 @@ export function ShowMoreList<T>({
   initialCount = 6,
   increment = 6,
   label = 'items',
+  moreLabel = label,
   listClassName = 'grid gap-1',
   ariaLabel,
   renderList,
@@ -24,6 +25,7 @@ export function ShowMoreList<T>({
   initialCount?: number;
   increment?: number;
   label?: string;
+  moreLabel?: string;
   listClassName?: string;
   ariaLabel?: string;
   renderList?: (children: ReactNode[]) => ReactNode;
@@ -65,7 +67,7 @@ export function ShowMoreList<T>({
               }}
               type="button"
             >
-              Show more {label} ({String(items.length - pageStart - visibleCount)})
+              Show more {moreLabel} ({String(items.length - pageStart - visibleCount)})
             </button>
           )}
           {visibleLimit > initialCount && (

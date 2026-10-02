@@ -34,8 +34,8 @@ export interface UIState extends PersistedLayout {
   pendingComposerFocus: boolean;
   rightTab: RightTab;
   density: Density;
-  settingsSection: SettingsSection;
   selectedWorkspaceId: string | null;
+  settingsSection: SettingsSection;
   exploreFilter: 'All' | 'Free' | 'Credits' | 'Paid' | 'CLI';
   openTab: (tab: OpenTab) => void;
   requestComposerFocus: () => void;

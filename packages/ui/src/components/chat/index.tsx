@@ -1,6 +1,9 @@
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import {
   ArrowLeftRight,
+  Check,
+  Circle,
+  CircleDot,
   ChevronDown,
   ChevronRight,
   CircleHelp,
@@ -30,7 +33,6 @@ import type {
 } from '@ferry/shared';
 import { FerryMark } from '../../brand/FerryMark';
 import { CountUp } from '../data/CountUp';
-import { ReactBitsThinkingLine } from './ThinkingLine';
 import { AdaptedStatusMark } from './StatusMark';
 import { ShinyText } from '../../effects/ShinyText';
 import { cn } from '../../lib/cn';
@@ -42,6 +44,11 @@ export { AgentTimeline, buildTimelineLanes } from './AgentTimeline';
 const MarkdownContent = lazy(() =>
   import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })),
 );
+
+function PlanStepIcon({ status }: { status: 'pending' | 'active' | 'done' }) {
+  const Icon = status === 'done' ? Check : status === 'active' ? CircleDot : Circle;
+  return <Icon aria-hidden="true" className="mr-2 inline size-3.5" />;
+}
 
 export function UserMessage({ children }: { children: ReactNode }) {
   return (
@@ -110,7 +117,8 @@ export function ThinkingLine({
         <ul className="mt-2 space-y-1">
           {steps.map((step) => (
             <li className={step.status === 'active' ? 'text-text-2' : ''} key={step.label}>
-              {step.status === 'done' ? '✓' : step.status === 'active' ? '◌' : '○'} {step.label}
+              <PlanStepIcon status={step.status} />
+              {step.label}
             </li>
           ))}
         </ul>
@@ -121,11 +129,27 @@ export function ThinkingLine({
 export function ReasoningPart({
   text,
   steps = [],
+  running = false,
+  startedAt,
 }: {
   text: string;
   steps?: { label: string; status: 'pending' | 'active' | 'done' }[];
+  running?: boolean;
+  startedAt?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const [startedAtMs] = useState(() => (startedAt ? new Date(startedAt).getTime() : Date.now()));
+  useEffect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+    }, 100);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [running]);
+  const elapsed = Math.max(0, (now - startedAtMs) / 1000).toFixed(1);
   return (
     <section className="rounded-xl border border-border-hair bg-card">
       <button
@@ -137,11 +161,20 @@ export function ReasoningPart({
         type="button"
       >
         <ChevronRight className={cn('size-4 transition-transform', open && 'rotate-90')} />
-        <span className="text-label text-text-3">Thinking</span>
+        <span className="text-label text-text-3">Thinking · {elapsed}s</span>
       </button>
       {open && (
         <div className="space-y-2 px-3 pb-3">
-          <ReactBitsThinkingLine steps={steps} running />
+          {steps.length > 0 && (
+            <ul className="space-y-1 text-label text-text-2">
+              {steps.map((step) => (
+                <li key={step.label}>
+                  <PlanStepIcon status={step.status} />
+                  {step.label}
+                </li>
+              ))}
+            </ul>
+          )}
           <p className="whitespace-pre-wrap text-label leading-5 text-text-2">{text}</p>
         </div>
       )}
@@ -203,6 +236,7 @@ export function ToolCallBlock({
   output,
   changes = [],
   durationMs,
+  grouped = false,
   onShowFull,
   onOpenDiff,
 }: {
@@ -213,13 +247,19 @@ export function ToolCallBlock({
   output: ToolOutput | null;
   changes?: FileChange[];
   durationMs?: number | null;
+  grouped?: boolean;
   onShowFull?: (handle: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const Icon = tool.startsWith('mcp__') ? Plug : (tools[tool] ?? Wrench);
   return (
-    <section className="overflow-hidden rounded-xl border border-border-hair bg-card">
+    <section
+      className={cn(
+        'overflow-hidden rounded-xl border border-border-hair bg-card',
+        grouped && 'tool-step-group-row',
+      )}
+    >
       <button
         aria-expanded={open}
         className={`flex w-full items-center gap-2.5 px-3 py-3 text-left ${focusRingClass}`}
@@ -344,7 +384,7 @@ export function ToolStepGroup({
           : 'pending';
   const elapsed = parts.reduce((sum, part) => sum + (part.durationMs ?? 0), 0);
   return (
-    <section className="overflow-hidden rounded-xl border border-border-hair bg-card">
+    <section className="overflow-hidden rounded-xl border border-border-hair bg-card tool-step-group">
       <button
         aria-expanded={open}
         className={`flex w-full items-center gap-2.5 px-3 py-3 text-left ${focusRingClass}`}
@@ -367,11 +407,12 @@ export function ToolStepGroup({
         <ChevronDown className={cn('size-3.5 text-text-3 transition', open && 'rotate-180')} />
       </button>
       {open && (
-        <div className="space-y-2 border-t border-border-hair p-3">
+        <div className="border-t border-border-hair p-3 tool-step-group-rows">
           {parts.map((part) => (
             <ToolCallBlock
               key={part.id}
               {...part}
+              grouped
               {...(onShowFull
                 ? {
                     onShowFull: () => {
@@ -469,7 +510,7 @@ export function HandoffMarker({
         >
           <ArrowLeftRight aria-hidden="true" size={13} />
           <span>
-            <b>{from}</b> → <b>{to}</b> · {reason}
+            Switched from <b>{from}</b> to <b>{to}</b> because of {reason}
           </span>
           <span className="sr-only">{explanation}</span>
         </button>

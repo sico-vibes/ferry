@@ -12,6 +12,7 @@ interface PersistedUI {
   activeId: UIState['activeId'];
   rightTab: UIState['rightTab'];
   density: UIState['density'];
+  selectedWorkspaceId: UIState['selectedWorkspaceId'];
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -43,6 +44,7 @@ export const useUI = create<UIState>((set) => {
             rightCollapsed: merged.rightCollapsed,
             rightTab: merged.rightTab,
             density: merged.density,
+            selectedWorkspaceId: merged.selectedWorkspaceId,
             rightWidth: merged.rightWidth,
             bottomOpen: merged.bottomOpen,
             bottomHeight: merged.bottomHeight,
@@ -67,8 +69,9 @@ export const useUI = create<UIState>((set) => {
     ...savedLayout,
     rightTab: saved.rightTab === 'plan' || saved.rightTab === 'changes' ? saved.rightTab : 'chats',
     density: saved.density === 'compact' ? 'compact' : 'comfortable',
+    selectedWorkspaceId:
+      typeof saved.selectedWorkspaceId === 'string' ? saved.selectedWorkspaceId : null,
     settingsSection: 'General',
-    selectedWorkspaceId: null,
     exploreFilter: 'All',
     ...createLayoutSlice(update),
     ...createTabsSlice(update),

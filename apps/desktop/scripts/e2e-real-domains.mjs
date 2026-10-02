@@ -313,7 +313,7 @@ async function startEmbeddedCore() {
       if (/FERRY_(PRELOAD|RENDERER|RPC)/.test(text)) console.log(`[E2E_RENDERER] ${text}`);
     });
     const getStarted = page.getByRole('button', { name: /Get started/ });
-    await expect(getStarted.or(page.getByRole('button', { name: 'Explore' })).first()).toBeVisible({
+    await expect(getStarted.or(page.getByRole('button', { name: 'Models' })).first()).toBeVisible({
       timeout: 20_000,
     });
     await page.waitForFunction(
@@ -487,10 +487,33 @@ async function approvePendingRequestsUntilRunning(
     .toBe('running');
 }
 
-async function createSessionViaUi(page, title, profileName, modelRef) {
+async function selectWorkspaceViaComposer(page, workspaceName) {
+  await page.evaluate(() => {
+    window.location.hash = '/';
+  });
+  await page.waitForURL((url) => url.hash === '#/', { timeout: 15_000 });
+  await page.getByRole('textbox', { name: 'Message Ferry' }).waitFor({
+    state: 'visible',
+    timeout: 15_000,
+  });
+  await page.getByRole('button', { name: workspaceName, exact: true }).click();
+  await page.getByRole('menuitem', { name: workspaceName, exact: true }).click();
+}
+
+async function createSessionViaUi(
+  page,
+  title,
+  profileName,
+  modelRef,
+  workspaceName = fixtureRepoName,
+) {
+  const workspaces = await callRendererRpc(page, 'workspaces.list', []);
+  const workspace = workspaces.find((item) => item.name === workspaceName);
+  if (!workspace) throw new Error(`Workspace not found: ${workspaceName}`);
   const previousSessions = await callRendererRpc(page, 'sessions.list', []);
   const previousSessionIds = previousSessions.map((session) => session.id);
-  await page.getByRole('button', { name: 'Add tab' }).click();
+  await selectWorkspaceViaComposer(page, workspaceName);
+  await page.getByRole('button', { name: 'New chat', exact: true }).click();
   let routeSnapshot;
   await expect
     .poll(
@@ -516,12 +539,17 @@ async function createSessionViaUi(page, title, profileName, modelRef) {
     )
     .toMatchObject({ isNewSessionOnRoute: true });
   const sessionId = routeSnapshot.routeSessionId;
-  if (!sessionId) throw new Error(`Add tab did not create a session for ${title}`);
+  if (!sessionId) throw new Error(`New chat did not create a session for ${title}`);
   const detail = await callRendererRpc(page, 'sessions.get', [sessionId]);
   const sessionIdFromDetail = detail.session.id;
+  if (detail.session.workspaceId !== workspace.id) {
+    throw new Error(
+      `New chat used the wrong workspace for ${title}: expected=${workspace.id}, actual=${detail.session.workspaceId}`,
+    );
+  }
   if (sessionIdFromDetail !== sessionId) {
     throw new Error(
-      `Add tab route session mismatch for ${title}: route=${sessionId}, detail=${sessionIdFromDetail}`,
+      `New chat route session mismatch for ${title}: route=${sessionId}, detail=${sessionIdFromDetail}`,
     );
   }
   const profiles = await callRendererRpc(page, 'profiles.list', []);
@@ -594,10 +622,11 @@ try {
         ),
       )
       .toBe(true);
-    await page.getByRole('button', { name: `Open ${fixtureRepoName} in Library` }).click();
-    await expect(page.getByRole('heading', { name: fixtureRepoName }).last()).toBeVisible();
+    const fixtureWorkspace = page.getByRole('button', { name: fixtureRepoName, exact: true });
+    await fixtureWorkspace.click();
+    await expect(fixtureWorkspace).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByText('fixture/restore', { exact: true })).toBeVisible();
-    console.log('e2e real domains: folder dialog, Library entry, and git branch OK');
+    console.log('e2e real domains: folder dialog, selected Library workspace, and git branch OK');
 
     if (phase === 'core-flows') {
       await page.evaluate(async () => {
@@ -608,7 +637,8 @@ try {
           (await window.ferryRpcClient.settings.get()).theme === 'dark' &&
           document.documentElement.dataset.theme === 'dark',
       );
-      await page.getByRole('button', { name: 'Toggle theme' }).click();
+      await page.getByRole('button', { name: 'User menu' }).click();
+      await page.getByRole('menuitemradio', { name: 'Light', exact: true }).click();
       await page.waitForFunction(
         async () => (await window.ferryRpcClient.settings.get()).theme === 'light',
       );
@@ -680,10 +710,14 @@ try {
         timeout: 15_000,
       });
       await expect(page.locator('.transcript-viewport')).toBeVisible();
-      await page.getByRole('button', { name: 'Changes', exact: true }).click();
-      await expect(page.getByRole('button', { name: 'Changes', exact: true })).toHaveAttribute(
-        'aria-current',
-        'page',
+      const checkpointDrawerTabs = page.getByRole('tablist', { name: 'Session drawer tabs' });
+      if (!(await checkpointDrawerTabs.isVisible().catch(() => false))) {
+        await page.getByRole('button', { name: 'Toggle drawer' }).click();
+      }
+      await checkpointDrawerTabs.getByRole('tab', { name: 'Changes' }).click();
+      await expect(checkpointDrawerTabs.getByRole('tab', { name: 'Changes' })).toHaveAttribute(
+        'aria-selected',
+        'true',
       );
       const restoreButton = page.getByRole('button', {
         name: 'Restore checkpoint FixtureRepo baseline',
@@ -709,7 +743,6 @@ try {
       );
 
       failureStep = 'walking-skeleton';
-      await page.getByRole('button', { name: 'Chats navigation' }).click();
       const agentSession = await createSessionViaUi(
         page,
         'Agent walking skeleton',
@@ -809,7 +842,15 @@ try {
           ),
         ),
       ).toBe(true);
-      await page.getByRole('button', { name: 'Changes', exact: true }).click();
+      const editDrawerTabs = page.getByRole('tablist', { name: 'Session drawer tabs' });
+      if (!(await editDrawerTabs.isVisible().catch(() => false))) {
+        await page.getByRole('button', { name: 'Toggle drawer' }).click();
+      }
+      await editDrawerTabs.getByRole('tab', { name: 'Changes' }).click();
+      await expect(editDrawerTabs.getByRole('tab', { name: 'Changes' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
       await expect(page.getByRole('button', { name: /index\.js \+/ })).toBeVisible({
         timeout: 30_000,
       });
@@ -821,7 +862,7 @@ try {
         history: await window.ferryRpcClient.quota.history(14),
       }));
       expect(sessionUsage.history.some((point) => point.requests > 0)).toBe(true);
-      await page.getByRole('button', { name: 'Explore', exact: true }).click();
+      await page.getByRole('button', { name: 'Models', exact: true }).click();
       await page.getByRole('button', { name: 'Usage', exact: true }).click();
       const usageDashboard = page.getByRole('region', { name: 'Usage dashboard' });
       await expect(usageDashboard).toBeVisible();
@@ -831,7 +872,6 @@ try {
         }),
       ).toBeVisible();
       failureStep = 'cancellation';
-      await page.getByRole('button', { name: 'Chats navigation' }).click();
       const cancellationModel = await page.evaluate(async () => {
         const model = (await window.ferryRpcClient.models.list('openrouter')).find(
           (item) => item.ref.endsWith(':free') && item.toolCalling,
@@ -903,15 +943,35 @@ try {
         'Auto-Free',
         rateLimitModel,
       );
-      const manualTrigger = page.getByRole('button', { name: /Manual · North Mini Code/ });
+      await expect(page.getByText('What would you like to work on?')).toBeVisible();
+      const manualTrigger = page.getByRole('button', { name: /North Mini Code/ });
       await expect(manualTrigger).toBeVisible();
       await manualTrigger.click();
       const autoModel = page.getByRole('option', { name: /Auto \(recommended\)/ });
       await expect(autoModel).toBeVisible();
+      const autoOptionIsInsidePicker = await autoModel.evaluate((option) => {
+        const picker = document.querySelector('[role="dialog"][aria-label="Choose model"]');
+        const rect = option.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          rect.left + rect.width / 2,
+          rect.top + rect.height / 2,
+        );
+        return Boolean(picker && hit && picker.contains(hit));
+      });
+      assert.equal(
+        autoOptionIsInsidePicker,
+        true,
+        'the empty-session greeting or another surface intercepts the Auto option',
+      );
       await autoModel.click();
       await expect(page.getByRole('dialog', { name: 'Choose model' })).toBeHidden();
       await expect(page.getByRole('button', { name: /Auto ·/ })).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Auto-Free', exact: true })).toBeVisible();
+      const profileChip = page.getByRole('button', { name: /Auto ·/ });
+      await expect(profileChip).toBeVisible();
+      await profileChip.click();
+      const modelPicker = page.getByRole('dialog', { name: 'Choose model' });
+      await expect(modelPicker.getByRole('option', { name: /Auto-Free/ })).toBeVisible();
+      await page.keyboard.press('Escape');
       await page.evaluate((sessionId) => {
         window.e2eHandoffParts = [];
         window.ferryRpcClient.on('session.part', (event) => {
@@ -1160,21 +1220,7 @@ try {
         throw error;
       }
       failureStep = 'crash-resume-library';
-      const crashWorkspaceName = await page.evaluate(async (id) => {
-        const detail = await window.ferryRpcClient.sessions.get(id);
-        const workspace = (await window.ferryRpcClient.workspaces.list()).find(
-          (item) => item.id === detail.session.workspaceId,
-        );
-        if (!workspace) throw new Error('Crash resume workspace unavailable in Library');
-        return workspace.name;
-      }, crashSessionId);
-      await page.getByRole('button', { name: 'Library', exact: true }).click();
-      await page
-        .getByRole('button', { name: `Expand workspace ${crashWorkspaceName}`, exact: true })
-        .click();
-      await page.evaluate((hash) => {
-        window.location.hash = hash;
-      }, crashSessionRoute);
+      await page.getByRole('button', { name: 'Crash Resume E2E', exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`/s/${crashSessionId}(?:$|[?#])`));
       failureStep = 'crash-resume-detail';
       await expect(page.locator('.transcript-viewport')).toBeVisible();
@@ -1258,7 +1304,7 @@ try {
         openedWorkspace.id,
       );
       expect(paidWorkspaceExists).toBe(true);
-      // The Electron file renderer uses hash routing; wait for Add tab to navigate to its new session.
+      // The Electron file renderer uses hash routing; wait for New chat to navigate to its session.
       const livePaidSession = await createSessionViaUi(
         page,
         'Paid guardrails E2E',

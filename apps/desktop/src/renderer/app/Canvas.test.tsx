@@ -144,7 +144,7 @@ describe('Home and session canvases', () => {
     );
 
     expect(screen.getByText('Transcript text survives')).toBeTruthy();
-    fireEvent.click(screen.getByText('Thinking'));
+    fireEvent.click(screen.getByText(/Thinking ·/));
     expect(screen.getByText('Reasoning survives')).toBeTruthy();
     expect(screen.getByText('Run checks')).toBeTruthy();
     expect(screen.getByText('Approve command')).toBeTruthy();

@@ -26,7 +26,7 @@ export const DEFAULT_KEYBINDINGS: Keybinding[] = [
   { command: 'palette.open', key: 'Ctrl+K', when: [] },
   { command: 'chat.new', key: 'Ctrl+N', when: ['isDesktop'] },
   { command: 'sidebar.toggle', key: 'Ctrl+B', when: [] },
-  { command: 'panel.toggle', key: 'Ctrl+Shift+B', when: [] },
+  { command: 'panel.toggle', key: 'Ctrl+.', when: [] },
   { command: 'terminal.toggle', key: 'Ctrl+`', when: ['isDesktop'] },
   { command: 'shortcuts.open', key: 'Ctrl+/', when: [] },
   { command: 'search.open', key: 'Ctrl+F', when: [] },

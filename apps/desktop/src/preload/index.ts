@@ -28,6 +28,7 @@ ipcRenderer.on('ferry:window-background', (_event, value: boolean) => {
 
 contextBridge.exposeInMainWorld('ferryHost', {
   platform: process.platform,
+  displayName: process.env.USERNAME?.trim() ?? process.env.USER?.trim() ?? '',
   versions: {
     app: releaseVersion,
     electron: process.versions.electron,

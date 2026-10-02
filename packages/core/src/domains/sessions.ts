@@ -291,7 +291,11 @@ export function register(host: CoreHost, services: FerryServices): void {
         activeProfile && profileList().some((item) => item.id === activeProfile)
           ? activeProfile
           : undefined;
-      const selected = input.profileId ?? validActive ?? 'profile_builtin_best_available';
+      const defaultProfile =
+        profileList().find((item) => item.builtin && item.name === 'Auto-Free') ??
+        profileList().find((item) => item.builtin);
+      if (!defaultProfile) throw new Error('No built-in profiles are configured');
+      const selected = input.profileId ?? validActive ?? defaultProfile.id;
       const profile = profileList().find((item) => item.id === selected);
       if (!profile) throw rpcDomainError(-32044, 'not_found', `Profile not found: ${selected}`);
       const now = services.clock.now().toISOString();

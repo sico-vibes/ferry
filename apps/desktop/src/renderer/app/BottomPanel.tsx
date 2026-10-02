@@ -1,10 +1,12 @@
 import { useEffect, useRef, type CSSProperties } from 'react';
 import '@xterm/xterm/css/xterm.css';
 import { Terminal as XTerm } from '@xterm/xterm';
+import type { SessionId } from '@ferry/shared';
 import { FitAddon } from '@xterm/addon-fit';
 import { useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Terminal, X } from 'lucide-react';
+import { SegmentedControl } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { useUI } from '../state/ui';
 
@@ -72,10 +74,11 @@ function TerminalView() {
   return <div aria-label="Terminal" className="terminal-host" ref={host} />;
 }
 
-export function BottomPanel() {
+export function BottomPanel({ sessionId: activeSessionId }: { sessionId?: SessionId } = {}) {
   const client = useFerryClient();
   const path = useRouterState({ select: (state) => state.location.pathname });
-  const sessionId = path.startsWith('/s/') ? path.slice(3) : null;
+  const sessionId =
+    activeSessionId ?? (path.startsWith('/s/') ? (path.slice(3) as SessionId) : null);
   const { data } = useQuery({
     queryKey: ['session', sessionId],
     queryFn: () => (sessionId ? client.sessions.get(sessionId as never) : Promise.resolve(null)),
@@ -85,9 +88,10 @@ export function BottomPanel() {
   const bottomHeight = useUI((s) => s.bottomHeight);
   const setBottomTab = useUI((s) => s.setBottomTab);
   const toggleBottom = useUI((s) => s.toggleBottom);
+  const isDrawer = activeSessionId !== undefined;
   return (
     <section
-      aria-label="Bottom panel"
+      aria-label={isDrawer ? 'Session tools' : 'Bottom panel'}
       className="bottom-panel"
       style={{ '--bottom-height': `${String(bottomHeight)}px` } as CSSProperties}
     >
@@ -126,33 +130,49 @@ export function BottomPanel() {
         role="separator"
         tabIndex={0}
       />
-      <header className="bottom-panel-header">
-        <nav aria-label="Bottom panel tabs">
-          <button
-            aria-current={bottomTab === 'terminal' ? 'page' : undefined}
-            onClick={() => {
-              setBottomTab('terminal');
+      {isDrawer ? (
+        <div className="drawer-terminal-switch">
+          <SegmentedControl
+            label="Terminal view"
+            value={bottomTab}
+            onValueChange={(value) => {
+              setBottomTab(value === 'terminal' ? 'terminal' : 'agent-log');
             }}
-          >
-            <Terminal size={14} /> Terminal
+            options={[
+              { value: 'terminal', label: 'Terminal' },
+              { value: 'agent-log', label: 'Agent log' },
+            ]}
+          />
+        </div>
+      ) : (
+        <header className="bottom-panel-header">
+          <nav aria-label="Bottom panel tabs">
+            <button
+              aria-current={bottomTab === 'terminal' ? 'page' : undefined}
+              onClick={() => {
+                setBottomTab('terminal');
+              }}
+            >
+              <Terminal size={14} /> Terminal
+            </button>
+            <button
+              aria-current={bottomTab === 'agent-log' ? 'page' : undefined}
+              onClick={() => {
+                setBottomTab('agent-log');
+              }}
+            >
+              Agent log
+            </button>
+          </nav>
+          <button aria-label="Close bottom panel" className="header-icon" onClick={toggleBottom}>
+            <X size={15} />
           </button>
-          <button
-            aria-current={bottomTab === 'agent-log' ? 'page' : undefined}
-            onClick={() => {
-              setBottomTab('agent-log');
-            }}
-          >
-            Agent log
-          </button>
-        </nav>
-        <button aria-label="Close bottom panel" className="header-icon" onClick={toggleBottom}>
-          <X size={15} />
-        </button>
-      </header>
+        </header>
+      )}
       {bottomTab === 'terminal' ? (
         <TerminalView />
       ) : (
-        <div aria-label="Agent log" className="agent-log">
+        <div aria-label="Agent log" className="agent-log" role="region">
           {data?.messages.flatMap((message) =>
             message.parts
               .filter((part) => part.type === 'tool_call')

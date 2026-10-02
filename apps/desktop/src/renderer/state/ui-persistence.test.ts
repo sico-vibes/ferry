@@ -23,6 +23,15 @@ describe('ui store persistence', () => {
     expect(useUI.getState().density).toBe('compact');
   });
 
+  it('persists the selected composer workspace for new chats', async () => {
+    const { useUI } = await loadUI();
+    useUI.getState().setSelectedWorkspace('workspace_selected');
+    const persisted: unknown = JSON.parse(localStorage.getItem('ferry.ui') ?? '{}');
+    expect(persisted).toMatchObject({ selectedWorkspaceId: 'workspace_selected' });
+    const restored = await loadUI(localStorage.getItem('ferry.ui') ?? undefined);
+    expect(restored.useUI.getState().selectedWorkspaceId).toBe('workspace_selected');
+  });
+
   it('falls back to an empty tab list when the persisted value is not an array', async () => {
     const { useUI } = await loadUI(JSON.stringify({ tabs: 'not-an-array' }));
     expect(useUI.getState().tabs).toEqual([]);

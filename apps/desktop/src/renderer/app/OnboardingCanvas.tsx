@@ -98,7 +98,7 @@ export function OnboardingCanvas() {
   const [keysByProvider, setKeysByProvider] = useState<Record<string, string>>({});
   const [cloudflareAccountId, setCloudflareAccountId] = useState('');
   const [tested, setTested] = useState<Record<string, string>>({});
-  const [profile, setProfile] = useState('profile_free');
+  const [profile, setProfile] = useState('');
   const [delegation, setDelegation] = useState('suggest');
   const [terse, setTerse] = useState('lite');
   useEffect(() => {
@@ -113,12 +113,15 @@ export function OnboardingCanvas() {
     queryKey: keys.profiles,
     queryFn: () => client.profiles.list(),
   });
+  const defaultProfile =
+    profiles.find((item) => item.builtin && item.name === 'Auto-Free') ??
+    profiles.find((item) => item.builtin) ??
+    profiles[0];
+  const selectedProfile = profiles.find((item) => item.id === profile) ?? defaultProfile;
   const finish = async () => {
     await client.settings.update({
       onboardingComplete: true,
-      activeProfileId: profile as NonNullable<
-        Awaited<ReturnType<typeof client.settings.get>>
-      >['activeProfileId'],
+      ...(selectedProfile ? { activeProfileId: selectedProfile.id } : {}),
       delegationMode: delegation as 'off' | 'suggest' | 'auto',
       optimizers: {
         terse: terse as 'off' | 'lite' | 'full' | 'ultra',
@@ -339,7 +342,7 @@ export function OnboardingCanvas() {
                     )}
                     <Pill
                       size="sm"
-                      aria-label={`Test ${provider?.name ?? id} API`}
+                      aria-label={`Test ${provider?.name ?? id}`}
                       onClick={() => void testProvider(id)}
                       leadingIcon={<Check size={13} />}
                     >
@@ -376,7 +379,7 @@ export function OnboardingCanvas() {
             <p>You can change these choices any time in Settings.</p>
             <h3>Default profile</h3>
             <RadioCards
-              value={profile}
+              value={selectedProfile?.id ?? profile}
               onValueChange={(value) => {
                 setProfile(value as string);
               }}

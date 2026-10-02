@@ -235,6 +235,9 @@ export function useFerryEvents(): void {
         void cache.invalidateQueries({ queryKey: ['model-candidates'] });
         pushToast({ kind: 'info', title: `${provider.name} updated`, body: null });
       }),
+      client.on('settings.updated', (settings) => {
+        cache.setQueryData(keys.settings, settings);
+      }),
       client.on('delegation.updated', (run) => {
         const key = ['delegation', run.sessionId] as const;
         const current = cache.getQueryData<import('@ferry/shared').DelegationRun[]>(key);

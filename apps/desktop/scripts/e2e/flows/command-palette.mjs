@@ -20,13 +20,17 @@ export async function run(page, { url, expect, capture }) {
   await expect(newChatOption).toBeVisible();
   await newChatOption.click();
   await expect(dialog).toBeHidden();
+  await page.waitForURL(/\/s\/[^/]+$/);
   const newSessionId = new URL(page.url()).pathname.match(/^\/s\/([^/]+)$/)?.[1];
   expect(newSessionId).toBeTruthy();
+  const session = page.locator(`.v2-chat-open[data-session-id="${newSessionId}"]`);
+  await expect(session).toHaveAttribute('aria-current', 'page');
   const composer = page.getByRole('textbox', { name: 'Message Ferry' });
   await expect(composer).toBeFocused();
-  const session = page.getByRole('tab').first();
   await expect(session).toBeVisible();
-  const sessionTitle = (await session.innerText()).trim();
+  const sessionTitle = (
+    await page.getByRole('button', { name: 'Rename session' }).innerText()
+  ).trim();
   await page.keyboard.press('Control+k');
   await dialog.getByRole('combobox').fill(sessionTitle);
   await dialog

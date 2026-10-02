@@ -3,6 +3,7 @@ declare global {
   interface Window {
     ferryHost?: {
       platform: string;
+      displayName: string;
       versions: { app: string; electron: string };
       channel: string;
       commit: string;

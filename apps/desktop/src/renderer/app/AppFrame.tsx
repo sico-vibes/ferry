@@ -1,19 +1,20 @@
-import { Profiler, useEffect, useMemo, useState } from 'react';
+import { Profiler, useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
-import { FileText, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
-import { Dialog, Pill, TabsBar, TopRightCluster } from '@ferry/ui';
+import { ChevronRight } from 'lucide-react';
+import { Dialog, Pill, UiV2 } from '@ferry/ui';
+import type { SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { useFerryEvents } from '../data/events';
-import { keys, useSessions, useSettings } from '../data/queries';
+import { keys, useProfiles, useSessions, useSettings } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
-import { Sidebar } from './Sidebar';
 import { RightPanel } from './right-panel/RightPanel';
 import { appMounts } from './mounts';
 import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
-import { ConfigurationSheet } from './ConfigurationSheet';
-import type { SessionId } from '@ferry/shared';
+import { V2Sidebar } from './V2Sidebar';
+import { V2ChatHeader } from './V2ChatHeader';
+import { BottomPanel } from './BottomPanel';
 import type { UpdateSnapshot } from '../../main/update-state.js';
 import { initializeKeybindings } from '../state/keybindings';
 import { useKeybindings } from '../state/keybindings';
@@ -78,6 +79,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   }, [cache, client, navigate]);
   const { data: sessions = [] } = useSessions();
   const { data: settings } = useSettings();
+  const { data: profiles = [] } = useProfiles();
   useEffect(() => {
     if (!settings) return;
     const root = document.documentElement;
@@ -86,6 +88,8 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       const theme =
         settings.theme === 'system' ? (media.matches ? 'light' : 'dark') : settings.theme;
       root.dataset.theme = theme;
+      root.classList.toggle('light', theme === 'light');
+      root.classList.toggle('dark', theme === 'dark');
       window.ferryHost?.updateTheme(theme);
     };
     apply();
@@ -108,13 +112,30 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const dismissToast = useToasts((state) => state.dismiss);
   const [closePrompt, setClosePrompt] = useState<string | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [configurationOpen, setConfigurationOpen] = useState(false);
-  const [completedDelegationIds, setCompletedDelegationIds] = useState<string[]>([]);
+  const [drawerTab, setDrawerTab] = useState<'plan' | 'changes' | 'terminal'>('plan');
+  const [wideDrawer, setWideDrawer] = useState(
+    () => window.matchMedia('(min-width: 1280px)').matches,
+  );
   const [simulatedOffline, setSimulatedOffline] = useState(
     () => localStorage.getItem('ferry.simulateOffline') === 'true',
   );
   const [networkOnline, setNetworkOnline] = useState(() => navigator.onLine);
   const { bindings } = useKeybindings();
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1280px)');
+    const sync = () => {
+      setWideDrawer(media.matches);
+    };
+    sync();
+    media.addEventListener('change', sync);
+    return () => {
+      media.removeEventListener('change', sync);
+    };
+  }, []);
+  useEffect(() => {
+    if (!rightCollapsed && pathname.startsWith('/s/') && drawerTab !== 'terminal')
+      useUI.getState().setRightTab(drawerTab);
+  }, [drawerTab, pathname, rightCollapsed]);
   useEffect(() => {
     return initializeKeybindings((message) => {
       pushToast({ kind: 'error', title: 'Keybindings could not be loaded', body: message });
@@ -134,39 +155,39 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       window.removeEventListener('offline', offline);
     };
   }, []);
-  const labels = useMemo(
-    () => new Map(sessions.map((session) => [session.id, session.title])),
-    [sessions],
-  );
   const onboardingPage =
-    pathname === '/onboarding' || (pathname === '/' && settings?.onboardingComplete === false);
-  const activeNav = onboardingPage
-    ? null
-    : pathname.startsWith('/explore')
-      ? 'explore'
-      : pathname === '/library'
-        ? 'library'
-        : pathname === '/' || pathname.startsWith('/s/')
-          ? 'chats'
-          : null;
+    settings?.onboardingComplete === false && (pathname === '/onboarding' || pathname === '/');
   const fullCanvasPage = onboardingPage || pathname.includes('/review/');
-  const rightWidth = useUI((state) => state.rightWidth);
   const bottomOpen = useUI((state) => state.bottomOpen);
   const createChat = async () => {
-    const workspaces = await client.workspaces.list();
-    const workspace = workspaces[0];
-    if (!workspace) {
-      pushToast({
-        kind: 'warning',
-        title: 'Add a folder first',
-        body: 'Choose a workspace before starting a chat.',
+    try {
+      const workspaces = await client.workspaces.list();
+      const selectedWorkspaceId = useUI.getState().selectedWorkspaceId;
+      const workspace = workspaces.find((item) => item.id === selectedWorkspaceId) ?? workspaces[0];
+      if (!workspace) {
+        pushToast({
+          kind: 'warning',
+          title: 'Add a folder first',
+          body: 'Choose a workspace before starting a chat.',
+        });
+        return;
+      }
+      const profileId = profiles.find((profile) => profile.id === settings?.activeProfileId)?.id;
+      const session = await client.sessions.create({
+        workspaceId: workspace.id,
+        ...(profileId ? { profileId } : {}),
       });
-      return;
+      openTab({ id: session.id, title: session.title });
+      await cache.invalidateQueries({ queryKey: keys.sessions });
+      useUI.getState().requestComposerFocus();
+      await navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
+    } catch (error) {
+      pushToast({
+        kind: 'error',
+        title: 'Chat could not be created',
+        body: error instanceof Error ? error.message : String(error),
+      });
     }
-    const session = await client.sessions.create({ workspaceId: workspace.id });
-    openTab({ id: session.id, title: session.title });
-    await cache.invalidateQueries({ queryKey: keys.sessions });
-    await navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
   };
   const closeAndNavigate = (id: string, stop: boolean) => {
     if (stop) void client.sessions.cancel(id as (typeof sessions)[number]['id']);
@@ -192,18 +213,6 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     }
     closeAndNavigate(id, false);
   };
-
-  useEffect(() => {
-    const pulse = (event: Event) => {
-      const id = (event as CustomEvent<{ sessionId: string }>).detail.sessionId;
-      if (!id) return;
-      setCompletedDelegationIds((current) => [...new Set([...current, id])]);
-    };
-    window.addEventListener('ferry:success-pulse', pulse);
-    return () => {
-      window.removeEventListener('ferry:success-pulse', pulse);
-    };
-  }, []);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -235,10 +244,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
         useUI.getState().toggleLeft();
       } else if (matches('search.open')) {
         event.preventDefault();
-        if (useUI.getState().rightCollapsed) useUI.getState().toggleRight();
-        requestAnimationFrame(() =>
-          document.querySelector<HTMLInputElement>('[aria-label="Search chats"]')?.focus(),
-        );
+        window.dispatchEvent(new Event('ferry:open-command-palette'));
       } else if (matches('tab.close') && activeId) {
         event.preventDefault();
         requestCloseTab(activeId);
@@ -252,7 +258,8 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
         }
       } else if (matches('terminal.toggle')) {
         event.preventDefault();
-        useUI.getState().toggleBottom();
+        setDrawerTab('terminal');
+        if (useUI.getState().rightCollapsed) useUI.getState().toggleRight();
       }
     };
     window.addEventListener('keydown', handler);
@@ -269,6 +276,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     openTab,
     pushToast,
     requestCloseTab,
+    setDrawerTab,
     setActive,
     tabs,
     sessions,
@@ -307,115 +315,20 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     };
   }, [toastItems, dismissToast]);
 
-  const tabItems =
-    tabs.length === 0 && pathname === '/'
-      ? [{ id: 'home', label: 'New Chat', ariaLabel: 'New Chat (tab)', icon: FileText }]
-      : tabs.map((tab) => ({
-          id: tab.id,
-          label: labels.get(tab.id) ?? tab.title,
-          icon: FileText,
-          status: sessions.find((session) => session.id === tab.id)?.status ?? 'idle',
-          successPulse: completedDelegationIds.includes(tab.id),
-        }));
-  const homeTab = tabs.length === 0 && pathname === '/';
-  const currentId = pathname.startsWith('/s/')
-    ? pathname.slice('/s/'.length)
-    : homeTab
-      ? 'home'
-      : (activeId ?? '');
-  const configurationSessionId = pathname.startsWith('/s/')
-    ? (pathname.slice('/s/'.length).split('/')[0] as SessionId | undefined)
-    : undefined;
+  if (onboardingPage) return <main className="v2-onboarding-shell">{children}</main>;
+
   return (
     <div
-      className={`app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed ? 'right-is-collapsed' : ''}`}
+      className={`ferry-ui v2-app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed ? 'right-is-collapsed' : ''} ${pathname === '/' || pathname.startsWith('/s/') ? 'v2-chat-route' : 'v2-legacy-route'}`}
       data-density={density}
     >
       <div className="title-strip" aria-hidden="true" />
       <div
-        className={`app-grid ${fullCanvasPage ? 'page-mode-grid' : ''}`}
-        style={{ '--right-width': `${String(rightWidth)}px` } as React.CSSProperties}
+        className={`v2-app-grid ${!rightCollapsed && pathname.startsWith('/s/') ? 'drawer-open' : ''}`}
       >
-        <Sidebar activeNav={activeNav} />
-        <main className="center-column">
-          <div
-            className={`tabs-bar-frame ${leftCollapsed && !fullCanvasPage ? 'with-sidebar-toggle' : ''}`}
-          >
-            {!fullCanvasPage && leftCollapsed && (
-              <button
-                aria-label="Show sidebar"
-                className="header-icon"
-                onClick={() => {
-                  useUI.getState().toggleLeft();
-                }}
-                title="Show sidebar · Ctrl+B"
-                type="button"
-              >
-                <PanelLeftOpen aria-hidden="true" size={15} />
-              </button>
-            )}
-            <TabsBar
-              tabs={tabItems}
-              activeId={currentId}
-              onSelect={(id) => {
-                if (id === 'home') {
-                  void navigate({ to: '/' });
-                  return;
-                }
-                setActive(id as (typeof tabs)[number]['id']);
-                void navigate({ to: '/s/$sessionId', params: { sessionId: id } });
-              }}
-              {...(homeTab
-                ? {}
-                : {
-                    onClose: requestCloseTab,
-                  })}
-              onAdd={() => void createChat()}
-              rightCluster={
-                <div className="top-cluster-with-terminal">
-                  {!fullCanvasPage && (
-                    <button
-                      aria-label={bottomOpen ? 'Close terminal panel' : 'Open terminal panel'}
-                      className="header-icon"
-                      onClick={() => {
-                        useUI.getState().toggleBottom();
-                      }}
-                      title="Terminal (Ctrl+`)"
-                    >
-                      <FileText size={15} />
-                    </button>
-                  )}
-                  <TopRightCluster
-                    onAccount={() => void navigate({ to: '/settings' })}
-                    showShare={false}
-                    onConfiguration={() => {
-                      setConfigurationOpen(true);
-                    }}
-                    onShare={() => {
-                      pushToast({
-                        kind: 'success',
-                        title: 'Share',
-                        body: 'There is nothing to share yet.',
-                      });
-                    }}
-                  />
-                  {!fullCanvasPage && rightCollapsed && (
-                    <button
-                      aria-label="Show panel"
-                      className="header-icon"
-                      onClick={() => {
-                        useUI.getState().toggleRight();
-                      }}
-                      title="Show panel · Ctrl+Shift+B"
-                      type="button"
-                    >
-                      <PanelRightOpen aria-hidden="true" size={15} />
-                    </button>
-                  )}
-                </div>
-              }
-            />
-          </div>
+        <V2Sidebar onNewChat={() => void createChat()} />
+        <main className="v2-main-column">
+          <V2ChatHeader />
           {(!networkOnline || simulatedOffline) && (
             <div className="offline-warning" role="status">
               Offline - local work is saved. Provider requests will retry when the network returns.
@@ -439,7 +352,9 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
               </button>
             </div>
           )}
-          <div className="canvas-slot">
+          <div
+            className={`canvas-slot ${pathname === '/' || (pathname.startsWith('/s/') && !pathname.includes('/review/')) ? '' : 'ferry-legacy-scope'}`}
+          >
             {import.meta.env.DEV && new URLSearchParams(location.search).has('perf-render') ? (
               <Profiler
                 id={
@@ -462,14 +377,75 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
               children
             )}
           </div>
-          {appMounts.main.map((Mount, index) => (
-            <Mount bottomOpen={bottomOpen} fullCanvasPage={fullCanvasPage} key={index} />
-          ))}
         </main>
-        {!rightCollapsed && <RightPanel onNewChat={() => void createChat()} />}
+        {!rightCollapsed && pathname.startsWith('/s/') && (
+          <UiV2.Sheet
+            open
+            modal={!wideDrawer}
+            onOpenChange={(open) => {
+              if (!open) useUI.getState().toggleRight();
+            }}
+          >
+            <UiV2.SheetContent
+              className="v2-drawer-content"
+              overlayClassName="v2-drawer-overlay"
+              side="right"
+            >
+              <UiV2.SheetHeader className="v2-drawer-heading">
+                <UiV2.SheetTitle>Session details</UiV2.SheetTitle>
+                <button
+                  className="v2-drawer-close"
+                  aria-label="Close drawer"
+                  onClick={() => {
+                    useUI.getState().toggleRight();
+                  }}
+                >
+                  <ChevronRight aria-hidden="true" />
+                </button>
+              </UiV2.SheetHeader>
+              <div aria-label="Session drawer tabs" className="v2-drawer-tabs" role="tablist">
+                {(['plan', 'changes', 'terminal'] as const).map((tab) => (
+                  <button
+                    aria-controls="session-drawer-panel"
+                    aria-selected={drawerTab === tab}
+                    id={`session-drawer-tab-${tab}`}
+                    key={tab}
+                    onClick={() => {
+                      setDrawerTab(tab);
+                      if (tab === 'plan' || tab === 'changes') useUI.getState().setRightTab(tab);
+                    }}
+                    role="tab"
+                  >
+                    {tab === 'plan' ? 'Plan' : tab === 'changes' ? 'Changes' : 'Terminal'}
+                  </button>
+                ))}
+              </div>
+              <div
+                aria-labelledby={`session-drawer-tab-${drawerTab}`}
+                className="v2-drawer-body"
+                id="session-drawer-panel"
+                role="tabpanel"
+              >
+                {drawerTab === 'terminal' ? (
+                  <BottomPanel sessionId={pathname.split('/')[2] as SessionId} />
+                ) : (
+                  <RightPanel
+                    onNewChat={() => void createChat()}
+                    sessionId={pathname.split('/')[2] as SessionId}
+                  />
+                )}
+              </div>
+            </UiV2.SheetContent>
+          </UiV2.Sheet>
+        )}
       </div>
       {appMounts.overlays.map((Mount, index) => (
-        <Mount bottomOpen={bottomOpen} fullCanvasPage={fullCanvasPage} key={index} />
+        <Mount
+          bottomOpen={bottomOpen}
+          fullCanvasPage={fullCanvasPage}
+          key={index}
+          onNewChat={createChat}
+        />
       ))}
       <Dialog
         open={Boolean(closePrompt)}
@@ -497,11 +473,6 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           </Pill>
         </div>
       </Dialog>
-      <ConfigurationSheet
-        open={configurationOpen}
-        onOpenChange={setConfigurationOpen}
-        sessionId={configurationSessionId}
-      />
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </div>
   );

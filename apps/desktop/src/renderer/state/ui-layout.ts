@@ -4,7 +4,7 @@ export const clampRightWidth = (width: number) => Math.min(560, Math.max(300, wi
 export const clampBottomHeight = (height: number) => Math.min(480, Math.max(200, height));
 export const DEFAULT_LAYOUT = {
   leftCollapsed: false,
-  rightCollapsed: false,
+  rightCollapsed: true,
   rightWidth: 300,
   bottomOpen: false,
   bottomHeight: 260,
@@ -28,7 +28,7 @@ export function parsePersistedLayout(value: unknown): PersistedLayout {
     return DEFAULT_LAYOUT;
   return {
     leftCollapsed: typeof value.leftCollapsed === 'boolean' ? value.leftCollapsed : false,
-    rightCollapsed: typeof value.rightCollapsed === 'boolean' ? value.rightCollapsed : false,
+    rightCollapsed: typeof value.rightCollapsed === 'boolean' ? value.rightCollapsed : true,
     rightWidth: clampRightWidth(typeof value.rightWidth === 'number' ? value.rightWidth : 300),
     bottomOpen: typeof value.bottomOpen === 'boolean' ? value.bottomOpen : false,
     bottomHeight: clampBottomHeight(

@@ -155,24 +155,19 @@ describe('UI v2 semantic tokens', () => {
         }
       }
     });
-    it(theme + ' keeps borders, inputs, and focus rings visible at 3:1', () => {
+    it(theme + ' uses hairline surfaces and keeps focus rings at 3:1', () => {
+      expect(requiredToken(block, 'border')).toBe(
+        theme === '.ferry-ui' ? 'rgba(255, 255, 255, 0.06)' : 'rgba(23, 21, 30, 0.07)',
+      );
+      expect(requiredToken(block, 'input')).toBe(
+        theme === '.ferry-ui' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(23, 21, 30, 0.14)',
+      );
       for (const surface of ['background', 'sidebar', 'card', 'muted', 'popover', 'secondary']) {
-        expect(
-          contrast(requiredToken(block, 'border'), requiredToken(block, surface)),
-          'border on ' + surface,
-        ).toBeGreaterThanOrEqual(3);
-        expect(
-          contrast(requiredToken(block, 'input'), requiredToken(block, surface)),
-          'input on ' + surface,
-        ).toBeGreaterThanOrEqual(3);
         expect(
           contrast(requiredToken(block, 'ring'), requiredToken(block, surface)),
           'ring on ' + surface,
         ).toBeGreaterThanOrEqual(3);
         if (surface === 'sidebar') {
-          expect(
-            contrast(requiredToken(block, 'sidebar-border'), requiredToken(block, surface)),
-          ).toBeGreaterThanOrEqual(3);
           expect(
             contrast(requiredToken(block, 'sidebar-ring'), requiredToken(block, surface)),
           ).toBeGreaterThanOrEqual(3);

@@ -23,7 +23,7 @@ export async function run(page, ctx) {
   await ctx.expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
 
   dialog = await open();
-  await dialog.getByRole('option', { name: 'Go to Explore' }).click();
+  await dialog.getByRole('option', { name: 'Go to Models' }).click();
   await ctx.expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible();
 
   await page.keyboard.press('Control+k');
