@@ -438,6 +438,18 @@ ipcMain.handle('ferry:open-folder', async (event, ...args: unknown[]) => {
   return OpenFolderResultSchema.parse(result.canceled ? null : (result.filePaths[0] ?? null));
 });
 
+ipcMain.handle('ferry:open-help', (event, ...args: unknown[]) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  EmptyIpcArgsSchema.parse(args);
+  return openExternalSafely('https://github.com/sico-vibes/ferry#readme');
+});
+
+ipcMain.handle('ferry:reveal-data-folder', (event, path: unknown) => {
+  if (!isTrustedSender(event) || typeof path !== 'string')
+    throw new Error('Invalid data folder request');
+  shell.showItemInFolder(path);
+});
+
 const keybindingsPath = join(app.getPath('userData'), 'keybindings.json');
 const readKeybindings = async (): Promise<{
   path: string;

@@ -10,15 +10,8 @@ import { useUI } from '../state/ui';
 import type { SessionId } from '@ferry/shared';
 import { ApprovalsTray } from './SessionPowerControls';
 
-const {
-  Button,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-  Input,
-} = UiV2;
+const { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Input } =
+  UiV2;
 
 export function V2ChatHeader() {
   const client = useFerryClient();
@@ -118,19 +111,6 @@ export function V2ChatHeader() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onSelect={() => {
-                  void navigator.clipboard.writeText('Ferry session export is not available yet.');
-                  pushToast({
-                    kind: 'info',
-                    title: 'Export',
-                    body: 'Session export is coming soon.',
-                  });
-                }}
-              >
-                Export
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
               <DropdownMenuItem className="text-destructive" onSelect={() => void remove()}>
                 <Trash2 />
                 Delete session

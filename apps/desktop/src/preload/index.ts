@@ -42,6 +42,9 @@ contextBridge.exposeInMainWorld('ferryHost', {
       .filter(Boolean) ?? [],
   openFolder: (): Promise<string | null> =>
     ipcRenderer.invoke('ferry:open-folder') as Promise<string | null>,
+  openHelp: (): Promise<void> => ipcRenderer.invoke('ferry:open-help') as Promise<void>,
+  revealDataFolder: (path: string): Promise<void> =>
+    ipcRenderer.invoke('ferry:reveal-data-folder', path) as Promise<void>,
   readKeybindings: (): Promise<{ path: string; content: string; error: string | null }> =>
     ipcRenderer.invoke('ferry:keybindings-read') as Promise<{
       path: string;

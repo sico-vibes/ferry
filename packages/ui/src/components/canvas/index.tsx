@@ -146,15 +146,17 @@ export function Composer({
         </div>
         <div className="v2-composer-toolbar">
           <div className="v2-composer-tools">
-            <button
-              className="v2-composer-tool"
-              aria-label="Attach file"
-              onClick={onAttach}
-              type="button"
-            >
-              <Link aria-hidden="true" />
-              Attach
-            </button>
+            {onAttach && (
+              <button
+                className="v2-composer-tool"
+                aria-label="Attach file"
+                onClick={onAttach}
+                type="button"
+              >
+                <Link aria-hidden="true" />
+                Attach
+              </button>
+            )}
             {profileControl ??
               (profileMenuItems ? (
                 <DropdownMenu

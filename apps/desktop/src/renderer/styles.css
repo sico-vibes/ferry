@@ -2088,7 +2088,30 @@ body {
   justify-content: space-between;
   gap: 16px;
   border-bottom: 0;
-  padding: 0 24px;
+  padding: 0 24px 0 calc(24px + var(--titlebar-overlay-reserve, 0px));
+  -webkit-app-region: drag;
+}
+.v2-library-header,
+.v2-settings-header,
+.v2-models-page .ferry-page-header,
+.v2-review-route .ferry-page-header {
+  -webkit-app-region: drag;
+}
+.v2-library-header,
+.v2-settings-header,
+.v2-models-page .ferry-page-header {
+  padding-right: var(--titlebar-overlay-reserve, 0px);
+}
+.v2-library-header :is(button, input, [role='button']),
+.v2-settings-header :is(button, input, [role='button']),
+.v2-models-page .ferry-page-header :is(button, input, [role='button']),
+.v2-review-route .ferry-page-header :is(button, input, [role='button']) {
+  -webkit-app-region: no-drag;
+}
+.v2-chat-header button,
+.v2-chat-header input,
+.v2-chat-header [role='button'] {
+  -webkit-app-region: no-drag;
 }
 .v2-header-title,
 .v2-header-actions {
@@ -2150,7 +2173,8 @@ body {
   min-height: 0;
   grid-template-columns: 208px minmax(0, 1fr);
   gap: var(--space-8);
-  overflow: auto;
+  height: 100%;
+  overflow: hidden;
   border: 0;
   border-radius: 0;
   background: var(--background);
@@ -2162,6 +2186,7 @@ body {
   align-self: start;
   flex-direction: column;
   gap: var(--spacing);
+  min-height: 0;
   padding-top: var(--spacing);
 }
 .v2-settings-nav button {
@@ -2186,11 +2211,36 @@ body {
   font-weight: 550;
 }
 .v2-settings-content {
-  display: grid;
+  display: flex;
   width: min(100%, 800px);
-  align-content: start;
+  flex-direction: column;
   gap: var(--space-6);
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: var(--space-2);
+}
+.v2-settings-content > .v2-settings-header {
+  flex: 0 0 auto;
+}
+.v2-settings-content > .settings-group-card,
+.v2-settings-content > .profile-settings,
+.v2-settings-content > * {
+  flex: 0 0 auto;
+}
+.v2-settings-save-success,
+.v2-settings-save-error {
+  align-self: center;
+  font-size: 13px;
+}
+.v2-settings-save-success {
+  color: var(--success);
+}
+.v2-settings-save-error {
+  max-width: 40ch;
+  color: var(--destructive);
 }
 .v2-settings-header {
   display: flex;
@@ -2226,6 +2276,40 @@ body {
   background: var(--card);
   padding: var(--space-4);
   color: var(--foreground);
+}
+.v2-about-details {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+.v2-about-dialog {
+  max-width: 480px;
+}
+.v2-about-details > div {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+}
+.v2-about-details dt {
+  color: var(--muted-foreground);
+}
+.v2-about-details dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+}
+.v2-about-details .v2-about-data-folder dd {
+  grid-column: 2;
+}
+.v2-about-details .v2-about-data-folder button {
+  grid-column: 2;
+  justify-self: start;
+}
+.v2-about-details .v2-about-data-folder dd {
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px;
 }
 .v2-settings-page .settings-group-card .ferry-section-title {
   margin: 0;
@@ -2786,6 +2870,7 @@ body {
 .v2-review-route .ferry-page-header {
   flex: 0 0 auto;
   padding: 32px 32px 24px;
+  padding-right: calc(32px + var(--titlebar-overlay-reserve, 0px));
 }
 .v2-review-route .review-toolbar {
   display: flex;
@@ -3303,6 +3388,11 @@ body {
   line-height: 20px;
 }
 .v2-app-shell .session-resume-banner {
+  box-sizing: border-box;
+  width: min(100% - 48px, 768px);
+  flex: 0 0 auto;
+  align-self: center;
+  margin-inline: auto;
   gap: 16px;
   border: 0;
   border-radius: 14px;
@@ -5757,6 +5847,9 @@ button:not(:disabled):active,
   }
   .v2-settings-content {
     width: 100%;
+  }
+  .v2-settings-page {
+    grid-template-rows: auto minmax(0, 1fr);
   }
 }
 @media (max-width: 560px) {

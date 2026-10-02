@@ -198,13 +198,7 @@ export function ModelsCanvas() {
     setProbing(provider.id);
     try {
       const result = await client.providers.probe(provider.id);
-      pushToast({
-        kind: result.ok ? 'success' : 'error',
-        title: result.ok
-          ? `Connected · ${result.latencyMs === null ? 'CLI' : String(result.latencyMs)}${result.latencyMs === null ? '' : ' ms'}`
-          : 'Key invalid',
-        body: result.ok ? provider.name : result.message,
-      });
+      if (!result.ok) pushToast({ kind: 'error', title: 'Key invalid', body: result.message });
     } catch (error) {
       pushToast({
         kind: 'error',
@@ -247,11 +241,6 @@ export function ModelsCanvas() {
         });
       await client.oauth.login(provider.id, ...(gateway ? [{ gateway }] : []));
       await cache.invalidateQueries({ queryKey: ['oauth-providers'] });
-      pushToast({
-        kind: 'success',
-        title: 'Subscription login complete',
-        body: provider.name,
-      });
       setActiveOAuthProvider(null);
       setRiskAcknowledged(false);
     } catch (error) {

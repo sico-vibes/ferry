@@ -159,11 +159,6 @@ export function LibraryCanvas() {
     }
     await cache.invalidateQueries({ queryKey: keys.workspaces });
     await cache.invalidateQueries({ queryKey: keys.sessions });
-    toast({
-      kind: 'success',
-      title: 'Project removed',
-      body: `${removed.name} was removed from Ferry. Files remain on disk.`,
-    });
     setSelectedForRemoval(null);
   };
   const saveName = () => {
@@ -414,11 +409,6 @@ export function LibraryCanvas() {
                       onClick={() =>
                         void client.delegation.approveProjectLanes().then(async () => {
                           await cache.invalidateQueries({ queryKey: ['lanes'] });
-                          toast({
-                            kind: 'success',
-                            title: 'Project lanes approved',
-                            body: 'They are now trusted for this workspace.',
-                          });
                         })
                       }
                     >
@@ -467,15 +457,8 @@ export function LibraryCanvas() {
                     )
                       return;
                     void client.delegation.approveProjectConfig().then((result) => {
-                      toast({
-                        kind: result.approved ? 'success' : 'error',
-                        title: result.approved
-                          ? 'Project config approved'
-                          : 'No project config found',
-                        body: result.approved
-                          ? `Approved SHA-256: ${result.hash ?? 'unavailable'}`
-                          : null,
-                      });
+                      if (!result.approved)
+                        toast({ kind: 'error', title: 'No project config found', body: null });
                     });
                   }}
                 >

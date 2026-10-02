@@ -229,11 +229,10 @@ export function useFerryEvents(): void {
         if (current) cache.setQueryData(key, { ...current, taskRecord: task });
         else void cache.invalidateQueries({ queryKey: key });
       }),
-      client.on('provider.updated', (provider) => {
+      client.on('provider.updated', () => {
         void cache.invalidateQueries({ queryKey: ['providers'] });
         void cache.invalidateQueries({ queryKey: ['models'] });
         void cache.invalidateQueries({ queryKey: ['model-candidates'] });
-        pushToast({ kind: 'info', title: `${provider.name} updated`, body: null });
       }),
       client.on('settings.updated', (settings) => {
         cache.setQueryData(keys.settings, settings);
@@ -256,12 +255,10 @@ export function useFerryEvents(): void {
             new CustomEvent('ferry:success-pulse', { detail: { sessionId: run.sessionId } }),
           );
         }
-        pushToast(
-          { kind: 'info', title: `Delegation ${run.status}`, body: run.lane },
-          `delegation:${run.id}`,
-        );
       }),
-      client.on('toast', pushToast),
+      client.on('toast', (toast) => {
+        if (toast.kind === 'error' || toast.kind === 'warning') pushToast(toast);
+      }),
     ];
     return () => {
       off.forEach((unsubscribe) => {

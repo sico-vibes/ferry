@@ -85,6 +85,7 @@ describe('SettingsCanvas', () => {
     await waitFor(async () => {
       expect((await client.settings.get()).routing.stickySessions).toBe(false);
     });
+    expect(screen.getByRole('status').textContent).toBe('Saved');
     expect(
       screen.getByText(
         "Reserve capacity before sending so parallel tasks don't overshoot a provider's limits.",
@@ -92,6 +93,19 @@ describe('SettingsCanvas', () => {
     ).toBeTruthy();
     fireEvent.click(screen.getByText('Tune'));
     expect(screen.getByRole('slider', { name: 'Quota ramp start' })).toBeTruthy();
+  });
+
+  it('shows setting save failures inline', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    vi.spyOn(client.settings, 'update').mockRejectedValue(new Error('Storage is unavailable'));
+    useUI.setState({ settingsSection: 'Routing' });
+    mount(client);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('switch', { name: 'Sticky sessions' }));
+    await user.click(screen.getByRole('button', { name: /^Save changes$/ }));
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'Could not save: Storage is unavailable',
+    );
   });
 
   it('persists the planner/editor split on an individual profile', async () => {
