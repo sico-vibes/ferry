@@ -26,6 +26,10 @@ const states = [
   'session-streaming',
   'approval-pending',
   'drawer-open',
+  'library-list',
+  'library-detail',
+  'library-instructions',
+  'library-permissions',
 ];
 const filename = (state, theme, viewport) =>
   `${state}-${theme}-${viewport.width}x${viewport.height}.png`;
@@ -56,7 +60,20 @@ async function captureState(browser, state, theme, viewport) {
     page.setDefaultTimeout(30_000);
     await configureTheme(page, theme);
 
-    if (state === 'home-idle') {
+    if (state.startsWith('library-')) {
+      await page.goto(new URL('/library', baseUrl).href);
+      await page.locator('.v2-library-header').waitFor();
+      if (state !== 'library-list') {
+        await page.locator('.v2-library-project-link').first().click();
+        const tab =
+          state === 'library-instructions'
+            ? 'Instructions'
+            : state === 'library-permissions'
+              ? 'Permissions'
+              : 'Sessions';
+        await page.getByRole('tab', { name: tab, exact: true }).click();
+      }
+    } else if (state === 'home-idle') {
       await page.getByRole('textbox', { name: 'Message Ferry' }).focus();
     } else if (state === 'session-idle' || state === 'drawer-open') {
       await page.goto(new URL('/s/session_3', baseUrl).href);

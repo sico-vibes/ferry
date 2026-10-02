@@ -76,6 +76,8 @@ describe('Library, settings, and onboarding screens', () => {
     queryClient.setQueryData(['lanes'], client.__state().lanes);
     await renderRoute('library', client, queryClient);
     const user = userEvent.setup({ delay: null });
+    await user.click(await screen.findByRole('button', { name: 'Open project ferry-web' }));
+    await user.click(screen.getByRole('tab', { name: 'Instructions' }));
     const originalUpdate = client.workspaces.update.bind(client.workspaces);
     let resolveSaved: (() => void) | undefined;
     const saved = new Promise<void>((resolve) => {
@@ -92,7 +94,7 @@ describe('Library, settings, and onboarding screens', () => {
     if (!form) throw new Error('Gate command form was not rendered');
     fireEvent.submit(form);
     expect(screen.getByText('pnpm check')).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
     await saved;
     expect((await client.workspaces.list())[0]?.settings.gateCommands).toContain('pnpm check');
   }, 30_000);

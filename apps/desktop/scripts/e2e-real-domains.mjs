@@ -622,9 +622,11 @@ try {
         ),
       )
       .toBe(true);
-    const fixtureWorkspace = page.getByRole('button', { name: fixtureRepoName, exact: true });
+    const fixtureWorkspace = page.getByRole('button', {
+      name: `Open project ${fixtureRepoName}`,
+      exact: true,
+    });
     await fixtureWorkspace.click();
-    await expect(fixtureWorkspace).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByText('fixture/restore', { exact: true })).toBeVisible();
     console.log('e2e real domains: folder dialog, selected Library workspace, and git branch OK');
 

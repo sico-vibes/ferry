@@ -199,7 +199,8 @@ try {
     await expect(page.getByText('Profile saved: Best Available')).toBeVisible();
 
     await page.goto(`${url}/library`);
-    await expect(page.locator('.context-sidebar-row', { hasText: 'ferry-web' })).toBeVisible();
+    await page.getByRole('button', { name: 'Open project ferry-web', exact: true }).click();
+    await page.getByRole('tab', { name: 'Permissions', exact: true }).click();
     await page.getByRole('button', { name: 'Approve project lanes' }).click();
     await expect(page.getByText('Project lanes approved')).toBeVisible();
   } finally {

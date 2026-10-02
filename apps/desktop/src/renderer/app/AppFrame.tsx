@@ -328,7 +328,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       >
         <V2Sidebar onNewChat={() => void createChat()} />
         <main className="v2-main-column">
-          <V2ChatHeader />
+          {pathname !== '/library' && <V2ChatHeader />}
           {(!networkOnline || simulatedOffline) && (
             <div className="offline-warning" role="status">
               Offline - local work is saved. Provider requests will retry when the network returns.
@@ -353,7 +353,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
             </div>
           )}
           <div
-            className={`canvas-slot ${pathname === '/' || (pathname.startsWith('/s/') && !pathname.includes('/review/')) ? '' : 'ferry-legacy-scope'}`}
+            className={`canvas-slot ${pathname === '/' || pathname === '/library' || (pathname.startsWith('/s/') && !pathname.includes('/review/')) ? '' : 'ferry-legacy-scope'}`}
           >
             {import.meta.env.DEV && new URLSearchParams(location.search).has('perf-render') ? (
               <Profiler
