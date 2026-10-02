@@ -169,7 +169,7 @@ async function captureState(browser, state, theme, viewport) {
       } else if (state === 'drawer-terminal') {
         await page.locator('.terminal-host').waitFor();
       } else if (state === 'drawer-changes') {
-        await page.getByText('Changes', { exact: true }).waitFor();
+        await tabs.getByRole('tab', { name: 'Changes', exact: true }).waitFor();
       }
     } else if (state === 'review') {
       await page

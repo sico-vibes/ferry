@@ -329,7 +329,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       >
         <V2Sidebar onNewChat={() => void createChat()} />
         <main className="v2-main-column">
-          {pathname !== '/library' && !reviewPage && <V2ChatHeader />}
+          {pathname.startsWith('/s/') && !reviewPage && <V2ChatHeader />}
           {(!networkOnline || simulatedOffline) && (
             <div className="offline-warning" role="status">
               Offline - local work is saved. Provider requests will retry when the network returns.

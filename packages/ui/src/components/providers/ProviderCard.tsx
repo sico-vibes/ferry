@@ -2,8 +2,7 @@ import type { Provider } from '@ferry/shared';
 import { AlertTriangle, Check, KeyRound } from 'lucide-react';
 import { CountUp } from '../data/CountUp';
 import { BrandIcon } from '../primitives';
-import { Button } from '../ui';
-import { Switch } from '../forms';
+import { Button, Switch } from '../ui';
 import { LatticeLoader } from '../feedback/LatticeLoader';
 import { TagBadge } from './TagBadge';
 import { QuotaWindowBar } from './QuotaWindowBar';
@@ -61,8 +60,8 @@ export function ProviderCard({
     ? 'Free trial uses provider credits; availability depends on the account.'
     : null;
   return (
-    <div className={`h-full rounded-card bg-card p-5 ${provider.enabled ? '' : 'opacity-60'}`}>
-      <article className="provider-card-content flex h-full min-w-0 flex-col gap-4">
+    <div className={`rounded-card bg-card p-5 ${provider.enabled ? '' : 'opacity-60'}`}>
+      <article className="provider-card-content flex min-w-0 flex-col gap-4">
         <header className="flex min-w-0 items-center gap-2.5">
           <BrandIcon
             slug={provider.brand ?? provider.name}
@@ -93,7 +92,7 @@ export function ProviderCard({
             </p>
           </div>
           <Switch
-            label={`${provider.enabled ? 'Disable' : 'Enable'} ${provider.name}`}
+            aria-label={`${provider.enabled ? 'Disable' : 'Enable'} ${provider.name}`}
             checked={provider.enabled}
             onCheckedChange={(enabled) => onToggle?.(enabled)}
           />

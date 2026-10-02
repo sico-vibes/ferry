@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { chromium } from '@playwright/test';
+import { chromium, expect } from '@playwright/test';
 
 const packageRoot = resolve(import.meta.dirname, '..');
 const executable =
@@ -178,11 +178,11 @@ async function waitForRendererLoad() {
           if (readyState === 'complete') {
             const composer = page.getByRole('textbox', { name: 'Message Ferry' });
             const skipSetup = page.getByRole('button', { name: 'Skip setup' });
+            const primaryNavigation = page.getByRole('navigation', { name: 'Primary' });
             await Promise.race([
               composer.waitFor({ state: 'visible' }),
               skipSetup.waitFor({ state: 'visible' }),
             ]);
-            const firstRunOnboardingVisible = await skipSetup.isVisible();
             const interactiveMs = Number((performance.now() - launchStartedAt).toFixed(1));
             console.log(`Packaged time to interactive: ${String(interactiveMs)} ms`);
             await page.waitForFunction(
@@ -212,6 +212,10 @@ async function waitForRendererLoad() {
             )
               throw new Error(`Packaged real-domain hello failed: ${JSON.stringify(domains)}`);
             console.log(`Packaged renderer hello reports ${String(domains.length)} real domains`);
+            await expect(skipSetup.or(primaryNavigation).first()).toBeVisible({
+              timeout: 20_000,
+            });
+            const firstRunOnboardingVisible = await skipSetup.isVisible();
             if (process.env.FERRY_SMOKE_SEED_DATA === 'true') {
               const fixturePath = join(userDataDirectory, 'workspace');
               await mkdir(fixturePath, { recursive: true });

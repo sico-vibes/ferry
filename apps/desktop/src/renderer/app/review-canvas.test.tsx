@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { DelegationRun, RunId, SessionId } from '@ferry/shared';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FerryClient } from '@ferry/client';
 import { FerryProvider } from '../data/client';
@@ -54,9 +54,16 @@ afterEach(cleanup);
 describe('ReviewCanvas', () => {
   it('renders the run lane, gate results and empty-file state', async () => {
     mount([run()]);
-    expect(await screen.findByText('Codex')).toBeTruthy();
+    const lane = await screen.findByText('Codex', { selector: '.review-run-heading > strong' });
+    const heading = lane.closest('.review-run-heading');
+    expect(heading).toBeTruthy();
+    const headingQueries = within(heading as HTMLElement);
+    expect(headingQueries.getAllByText('Codex')).toHaveLength(1);
+    expect(headingQueries.getByText('Completed')).toBeTruthy();
     expect(screen.getByText('No changed files in this run.')).toBeTruthy();
-    expect(screen.getByText(/pnpm check/)).toBeTruthy();
+    const gateResults = screen.getByText('pnpm check').closest('.gate-ok');
+    expect(gateResults).toBeTruthy();
+    expect(within(gateResults as HTMLElement).getByText('pnpm check')).toBeTruthy();
   });
 
   it('shows running progress and keeps review decisions disabled until results are ready', async () => {

@@ -9,6 +9,7 @@ import {
   BrandIcon,
   ProviderCard,
   DataUseBadge,
+  dataUseStatus,
   TagBadge,
   Section,
   ShowMoreList,
@@ -19,7 +20,6 @@ import { useFerryClient } from '../../data/client';
 import { useToasts } from '../../state/toasts';
 import { useUI } from '../../state/ui';
 import { ProviderKeyDialog } from '../ProviderKeyDialog';
-import { ModelQualityBadge } from '../ModelQualityBadge';
 import { OAuthProviderRows } from '../OAuthProviderRows';
 import { UsageTab } from './Usage';
 
@@ -275,7 +275,10 @@ export function ModelsCanvas() {
   };
 
   return (
-    <section aria-label="Models" className="min-h-0 w-full flex-1 overflow-y-auto px-6 py-6">
+    <section
+      aria-label="Models"
+      className="v2-models-page min-h-0 w-full flex-1 overflow-y-auto px-8 py-8"
+    >
       <div className="mx-auto grid w-full max-w-[1040px] gap-6">
         <header className="flex flex-wrap items-center gap-4">
           <div className="mr-auto">
@@ -372,7 +375,7 @@ export function ModelsCanvas() {
                 listClassName="provider-card-grid grid grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))] gap-3"
                 renderItem={(provider) => (
                   <li
-                    className="h-full min-w-0 list-none"
+                    className="min-w-0 list-none"
                     id={`provider-${provider.id}`}
                     key={provider.id}
                   >
@@ -538,17 +541,23 @@ export function ModelsCanvas() {
                           )}
                           {providers.find((provider) => provider.id === model.providerId)?.tag ===
                             'trial' && <TagBadge className="ml-2" kind="trial" />}
-                          <span className="ml-2 inline-block align-middle">
-                            <DataUseBadge
-                              dataUse={
-                                providers.find((provider) => provider.id === model.providerId)
-                                  ?.dataUse
-                              }
-                            />
-                          </span>
-                          <span className="ml-2 inline-block align-middle">
-                            <ModelQualityBadge model={model} />
-                          </span>
+                          {model.quality !== null && model.quality !== undefined && (
+                            <span className="ml-2 text-ui-meta text-muted-foreground">
+                              Quality {Math.round(model.quality * 100)}%
+                            </span>
+                          )}
+                          {dataUseStatus(
+                            providers.find((provider) => provider.id === model.providerId)?.dataUse,
+                          ) === 'training' && (
+                            <span className="ml-2 inline-block align-middle">
+                              <DataUseBadge
+                                dataUse={
+                                  providers.find((provider) => provider.id === model.providerId)
+                                    ?.dataUse
+                                }
+                              />
+                            </span>
+                          )}
                           {oauthProviders.some(
                             (provider) =>
                               model.providerId === provider.id && provider.riskLevel === 'high',

@@ -148,6 +148,7 @@ try {
   const realDomains = await page.evaluate(() => window.ferryEngineHello?.realDomains ?? []);
   assert.ok(realDomains.length > 0, 'Electron hello must include real domains');
   console.log(`Electron renderer real client connected with ${String(realDomains.length)} domains`);
+  await expect(skipSetup.or(primaryNavigation).first()).toBeVisible({ timeout: 20_000 });
   if (await skipSetup.isVisible().catch(() => false)) await skipSetup.click();
   await primaryNavigation.waitFor({ state: 'visible' });
   await page.getByRole('button', { name: 'Models', exact: true }).click();

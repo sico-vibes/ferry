@@ -25,7 +25,6 @@ export function V2ChatHeader() {
   const cache = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const isHome = pathname === '/';
   const sessionId = pathname.startsWith('/s/')
     ? (pathname.slice(3).split('/')[0] as SessionId)
     : null;
@@ -83,12 +82,10 @@ export function V2ChatHeader() {
           >
             {session?.title ?? tab?.title ?? 'Session'}
           </button>
-        ) : isHome ? null : (
-          <span className="v2-title-button">Ferry</span>
-        )}
+        ) : null}
       </div>
       <div className="v2-header-actions">
-        {!isHome && <ApprovalsTray activeSessionId={sessionId} />}
+        {isSession && <ApprovalsTray activeSessionId={sessionId} />}
         {isSession && (
           <Button
             variant="ghost"

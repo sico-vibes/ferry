@@ -504,19 +504,10 @@ export function SettingsCanvas() {
                   <span>{(settings?.fontScale ?? 1).toFixed(2)}×</span>
                 </div>
               </SettingRow>
-              <SettingRow
-                title="Restore tabs"
-                helper="Reopen your last session tabs when Ferry starts."
-              >
-                <Switch
-                  label="Restore tabs"
-                  checked={settings?.restoreTabs ?? false}
-                  onCheckedChange={(restoreTabs) => void update({ restoreTabs })}
-                />
-              </SettingRow>
               <SettingRow title="First run" helper="Review the provider and workspace setup again.">
                 <UiV2.Button
                   size="sm"
+                  variant="ghost"
                   onClick={() => {
                     localStorage.removeItem('ferry.onboardingStep');
                     void client.settings
@@ -534,7 +525,6 @@ export function SettingsCanvas() {
             <p className="muted">
               Edit keybindings.json in Ferry's config folder. Changes reload automatically.
             </p>
-            <p className="text-meta">{keybindings.path}</p>
             {keybindings.errors.map((error) => (
               <p className="text-meta text-warn" key={error}>
                 {error}
@@ -578,11 +568,6 @@ export function SettingsCanvas() {
               </UiV2.Button>
             )}
           </Group>
-          {section === 'General' && (
-            <Group title="Quick access">
-              <p className="muted">Your Ferry setup stays local to this demo client.</p>
-            </Group>
-          )}
         </>
       );
     if (section === 'Profiles')
@@ -2102,6 +2087,7 @@ export function SettingsCanvas() {
           <div className="v2-settings-actions">
             {section === 'General' && (
               <UiV2.Button
+                variant="ghost"
                 onClick={() => {
                   setConfirm('Reset layout?');
                   setConfirmAction(() => () => {

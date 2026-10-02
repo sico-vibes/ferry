@@ -42,6 +42,11 @@ export function ReviewCanvas() {
   const canDecide = Boolean(
     run && run.status !== 'running' && run.touchedFiles.length > 0 && run.gateResults.length > 0,
   );
+  const laneName = (lane: string) =>
+    lane.toLowerCase() === 'impl' ? 'Implementation' : lane.charAt(0).toUpperCase() + lane.slice(1);
+  const implementerName = (implementer: string) =>
+    implementer.charAt(0).toUpperCase() + implementer.slice(1);
+  const statusName = (status: string) => status.charAt(0).toUpperCase() + status.slice(1);
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
@@ -133,9 +138,11 @@ export function ReviewCanvas() {
           <ArrowLeft size={16} /> Back to session
         </button>
         <div className="review-run-heading">
-          <strong>{run.lane}</strong>
-          <span>
-            {run.implementer} / {run.status}
+          <strong>{laneName(run.lane)}</strong>
+          <span className="review-run-meta">
+            {implementerName(run.implementer).toLowerCase() !==
+              laneName(run.lane).toLowerCase() && <span>{implementerName(run.implementer)}</span>}
+            <span>{statusName(run.status)}</span>
           </span>
         </div>
         {run.events.length > 0 && (

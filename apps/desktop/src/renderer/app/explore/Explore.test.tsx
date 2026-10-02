@@ -262,13 +262,21 @@ describe('Models providers and catalog', () => {
     });
     expect(await screen.findByText('Codestral')).toBeTruthy();
     const modelHeader = within(screen.getByRole('columnheader', { name: /Model/ }));
+    const rowTexts = () =>
+      screen
+        .getAllByRole('row')
+        .slice(1)
+        .map((row) => row.textContent);
     await user.click(modelHeader.getByRole('button'));
-    const names = screen
-      .getAllByRole('row')
-      .slice(1)
-      .map((row) => row.querySelector('td')?.getAttribute('title') ?? '');
-    expect(names[0]).toBe('Large');
-    expect(screen.getAllByRole('row')[1]?.querySelector('td')?.textContent).toContain('coding n/a');
+    await waitFor(() => {
+      expect(rowTexts()[0]).toContain('Large');
+      expect(rowTexts()[1]).toContain('Codestral');
+    });
+    await user.click(modelHeader.getByRole('button'));
+    await waitFor(() => {
+      expect(rowTexts()[0]).toContain('Codestral');
+      expect(rowTexts()[1]).toContain('Large');
+    });
   }, 20_000);
 
   it('paginates models and resets to the first page when searching', async () => {

@@ -328,6 +328,9 @@ async function startEmbeddedCore() {
     const helloDomains = await page.evaluate(() => window.ferryEngineHello?.realDomains ?? []);
     assert.ok(helloDomains.length > 0, 'File renderer hello must include real domains');
     console.log(`File renderer real client connected with ${String(helloDomains.length)} domains`);
+    await expect(skipSetup.or(primaryNavigation).first()).toBeVisible({
+      timeout: 20_000,
+    });
     if (await skipSetup.isVisible().catch(() => false)) await skipSetup.click();
     await primaryNavigation.waitFor({ state: 'visible' });
     await page.getByRole('button', { name: 'Library', exact: true }).click();
