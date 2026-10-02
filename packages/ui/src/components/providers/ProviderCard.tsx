@@ -60,8 +60,10 @@ export function ProviderCard({
     ? 'Free trial uses provider credits; availability depends on the account.'
     : null;
   return (
-    <div className={`rounded-card bg-card p-5 ${provider.enabled ? '' : 'opacity-60'}`}>
-      <article className="provider-card-content flex min-w-0 flex-col gap-4">
+    <div
+      className={`provider-card flex h-full flex-col rounded-card bg-card p-5 ${provider.enabled ? '' : 'opacity-60'}`}
+    >
+      <article className="provider-card-content flex min-h-0 min-w-0 flex-1 flex-col gap-4">
         <header className="flex min-w-0 items-center gap-2.5">
           <BrandIcon
             slug={provider.brand ?? provider.name}
@@ -148,32 +150,39 @@ export function ProviderCard({
             {provider.dataUse && <span>{provider.dataUse}</span>}
           </p>
         }
-        <footer className="provider-card-footer mt-auto flex flex-wrap items-center gap-2 pt-2">
+        <footer className="provider-card-footer mt-auto flex min-w-0 flex-nowrap items-center gap-2 pt-2">
           <span
-            className="truncate text-ui-meta text-muted-foreground"
-            title="Rate limited, no daily cap"
+            className="provider-card-capacity min-w-0 flex-1 truncate text-ui-meta text-muted-foreground"
+            title={
+              provider.stepsLeftToday === null
+                ? 'Rate limited, no daily cap'
+                : `\u2248 ${String(provider.stepsLeftToday)} steps today`
+            }
           >
             {provider.stepsLeftToday === null ? (
-              'Rate limited, no daily cap'
+              'No daily cap'
             ) : (
               <>
-                ≈ <CountUp to={provider.stepsLeftToday} /> steps today
+                {'\u2248 '}
+                <CountUp to={provider.stepsLeftToday} /> steps today
               </>
             )}
           </span>
-          <Button
-            aria-label={`Test ${provider.name}`}
-            disabled={probing || !provider.enabled}
-            onClick={onTest}
-            size="sm"
-            variant="secondary"
-          >
-            {probing ? <LatticeLoader label="Testing" /> : null}
-            {probing ? 'Testing…' : 'Test'}
-          </Button>
-          <Button aria-label="Manage key" onClick={onManageKey} size="sm" variant="ghost">
-            Manage key
-          </Button>
+          <div className="provider-card-footer-actions flex shrink-0 items-center gap-1">
+            <Button
+              aria-label={`Test ${provider.name}`}
+              disabled={probing || !provider.enabled}
+              onClick={onTest}
+              size="sm"
+              variant="secondary"
+            >
+              {probing ? <LatticeLoader label="Testing" /> : null}
+              {probing ? 'Testing\u2026' : 'Test'}
+            </Button>
+            <Button aria-label="Manage key" onClick={onManageKey} size="sm" variant="ghost">
+              Manage key
+            </Button>
+          </div>
         </footer>
       </article>
     </div>

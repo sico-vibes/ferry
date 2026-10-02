@@ -34,7 +34,12 @@ describe('ProviderCard', () => {
 
   it('describes providers without a daily step cap', () => {
     render(<ProviderCard provider={{ ...provider, stepsLeftToday: null }} />);
-    expect(screen.getByText('Rate limited, no daily cap')).toBeTruthy();
+    const footer = screen.getByText('No daily cap').closest('footer');
+    expect(footer).toBeTruthy();
+    expect(footer?.querySelector('.provider-card-footer-actions')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Test Gemini API' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Manage key' })).toBeTruthy();
+    expect(screen.queryByText('Rate limited, no daily cap')).toBeNull();
   });
 
   it('explains terminal authentication health and points to key recovery', () => {

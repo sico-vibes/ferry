@@ -13,7 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import type { Session, Workspace, WorkspaceSettings } from '@ferry/shared';
-import { UiV2 } from '@ferry/ui';
+import { UiV2, PageHeader } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { keys, useProfiles, useSessions, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
@@ -182,36 +182,33 @@ export function LibraryCanvas() {
 
   return (
     <main className="v2-library-page">
-      <header className="v2-library-header">
-        <div>
-          {selected && (
-            <Button
-              className="v2-library-back"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setDetailId(null);
-              }}
-            >
-              <ArrowLeft aria-hidden="true" />
-              Library
+      {selected && (
+        <Button
+          className="v2-library-back"
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setDetailId(null);
+          }}
+        >
+          <ArrowLeft aria-hidden="true" />
+          Library
+        </Button>
+      )}
+      <PageHeader
+        className="v2-library-header"
+        title={selected ? (projectNames[selected.id] ?? selected.name) : 'Library'}
+        subtitle={selected ? selected.path : 'Projects Ferry has opened'}
+        primaryAction={
+          <div className="v2-library-header-actions">
+            <ApprovalsTray />
+            <Button className="v2-library-open" onClick={() => void chooseFolder()}>
+              <FolderOpen aria-hidden="true" />
+              Open folder
             </Button>
-          )}
-          <h1>{selected ? (projectNames[selected.id] ?? selected.name) : 'Library'}</h1>
-          {selected ? (
-            <p className="v2-library-path">{selected.path}</p>
-          ) : (
-            <p>Projects Ferry has opened</p>
-          )}
-        </div>
-        <div className="v2-library-header-actions">
-          <ApprovalsTray />
-          <Button className="v2-library-open" onClick={() => void chooseFolder()}>
-            <FolderOpen aria-hidden="true" />
-            Open folder
-          </Button>
-        </div>
-      </header>
+          </div>
+        }
+      />
 
       {selected && activeSettings ? (
         <section

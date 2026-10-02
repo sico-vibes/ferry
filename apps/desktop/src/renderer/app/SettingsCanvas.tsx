@@ -16,6 +16,7 @@ import {
   Select,
   Slider,
   Switch,
+  PageHeader,
 } from '@ferry/ui';
 import { FERRY_DOMAINS } from '@ferry/shared';
 import type { Profile, Provider, StepKind, Tier } from '@ferry/shared';
@@ -2078,38 +2079,42 @@ export function SettingsCanvas() {
         ))}
       </nav>
       <main className="v2-settings-content">
-        <header className="v2-settings-header">
-          <div>
-            <h1 className="sr-only">Settings</h1>
-            <h2>{pageCopy.title}</h2>
-            <p>{pageCopy.description}</p>
-          </div>
-          <div className="v2-settings-actions">
-            {section === 'General' && (
-              <UiV2.Button
-                variant="ghost"
-                onClick={() => {
-                  setConfirm('Reset layout?');
-                  setConfirmAction(() => () => {
-                    useUI.getState().resetLayout();
-                    toast({
-                      kind: 'success',
-                      title: 'Layout reset',
-                      body: 'Panel sizes and positions are back to default.',
-                    });
-                  });
-                }}
-              >
-                Reset layout
-              </UiV2.Button>
-            )}
-            {pendingSettings && (
-              <UiV2.Button variant="default" onClick={() => void saveSettings()}>
-                Save changes
-              </UiV2.Button>
-            )}
-          </div>
-        </header>
+        <h1 className="sr-only">Settings</h1>
+        <PageHeader
+          className="v2-settings-header"
+          level={2}
+          title={pageCopy.title}
+          subtitle={pageCopy.description}
+          primaryAction={
+            pendingSettings || section === 'General' ? (
+              <div className="v2-settings-actions">
+                {section === 'General' && (
+                  <UiV2.Button
+                    variant="ghost"
+                    onClick={() => {
+                      setConfirm('Reset layout?');
+                      setConfirmAction(() => () => {
+                        useUI.getState().resetLayout();
+                        toast({
+                          kind: 'success',
+                          title: 'Layout reset',
+                          body: 'Panel sizes and positions are back to default.',
+                        });
+                      });
+                    }}
+                  >
+                    Reset layout
+                  </UiV2.Button>
+                )}
+                {pendingSettings && (
+                  <UiV2.Button variant="default" onClick={() => void saveSettings()}>
+                    Save changes
+                  </UiV2.Button>
+                )}
+              </div>
+            ) : undefined
+          }
+        />
         {body()}
       </main>
       <ProviderKeyDialog

@@ -2,30 +2,27 @@ import type { ReactNode } from 'react';
 
 export interface PageHeaderProps {
   title: string;
+  level?: 1 | 2 | 3 | 4 | 5 | 6;
   subtitle?: string;
-  eyebrow?: string;
-  actions?: ReactNode;
-  nav?: ReactNode;
+  primaryAction?: ReactNode;
   className?: string;
 }
 
 export function PageHeader({
   title,
+  level = 1,
   subtitle,
-  eyebrow,
-  actions,
-  nav,
+  primaryAction,
   className = '',
 }: PageHeaderProps) {
+  const Heading = ({ 1: 'h1', 2: 'h2', 3: 'h3', 4: 'h4', 5: 'h5', 6: 'h6' } as const)[level];
   return (
     <header className={`ferry-page-header ${className}`.trim()}>
       <div className="ferry-page-header-main">
-        {eyebrow && <span className="ferry-page-header-eyebrow">{eyebrow}</span>}
-        <h1>{title}</h1>
+        <Heading className="ferry-page-header-title">{title}</Heading>
         {subtitle && <p>{subtitle}</p>}
-        {nav && <nav className="ferry-page-header-nav">{nav}</nav>}
       </div>
-      {actions && <div className="ferry-page-header-actions">{actions}</div>}
+      {primaryAction && <div className="ferry-page-header-action">{primaryAction}</div>}
     </header>
   );
 }

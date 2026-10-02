@@ -3,7 +3,7 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Check, CircleAlert, FileCode2, X } from 'lucide-react';
 import type { RunId, SessionId } from '@ferry/shared';
-import { AgentTimeline, EmptyState, Skeleton } from '@ferry/ui';
+import { AgentTimeline, EmptyState, PageHeader, Skeleton } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { decideReview } from './reviewActions';
 import { FullOutputDialog } from './FullOutputDialog';
@@ -63,6 +63,7 @@ export function ReviewCanvas() {
   if (!run && isLoading)
     return (
       <section aria-label="Delegation review" className="canvas review-canvas">
+        <PageHeader title="Review" subtitle="Loading delegated changes and gate results" />
         <header className="review-toolbar">
           <button
             className="review-back"
@@ -82,6 +83,7 @@ export function ReviewCanvas() {
   if (!run && isError)
     return (
       <section aria-label="Delegation review" className="canvas review-canvas">
+        <PageHeader title="Review" subtitle="Delegated changes are unavailable" />
         <EmptyState
           title="Review could not be loaded"
           action="Try again"
@@ -92,6 +94,7 @@ export function ReviewCanvas() {
   if (!run)
     return (
       <section aria-label="Delegation review" className="canvas review-canvas">
+        <PageHeader title="Review" subtitle="Delegated changes are unavailable" />
         <EmptyState
           title="This review is no longer available"
           action="Back to session"
@@ -130,6 +133,10 @@ export function ReviewCanvas() {
 
   return (
     <section aria-label="Delegation review" className="canvas review-canvas">
+      <PageHeader
+        title="Review"
+        subtitle={`${laneName(run.lane)} changes by ${implementerName(run.implementer)}`}
+      />
       <header className="review-toolbar">
         <button
           className="review-back"

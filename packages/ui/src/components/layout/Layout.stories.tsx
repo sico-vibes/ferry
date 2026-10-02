@@ -6,17 +6,12 @@ export const Page = () => (
   <div className="bg-canvas p-6">
     <Stack className="mx-auto max-w-3xl" gap={6}>
       <PageHeader
-        eyebrow="WORKSPACE"
         title="Explore providers"
         subtitle="Compare the models available to this workspace."
-        actions={
-          <button className="rounded-pill bg-blue-500 px-3 py-2 text-label">Add provider</button>
-        }
-        nav={
-          <Cluster gap={2}>
-            <button>Providers</button>
-            <button>Usage</button>
-          </Cluster>
+        primaryAction={
+          <button className="rounded-pill bg-primary px-3 py-2 text-label text-primary-foreground">
+            Add provider
+          </button>
         }
       />
       <Section title="Available models">

@@ -4,19 +4,16 @@ import { describe, expect, it } from 'vitest';
 import { Cluster, PageHeader, Section, Stack } from './index';
 
 describe('layout primitives', () => {
-  it('renders page heading, optional navigation, and actions', () => {
+  it('renders a page heading, subtitle, and primary action', () => {
     render(
       <PageHeader
-        eyebrow="WORKSPACE"
         title="Explore"
         subtitle="Find a provider"
-        actions={<button>Add provider</button>}
-        nav={<button>Usage</button>}
+        primaryAction={<button>Add provider</button>}
       />,
     );
     expect(screen.getByRole('heading', { name: 'Explore' })).toBeTruthy();
-    expect(screen.getByText('WORKSPACE')).toBeTruthy();
-    expect(screen.getByRole('navigation').textContent).toBe('Usage');
+    expect(screen.getByText('Find a provider')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Add provider' })).toBeTruthy();
   });
 

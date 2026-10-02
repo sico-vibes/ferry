@@ -15,6 +15,7 @@ import {
   ShowMoreList,
   Skeleton,
   UiV2,
+  PageHeader,
 } from '@ferry/ui';
 import { useFerryClient } from '../../data/client';
 import { useToasts } from '../../state/toasts';
@@ -280,18 +281,16 @@ export function ModelsCanvas() {
       className="v2-models-page min-h-0 w-full flex-1 overflow-y-auto px-8 py-8"
     >
       <div className="mx-auto grid w-full max-w-[1040px] gap-6">
-        <header className="flex flex-wrap items-center gap-4">
-          <div className="mr-auto">
-            <h1 className="text-ui-title font-semibold tracking-[-0.01em]">Models</h1>
-            <p className="mt-1 text-ui-secondary text-muted-foreground">
-              Providers, model capabilities and usage
-            </p>
-          </div>
-          <UiV2.Button onClick={openAdd}>
-            <span aria-hidden="true">+</span>
-            Add provider
-          </UiV2.Button>
-        </header>
+        <PageHeader
+          title="Models"
+          subtitle="Providers, model capabilities and usage"
+          primaryAction={
+            <UiV2.Button onClick={openAdd}>
+              <span aria-hidden="true">+</span>
+              Add provider
+            </UiV2.Button>
+          }
+        />
         <UiV2.Tabs
           onValueChange={(value) => {
             setSelectedTab(value);
