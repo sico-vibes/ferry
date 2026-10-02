@@ -444,9 +444,10 @@ ipcMain.handle('ferry:open-help', (event, ...args: unknown[]) => {
   return openExternalSafely('https://github.com/sico-vibes/ferry#readme');
 });
 
-ipcMain.handle('ferry:reveal-data-folder', (event, path: unknown) => {
-  if (!isTrustedSender(event) || typeof path !== 'string')
-    throw new Error('Invalid data folder request');
+ipcMain.handle('ferry:reveal-data-folder', (event, rawPath: unknown) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  const path = OpenFolderResultSchema.parse(rawPath);
+  if (!path) throw new Error('Invalid data folder request');
   shell.showItemInFolder(path);
 });
 

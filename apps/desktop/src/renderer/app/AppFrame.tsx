@@ -30,23 +30,29 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const [updateState, setUpdateState] = useState<UpdateSnapshot | null>(null);
   const [titlebarReserve, setTitlebarReserve] = useState(0);
   useEffect(() => {
+    const overlay = (
+      navigator as Navigator & {
+        windowControlsOverlay?: {
+          getTitlebarAreaRect: () => DOMRectReadOnly;
+          addEventListener?: (type: 'geometrychange', listener: () => void) => void;
+          removeEventListener?: (type: 'geometrychange', listener: () => void) => void;
+        };
+      }
+    ).windowControlsOverlay;
     const syncTitlebarReserve = () => {
-      const overlay = (
-        navigator as Navigator & {
-          windowControlsOverlay?: { getTitlebarAreaRect: () => DOMRectReadOnly };
-        }
-      ).windowControlsOverlay;
       if (overlay) {
         const area = overlay.getTitlebarAreaRect();
-        setTitlebarReserve(Math.max(0, window.innerWidth - area.x - area.width));
+        setTitlebarReserve(Math.max(0, window.innerWidth - (area.x + area.width)));
       } else {
         setTitlebarReserve(window.ferryHost?.platform === 'win32' ? 140 : 0);
       }
     };
     syncTitlebarReserve();
     window.addEventListener('resize', syncTitlebarReserve);
+    overlay?.addEventListener?.('geometrychange', syncTitlebarReserve);
     return () => {
       window.removeEventListener('resize', syncTitlebarReserve);
+      overlay?.removeEventListener?.('geometrychange', syncTitlebarReserve);
     };
   }, []);
   useFerryEvents();
@@ -344,7 +350,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     <div
       className={`ferry-ui v2-app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed || reviewPage ? 'right-is-collapsed' : ''} ${reviewPage ? 'v2-review-route' : pathname === '/' || pathname.startsWith('/s/') ? 'v2-chat-route' : pathname.startsWith('/settings') ? 'v2-settings-route' : ''}`}
       data-density={density}
-      style={{ '--titlebar-overlay-reserve': `${String(titlebarReserve)}px` } as CSSProperties}
+      style={{ '--titlebar-overlay-right': `${String(titlebarReserve)}px` } as CSSProperties}
     >
       <div className="title-strip" aria-hidden="true" />
       <div

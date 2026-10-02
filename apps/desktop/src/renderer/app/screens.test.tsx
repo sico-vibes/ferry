@@ -119,11 +119,45 @@ describe('Library, settings, and onboarding screens', () => {
     await user.click(await screen.findByRole('button', { name: /Best Available/ }));
     await user.clear(screen.getByRole('textbox', { name: 'Daily cap ($)' }));
     await user.type(screen.getByRole('textbox', { name: 'Daily cap ($)' }), '4');
+    await user.clear(screen.getByRole('textbox', { name: 'Monthly cap ($)' }));
+    await user.type(screen.getByRole('textbox', { name: 'Monthly cap ($)' }), '25');
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
     await saved;
-    expect(
-      (await client.profiles.list()).find((item) => item.name === 'Best Available')?.caps.dailyUsd,
-    ).toBe(4);
+    const savedProfile = (await client.profiles.list()).find(
+      (item) => item.name === 'Best Available',
+    );
+    expect(savedProfile?.caps.dailyUsd).toBe(4);
+    expect(savedProfile?.caps.monthlyUsd).toBe(25);
+    expect(await screen.findByRole('status', { name: 'Saved' })).toBeTruthy();
+  }, 30_000);
+
+  it('shows Approved after approving project lanes in Library permissions', async () => {
+    const client = createDemoFerryClient({ speed: 0, latencyMs: 0 });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(keys.workspaces, client.__state().workspaces);
+    queryClient.setQueryData([...keys.sessions, ''], client.__state().sessions);
+    queryClient.setQueryData(keys.profiles, client.__state().profiles);
+    let lanesApproved = false;
+    const originalLanes = client.delegation.lanes.bind(client.delegation);
+    const originalApprove = client.delegation.approveProjectLanes.bind(client.delegation);
+    vi.spyOn(client.delegation, 'lanes').mockImplementation(async () =>
+      (await originalLanes()).map((lane) =>
+        lane.source === 'project' ? { ...lane, trusted: lanesApproved } : lane,
+      ),
+    );
+    vi.spyOn(client.delegation, 'approveProjectLanes').mockImplementation(async () => {
+      const lanes = await originalApprove();
+      lanesApproved = true;
+      return lanes;
+    });
+    await renderRoute('library', client, queryClient);
+    const user = userEvent.setup({ delay: null });
+    await user.click(await screen.findByRole('button', { name: 'Open project ferry-web' }));
+    await user.click(screen.getByRole('tab', { name: 'Permissions' }));
+    const approveButton = await screen.findByRole('button', { name: 'Approve project lanes' });
+    expect(screen.queryByRole('status', { name: 'Approved' })).toBeNull();
+    await user.click(approveButton);
+    expect(await screen.findByRole('status', { name: 'Approved' })).toBeTruthy();
   }, 30_000);
 
   it('completes onboarding and persists the default profile', async () => {

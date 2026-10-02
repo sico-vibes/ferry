@@ -120,8 +120,10 @@ describe('transcript components', () => {
         <StatusMark status="running" />
         <StreamingCursor />
         <HandoffMarker
-          from="Cerebras gpt-oss-120b"
-          to="NVIDIA Nemotron 3 Ultra"
+          from="GPT OSS 120B"
+          to="Nemotron 3 Ultra"
+          fromRef="cerebras/gpt-oss-120b"
+          toRef="nvidia/nemotron-3-ultra"
           reason="quota"
           briefingTokens={3100}
           explanation="Carried the task state."
@@ -139,7 +141,11 @@ describe('transcript components', () => {
       </AssistantMessage>,
     );
     expect(screen.getByText(/Retrying/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /Switched/ }));
+    const handoff = screen.getByRole('button', {
+      name: 'Model handoff: Switched from cerebras/gpt-oss-120b to nvidia/nemotron-3-ultra because of quota. Carried the task state. Briefed 3.1K tokens.',
+    });
+    expect(handoff.textContent).toContain('Switched to Nemotron 3 Ultra');
+    fireEvent.click(handoff);
     expect(screen.getByText('Carried the task state.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
     fireEvent.click(screen.getByRole('button', { name: 'Review diff' }));

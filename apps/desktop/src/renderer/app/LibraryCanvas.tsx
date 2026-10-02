@@ -85,21 +85,24 @@ export function LibraryCanvas() {
   const { data: workspaces = [], isLoading: workspacesLoading } = useWorkspaces();
   const { data: sessions = [] } = useSessions();
   const { data: profiles = [] } = useProfiles();
-  const { data: lanes = [] } = useQuery({
-    queryKey: ['lanes'],
-    queryFn: () => client.delegation.lanes(),
-  });
+
   const [query, setQuery] = useState('');
   const [showAll, setShowAll] = useState(false);
   const [detailId, setDetailId] = useState<Workspace['id'] | null>(null);
   const [tab, setTab] = useState<ProjectTab>('sessions');
   const [settings, setSettings] = useState<WorkspaceSettings | null>(null);
+  const [approvingLanes, setApprovingLanes] = useState(false);
   const [gate, setGate] = useState('');
   const [selectedForRemoval, setSelectedForRemoval] = useState<Workspace | null>(null);
   const [renaming, setRenaming] = useState<Workspace | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [projectNames, setProjectNames] = useState(loadProjectNames);
   const selected = workspaces.find((workspace) => workspace.id === detailId) ?? null;
+  const { data: lanes = [] } = useQuery({
+    queryKey: ['lanes', selected?.id],
+    queryFn: () => client.delegation.lanes(),
+    enabled: Boolean(selected && tab === 'permissions'),
+  });
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return workspaces.filter((workspace) => {
@@ -114,6 +117,9 @@ export function LibraryCanvas() {
   }, [projectNames, query, workspaces]);
   const visibleWorkspaces = showAll ? filtered : filtered.slice(0, 10);
   const recent = selected ? sessionActivity(sessions, selected.id) : [];
+  const projectLanes = lanes.filter((lane) => lane.source === 'project');
+  const projectLanesApproved =
+    projectLanes.length > 0 && projectLanes.every((lane) => lane.trusted);
   const activeSettings = selected
     ? settings && detailId === selected.id
       ? settings
@@ -229,11 +235,35 @@ export function LibraryCanvas() {
             }}
           >
             <TabsList aria-label="Project details" className="v2-project-tabs">
-              <TabsTrigger value="sessions">Sessions</TabsTrigger>
-              <TabsTrigger value="instructions">Instructions</TabsTrigger>
-              <TabsTrigger value="permissions">Permissions</TabsTrigger>
+              <TabsTrigger
+                value="sessions"
+                id="project-tab-sessions"
+                aria-controls="project-panel-sessions"
+              >
+                Sessions
+              </TabsTrigger>
+              <TabsTrigger
+                value="instructions"
+                id="project-tab-instructions"
+                aria-controls="project-panel-instructions"
+              >
+                Instructions
+              </TabsTrigger>
+              <TabsTrigger
+                value="permissions"
+                id="project-tab-permissions"
+                aria-controls="project-panel-permissions"
+              >
+                Permissions
+              </TabsTrigger>
             </TabsList>
-            <TabsContent value="sessions" className="v2-project-tab-content">
+            <TabsContent
+              value="sessions"
+              id="project-panel-sessions"
+              aria-labelledby="project-tab-sessions"
+              role="tabpanel"
+              className="v2-project-tab-content"
+            >
               <div className="v2-project-section-heading">
                 <div>
                   <h2>Sessions</h2>
@@ -262,7 +292,13 @@ export function LibraryCanvas() {
                 <p className="v2-library-empty-copy">No sessions in this project yet.</p>
               )}
             </TabsContent>
-            <TabsContent value="instructions" className="v2-project-tab-content">
+            <TabsContent
+              value="instructions"
+              id="project-panel-instructions"
+              aria-labelledby="project-tab-instructions"
+              role="tabpanel"
+              className="v2-project-tab-content"
+            >
               <div className="v2-project-section-heading">
                 <div>
                   <h2>Instructions</h2>
@@ -372,7 +408,13 @@ export function LibraryCanvas() {
                 </div>
               )}
             </TabsContent>
-            <TabsContent value="permissions" className="v2-project-tab-content">
+            <TabsContent
+              value="permissions"
+              id="project-panel-permissions"
+              aria-labelledby="project-tab-permissions"
+              role="tabpanel"
+              className="v2-project-tab-content"
+            >
               <div className="v2-project-section-heading">
                 <div>
                   <h2>Permissions</h2>
@@ -402,19 +444,38 @@ export function LibraryCanvas() {
                     <h3>Project lanes</h3>
                     <p>Review project-provided delegation lanes before trusting them.</p>
                   </div>
-                  {lanes.some((lane) => lane.source === 'project') && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() =>
-                        void client.delegation.approveProjectLanes().then(async () => {
-                          await cache.invalidateQueries({ queryKey: ['lanes'] });
-                        })
-                      }
-                    >
-                      Approve project lanes
-                    </Button>
-                  )}
+                  {projectLanes.length > 0 &&
+                    (projectLanesApproved ? (
+                      <span aria-label="Approved" className="v2-lane-trusted" role="status">
+                        Approved
+                      </span>
+                    ) : (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={approvingLanes}
+                        onClick={() => {
+                          setApprovingLanes(true);
+                          void client.delegation
+                            .approveProjectLanes()
+                            .then(async () => {
+                              await cache.invalidateQueries({ queryKey: ['lanes'] });
+                            })
+                            .catch((error: unknown) => {
+                              toast({
+                                kind: 'error',
+                                title: 'Could not approve project lanes',
+                                body: error instanceof Error ? error.message : 'Try again.',
+                              });
+                            })
+                            .finally(() => {
+                              setApprovingLanes(false);
+                            });
+                        }}
+                      >
+                        {approvingLanes ? 'Approving' : 'Approve project lanes'}
+                      </Button>
+                    ))}
                 </div>
                 {lanes.filter((lane) => lane.source === 'project').length ? (
                   <ul className="v2-lane-list">

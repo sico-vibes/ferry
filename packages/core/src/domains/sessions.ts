@@ -360,7 +360,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             message: MessageSchema.parse(userMessage),
           });
         }
-        const preflight = createSessionDependencies(services, () => undefined, host);
+        const preflight = createSessionDependencies(services, () => undefined);
         const configuredProviders = services.catalog.providers.filter(
           ({ provider, key_required }) => {
             const saved = services.providers.get(provider);
@@ -573,7 +573,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             services.optimizerEvents.put(optimizerEvent);
           } else host.emit('toast', { kind: event.tone, title: event.message, body: null });
         };
-        const runtime = createSessionDependencies(services, emitAgentEvent, host);
+        const runtime = createSessionDependencies(services, emitAgentEvent);
         const sessionCatalogModels = [
           ...(services.env.NODE_ENV === 'test'
             ? services.catalog.models

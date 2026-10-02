@@ -38,8 +38,11 @@ export async function run(page, ctx) {
         .first(),
     )
     .toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: 'Close dialog' }).click();
 
-  await nav.getByRole('button', { name: 'Providers & keys', exact: true }).click();
+  const providersSection = nav.getByRole('button', { name: 'Providers & keys', exact: true });
+  await providersSection.scrollIntoViewIfNeeded();
+  await providersSection.click();
   for (const viewport of [
     { width: 1024, height: 680 },
     { width: 1440, height: 900 },

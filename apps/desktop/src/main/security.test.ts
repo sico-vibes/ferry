@@ -58,7 +58,7 @@ describe('Electron security boundary', () => {
   });
 
   it('guards all IPC handlers and exposes only named preload capabilities', () => {
-    expect(mainSource.match(/ipcMain\.handle\(/g)).toHaveLength(10);
+    expect(mainSource.match(/ipcMain\.handle\(/g)).toHaveLength(12);
     expect(mainSource.match(/ipcMain\.on\(/g)).toHaveLength(2);
     expect(mainSource).toContain('isTrustedSender(event)');
     expect(mainSource).toContain('event.sender === mainWindow.webContents');
@@ -74,11 +74,21 @@ describe('Electron security boundary', () => {
     expect(mainSource).toContain("ipcMain.handle('ferry:update-install'");
     expect(mainSource).toContain("ipcMain.handle('ferry:update-download'");
     expect(mainSource).toContain("ipcMain.handle('ferry:process-metrics'");
+    expect(mainSource).toContain("ipcMain.handle('ferry:engine-status'");
+    expect(mainSource).toContain("ipcMain.handle('ferry:reveal-data-folder'");
+    expect(mainSource).toMatch(
+      /ipcMain\.handle\('ferry:engine-status',[\s\S]*?if \(!isTrustedSender\(event\)\) throw new Error\('Untrusted IPC sender'\);[\s\S]*?EmptyIpcArgsSchema\.parse\(args\);/,
+    );
+    expect(mainSource).toMatch(
+      /ipcMain\.handle\('ferry:reveal-data-folder',[\s\S]*?if \(!isTrustedSender\(event\)\) throw new Error\('Untrusted IPC sender'\);[\s\S]*?OpenFolderResultSchema\.parse\(rawPath\)/,
+    );
     expect(mainSource).toContain("webContents.send('ferry:window-background'");
     expect(mainSource).toMatch(
       /ipcMain\.handle\('ferry:process-metrics',[\s\S]*?if \(!isTrustedSender\(event\)\) throw new Error\('Untrusted IPC sender'\);[\s\S]*?EmptyIpcArgsSchema\.parse\(args\);/,
     );
     expect(preloadSource).toContain('getProcessMetrics:');
+    expect(preloadSource).toContain('getEngineStatus:');
+    expect(preloadSource).toContain('revealDataFolder:');
     expect(preloadSource).toContain('isWindowBackgrounded:');
     expect(preloadSource).toContain('onWindowBackground:');
     expect(mainSource).toContain("ipcMain.handle('ferry:keybindings-read'");

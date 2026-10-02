@@ -231,7 +231,7 @@ describe('QA settings domain', () => {
 });
 
 describe('QA discovered models', () => {
-  it('returns cached catalog models immediately and backs discovery failures off per provider', async () => {
+  it('backs discovery failures off per provider and resets after success', async () => {
     let now = new Date('2026-10-02T10:00:00.000Z');
     const clock = { now: () => new Date(now) };
     const providerId = ProviderIdSchema.parse('openrouter');
@@ -245,9 +245,9 @@ describe('QA discovered models', () => {
           return new Promise<Response>((resolve) => {
             releaseFirst = resolve;
           });
-        if (calls === 2)
+        if (calls === 2 || calls === 4)
           return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
-        return Promise.resolve(new Response('{}', { status: 401 }));
+        return Promise.resolve(new Response('{}', { status: 503 }));
       }),
     );
     const core = await makeCore(
@@ -269,10 +269,6 @@ describe('QA discovered models', () => {
     try {
       await core.rpc.providers.setKey(providerId, 'fixture-key');
       await waitFor(() => calls === 1);
-      const read = await core.rpc.models.page({ filters: { providerId }, limit: 10 });
-      expect(read.items.length).toBeGreaterThan(0);
-      expect(calls).toBe(1);
-
       releaseFirst?.(new Response('{}', { status: 503 }));
       const services = core.host.options.services;
       if (!services) throw new Error('Core services were not created');
@@ -289,9 +285,14 @@ describe('QA discovered models', () => {
       now = new Date(now.getTime() + 24 * 60 * 60 * 1000 + 1);
       await core.rpc.models.list(providerId);
       await waitFor(() => calls === 3);
-      await waitFor(() => services.providers.get('openrouter')?.keyStatus === 'invalid');
+      await waitFor(() => services.providers.get('openrouter')?.discoveryFailures === 1);
       await core.rpc.models.list(providerId);
       expect(calls).toBe(3);
+
+      now = new Date(now.getTime() + 60_001);
+      await core.rpc.models.list(providerId);
+      expect(calls).toBe(4);
+      await waitFor(() => services.providers.get('openrouter')?.discoveryFailures === 0);
     } finally {
       vi.unstubAllGlobals();
       await core.close();

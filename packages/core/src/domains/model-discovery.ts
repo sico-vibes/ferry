@@ -4,6 +4,7 @@ import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 
 const modelsMaxAgeMs = 24 * 60 * 60 * 1000;
+const discoveryTimeoutMs = 4_000;
 const retryDelaysMs = [60_000, 120_000, 300_000, 900_000, 3_600_000] as const;
 
 function baseUrlFor(services: FerryServices, id: string): string | undefined {
@@ -55,6 +56,11 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
 
     const controller = new AbortController();
     controllers.set(id, controller);
+    const timeoutReason = new Error('Provider model discovery timed out');
+    const timeout = setTimeout(() => {
+      controller.abort(timeoutReason);
+    }, discoveryTimeoutMs);
+    timeout.unref();
     const task = (async () => {
       const limits = services.catalog.providers.find((item) => item.provider === id);
       const current = services.providers.get(id);
@@ -97,12 +103,13 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
           saved.health !== updated.health ||
           saved.discoveryUnsupported ||
           saved.discoveryFailures ||
-          saved.modelsVerifiedAt !== updated.modelsVerifiedAt ||
-          saved.modelCount !== updated.modelCount
+          saved.discoveryErrorClass ||
+          saved.modelCount !== updated.modelCount ||
+          JSON.stringify(saved.availableModels) !== JSON.stringify(updated.availableModels)
         )
           host.emit('provider.updated', updated);
       } catch (error) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted && controller.signal.reason !== timeoutReason) return;
         const saved = services.providers.get(id);
         if (!saved) return;
         const errorClass = discoveryErrorClass(error);
@@ -123,15 +130,16 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
         services.providers.put(updated);
         const delayMs =
           retryDelaysMs[Math.min(failures - 1, retryDelaysMs.length - 1)] ?? 3_600_000;
-        services.logger.warn(
-          {
-            providerId: id,
-            errorClass,
-            failures,
-            retryInMs: unsupported || authFailure ? null : delayMs,
-          },
-          'Provider model discovery failed',
-        );
+        if (failures <= retryDelaysMs.length)
+          services.logger.warn(
+            {
+              providerId: id,
+              errorClass,
+              failures,
+              retryInMs: unsupported || authFailure ? null : delayMs,
+            },
+            'Provider model discovery failed',
+          );
         if (
           saved.keyStatus !== updated.keyStatus ||
           saved.health !== updated.health ||
@@ -140,6 +148,7 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
           host.emit('provider.updated', updated);
       }
     })().finally(() => {
+      clearTimeout(timeout);
       inFlight.delete(id);
       controllers.delete(id);
     });
@@ -148,29 +157,30 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
     return task;
   };
 
-  const refreshIfStale = (id: string): Promise<void> => {
+  const refreshIfStale = async (id: string): Promise<void> => {
     const saved = services.providers.get(id);
-    if (
-      !saved ||
-      saved.discoveryUnsupported ||
-      saved.health === 'auth_invalid' ||
-      saved.keyStatus === 'invalid'
-    )
-      return Promise.resolve();
+    if (!saved || saved.discoveryUnsupported) return;
+    if (saved.discoveryErrorClass === 'auth') return;
     const failedAt = saved.discoveryFailedAt ? Date.parse(saved.discoveryFailedAt) : Number.NaN;
     const failures = saved.discoveryFailures ?? 0;
     const retryDelay = retryDelaysMs[Math.min(Math.max(0, failures - 1), retryDelaysMs.length - 1)];
     if (
+      failures > 0 &&
       Number.isFinite(failedAt) &&
       retryDelay !== undefined &&
       services.clock.now().getTime() - failedAt < retryDelay
     )
-      return Promise.resolve();
+      return;
     const fetchedAt = saved.modelsVerifiedAt ? Date.parse(saved.modelsVerifiedAt) : Number.NaN;
+    const needsHealthRecovery =
+      saved.health === 'down' || saved.health === 'auth_invalid' || saved.keyStatus === 'invalid';
     const stale =
-      !Number.isFinite(fetchedAt) || services.clock.now().getTime() - fetchedAt >= modelsMaxAgeMs;
-    if (stale) void refresh(id).catch(() => undefined);
-    return Promise.resolve();
+      needsHealthRecovery ||
+      services.models.list(id).length === 0 ||
+      !Number.isFinite(fetchedAt) ||
+      services.clock.now().getTime() - fetchedAt >= modelsMaxAgeMs;
+    if (!stale) return;
+    await refresh(id);
   };
 
   const discovery: ModelDiscovery = {

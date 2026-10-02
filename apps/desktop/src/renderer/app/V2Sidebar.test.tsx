@@ -147,10 +147,10 @@ describe('V2Sidebar new chat', () => {
     queryClient.setQueryData(keys.settings, await client.settings.get());
     queryClient.setQueryData(keys.profiles, await client.profiles.list());
     queryClient.setQueryData(keys.capacity, await client.quota.capacity());
+    const systemInfo = await client.system.info();
     queryClient.setQueryData(keys.system, {
-      ...(await client.system.info()),
-      version: '0.1.0',
-      dataDir: 'C:\\Users\\test\\AppData\\Roaming\\Ferry\\data',
+      ...systemInfo,
+      dataDir: 'test-data-folder',
     });
     render(
       <FerryProvider client={client}>
@@ -163,10 +163,10 @@ describe('V2Sidebar new chat', () => {
     await userEvent.click(await screen.findByRole('button', { name: /^User menu$/ }));
     await userEvent.click(await screen.findByRole('menuitem', { name: /^About$/ }));
     const dialog = await screen.findByRole('dialog', { name: /^About Ferry$/ });
-    expect(dialog.textContent).toContain('0.9.0-beta.1');
+    expect(dialog.textContent).toContain(window.ferryHost.versions.app);
     expect(dialog.textContent).toContain('beta');
-    expect(dialog.textContent).toContain('0.1.0');
-    expect(dialog.textContent).toContain('C:\\Users\\test\\AppData\\Roaming\\Ferry\\data');
+    expect(dialog.textContent).toContain(systemInfo.version);
+    expect(dialog.textContent).toContain('Unavailable');
     expect(dialog.textContent).toContain('MIT');
     await userEvent.keyboard('{Escape}');
     await userEvent.click(await screen.findByRole('button', { name: /^User menu$/ }));

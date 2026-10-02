@@ -596,7 +596,7 @@ export function SettingsCanvas() {
               </UiV2.Button>
             )}
             {keybindingsSaved && (
-              <span className="v2-settings-save-success" role="status">
+              <span aria-label="Saved" className="v2-settings-save-success" role="status">
                 Saved
               </span>
             )}
@@ -692,7 +692,7 @@ export function SettingsCanvas() {
                     </UiV2.Button>
                   )}
                   {saveFeedback.Profiles?.kind === 'saved' && (
-                    <span className="v2-settings-save-success" role="status">
+                    <span aria-label="Saved" className="v2-settings-save-success" role="status">
                       Saved
                     </span>
                   )}
@@ -2114,7 +2114,9 @@ export function SettingsCanvas() {
           title={pageCopy.title}
           subtitle={pageCopy.description}
           primaryAction={
-            pendingSettings || section === 'General' || saveFeedback[section] ? (
+            pendingSettings ||
+            section === 'General' ||
+            (section !== 'Profiles' && saveFeedback[section]) ? (
               <div className="v2-settings-actions">
                 {section === 'General' && (
                   <UiV2.Button
@@ -2135,7 +2137,7 @@ export function SettingsCanvas() {
                   </UiV2.Button>
                 )}
                 {saveFeedback[section]?.kind === 'saved' && (
-                  <span className="v2-settings-save-success" role="status">
+                  <span aria-label="Saved" className="v2-settings-save-success" role="status">
                     Saved
                   </span>
                 )}

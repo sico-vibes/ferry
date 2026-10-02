@@ -480,29 +480,34 @@ export function ApprovalCard({
 export function HandoffMarker({
   from,
   to,
+  fromRef = from,
+  toRef = to,
   reason,
   briefingTokens,
   explanation,
 }: {
   from: string;
   to: string;
+  fromRef?: string;
+  toRef?: string;
   reason: string;
   briefingTokens: number;
   explanation: string;
 }) {
-  const details = `Switched from ${from} to ${to} because of ${reason}. ${explanation} Briefed ${(briefingTokens / 1000).toFixed(1)}K tokens.`;
+  const details = `${explanation} Briefed ${(briefingTokens / 1000).toFixed(1)}K tokens.`;
+  const accessibleName = `Model handoff: Switched from ${fromRef} to ${toRef} because of ${reason}. ${details}`;
   return (
     <div className="my-1 text-center">
       <Tooltip content={details}>
         <button
-          aria-label={`Model handoff: ${details}`}
+          aria-label={accessibleName}
           className={`handoff-chip ${focusRingClass}`}
-          title={details}
+          title={`Switched from ${fromRef} to ${toRef} because of ${reason}. ${details}`}
           type="button"
         >
           <ArrowLeftRight aria-hidden="true" size={13} />
           <span>
-            Switched to <b>{to}</b> - {reason.replace('_', ' ')} on <b>{from}</b>
+            Switched to <b>{to}</b> · {reason.replace('_', ' ')} on <b>{from}</b>
           </span>
           <span className="sr-only">{explanation}</span>
         </button>

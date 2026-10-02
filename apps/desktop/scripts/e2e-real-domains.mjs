@@ -996,6 +996,10 @@ try {
       ]);
       await composer.fill('Continue with a forced provider handoff.');
       await composer.press('Enter');
+      await page
+        .getByRole('button', { name: /Worked for|Working/ })
+        .last()
+        .click();
       const handoff = page.getByRole('button', { name: /Switched .*rate_limit/ }).first();
       try {
         await expect(handoff).toBeVisible({ timeout: 30_000 });

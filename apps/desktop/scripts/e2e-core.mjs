@@ -54,6 +54,12 @@ try {
       .getByRole('textbox', { name: 'Message Ferry' })
       .fill('Switch models after quota handoff');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
+    const activityToggles = page.getByRole('button', { name: /Worked for|Working/ });
+    await expect(activityToggles.last()).toBeVisible({ timeout: 10_000 });
+    for (let index = 0; index < (await activityToggles.count()); index += 1) {
+      const toggle = activityToggles.nth(index);
+      if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+    }
     await expect(page.getByRole('button', { name: /Switched.*nvidia/ })).toBeVisible({
       timeout: 10_000,
     });
@@ -193,13 +199,32 @@ try {
     await page.getByRole('textbox', { name: 'Daily cap ($)' }).fill('3.5');
     await page.getByRole('textbox', { name: 'Monthly cap ($)' }).fill('25');
     await page.getByRole('button', { name: 'Save changes', exact: true }).click();
-    await expect(page.getByText('Profile saved: Best Available')).toBeVisible();
+    await expect(page.getByRole('status', { name: 'Saved' })).toBeVisible();
+    await page.reload();
+    await page
+      .getByRole('navigation', { name: 'Settings sections' })
+      .getByRole('button', { name: 'Profiles' })
+      .click();
+    await page
+      .locator('.v2-settings-content')
+      .getByRole('button', { name: /Best Available/ })
+      .first()
+      .click();
+    await expect(page.getByRole('textbox', { name: 'Daily cap ($)' })).toHaveValue('3.5');
+    await expect(page.getByRole('textbox', { name: 'Monthly cap ($)' })).toHaveValue('25');
 
     await page.goto(`${url}/library`);
     await page.getByRole('button', { name: 'Open project ferry-web', exact: true }).click();
     await page.getByRole('tab', { name: 'Permissions', exact: true }).click();
-    await page.getByRole('button', { name: 'Approve project lanes' }).click();
-    await expect(page.getByText('Project lanes approved')).toBeVisible();
+    const approvedStatus = page.getByRole('status', { name: 'Approved' });
+    const approveButton = page.getByRole('button', { name: 'Approve project lanes' });
+    await expect(approvedStatus.or(approveButton).first()).toBeVisible();
+    if (await approvedStatus.isVisible()) {
+      await expect(approvedStatus).toBeVisible();
+    } else {
+      await approveButton.click();
+      await expect(approvedStatus).toBeVisible();
+    }
   } finally {
     await browser.close();
   }

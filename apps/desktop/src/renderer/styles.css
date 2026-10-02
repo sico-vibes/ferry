@@ -2088,7 +2088,7 @@ body {
   justify-content: space-between;
   gap: 16px;
   border-bottom: 0;
-  padding: 0 24px 0 calc(24px + var(--titlebar-overlay-reserve, 0px));
+  padding: 0 calc(24px + var(--titlebar-overlay-right, 0px)) 0 24px;
   -webkit-app-region: drag;
 }
 .v2-library-header,
@@ -2100,7 +2100,7 @@ body {
 .v2-library-header,
 .v2-settings-header,
 .v2-models-page .ferry-page-header {
-  padding-right: var(--titlebar-overlay-reserve, 0px);
+  padding-right: var(--titlebar-overlay-right, 0px);
 }
 .v2-library-header :is(button, input, [role='button']),
 .v2-settings-header :is(button, input, [role='button']),
@@ -2870,7 +2870,7 @@ body {
 .v2-review-route .ferry-page-header {
   flex: 0 0 auto;
   padding: 32px 32px 24px;
-  padding-right: calc(32px + var(--titlebar-overlay-reserve, 0px));
+  padding-right: calc(32px + var(--titlebar-overlay-right, 0px));
 }
 .v2-review-route .review-toolbar {
   display: flex;

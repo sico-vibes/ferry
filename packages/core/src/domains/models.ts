@@ -46,16 +46,8 @@ const ModelListQuerySchema = z.object({
 
 export function register(host: CoreHost, services: FerryServices): void {
   const modelDiscovery = getModelDiscovery(host, services);
-  const modelsFor = (id: string) => {
-    const cached = services.models.list(id);
-    const refs = new Set(cached.map((model) => model.ref));
-    return [
-      ...cached,
-      ...services.catalog.models.filter((model) => model.providerId === id && !refs.has(model.ref)),
-    ];
-  };
   host.registerDomain('models', {
-    list(rawProviderId?: unknown) {
+    async list(rawProviderId?: unknown) {
       const providerId =
         rawProviderId === undefined ? undefined : ProviderIdSchema.parse(rawProviderId);
       const enabled = services.catalog.providers
@@ -63,8 +55,8 @@ export function register(host: CoreHost, services: FerryServices): void {
         .map((provider) => provider.provider)
         .filter((id) => services.providers.get(id)?.enabled ?? false);
 
-      enabled.forEach((id) => void modelDiscovery.refreshIfStale(id));
-      const cachedModels = enabled.flatMap(modelsFor);
+      await Promise.all(enabled.map((id) => modelDiscovery.refreshIfStale(id)));
+      const cachedModels = enabled.flatMap((id) => services.models.list(id));
       const oauthModels = oauthModelCatalog
         .filter((model) => services.providers.get(model.providerId)?.enabled)
         .filter((model) => providerId === undefined || model.providerId === providerId)
@@ -74,7 +66,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         services.catalog.models,
       );
     },
-    page(rawQuery?: unknown) {
+    async page(rawQuery?: unknown) {
       const { offset, limit, query, filters, sort } = ModelListQuerySchema.parse(rawQuery ?? {});
       const providerId = filters.providerId;
       const enabled = services.catalog.providers
@@ -82,8 +74,8 @@ export function register(host: CoreHost, services: FerryServices): void {
         .map((provider) => provider.provider)
         .filter((id) => services.providers.get(id)?.enabled ?? false);
 
-      enabled.forEach((id) => void modelDiscovery.refreshIfStale(id));
-      const cachedModels = enabled.flatMap(modelsFor);
+      await Promise.all(enabled.map((id) => modelDiscovery.refreshIfStale(id)));
+      const cachedModels = enabled.flatMap((id) => services.models.list(id));
       const oauthModels = oauthModelCatalog
         .filter((model) => services.providers.get(model.providerId)?.enabled)
         .map((model) => ModelInfoSchema.parse(model));
@@ -119,15 +111,12 @@ export function register(host: CoreHost, services: FerryServices): void {
       const sessionId = SessionIdSchema.parse(rawSessionId);
       const session = services.sessions.get(sessionId);
       if (!session) return [];
-      services.catalog.providers.forEach(({ provider }) => {
-        if (services.providers.get(provider)?.enabled) void modelDiscovery.refreshIfStale(provider);
-      });
       const cachedModels = services.catalog.providers.flatMap(({ provider, key_required }) => {
         const saved = services.providers.get(provider);
         const hasKey = Boolean(services.providerKeys.get(provider));
         const enabled = saved?.enabled ?? (hasKey || key_required === false);
         return enabled && !saved?.freeTierUnsupported && (hasKey || key_required === false)
-          ? modelsFor(provider)
+          ? services.models.list(provider)
           : [];
       });
       const models = preserveCatalogBillingMetadata(cachedModels, services.catalog.models);

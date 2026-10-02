@@ -205,9 +205,26 @@ describe('Models providers and catalog', () => {
     await waitFor(() => {
       expect(probeSpy).toHaveBeenCalledWith('mistral');
     });
-    expect(pushToast).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'Connected · 412 ms' }),
-    );
+    expect((await screen.findByRole('status')).textContent).toBe('Connected · 412 ms');
+
+    probeSpy.mockResolvedValueOnce({
+      ok: false,
+      keyValid: false,
+      latencyMs: null,
+      message: 'Invalid API key',
+      windows: [],
+      models: [],
+      errorKind: 'auth',
+    });
+    await user.click(screen.getByRole('button', { name: 'Test Mistral' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toBe('Key invalid · Invalid API key');
+      expect(pushToast).toHaveBeenCalledWith({
+        kind: 'error',
+        title: 'Key invalid',
+        body: 'Invalid API key',
+      });
+    });
   }, 20_000);
 
   it('keeps providers needing attention visible above the collapsed group', async () => {

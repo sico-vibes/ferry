@@ -41,6 +41,7 @@ import { redactHeaders } from '@ferry/storage';
 import { createServices } from '../src/services.js';
 import { domainRegistrars } from '../src/domains/index.js';
 import { createSessionDependencies } from '../src/session-deps.js';
+import { getModelDiscovery } from '../src/domains/model-discovery.js';
 import { BUILTIN_PROFILES } from '@ferry/router';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'ferry-core-test-'));
@@ -706,6 +707,66 @@ describe('provider, model and quota RPC integration', () => {
       rpc.close();
       await host.stop();
       await fake.stop();
+    }
+  }, 30_000);
+});
+
+describe('model discovery backoff', () => {
+  it('limits 1,000 concurrent failing refresh requests to one call per backoff window', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('{}', { status: 503 })));
+    vi.stubGlobal('fetch', fetchMock);
+    const path = join(dataDir, 'discovery-storm-backoff');
+    const services = await createServices({
+      dataDir: path,
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        FERRY_TEST_KEYRING_NAMESPACE: 'discovery-storm-backoff',
+        FERRY_PROVIDER_BASE_URL_SAMBANOVA: 'http://127.0.0.1:43123/v1',
+      },
+      secrets: new MemorySecretStore('discovery-storm-backoff'),
+    });
+    let host: CoreHost | undefined;
+    let hostStarted = false;
+    let rpc: ReturnType<typeof createRpcFerryClient> | undefined;
+    try {
+      const [coreTransport, clientTransport] = createMemoryTransportPair();
+      host = new CoreHost({ dataDir: path, transport: coreTransport, services });
+      for (const register of domainRegistrars) register(host, services);
+      await host.start();
+      hostStarted = true;
+      rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
+      const providerId = ProviderIdSchema.parse('sambanova');
+      await rpc.providers.setKey(providerId, 'storm-fixture-key');
+      const saved = services.providers.get(providerId);
+      if (!saved) throw new Error(`Provider ${providerId} was not persisted after setting its key`);
+      services.providers.put({
+        ...saved,
+        enabled: true,
+        health: 'unknown',
+        keyStatus: 'unchecked',
+        availableModels: [],
+        modelCount: 0,
+        modelsVerifiedAt: null,
+        discoveryFailedAt: null,
+        discoveryFailures: 0,
+        discoveryErrorClass: null,
+      });
+      services.models.replace(providerId, []);
+      fetchMock.mockClear();
+      const discovery = getModelDiscovery(host, services);
+      await Promise.all(Array.from({ length: 1_000 }, () => discovery.refreshIfStale(providerId)));
+      await vi.waitFor(() => {
+        expect(services.providers.get(providerId)?.discoveryFailures).toBe(1);
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await Promise.all(Array.from({ length: 1_000 }, () => discovery.refreshIfStale(providerId)));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      rpc?.close();
+      if (hostStarted) await host?.stop();
+      else await services.dispose();
+      vi.unstubAllGlobals();
     }
   }, 30_000);
 });

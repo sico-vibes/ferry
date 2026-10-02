@@ -74,6 +74,7 @@ export function ModelsCanvas() {
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
   const [probing, setProbing] = useState<string | null>(null);
+  const [probeFeedback, setProbeFeedback] = useState<Record<string, string>>({});
   const [recentlyUpdatedProviderIds, setRecentlyUpdatedProviderIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -195,15 +196,26 @@ export function ModelsCanvas() {
     }
   };
   const probe = async (provider: Provider) => {
+    setProbeFeedback((current) => ({ ...current, [provider.id]: '' }));
     setProbing(provider.id);
     try {
       const result = await client.providers.probe(provider.id);
+      setProbeFeedback((current) => ({
+        ...current,
+        [provider.id]: result.ok
+          ? `Connected \u00B7 ${result.latencyMs === null ? 'CLI' : `${String(result.latencyMs)} ms`}`
+          : result.keyValid
+            ? result.message
+            : `Key invalid \u00B7 ${result.message}`,
+      }));
       if (!result.ok) pushToast({ kind: 'error', title: 'Key invalid', body: result.message });
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Try again.';
+      setProbeFeedback((current) => ({ ...current, [provider.id]: message }));
       pushToast({
         kind: 'error',
         title: 'Provider test failed',
-        body: error instanceof Error ? error.message : 'Try again.',
+        body: message,
       });
     } finally {
       setProbing(null);
@@ -376,6 +388,16 @@ export function ModelsCanvas() {
                       probing={probing === provider.id}
                       provider={provider}
                     />
+                    {probeFeedback[provider.id] && (
+                      <p
+                        aria-label={probeFeedback[provider.id]}
+                        aria-live="polite"
+                        className="text-ui-meta text-muted-foreground"
+                        role="status"
+                      >
+                        {probeFeedback[provider.id]}
+                      </p>
+                    )}
                   </li>
                 )}
               />

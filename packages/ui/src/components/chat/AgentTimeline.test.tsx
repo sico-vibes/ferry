@@ -58,7 +58,7 @@ describe('AgentTimeline', () => {
         ]}
       />,
     );
-    const toggle = screen.getByRole('button', { name: /Reviewing the changed files/ });
+    const toggle = screen.getByRole('button', { name: /Worked for|Working/ });
     assert.equal(toggle.getAttribute('aria-expanded'), 'false');
     assert.equal(screen.queryByText('28 chars · ~7 tokens'), null);
     fireEvent.click(toggle);
