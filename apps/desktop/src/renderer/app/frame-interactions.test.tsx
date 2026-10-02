@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FerryProvider } from '../data/client';
 import { useFerryEvents } from '../data/events';
-import { SettingsSectionNav } from './LegacyContextNav';
+import { SettingsCanvas } from './SettingsCanvas';
 import { RightPanel } from './right-panel/RightPanel';
 import { useUI } from '../state/ui';
 import { DEFAULT_LAYOUT } from '../state/ui-layout';
@@ -108,8 +108,8 @@ describe('desktop frame interactions', () => {
     expect(mockShellOutput('nonsense')).toBe('mock shell: command not available in demo');
   });
 
-  it('renders contextual navigation for the legacy settings page', async () => {
-    mount(<SettingsSectionNav />);
+  it('renders the settings section navigation', async () => {
+    mount(<SettingsCanvas />);
     expect(await screen.findByRole('navigation', { name: 'Settings sections' })).toBeTruthy();
   });
 

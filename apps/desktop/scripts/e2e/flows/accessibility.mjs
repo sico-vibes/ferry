@@ -56,22 +56,20 @@ export async function run(page, { url, expect }) {
   for (const section of [
     'General',
     'Profiles',
-    'Providers & Keys',
-    'Gateway',
-    'Advanced',
+    'Providers & keys',
+    'Routing',
     'Optimizers',
     'Delegation',
     'Permissions',
-    'Developer',
-    'Skills',
-    'MCP',
-    'Data & Privacy',
+    'Gateway',
+    'Data & privacy',
+    'Shortcuts',
     'About',
   ]) {
     await settingsNav.getByRole('button', { name: section, exact: true }).click();
     await expect(
       page.getByRole('heading', {
-        name: section === 'General' ? 'Settings' : section,
+        name: section,
         exact: true,
       }),
     ).toBeVisible();

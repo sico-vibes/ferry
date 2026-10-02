@@ -119,21 +119,22 @@ describe('Library, settings, and onboarding screens', () => {
     await user.click(await screen.findByRole('button', { name: /Best Available/ }));
     await user.clear(screen.getByRole('textbox', { name: 'Daily cap ($)' }));
     await user.type(screen.getByRole('textbox', { name: 'Daily cap ($)' }), '4');
-    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
     await saved;
     expect(
       (await client.profiles.list()).find((item) => item.name === 'Best Available')?.caps.dailyUsd,
     ).toBe(4);
   }, 30_000);
 
-  it('completes onboarding and persists the chosen defaults', async () => {
+  it('completes onboarding and persists the default profile', async () => {
     const client = createDemoFerryClient();
     await client.settings.update({ onboardingComplete: false });
+    localStorage.removeItem('ferry.onboardingStep');
     await renderRoute('onboarding', client);
-    await userEvent.click(await screen.findByRole('button', { name: /Get started/ }));
+    await userEvent.click(await screen.findByRole('button', { name: /^Continue$/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
     await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Skip setup' }));
     await waitFor(async () => {
       const settings = await client.settings.get();
       const autoFree = (await client.profiles.list()).find((item) => item.name === 'Auto-Free');
@@ -146,8 +147,9 @@ describe('Library, settings, and onboarding screens', () => {
   it('shows researched reasons for unavailable providers in onboarding', async () => {
     const client = createDemoFerryClient();
     await client.settings.update({ onboardingComplete: false });
+    localStorage.removeItem('ferry.onboardingStep');
     await renderRoute('onboarding', client);
-    await userEvent.click(await screen.findByRole('button', { name: /Get started/ }));
+    await userEvent.click(await screen.findByRole('button', { name: /^Continue$/ }));
     await userEvent.click(screen.getByText('Unavailable'));
     expect(screen.getByText('Kiro')).toBeTruthy();
     expect(screen.getByText('The free API was retired on July 30, 2026.')).toBeTruthy();

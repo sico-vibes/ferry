@@ -33,6 +33,20 @@ const states = [
   'models-providers',
   'models-catalog',
   'models-usage',
+  'settings-general',
+  'settings-profiles',
+  'settings-providers',
+  'settings-routing',
+  'settings-optimizers',
+  'settings-delegation',
+  'settings-permissions',
+  'settings-gateway',
+  'settings-data-privacy',
+  'settings-shortcuts',
+  'settings-about',
+  'onboarding-welcome',
+  'onboarding-provider',
+  'onboarding-folder',
 ];
 const filename = (state, theme, viewport) =>
   `${state}-${theme}-${viewport.width}x${viewport.height}.png`;
@@ -90,6 +104,33 @@ async function captureState(browser, state, theme, viewport) {
       await page.goto(new URL(route, baseUrl).href);
       await page.getByRole('heading', { name: 'Models', exact: true }).waitFor();
       await page.getByRole('tab', { name: tab, exact: true }).waitFor();
+    } else if (state.startsWith('settings-')) {
+      const section = {
+        'settings-general': 'General',
+        'settings-profiles': 'Profiles',
+        'settings-providers': 'Providers & keys',
+        'settings-routing': 'Routing',
+        'settings-optimizers': 'Optimizers',
+        'settings-delegation': 'Delegation',
+        'settings-permissions': 'Permissions',
+        'settings-gateway': 'Gateway',
+        'settings-data-privacy': 'Data & privacy',
+        'settings-shortcuts': 'Shortcuts',
+        'settings-about': 'About',
+      }[state];
+      await page.goto(new URL('/settings', baseUrl).href);
+      await page.getByRole('navigation', { name: 'Settings sections' }).waitFor();
+      await page.getByRole('button', { name: section, exact: true }).click();
+    } else if (state.startsWith('onboarding-')) {
+      await page.goto(new URL('/settings', baseUrl).href);
+      await page.getByRole('button', { name: 'Run onboarding again' }).click();
+      await page.locator('.v2-onboarding-shell').waitFor();
+      if (state === 'onboarding-provider') {
+        await page.getByRole('button', { name: 'Continue', exact: true }).click();
+      } else if (state === 'onboarding-folder') {
+        await page.getByRole('button', { name: 'Continue', exact: true }).click();
+        await page.getByRole('button', { name: 'Continue', exact: true }).click();
+      }
     } else if (state === 'session-idle' || state === 'drawer-open') {
       await page.goto(new URL('/s/session_3', baseUrl).href);
       await page.locator('.transcript-viewport').waitFor();

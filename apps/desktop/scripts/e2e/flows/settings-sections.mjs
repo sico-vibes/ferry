@@ -6,13 +6,14 @@ export async function run(page, ctx) {
   const sections = [
     ['General', 'Appearance'],
     ['Profiles', 'Select a profile to edit.'],
-    ['Providers & Keys', 'Providers & Keys'],
-    ['Optimizers', 'Optimizers'],
+    ['Providers & keys', 'Subscription logins'],
+    ['Routing', 'Paid spending caps'],
+    ['Optimizers', 'Terse level'],
     ['Delegation', 'Merged lanes'],
     ['Permissions', 'Default mode'],
-    ['Skills', 'Enable local instructions and workflows.'],
-    ['MCP', 'MCP servers'],
-    ['Data & Privacy', 'Data & Privacy'],
+    ['Gateway', 'Local API gateway'],
+    ['Data & privacy', 'Integrations'],
+    ['Shortcuts', 'keybindings.json'],
     ['About', 'Notices'],
   ];
   for (const [name, marker] of sections) {
@@ -25,7 +26,7 @@ export async function run(page, ctx) {
     });
     await ctx.expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
   }
-  await nav.getByRole('button', { name: 'Providers & Keys', exact: true }).click();
+  await nav.getByRole('button', { name: 'Providers & keys', exact: true }).click();
   const manageKey = page.getByRole('button', { name: 'Manage key' }).first();
   await manageKey.click();
   await page.getByRole('button', { name: 'Test connection' }).click();
