@@ -77,7 +77,7 @@ export async function run(page, { url, expect }) {
     }
   }
 
-  for (const route of ['/settings', '/explore', '/library']) {
+  for (const route of ['/settings', '/models', '/library']) {
     await page.goto(new URL(route, url).href);
     await page.getByRole('navigation', { name: 'Primary' }).waitFor();
     const legacy = await page.evaluate(() => {

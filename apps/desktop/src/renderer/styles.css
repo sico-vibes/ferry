@@ -3486,33 +3486,12 @@ body {
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
-  border: 1px solid var(--border-hair);
-  border-radius: var(--r-card);
-  background: var(--bg-card);
+  border: 0;
   outline: none;
 }
 .model-table-scroll:focus-visible {
-  outline: 2px solid var(--blue-500);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
-}
-.model-table-scroll::after {
-  display: none;
-}
-@container (max-width: 760px) {
-  .model-table-scroll::after {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    z-index: 2;
-    display: block;
-    padding: 4px 8px;
-    border-radius: var(--r-item);
-    background: linear-gradient(90deg, transparent, var(--bg-card) 28%);
-    color: var(--text-3);
-    content: 'More →';
-    font-size: 10px;
-    pointer-events: none;
-  }
 }
 @container (max-width: 900px) {
   .usage-summary-grid {

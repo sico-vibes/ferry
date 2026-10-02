@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import {
@@ -12,7 +12,7 @@ import {
   Settings,
   UserRound,
 } from 'lucide-react';
-import { IntegrationItem, ShowMoreList, Skeleton, TagBadge } from '@ferry/ui';
+import { IntegrationItem, ShowMoreList } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { keys, useMcpServers, useSessions, useWorkspaces } from '../data/queries';
 import { useUI } from '../state/ui';
@@ -115,93 +115,6 @@ export function LibraryWorkspaceNav() {
         );
       })}
       {!workspaces.length && <p className="muted">Open a folder to add a workspace.</p>}
-    </aside>
-  );
-}
-
-export function ProviderFilterNav() {
-  const navigate = useNavigate();
-  const client = useFerryClient();
-  const exploreFilter = useUI((state) => state.exploreFilter);
-  const { data: providers = [], isLoading } = useQuery({
-    queryKey: ['providers'],
-    queryFn: () => client.providers.list(),
-  });
-  return (
-    <aside className="legacy-context-nav">
-      <div className="context-sidebar-list">
-        <nav aria-label="Provider filters" className="context-filter-row">
-          {(['All', 'Free', 'Paid', 'CLI'] as const).map((filter) => (
-            <button
-              aria-pressed={exploreFilter === filter}
-              key={filter}
-              onClick={() => {
-                useUI.getState().setExploreFilter(filter);
-              }}
-            >
-              {filter}
-            </button>
-          ))}
-        </nav>
-        {isLoading ? (
-          <Skeleton rows={4} />
-        ) : (
-          <ShowMoreList
-            items={providers.filter((provider) => {
-              const kind =
-                provider.tag === 'subscription_cli'
-                  ? 'CLI'
-                  : provider.tag === 'paid'
-                    ? 'Paid'
-                    : 'Free';
-              return exploreFilter === 'All' || kind === exploreFilter;
-            })}
-            groupKey="sidebar:explore:providers"
-            label="providers"
-            moreLabel="providers in navigation"
-            listClassName=""
-            renderItem={(provider) => (
-              <li className="list-none" key={provider.id}>
-                <button
-                  title={provider.name}
-                  className="context-provider-row"
-                  onClick={() =>
-                    document
-                      .getElementById(`provider-${provider.id}`)
-                      ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                  }
-                >
-                  <span
-                    className={`provider-health ${provider.health === 'ok' ? 'healthy' : provider.health === 'down' ? 'failed' : ''}`}
-                  />
-                  <span>{provider.name}</span>
-                  <TagBadge
-                    kind={
-                      provider.tag === 'paid'
-                        ? 'paid'
-                        : provider.tag === 'subscription_cli'
-                          ? 'cli'
-                          : provider.tag === 'caution'
-                            ? 'caution'
-                            : provider.tag === 'promo'
-                              ? 'promo'
-                              : 'legit'
-                    }
-                  />
-                </button>
-              </li>
-            )}
-          />
-        )}
-        {!providers.length && !isLoading && (
-          <button
-            className="context-provider-row"
-            onClick={() => void navigate({ to: '/explore' })}
-          >
-            Add a provider
-          </button>
-        )}
-      </div>
     </aside>
   );
 }

@@ -1,5 +1,4 @@
 import { motion, useReducedMotion } from 'motion/react';
-import { useId } from 'react';
 import { ArrowUpRight } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { CountUp } from './CountUp';
@@ -11,7 +10,6 @@ export interface RingGaugeProps {
   label?: string;
 }
 export function RingGauge({ value, size = 40, stroke = 4, label }: RingGaugeProps) {
-  const filterId = `ring-gauge-glow-${useId().replaceAll(':', '')}`;
   const normalized = Math.max(0, Math.min(100, value));
   const radius = (size - stroke) / 2;
   const circumference = Math.PI * radius * 2;
@@ -26,15 +24,6 @@ export function RingGauge({ value, size = 40, stroke = 4, label }: RingGaugeProp
       viewBox={`0 0 ${String(size)} ${String(size)}`}
       width={size}
     >
-      <defs>
-        <filter height="180%" id={filterId} width="180%" x="-40%" y="-40%">
-          <feGaussianBlur result="blur" stdDeviation="2" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
       <circle
         cx={size / 2}
         cy={size / 2}
@@ -50,16 +39,16 @@ export function RingGauge({ value, size = 40, stroke = 4, label }: RingGaugeProp
         fill="none"
         initial={false}
         r={radius}
-        stroke="var(--blue-500)"
+        stroke="var(--primary)"
         strokeDasharray={circumference}
         strokeDashoffset={circumference * (1 - normalized / 100)}
         strokeLinecap="round"
         strokeWidth={stroke}
-        style={{ rotate: -90, transformOrigin: '50% 50%', filter: `url(#${filterId})` }}
+        style={{ rotate: -90, transformOrigin: '50% 50%' }}
         transition={reducedMotion ? { duration: 0 } : { duration: 0.22, ease: 'easeOut' }}
       />
       <text
-        className="fill-text-1 font-sans text-[10px] leading-3 font-semibold tabular-nums"
+        className="fill-foreground font-sans text-[10px] leading-3 font-semibold tabular-nums"
         dominantBaseline="central"
         textAnchor="middle"
         x="50%"

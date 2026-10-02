@@ -57,7 +57,7 @@ export function ShowMoreList<T>({
         <div className="mt-1 flex gap-3">
           {pageStart + visibleCount < items.length && (
             <button
-              className="text-meta text-link hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              className="text-ui-meta text-accent-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => {
                 updateCount(
                   visibleLimit >= pageStart + 100
@@ -72,7 +72,7 @@ export function ShowMoreList<T>({
           )}
           {visibleLimit > initialCount && (
             <button
-              className="text-meta text-text-3 hover:text-text-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              className="text-ui-meta text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => {
                 updateCount(initialCount);
               }}

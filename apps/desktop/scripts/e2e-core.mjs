@@ -132,33 +132,31 @@ try {
       )
       .toBe(originalIndex);
     await page.getByRole('button', { name: 'Models', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Models', exact: true })).toBeVisible();
     await expect(page.getByRole('navigation', { name: 'Provider filters' })).toBeVisible();
     await page
-      .getByRole('region', { name: 'Provider filter' })
+      .getByRole('navigation', { name: 'Provider filters' })
       .getByRole('button', { name: 'Free', exact: true })
       .click();
     const gemini = page.locator('article').filter({ hasText: 'Gemini API' });
     await gemini.getByRole('button', { name: 'Test Gemini API' }).click();
     await expect(page.getByText(/Connected · \d+ ms/)).toBeVisible({ timeout: 10_000 });
     const mistral = page.locator('article').filter({ hasText: 'Mistral (Experiment)' });
-    await mistral.getByRole('button', { name: 'Manage key' }).click();
-    await page.getByRole('textbox', { name: 'API key' }).fill('demo-mistral-key');
-    await page.getByRole('button', { name: 'Save key' }).click();
-    await expect(mistral.getByText('Key: unchecked')).toBeVisible({ timeout: 10_000 });
+    await mistral.getByRole('button', { name: 'Manage key', exact: true }).click();
+    await page.getByLabel('API key', { exact: true }).fill('demo-mistral-key');
+    await page.getByRole('button', { name: 'Save key', exact: true }).click();
+    await expect(mistral.getByText('Key unchecked')).toBeVisible({ timeout: 10_000 });
     await page.getByRole('button', { name: 'Close dialog' }).click();
     await mistral.getByRole('button', { name: 'Test Mistral (Experiment)' }).click();
-    await expect(mistral.getByText('Key: valid')).toBeVisible({ timeout: 10_000 });
-    await page.getByRole('button', { name: 'Usage' }).click();
-    await expect(page.getByRole('heading', { name: 'Usage', exact: true })).toBeVisible();
+    await expect(mistral.getByText('Key valid')).toBeVisible({ timeout: 10_000 });
+    await page.getByRole('tab', { name: 'Usage', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Usage dashboard' })).toBeVisible();
     const nvidiaUsage = page
       .getByRole('region', { name: 'Capacity remaining' })
       .getByRole('list')
       .locator('li')
       .filter({ hasText: 'NVIDIA NIM' });
-    await expect(nvidiaUsage.getByLabel('NVIDIA NIM: limit unknown')).toHaveText('—');
-    await expect(nvidiaUsage.locator('.h-1')).toHaveCount(0);
-    await page.getByRole('button', { name: 'tokens', exact: true }).click();
+    await expect(nvidiaUsage.getByLabel('NVIDIA NIM: limit unknown')).toBeVisible();
     await expect(
       page.getByRole('img', { name: '14 day stacked tokens usage by provider' }),
     ).toBeVisible();
@@ -167,14 +165,12 @@ try {
     await page.getByRole('button', { name: /Get started/ }).click();
     await page.getByRole('button', { name: 'Gemini API' }).click();
     await page.getByRole('button', { name: 'OpenRouter (free models)' }).click();
-    await page
-      .getByRole('textbox', { name: 'Gemini API API key' })
-      .fill('demo-onboarding-gemini-key');
+    await page.getByLabel('Gemini API API key', { exact: true }).fill('demo-onboarding-gemini-key');
     await page.getByRole('button', { name: 'Save key' }).first().click();
     await page.getByRole('button', { name: 'Test Gemini API', exact: true }).click();
     await expect(page.getByText('Connected')).toBeVisible();
     await page
-      .getByRole('textbox', { name: 'OpenRouter (free models) API key' })
+      .getByLabel('OpenRouter (free models) API key', { exact: true })
       .fill('demo-onboarding-openrouter-key');
     await page.getByRole('button', { name: 'Save key' }).nth(1).click();
     await page.getByRole('button', { name: 'Test OpenRouter (free models)', exact: true }).click();

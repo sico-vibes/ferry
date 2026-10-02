@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Provider } from '@ferry/shared';
-import { Dialog, Pill, TextField } from '@ferry/ui';
+import { X } from 'lucide-react';
+import { UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { useToasts } from '../state/toasts';
 
@@ -23,6 +24,16 @@ export function ProviderKeyDialog({
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const {
+    Button,
+    Dialog,
+    DialogClose,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+    Input,
+  } = UiV2;
   const save = async () => {
     if (provider?.id === 'cloudflare-workers-ai' && !accountId.trim()) {
       setMessage('Enter the Cloudflare account ID.');
@@ -98,114 +109,143 @@ export function ProviderKeyDialog({
   return (
     <Dialog
       open={open && Boolean(provider)}
-      onOpenChange={onOpenChange}
-      title={`Manage ${provider?.name ?? 'provider'} key`}
-      description={
-        realProviders
-          ? 'Keys are stored securely in your operating system keyring.'
-          : 'Keys are stored in this local demo client.'
-      }
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) {
+          setValue('');
+          setAccountId('');
+          setMessage('');
+          setConfirmRemove(false);
+        }
+        onOpenChange(nextOpen);
+      }}
     >
-      <div className="grid gap-3">
-        {provider?.signupUrl && (
-          <a
-            className="text-label text-link"
-            href={provider.signupUrl}
-            target="_blank"
-            rel="noreferrer"
-          >
-            Get a key
-          </a>
-        )}
-        {provider?.id === 'cloudflare-workers-ai' && (
-          <TextField
-            label="Cloudflare account ID"
-            value={accountId}
-            onChange={(next) => {
-              setAccountId(next);
-              setMessage('');
-            }}
-            placeholder="Account ID"
-          />
-        )}
-        <TextField
-          label={provider?.id === 'cloudflare-workers-ai' ? 'Cloudflare API token' : 'API key'}
-          masked
-          value={value}
-          onChange={(next) => {
-            setValue(next);
-            setMessage('');
-          }}
-          placeholder="Paste provider key"
-        />
-        {message && (
-          <p
-            role={
-              message.includes('failed') ||
-              message.includes('could not') ||
-              message.includes('Enter')
-                ? 'alert'
-                : 'status'
-            }
-            className={
-              message.includes('failed') ||
-              message.includes('could not') ||
-              message.includes('Enter')
-                ? 'text-meta text-danger'
-                : 'muted'
-            }
-          >
-            {message}
-          </p>
-        )}
-        {confirmRemove ? (
-          <p role="alert">
-            Remove the saved key for {provider?.name}?{' '}
-            <button
-              type="button"
-              onClick={() => {
-                setConfirmRemove(false);
-              }}
+      <DialogContent aria-describedby="provider-key-description">
+        <DialogHeader>
+          <div className="flex items-start gap-3">
+            <div className="mr-auto grid gap-2">
+              <DialogTitle>Manage {provider?.name ?? 'provider'} key</DialogTitle>
+              <DialogDescription id="provider-key-description">
+                {realProviders
+                  ? 'Keys are stored securely in your operating system keyring.'
+                  : 'Keys are stored in this local demo client.'}
+              </DialogDescription>
+            </div>
+            <DialogClose aria-label="Close dialog">
+              <X aria-hidden="true" />
+            </DialogClose>
+          </div>
+        </DialogHeader>
+        <div className="grid gap-4">
+          {provider?.signupUrl && (
+            <a
+              className="text-label text-link"
+              href={provider.signupUrl}
+              target="_blank"
+              rel="noreferrer"
             >
-              Cancel
-            </button>{' '}
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                void remove();
+              Get a key
+            </a>
+          )}
+          {provider?.id === 'cloudflare-workers-ai' && (
+            <label className="grid gap-2 text-ui-label">
+              Cloudflare account ID
+              <Input
+                autoComplete="off"
+                aria-label="Cloudflare account ID"
+                onChange={(event) => {
+                  setAccountId(event.target.value);
+                  setMessage('');
+                }}
+                placeholder="Account ID"
+                value={accountId}
+              />
+            </label>
+          )}
+          <label className="grid gap-2 text-ui-label">
+            {provider?.id === 'cloudflare-workers-ai' ? 'Cloudflare API token' : 'API key'}
+            <Input
+              aria-label={
+                provider?.id === 'cloudflare-workers-ai' ? 'Cloudflare API token' : 'API key'
+              }
+              autoComplete="new-password"
+              onChange={(event) => {
+                setValue(event.target.value);
+                setMessage('');
               }}
+              placeholder="Paste provider key"
+              type="password"
+              value={value}
+            />
+          </label>
+          {message && (
+            <p
+              role={
+                message.includes('failed') ||
+                message.includes('could not') ||
+                message.includes('Enter')
+                  ? 'alert'
+                  : 'status'
+              }
+              className={
+                message.includes('failed') ||
+                message.includes('could not') ||
+                message.includes('Enter')
+                  ? 'text-ui-meta text-destructive'
+                  : 'text-ui-meta text-muted-foreground'
+              }
             >
-              {busy ? 'Removing…' : 'Remove key'}
-            </button>
-          </p>
-        ) : (
-          <div className="button-row dialog-actions">
-            <Pill disabled={busy} onClick={() => void test()}>
-              {busy ? 'Testing…' : 'Test connection'}
-            </Pill>
-            <Pill disabled={busy} variant="blue-tint" onClick={() => void save()}>
-              {busy ? 'Saving…' : 'Save key'}
-            </Pill>
-            {provider?.keyStatus !== 'missing' && (
-              <Pill
-                disabled={busy}
-                variant="outline"
+              {message}
+            </p>
+          )}
+          {confirmRemove ? (
+            <p role="alert">
+              Remove the saved key for {provider?.name}?{' '}
+              <button
+                type="button"
                 onClick={() => {
-                  setConfirmRemove(true);
+                  setConfirmRemove(false);
                 }}
               >
-                Remove key
-              </Pill>
-            )}
-          </div>
-        )}
-        <p className="text-meta text-text-3">
-          {realProviders
-            ? 'Keys never leave your device or appear in Ferry logs.'
-            : 'Keys stay in the demo client store. Never paste a real secret into a shared demo.'}
-        </p>
-      </div>
+                Cancel
+              </button>{' '}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  void remove();
+                }}
+              >
+                {busy ? 'Removing…' : 'Remove key'}
+              </button>
+            </p>
+          ) : (
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button disabled={busy} onClick={() => void test()} variant="secondary">
+                {busy ? 'Testing…' : 'Test connection'}
+              </Button>
+              <Button disabled={busy} onClick={() => void save()}>
+                {busy ? 'Saving…' : 'Save key'}
+              </Button>
+              {provider?.keyStatus !== 'missing' && (
+                <Button
+                  disabled={busy}
+                  onClick={() => {
+                    setConfirmRemove(true);
+                  }}
+                  variant="ghost"
+                >
+                  Remove key
+                </Button>
+              )}
+            </div>
+          )}
+          <p className="text-meta text-text-3">
+            {realProviders
+              ? 'Keys never leave your device or appear in Ferry logs.'
+              : 'Keys stay in the demo client store. Never paste a real secret into a shared demo.'}
+          </p>
+        </div>
+      </DialogContent>
     </Dialog>
   );
 }

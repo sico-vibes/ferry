@@ -1027,7 +1027,7 @@ export function SettingsCanvas() {
           <Section title="Subscription logins" className="mt-4">
             <OAuthProviderRows
               providers={oauthProviders}
-              onLogin={() => void navigate({ to: '/explore' })}
+              onLogin={() => void navigate({ to: '/models' })}
               onLogout={(provider) =>
                 void client.oauth
                   .logout(provider.id)
@@ -1085,8 +1085,8 @@ export function SettingsCanvas() {
               }
             />
           </SettingRow>
-          <Pill size="sm" variant="outline" onClick={() => void navigate({ to: '/explore' })}>
-            Open in Explore
+          <Pill size="sm" variant="outline" onClick={() => void navigate({ to: '/models' })}>
+            Open Models
           </Pill>
         </Group>
       );

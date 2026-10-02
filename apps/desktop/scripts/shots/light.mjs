@@ -12,7 +12,7 @@ export async function run(page, ctx) {
       file: 'light-home.png',
     },
     { path: '/s/session_1', selector: '.session-canvas', file: 'light-session.png' },
-    { path: '/explore', heading: 'Providers', file: 'light-explore.png' },
+    { path: '/models', heading: 'Models', file: 'light-models.png' },
     { path: '/settings', heading: 'Settings', file: 'light-settings.png' },
   ];
   for (const route of routes) {

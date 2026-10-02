@@ -55,7 +55,7 @@ export async function run(page, { url, expect }) {
     'Models navigation',
   );
   await page.keyboard.press('Enter');
-  await page.waitForURL(/\/explore/);
+  await page.waitForURL(/\/models/);
 
   await page.goto(new URL('/settings', url).href, { waitUntil: 'domcontentloaded' });
   const settingsNav = page.getByRole('navigation', { name: 'Settings sections' });
@@ -125,5 +125,5 @@ export async function run(page, { url, expect }) {
     'the exhausted-capacity Add provider action',
   );
   await page.keyboard.press('Enter');
-  await page.waitForURL(/\/explore/);
+  await page.waitForURL(/\/models/);
 }

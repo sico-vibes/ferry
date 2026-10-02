@@ -55,7 +55,7 @@ try {
   };
   await navigate('/', 'Home');
   await navigate(`/s/${sessionId}`, 'Session');
-  await navigate('/explore', 'Explore');
+  await navigate('/models', 'Models');
   await navigate('/settings', 'Settings');
   const renders = await page.evaluate(() => window.ferryPerfRenderCounts ?? {});
   const result = { benchmark: 'screen-renders', harness: 'dev-only React Profiler', renders };

@@ -1,47 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
-import { ArrowUpRight } from 'lucide-react';
-import {
-  CountUp,
-  PageHeader,
-  Pill,
-  ResetsTimeline,
-  RingGauge,
-  Section,
-  ShowMoreList,
-  Stack,
-  UsageChart,
-  type UsageMetric,
-} from '@ferry/ui';
-import type { HandoffStat } from '@ferry/shared';
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { RingGauge, ResetsTimeline, ShowMoreList, UsageChart } from '@ferry/ui';
 import { useFerryClient } from '../../data/client';
-import { ProviderFilterNav } from '../LegacyContextNav';
 
-const reasons: Record<HandoffStat['reason'], string> = {
-  quota: 'Quota exhausted',
-  rate_limit: 'Rate limited',
-  error: 'Provider error',
-  context: 'Context limit',
-  capability: 'Capability',
-  manual: 'Manual',
-};
-const format = (value: number) => new Intl.NumberFormat().format(value);
-const money = (value: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
-const tightestCap = (profileCap: number | null, globalCap: number | null) =>
-  profileCap === null
-    ? globalCap
-    : globalCap === null
-      ? profileCap
-      : Math.min(profileCap, globalCap);
+const number = (value: number) => new Intl.NumberFormat().format(value);
 
-export function UsageCanvas() {
+export function UsageTab() {
   const client = useFerryClient();
-  const navigate = useNavigate();
-  const cache = useQueryClient();
   const realQuota = window.ferryHybrid?.getRealDomains().includes('quota') ?? false;
-  const [metric, setMetric] = useState<UsageMetric>('requests');
   const { data: providers = [] } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
@@ -54,48 +20,11 @@ export function UsageCanvas() {
     queryKey: ['usage', 'history', 14],
     queryFn: () => client.quota.history(14),
   });
-  const { data: paidHistory = [] } = useQuery({
-    queryKey: ['usage', 'paid-spend-history', 31],
-    queryFn: () => client.quota.history(31),
-  });
-  const { data: settings } = useQuery({
-    queryKey: ['settings'],
-    queryFn: () => client.settings.get(),
-  });
-  const { data: profiles = [] } = useQuery({
-    queryKey: ['profiles'],
-    queryFn: () => client.profiles.list(),
-  });
-  const { data: handoffs = [] } = useQuery({
-    queryKey: ['usage', 'handoffs', 14],
-    queryFn: () => client.quota.handoffs(14),
-  });
-  const { data: optimizer } = useQuery({
-    queryKey: ['usage', 'optimizer'],
-    queryFn: () => client.optimizer.stats(),
-  });
-  const names = useMemo(
+  const providerNames = useMemo(
     () => Object.fromEntries(providers.map((provider) => [provider.id, provider.name])),
     [providers],
   );
-  const activeProfile = profiles.find((profile) => profile.id === settings?.activeProfileId);
-  const today = new Date().toISOString().slice(0, 10);
-  const month = today.slice(0, 7);
-  const paidToday = paidHistory
-    .filter((point) => point.date === today)
-    .reduce((total, point) => total + point.costUsd, 0);
-  const paidMonth = paidHistory
-    .filter((point) => point.date.startsWith(month))
-    .reduce((total, point) => total + point.costUsd, 0);
-  const dailyCap = tightestCap(
-    activeProfile?.caps.dailyUsd ?? null,
-    settings?.paidCaps.dailyUsd ?? null,
-  );
-  const monthlyCap = tightestCap(
-    activeProfile?.caps.monthlyUsd ?? null,
-    settings?.paidCaps.monthlyUsd ?? null,
-  );
-  const timelineSummary = useMemo(() => {
+  const timeline = useMemo(() => {
     if (!capacity) return undefined;
     const futureResets = capacity.nextResets.filter(
       (reset) => new Date(reset.at).getTime() > Date.now(),
@@ -123,276 +52,133 @@ export function UsageCanvas() {
       );
     return { ...capacity, nextResets };
   }, [capacity, providers]);
-  const maxHandoffs = Math.max(1, ...handoffs.map((handoff) => handoff.count));
-  const maxSteps = Math.max(1, ...(capacity?.perProvider ?? []).map((item) => item.stepsLeft ?? 0));
-  const usableProviderIds = useMemo(
-    () =>
-      new Set(
-        providers
-          .filter(
-            (provider) =>
-              provider.enabled &&
-              (provider.keyStatus === 'valid' || provider.keyStatus === 'not_applicable'),
-          )
-          .map((provider) => provider.id),
-      ),
-    [providers],
+  const usableProviderIds = new Set(
+    providers
+      .filter(
+        (provider) =>
+          provider.enabled &&
+          (provider.keyStatus === 'valid' || provider.keyStatus === 'not_applicable'),
+      )
+      .map((provider) => provider.id),
   );
-  useEffect(() => {
-    const off = client.on('quota.updated', (summary) => {
-      cache.setQueryData(['usage', 'capacity'], summary);
-      void cache.invalidateQueries({ queryKey: ['usage'] });
-    });
-    return off;
-  }, [cache, client]);
+  const maxSteps = Math.max(1, ...(capacity?.perProvider ?? []).map((item) => item.stepsLeft ?? 0));
 
   return (
-    <section
-      aria-label="Usage dashboard"
-      className="canvas page-scroll-canvas min-h-0 p-5 legacy-context-page"
-    >
-      <ProviderFilterNav />
-      <Stack className="page-content mx-auto w-full max-w-[1200px]" gap={4}>
-        <PageHeader
-          title="Usage"
-          subtitle="Quota, handoffs and spend across connected providers"
-          nav={
-            <nav aria-label="Explore sections" className="flex gap-1">
-              <Pill onClick={() => void navigate({ to: '/explore' })} size="sm" variant="outline">
-                Providers
-              </Pill>
-              <Pill
-                className="border-border-strong bg-raised"
-                onClick={() => void navigate({ to: '/explore/usage' })}
-                size="sm"
-                variant="outline"
-              >
-                Usage
-              </Pill>
-            </nav>
-          }
-          actions={
-            !realQuota && (
-              <span className="rounded-pill border border-border-hair bg-card px-3 py-1 text-meta text-text-3">
-                Demo data
-              </span>
-            )
-          }
-        />
-        <div className="usage-top-grid grid">
-          <Section title="Capacity remaining" ariaLabel="Capacity remaining">
-            <div className="usage-capacity-grid min-h-24">
-              {capacity ? (
-                <RingGauge
-                  label={`${String(capacity.percentRemaining)}% capacity remaining`}
-                  size={96}
-                  stroke={6}
-                  value={capacity.percentRemaining}
-                />
-              ) : (
-                <span aria-label="Capacity unavailable" className="capacity-unavailable" role="img">
-                  —
-                </span>
-              )}
-              <div className="min-w-0">
-                <p className="text-label text-text-2">Available today</p>
-                <p className="mt-1 text-title font-semibold tabular-nums text-text-1">
-                  {capacity ? (
-                    <>
-                      ≈ <CountUp to={capacity.stepsLeftToday} /> steps left
-                    </>
-                  ) : (
-                    '—'
-                  )}
-                </p>
-                <ShowMoreList
-                  items={(capacity?.perProvider ?? []).filter((item) =>
-                    usableProviderIds.has(item.providerId),
-                  )}
-                  groupKey="usage:capacity:providers"
-                  label="providers"
-                  listClassName="usage-provider-grid mt-3 grid auto-rows-fr grid-cols-2 gap-x-4 gap-y-2"
-                  renderItem={(item) => (
-                    <li className="min-w-0" key={item.providerId}>
-                      <div className="usage-provider-row mb-1 flex justify-between gap-2 text-meta">
-                        <span className="usage-provider-name min-w-[88px] truncate text-text-2">
-                          {names[item.providerId] ?? item.providerId}
-                        </span>
-                        {item.stepsLeft === null ? (
-                          <span
-                            aria-label={`${names[item.providerId] ?? item.providerId}: limit unknown`}
-                            className="text-label text-text-2"
-                            role="img"
-                            title="Limit unknown"
-                          >
-                            —
-                          </span>
-                        ) : (
-                          <span className="tabular-nums text-text-1">{format(item.stepsLeft)}</span>
-                        )}
-                      </div>
-                      {item.stepsLeft !== null && (
-                        <div className="h-1 overflow-hidden rounded-pill bg-raised">
-                          <span
-                            className="block h-full rounded-pill bg-blue-500"
-                            style={{ width: `${String((item.stepsLeft / maxSteps) * 100)}%` }}
-                          />
-                        </div>
-                      )}
-                    </li>
-                  )}
-                />
-              </div>
-            </div>
-          </Section>
-          <Section ariaLabel="Reset timeline" className="min-h-[168px]">
-            {timelineSummary ? (
-              <ResetsTimeline providerNames={names} summary={timelineSummary} />
+    <div aria-label="Usage dashboard" className="grid gap-8" role="region">
+      <div className="grid gap-6 md:grid-cols-2">
+        <section aria-label="Capacity remaining" className="grid gap-4 rounded-card bg-card p-5">
+          <div className="flex items-center gap-5">
+            {capacity ? (
+              <RingGauge
+                label={`${String(capacity.percentRemaining)}% capacity remaining`}
+                size={104}
+                stroke={7}
+                value={capacity.percentRemaining}
+              />
             ) : (
-              <div aria-hidden="true" className="min-h-[168px]" />
+              <span
+                aria-label="Capacity unavailable"
+                className="text-2xl text-muted-foreground"
+                role="img"
+              >
+                --
+              </span>
             )}
-          </Section>
-        </div>
-        <Section title="Provider usage" ariaLabel="Usage history">
-          <header className="mb-3 flex flex-wrap items-center gap-3">
-            <div className="mr-auto">
-              <p className="mt-1 text-meta text-text-3">Daily totals over the last 14 days</p>
+            <div>
+              <h2 className="text-ui-section font-semibold">Today</h2>
+              <p className="mt-1 text-ui-secondary text-muted-foreground">Capacity remaining</p>
+              <p className="mt-2 text-ui-title font-semibold tabular-nums">
+                {capacity ? `${number(capacity.stepsLeftToday)} steps left` : 'Usage unavailable'}
+              </p>
             </div>
-            <div aria-label="Usage metric" className="flex gap-1">
-              {(['requests', 'tokens', 'cost'] as const).map((item) => (
-                <button
-                  aria-pressed={metric === item}
-                  className={`rounded-pill px-3 py-1 text-meta capitalize ${metric === item ? 'bg-blue-tint text-link' : 'text-text-3 hover:text-text-2'}`}
-                  key={item}
-                  onClick={() => {
-                    setMetric(item);
-                  }}
-                  type="button"
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-          </header>
-          <UsageChart data={history} metric={metric} providerNames={names} />
+          </div>
           <ShowMoreList
-            items={[...new Set(history.map((item) => item.providerId))]}
-            groupKey="usage:chart:providers"
+            items={(capacity?.perProvider ?? []).filter((item) =>
+              usableProviderIds.has(item.providerId),
+            )}
+            groupKey="models:usage:capacity"
             label="providers"
-            ariaLabel="Providers in chart"
-            listClassName="mt-1 flex flex-wrap gap-x-4 gap-y-1"
-            renderItem={(id, index) => (
-              <li className="flex items-center gap-1.5 text-meta text-text-3" key={id}>
-                <span
-                  className="size-2 rounded-sm"
-                  style={{ backgroundColor: `var(--series-${String((index % 8) + 1)})` }}
-                />
-                {names[id] ?? id}
+            listClassName="grid gap-3"
+            renderItem={(item) => (
+              <li className="grid gap-1.5" key={item.providerId}>
+                <div className="flex justify-between gap-3 text-ui-meta">
+                  <span className="truncate text-muted-foreground">
+                    {providerNames[item.providerId] ?? item.providerId}
+                  </span>
+                  {item.stepsLeft === null ? (
+                    <span
+                      aria-label={`${providerNames[item.providerId] ?? item.providerId}: limit unknown`}
+                      className="text-muted-foreground"
+                      role="img"
+                    >
+                      Limit unknown
+                    </span>
+                  ) : (
+                    <span className="tabular-nums">{number(item.stepsLeft)}</span>
+                  )}
+                </div>
+                {item.stepsLeft !== null && (
+                  <div
+                    aria-label={`${providerNames[item.providerId] ?? item.providerId} capacity`}
+                    aria-valuemax={100}
+                    aria-valuemin={0}
+                    aria-valuenow={(item.stepsLeft / maxSteps) * 100}
+                    className="h-1.5 overflow-hidden rounded-full bg-muted"
+                    role="progressbar"
+                  >
+                    <span
+                      className="block h-full rounded-full bg-primary"
+                      style={{ width: `${String((item.stepsLeft / maxSteps) * 100)}%` }}
+                    />
+                  </div>
+                )}
               </li>
             )}
           />
-        </Section>
-        <div className="usage-summary-grid grid">
-          <Section title="Handoffs (14d)" ariaLabel="Handoffs in fourteen days">
-            <header className="mb-3 flex items-baseline justify-between">
-              <span className="text-meta text-text-3">
-                {format(handoffs.reduce((sum, item) => sum + item.count, 0))} total
-              </span>
-            </header>
-            <ul className="grid gap-2">
-              {handoffs.map((item) => (
-                <li
-                  className="grid grid-cols-[92px_minmax(0,1fr)_24px] items-center gap-2 text-meta"
-                  key={item.reason}
-                >
-                  <span className="truncate text-text-2">{reasons[item.reason]}</span>
-                  <span className="h-1.5 overflow-hidden rounded-pill bg-raised">
-                    <span
-                      className="block h-full rounded-pill bg-blue-500"
-                      style={{ width: `${String((item.count / maxHandoffs) * 100)}%` }}
-                    />
-                  </span>
-                  <span className="text-right tabular-nums text-text-1">{item.count}</span>
-                </li>
-              ))}
-            </ul>
-          </Section>
-          <Section title="Optimizer savings" ariaLabel="Optimizer savings">
-            <header className="mb-3 flex items-center gap-2">
-              <span className="mr-auto" />
-              {(!optimizer || optimizer.demo) && (
-                <span className="rounded-pill bg-raised px-2 py-1 text-[10px] leading-[14px] text-text-2">
-                  No measurements
-                </span>
-              )}
-            </header>
-            {!optimizer || optimizer.demo ? (
-              <p className="text-meta text-text-3">
-                Measured token totals will appear after optimizer events are recorded.
-              </p>
-            ) : (
-              <>
-                <p className="text-[18px] leading-6 font-semibold tabular-nums text-text-1">
-                  {format(optimizer.today.savedTokens)}{' '}
-                  <span className="text-label font-medium text-text-2">tokens saved today</span>
-                </p>
-                <p className="mt-1 text-meta text-text-3">
-                  {optimizer.today.percent}% across {format(optimizer.today.samples)} measured
-                  events
-                </p>
-              </>
-            )}
-            <ShowMoreList
-              items={optimizer?.byOptimizer ?? []}
-              groupKey="usage:optimizers"
-              label="optimizers"
-              listClassName="mt-3 grid gap-2"
-              renderItem={(item) => (
-                <li className="flex items-center justify-between gap-3 text-meta" key={item.id}>
-                  <span className="truncate text-text-2">{item.name}</span>
-                  <span className="shrink-0 tabular-nums text-text-1">
-                    {format(item.savedTokens)} · {item.percent}%
-                  </span>
-                </li>
-              )}
-            />
-          </Section>
-          <Section title="Paid spend" ariaLabel="Paid spend">
-            <p className="mb-3 text-meta text-text-3">
-              {activeProfile
-                ? `All providers · ${activeProfile.name} and global limits`
-                : 'All providers'}
+        </section>
+        {timeline ? (
+          <ResetsTimeline providerNames={providerNames} summary={timeline} />
+        ) : (
+          <section aria-label="Reset timeline" className="min-h-40 rounded-card bg-card p-5">
+            <p className="text-ui-secondary text-muted-foreground">
+              Reset times are not available yet.
             </p>
-            <dl className="grid gap-3">
-              <div className="flex items-baseline justify-between gap-3">
-                <dt className="text-label text-text-2">Today</dt>
-                <dd className="tabular-nums text-label font-medium text-text-1">
-                  {money(paidToday)}
-                  {dailyCap === null ? ' · no cap' : ` of ${money(dailyCap)}`}
-                </dd>
-              </div>
-              <div className="flex items-baseline justify-between gap-3">
-                <dt className="text-label text-text-2">This month</dt>
-                <dd className="tabular-nums text-label font-medium text-text-1">
-                  {money(paidMonth)}
-                  {monthlyCap === null ? ' · no cap' : ` of ${money(monthlyCap)}`}
-                </dd>
-              </div>
-              <p className="text-meta text-text-3">
-                Spend is calculated from recorded token usage and model prices. Unknown prices use a
-                conservative estimate.
-              </p>
-            </dl>
-          </Section>
-        </div>
-        <button
-          className="inline-flex w-fit items-center gap-1 self-end text-meta text-link hover:underline"
-          onClick={() => void navigate({ to: '/explore' })}
-          type="button"
-        >
-          Manage providers <ArrowUpRight size={13} />
-        </button>
-      </Stack>
-    </section>
+          </section>
+        )}
+      </div>
+
+      <section aria-label="Usage history" className="grid gap-4 rounded-card bg-card p-5">
+        <header className="flex flex-wrap items-start gap-3">
+          <div className="mr-auto">
+            <h2 className="text-ui-section font-semibold">Last 14 days</h2>
+            <p className="mt-1 text-ui-secondary text-muted-foreground">
+              Daily token use by provider
+            </p>
+          </div>
+          {!realQuota && (
+            <span className="rounded-full bg-muted px-2.5 py-1 text-ui-meta text-muted-foreground">
+              Demo data
+            </span>
+          )}
+        </header>
+        <UsageChart data={history} metric="tokens" providerNames={providerNames} />
+        <ShowMoreList
+          ariaLabel="Providers in chart"
+          items={[...new Set(history.map((item) => item.providerId))]}
+          groupKey="models:usage:chart-providers"
+          label="providers"
+          listClassName="flex flex-wrap gap-x-4 gap-y-2"
+          renderItem={(id, index) => (
+            <li className="flex items-center gap-2 text-ui-meta text-muted-foreground" key={id}>
+              <span
+                className="size-2 rounded-sm"
+                style={{ backgroundColor: `var(--series-${String((index % 8) + 1)})` }}
+              />
+              {providerNames[id] ?? id}
+            </li>
+          )}
+        />
+      </section>
+    </div>
   );
 }

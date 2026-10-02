@@ -22,13 +22,13 @@ export function DataUseBadge({ dataUse }: { dataUse: string | null | undefined }
         : 'Unknown';
   const tone =
     status === 'training'
-      ? 'bg-[var(--tint-warn)] text-warn'
+      ? 'bg-warning/10 text-warning'
       : status === 'no-training'
-        ? 'bg-[var(--tint-success)] text-success-legacy'
-        : 'bg-icon-circle text-text-2';
+        ? 'bg-success/10 text-success'
+        : 'bg-muted text-muted-foreground';
   return (
     <span
-      className={`inline-flex rounded-pill px-2 py-0.5 text-meta ${tone}`}
+      className={`inline-flex rounded-full px-2 py-0.5 text-ui-meta ${tone}`}
       title={dataUse ?? label}
     >
       {label}

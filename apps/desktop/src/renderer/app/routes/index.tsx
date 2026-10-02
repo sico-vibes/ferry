@@ -1,6 +1,7 @@
 import { homeRoutes } from './home';
 import { sessionRoutes } from './session';
 import { exploreRoutes } from './explore';
+import { modelsRoutes } from './models';
 import { libraryRoutes } from './library';
 import { settingsRoutes } from './settings';
 import { rootRoute } from './root';
@@ -31,6 +32,7 @@ export const routeRegistry = [
   ...homeRoutes,
   ...sessionRoutes,
   ...exploreRoutes,
+  ...modelsRoutes,
   ...libraryRoutes,
   ...settingsRoutes,
   notFoundRoute,

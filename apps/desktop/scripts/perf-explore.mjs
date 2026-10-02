@@ -47,10 +47,10 @@ try {
     });
     try {
       const page = await context.newPage();
-      await page.goto(`${origin}/explore?demo=explore-perf${query}`, {
+      await page.goto(`${origin}/models/catalog?demo=explore-perf${query}`, {
         waitUntil: 'domcontentloaded',
       });
-      await page.locator('.app-shell').waitFor();
+      await page.locator('.v2-app-shell').waitFor();
       await page.getByRole('heading', { name: 'Models', exact: true }).waitFor();
       const expectedRows = query ? 1_200 : 50;
       await page

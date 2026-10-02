@@ -15,14 +15,14 @@ const labels: Record<TagBadgeKind, string> = {
 };
 
 const styles: Record<TagBadgeKind, string> = {
-  legit: 'bg-[var(--tint-success)] text-success-legacy',
-  promo: 'bg-[var(--tint-warn)] text-warn',
-  trial: 'bg-[var(--tint-warn)] text-warn',
-  credits: 'bg-[var(--tint-blue)] text-link',
-  paid: 'bg-[var(--tint-blue)] text-link',
-  cli: 'bg-icon-circle text-text-2',
-  caution: 'bg-[var(--tint-warn)] text-warn',
-  subscription_oauth: 'bg-[var(--tint-warn)] text-warn',
+  legit: 'bg-success/10 text-success',
+  promo: 'bg-warning/10 text-warning',
+  trial: 'bg-warning/10 text-warning',
+  credits: 'bg-accent text-accent-foreground',
+  paid: 'bg-accent text-accent-foreground',
+  cli: 'bg-muted text-muted-foreground',
+  caution: 'bg-warning/10 text-warning',
+  subscription_oauth: 'bg-warning/10 text-warning',
 };
 
 export function TagBadge({ kind, className }: { kind: TagBadgeKind; className?: string }) {
@@ -35,7 +35,7 @@ export function TagBadge({ kind, className }: { kind: TagBadgeKind; className?: 
   return (
     <span
       className={cn(
-        'inline-flex h-5 items-center rounded-pill px-2 text-[11px] font-medium',
+        'inline-flex h-5 items-center rounded-full px-2 text-ui-meta font-medium',
         styles[kind],
         className,
       )}
