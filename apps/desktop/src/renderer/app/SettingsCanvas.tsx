@@ -225,6 +225,8 @@ export function SettingsCanvas() {
   const toast = useToasts((state) => state.push);
   const keybindings = useKeybindings();
   const [keybindingsDraft, setKeybindingsDraft] = useState(keybindings.content);
+  const [keybindingsSaved, setKeybindingsSaved] = useState(false);
+  const [keybindingsSaveError, setKeybindingsSaveError] = useState<string | null>(null);
   useEffect(() => {
     setKeybindingsDraft(keybindings.content);
   }, [keybindings.content]);
@@ -271,6 +273,9 @@ export function SettingsCanvas() {
   const { data: settingsData } = useSettings();
   const [pendingBySection, setPendingBySection] = useState<
     Partial<Record<SettingsSection, Parameters<typeof client.settings.update>[0]>>
+  >({});
+  const [saveFeedback, setSaveFeedback] = useState<
+    Partial<Record<SettingsSection, { kind: 'saved' } | { kind: 'error'; message: string }>>
   >({});
   const pendingSettings = pendingBySection[section];
   const settings = settingsData
@@ -395,6 +400,11 @@ export function SettingsCanvas() {
     }
   };
   const update = (patch: Parameters<typeof client.settings.update>[0]) => {
+    setSaveFeedback((current) => {
+      const next = { ...current };
+      Reflect.deleteProperty(next, section);
+      return next;
+    });
     setPendingBySection((current) => {
       const previous = current[section] ?? {};
       return {
@@ -423,26 +433,48 @@ export function SettingsCanvas() {
         Reflect.deleteProperty(next, section);
         return next;
       });
-      toast({ kind: 'success', title: 'Settings saved', body: null });
+      setSaveFeedback((current) => ({ ...current, [section]: { kind: 'saved' } }));
     } catch (error) {
-      toast({
-        kind: 'error',
-        title: 'Settings could not be saved',
-        body: error instanceof Error ? error.message : String(error),
-      });
+      setSaveFeedback((current) => ({
+        ...current,
+        [section]: {
+          kind: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      }));
     }
   };
   const mutateProfile = <K extends keyof Profile>(key: K, value: Profile[K]) => {
+    setSaveFeedback((current) => {
+      const next = { ...current };
+      Reflect.deleteProperty(next, 'Profiles');
+      return next;
+    });
     setProfileDraft((current) => (current ? { ...current, [key]: value } : current));
   };
   const openProfile = (profile: Profile) => {
+    setSaveFeedback((current) => {
+      const next = { ...current };
+      Reflect.deleteProperty(next, 'Profiles');
+      return next;
+    });
     setProfileDraft(structuredClone(profile));
   };
   const saveProfile = async () => {
     if (!profileDraft) return;
-    await client.profiles.save(profileDraft);
-    await cache.invalidateQueries({ queryKey: keys.profiles });
-    toast({ kind: 'success', title: `Profile saved: ${profileDraft.name}`, body: null });
+    try {
+      await client.profiles.save(profileDraft);
+      await cache.invalidateQueries({ queryKey: keys.profiles });
+      setSaveFeedback((current) => ({ ...current, Profiles: { kind: 'saved' } }));
+    } catch (error) {
+      setSaveFeedback((current) => ({
+        ...current,
+        Profiles: {
+          kind: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      }));
+    }
   };
   const toggleOptimizer = (
     key: 'toolOutputFilters' | 'recoveryHandles' | 'contextHygiene' | 'rtk',
@@ -540,6 +572,8 @@ export function SettingsCanvas() {
               value={keybindingsDraft}
               onChange={(event) => {
                 setKeybindingsDraft(event.target.value);
+                setKeybindingsSaved(false);
+                setKeybindingsSaveError(null);
               }}
             />
             {keybindingsDraft !== keybindings.content && (
@@ -548,25 +582,28 @@ export function SettingsCanvas() {
                 onClick={() => {
                   saveKeybindings(keybindingsDraft)
                     .then((errors) => {
-                      if (errors.length)
-                        toast({
-                          kind: 'error',
-                          title: 'Keybindings validation failed',
-                          body: errors.join('; '),
-                        });
-                      else toast({ kind: 'success', title: 'Keybindings saved', body: null });
+                      if (errors.length) setKeybindingsSaveError(errors.join('; '));
+                      else setKeybindingsSaved(true);
                     })
                     .catch((error: unknown) => {
-                      toast({
-                        kind: 'error',
-                        title: 'Could not save keybindings',
-                        body: error instanceof Error ? error.message : String(error),
-                      });
+                      setKeybindingsSaveError(
+                        error instanceof Error ? error.message : String(error),
+                      );
                     });
                 }}
               >
                 Save changes
               </UiV2.Button>
+            )}
+            {keybindingsSaved && (
+              <span className="v2-settings-save-success" role="status">
+                Saved
+              </span>
+            )}
+            {keybindingsSaveError && (
+              <span className="v2-settings-save-error" role="alert">
+                Could not save: {keybindingsSaveError}
+              </span>
             )}
           </Group>
         </>
@@ -641,11 +678,6 @@ export function SettingsCanvas() {
                           void client.profiles.remove(profileDraft.id).then(async () => {
                             await cache.invalidateQueries({ queryKey: keys.profiles });
                             setProfileDraft(null);
-                            toast({
-                              kind: 'success',
-                              title: 'Profile deleted',
-                              body: 'You can create another profile in Settings.',
-                            });
                           }),
                       );
                     }}
@@ -658,6 +690,16 @@ export function SettingsCanvas() {
                     <UiV2.Button size="sm" variant="default" onClick={() => void saveProfile()}>
                       Save changes
                     </UiV2.Button>
+                  )}
+                  {saveFeedback.Profiles?.kind === 'saved' && (
+                    <span className="v2-settings-save-success" role="status">
+                      Saved
+                    </span>
+                  )}
+                  {saveFeedback.Profiles?.kind === 'error' && (
+                    <span className="v2-settings-save-error" role="alert">
+                      Could not save: {saveFeedback.Profiles.message}
+                    </span>
                   )}
                 </div>
               </div>
@@ -1864,24 +1906,10 @@ export function SettingsCanvas() {
               />
             </SettingRow>
             <div className="button-row">
-              <UiV2.Button
-                size="sm"
-                onClick={() => {
-                  toast({
-                    kind: 'success',
-                    title: 'Export prepared',
-                    body: 'Export is ready.',
-                  });
-                }}
-              >
+              <UiV2.Button size="sm" disabled>
                 Export data
               </UiV2.Button>
-              <UiV2.Button
-                size="sm"
-                onClick={() => {
-                  setConfirm('Delete local data?');
-                }}
-              >
+              <UiV2.Button size="sm" disabled>
                 Delete local data
               </UiV2.Button>
             </div>
@@ -2086,7 +2114,7 @@ export function SettingsCanvas() {
           title={pageCopy.title}
           subtitle={pageCopy.description}
           primaryAction={
-            pendingSettings || section === 'General' ? (
+            pendingSettings || section === 'General' || saveFeedback[section] ? (
               <div className="v2-settings-actions">
                 {section === 'General' && (
                   <UiV2.Button
@@ -2095,11 +2123,6 @@ export function SettingsCanvas() {
                       setConfirm('Reset layout?');
                       setConfirmAction(() => () => {
                         useUI.getState().resetLayout();
-                        toast({
-                          kind: 'success',
-                          title: 'Layout reset',
-                          body: 'Panel sizes and positions are back to default.',
-                        });
                       });
                     }}
                   >
@@ -2110,6 +2133,16 @@ export function SettingsCanvas() {
                   <UiV2.Button variant="default" onClick={() => void saveSettings()}>
                     Save changes
                   </UiV2.Button>
+                )}
+                {saveFeedback[section]?.kind === 'saved' && (
+                  <span className="v2-settings-save-success" role="status">
+                    Saved
+                  </span>
+                )}
+                {saveFeedback[section]?.kind === 'error' && (
+                  <span className="v2-settings-save-error" role="alert">
+                    Could not save: {saveFeedback[section].message}
+                  </span>
                 )}
               </div>
             ) : undefined
@@ -2151,12 +2184,6 @@ export function SettingsCanvas() {
               const action = confirmAction;
               setConfirmAction(null);
               if (action) void action();
-              else
-                toast({
-                  kind: 'success',
-                  title: 'Local data cleared',
-                  body: 'Changes remain available after refresh.',
-                });
             }}
           >
             Confirm
@@ -2194,11 +2221,6 @@ export function SettingsCanvas() {
               variant="default"
               onClick={() => {
                 setAddMcp(false);
-                toast({
-                  kind: 'info',
-                  title: 'MCP server request saved',
-                  body: mcpName || mcpAddress || 'Demo server',
-                });
                 setMcpName('');
                 setMcpAddress('');
               }}

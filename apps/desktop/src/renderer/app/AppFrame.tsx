@@ -1,4 +1,5 @@
 import { Profiler, useEffect, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { ChevronRight } from 'lucide-react';
@@ -27,6 +28,27 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [engineRestarting, setEngineRestarting] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateSnapshot | null>(null);
+  const [titlebarReserve, setTitlebarReserve] = useState(0);
+  useEffect(() => {
+    const syncTitlebarReserve = () => {
+      const overlay = (
+        navigator as Navigator & {
+          windowControlsOverlay?: { getTitlebarAreaRect: () => DOMRectReadOnly };
+        }
+      ).windowControlsOverlay;
+      if (overlay) {
+        const area = overlay.getTitlebarAreaRect();
+        setTitlebarReserve(Math.max(0, window.innerWidth - area.x - area.width));
+      } else {
+        setTitlebarReserve(window.ferryHost?.platform === 'win32' ? 140 : 0);
+      }
+    };
+    syncTitlebarReserve();
+    window.addEventListener('resize', syncTitlebarReserve);
+    return () => {
+      window.removeEventListener('resize', syncTitlebarReserve);
+    };
+  }, []);
   useFerryEvents();
   useEffect(() => {
     if (!window.ferryHost) return;
@@ -322,6 +344,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     <div
       className={`ferry-ui v2-app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed || reviewPage ? 'right-is-collapsed' : ''} ${reviewPage ? 'v2-review-route' : pathname === '/' || pathname.startsWith('/s/') ? 'v2-chat-route' : pathname.startsWith('/settings') ? 'v2-settings-route' : ''}`}
       data-density={density}
+      style={{ '--titlebar-overlay-reserve': `${String(titlebarReserve)}px` } as CSSProperties}
     >
       <div className="title-strip" aria-hidden="true" />
       <div

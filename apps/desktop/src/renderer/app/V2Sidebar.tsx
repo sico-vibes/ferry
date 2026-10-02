@@ -65,6 +65,12 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
   const { data: capacity } = useCapacity();
   const pushToast = useToasts((state) => state.push);
   const [showAll, setShowAll] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const { data: systemInfo } = useQuery({
+    queryKey: keys.system,
+    queryFn: () => client.system.info(),
+    enabled: aboutOpen,
+  });
   const orderedSessions = useMemo(() => {
     const pinned = sessions
       .filter((session) => session.pinned)
@@ -313,10 +319,12 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={() => {
-                  pushToast({
-                    kind: 'info',
-                    title: 'Help',
-                    body: 'Help center is not connected in this preview.',
+                  void window.ferryHost?.openHelp().catch((error: unknown) => {
+                    pushToast({
+                      kind: 'error',
+                      title: 'Help could not be opened',
+                      body: error instanceof Error ? error.message : String(error),
+                    });
                   });
                 }}
               >
@@ -325,7 +333,7 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => {
-                  pushToast({ kind: 'info', title: 'About Ferry', body: 'Ferry desktop preview.' });
+                  setAboutOpen(true);
                 }}
               >
                 <Sparkles />
@@ -334,6 +342,57 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        <UiV2.Dialog open={aboutOpen} onOpenChange={setAboutOpen}>
+          <UiV2.DialogContent className="v2-about-dialog">
+            <UiV2.DialogHeader>
+              <UiV2.DialogTitle>About Ferry</UiV2.DialogTitle>
+              <UiV2.DialogDescription>
+                Ferry desktop for routing coding work.
+              </UiV2.DialogDescription>
+            </UiV2.DialogHeader>
+            <dl className="v2-about-details">
+              <div>
+                <dt>App version</dt>
+                <dd>{window.ferryHost?.versions.app ?? 'Unavailable'}</dd>
+              </div>
+              <div>
+                <dt>Channel</dt>
+                <dd>{window.ferryHost?.channel ?? 'beta'}</dd>
+              </div>
+              <div>
+                <dt>Engine version</dt>
+                <dd>{systemInfo?.version ?? 'Unavailable'}</dd>
+              </div>
+              <div className="v2-about-data-folder">
+                <dt>Data folder</dt>
+                <dd>{systemInfo?.dataDir ?? 'Unavailable'}</dd>
+                <UiV2.Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!systemInfo?.dataDir || !window.ferryHost}
+                  onClick={() => {
+                    if (systemInfo?.dataDir)
+                      void window.ferryHost
+                        ?.revealDataFolder(systemInfo.dataDir)
+                        .catch((error: unknown) => {
+                          pushToast({
+                            kind: 'error',
+                            title: 'Data folder could not be revealed',
+                            body: error instanceof Error ? error.message : String(error),
+                          });
+                        });
+                  }}
+                >
+                  Reveal
+                </UiV2.Button>
+              </div>
+              <div>
+                <dt>License</dt>
+                <dd>MIT</dd>
+              </div>
+            </dl>
+          </UiV2.DialogContent>
+        </UiV2.Dialog>
       </aside>
     </TooltipProvider>
   );

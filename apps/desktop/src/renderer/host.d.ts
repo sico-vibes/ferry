@@ -10,6 +10,8 @@ declare global {
       e2eDiagnosticsEnabled?: boolean;
       realDomainsFromEnvironment(): string[];
       openFolder(): Promise<string | null>;
+      openHelp(): Promise<void>;
+      revealDataFolder(path: string): Promise<void>;
       readKeybindings(): Promise<{ path: string; content: string; error: string | null }>;
       writeKeybindings(
         content: string,

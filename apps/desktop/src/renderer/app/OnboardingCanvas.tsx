@@ -6,7 +6,6 @@ import { FerryMark, UiV2 } from '@ferry/ui';
 import type { ProviderId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { keys } from '../data/queries';
-import { useToasts } from '../state/toasts';
 
 const recommended = [
   'gemini',
@@ -83,7 +82,6 @@ export function OnboardingCanvas() {
   const client = useFerryClient();
   const cache = useQueryClient();
   const navigate = useNavigate();
-  const toast = useToasts((state) => state.push);
   const [step, setStep] = useState(() =>
     Math.min(2, Math.max(0, Number(localStorage.getItem('ferry.onboardingStep') ?? 0))),
   );
@@ -134,7 +132,6 @@ export function OnboardingCanvas() {
         : value;
     await client.providers.setKey(id as ProviderId, secret);
     await cache.invalidateQueries({ queryKey: ['providers'] });
-    toast({ kind: 'success', title: 'Key saved', body: 'Run a test to verify this provider.' });
   };
   const testProvider = async (id: string) => {
     const provider = providers.find((item) => item.id === id);

@@ -23,6 +23,8 @@ const themes = ['dark', 'light'];
 const states = [
   'home-idle',
   'session-idle',
+  'session-interrupted',
+  'about-dialog',
   'session-streaming',
   'approval-pending',
   'drawer-open',
@@ -34,6 +36,7 @@ const states = [
   'models-catalog',
   'models-usage',
   'settings-general',
+  'settings-scrolled',
   'settings-profiles',
   'settings-providers',
   'settings-routing',
@@ -114,22 +117,34 @@ async function captureState(browser, state, theme, viewport) {
       await page.getByRole('heading', { name: 'Models', exact: true }).waitFor();
       await page.getByRole('tab', { name: tab, exact: true }).waitFor();
     } else if (state.startsWith('settings-')) {
-      const section = {
-        'settings-general': 'General',
-        'settings-profiles': 'Profiles',
-        'settings-providers': 'Providers & keys',
-        'settings-routing': 'Routing',
-        'settings-optimizers': 'Optimizers',
-        'settings-delegation': 'Delegation',
-        'settings-permissions': 'Permissions',
-        'settings-gateway': 'Gateway',
-        'settings-data-privacy': 'Data & privacy',
-        'settings-shortcuts': 'Shortcuts',
-        'settings-about': 'About',
-      }[state];
+      const section =
+        state === 'settings-scrolled'
+          ? 'Providers & keys'
+          : {
+              'settings-general': 'General',
+              'settings-profiles': 'Profiles',
+              'settings-providers': 'Providers & keys',
+              'settings-routing': 'Routing',
+              'settings-optimizers': 'Optimizers',
+              'settings-delegation': 'Delegation',
+              'settings-permissions': 'Permissions',
+              'settings-gateway': 'Gateway',
+              'settings-data-privacy': 'Data & privacy',
+              'settings-shortcuts': 'Shortcuts',
+              'settings-about': 'About',
+            }[state];
       await page.goto(new URL('/settings', baseUrl).href);
       await page.getByRole('navigation', { name: 'Settings sections' }).waitFor();
       await page.getByRole('button', { name: section, exact: true }).click();
+      if (state === 'settings-scrolled') {
+        const content = page.locator('.v2-settings-content');
+        await content.evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+        });
+        await page.waitForFunction(
+          () => document.querySelector('.v2-settings-content')?.scrollTop > 0,
+        );
+      }
     } else if (state.startsWith('onboarding-')) {
       await page.goto(new URL('/settings', baseUrl).href);
       await page.getByRole('button', { name: 'Run onboarding again' }).click();
@@ -148,6 +163,21 @@ async function captureState(browser, state, theme, viewport) {
         await page.getByRole('button', { name: 'Toggle drawer' }).click();
         await page.getByRole('tablist', { name: 'Session drawer tabs' }).waitFor();
       }
+    } else if (state === 'session-interrupted') {
+      await page.evaluate(() => {
+        const persisted = JSON.parse(localStorage.getItem('ferry.mock.v1') ?? '{}');
+        const session = persisted.data?.sessions?.find((item) => item.id === 'session_3');
+        if (!session) throw new Error('session_3 is missing from the mock fixture');
+        session.status = 'interrupted';
+        session.inFlight = false;
+        localStorage.setItem('ferry.mock.v1', JSON.stringify(persisted));
+      });
+      await page.goto(new URL('/s/session_3', baseUrl).href);
+      await page.locator('.session-resume-banner').waitFor();
+    } else if (state === 'about-dialog') {
+      await page.getByRole('button', { name: 'User menu', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'About', exact: true }).click();
+      await page.getByRole('dialog', { name: 'About Ferry', exact: true }).waitFor();
     } else if (state.startsWith('drawer-')) {
       await page.goto(new URL('/s/session_3', baseUrl).href);
       await page.locator('.transcript-viewport').waitFor();

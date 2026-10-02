@@ -93,7 +93,6 @@ export function createPlaybackRunner(
         session.modelRef = to;
         session.updatedAt = clock.now().toISOString();
         emit('session.updated', session);
-        emit('toast', { kind: 'info', title: `Switched to ${to}`, body: explanation });
       };
       const ensureCapacity = () => {
         if (!session.modelRef) return;

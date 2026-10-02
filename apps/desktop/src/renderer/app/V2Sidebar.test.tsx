@@ -33,6 +33,7 @@ describe('V2Sidebar new chat', () => {
   });
   afterEach(() => {
     cleanup();
+    delete window.ferryHost;
   });
 
   it('delegates New Chat to the shared handler', async () => {
@@ -116,5 +117,62 @@ describe('V2Sidebar new chat', () => {
     if (!settingsUpdated) throw new Error('Settings event handler was not registered');
     settingsUpdated(updatedSettings);
     expect(queryClient.getQueryData(keys.settings)).toEqual(updatedSettings);
+  });
+
+  it('opens About with version, channel, engine, data folder, and license details', async () => {
+    const client = createDemoFerryClient({ speed: 0, latencyMs: 0 });
+    const workspace = (await client.workspaces.list())[0];
+    if (!workspace) throw new Error('Workspace fixture missing');
+    useUI.getState().setSelectedWorkspace(workspace.id);
+    const openHelp = vi.fn().mockResolvedValue(undefined);
+    window.ferryHost = {
+      versions: { app: '0.9.0-beta.1', electron: '44.0.0' },
+      channel: 'beta',
+      openHelp,
+      revealDataFolder: vi.fn().mockResolvedValue(undefined),
+    } as unknown as NonNullable<typeof window.ferryHost>;
+    const root = createRootRoute({ component: Outlet });
+    const home = createRoute({
+      getParentRoute: () => root,
+      path: '/',
+      component: () => <V2Sidebar onNewChat={() => undefined} />,
+    });
+    const router = createRouter({
+      routeTree: root.addChildren([home]),
+      history: createMemoryHistory({ initialEntries: ['/'] }),
+    });
+    await router.load();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(keys.workspaces, [workspace]);
+    queryClient.setQueryData(keys.settings, await client.settings.get());
+    queryClient.setQueryData(keys.profiles, await client.profiles.list());
+    queryClient.setQueryData(keys.capacity, await client.quota.capacity());
+    queryClient.setQueryData(keys.system, {
+      ...(await client.system.info()),
+      version: '0.1.0',
+      dataDir: 'C:\\Users\\test\\AppData\\Roaming\\Ferry\\data',
+    });
+    render(
+      <FerryProvider client={client}>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </FerryProvider>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: /^User menu$/ }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /^About$/ }));
+    const dialog = await screen.findByRole('dialog', { name: /^About Ferry$/ });
+    expect(dialog.textContent).toContain('0.9.0-beta.1');
+    expect(dialog.textContent).toContain('beta');
+    expect(dialog.textContent).toContain('0.1.0');
+    expect(dialog.textContent).toContain('C:\\Users\\test\\AppData\\Roaming\\Ferry\\data');
+    expect(dialog.textContent).toContain('MIT');
+    await userEvent.keyboard('{Escape}');
+    await userEvent.click(await screen.findByRole('button', { name: /^User menu$/ }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /^Help$/ }));
+    await waitFor(() => {
+      expect(openHelp).toHaveBeenCalledOnce();
+    });
   });
 });

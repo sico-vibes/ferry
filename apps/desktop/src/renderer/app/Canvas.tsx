@@ -307,9 +307,6 @@ export function HomeCanvas() {
               useUI.getState().setSelectedWorkspace(workspace.id);
             },
           }))}
-          onAttach={() => {
-            pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
-          }}
         />
         <div className="v2-quick-starts" aria-label="Quick starts">
           {(
@@ -1283,9 +1280,6 @@ export function SessionCanvas() {
           },
         },
       ]}
-      onAttach={() => {
-        pushToast({ kind: 'info', title: 'Attachments arrive later', body: null });
-      }}
     />
   );
   return (

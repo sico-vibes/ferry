@@ -4,7 +4,6 @@ import type { Provider } from '@ferry/shared';
 import { X } from 'lucide-react';
 import { UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
-import { useToasts } from '../state/toasts';
 
 export function ProviderKeyDialog({
   provider,
@@ -17,7 +16,6 @@ export function ProviderKeyDialog({
 }) {
   const client = useFerryClient();
   const cache = useQueryClient();
-  const toast = useToasts((state) => state.push);
   const realProviders = window.ferryHybrid?.getRealDomains().includes('providers') ?? false;
   const [value, setValue] = useState('');
   const [accountId, setAccountId] = useState('');
@@ -54,7 +52,6 @@ export function ProviderKeyDialog({
       setValue('');
       setAccountId('');
       setMessage('Key saved. Test the connection to verify it.');
-      toast({ kind: 'success', title: 'Key saved', body: `${provider.name} is ready to test.` });
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -95,7 +92,6 @@ export function ProviderKeyDialog({
       await cache.invalidateQueries({ queryKey: ['providers'] });
       setConfirmRemove(false);
       setMessage('Key removed.');
-      toast({ kind: 'info', title: 'Key removed', body: `${provider.name} has no saved key.` });
     } catch (error) {
       setMessage(
         error instanceof Error

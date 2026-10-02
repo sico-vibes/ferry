@@ -216,12 +216,7 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
         if (path) {
           await client.workspaces.open(path);
           await cache.invalidateQueries({ queryKey: keys.workspaces });
-        } else
-          pushToast({
-            kind: 'info',
-            title: 'Open folder',
-            body: 'Folder selection is available in the desktop app.',
-          });
+        }
         break;
       }
       case 'density':
@@ -267,11 +262,6 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
       case 'delegate':
         useUI.getState().setRightTab('plan');
         if (useUI.getState().rightCollapsed) useUI.getState().toggleRight();
-        pushToast({
-          kind: 'info',
-          title: 'Delegate current task',
-          body: 'Choose a lane and brief from the Plan panel.',
-        });
         break;
       case 'checkpoint': {
         if (!activeId) break;
@@ -295,7 +285,6 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
           await client.profiles.activate(next.id, activeId ?? undefined);
           await cache.invalidateQueries({ queryKey: keys.profiles });
           await cache.invalidateQueries({ queryKey: keys.settings });
-          pushToast({ kind: 'success', title: 'Profile selected', body: next.name });
         }
         break;
       }
