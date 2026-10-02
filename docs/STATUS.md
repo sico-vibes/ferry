@@ -10,8 +10,7 @@ Releases (`v0.9.0-beta.N`, auto-published on every merge to `main`; installed ap
 
 1. **Original master plan: complete** (integrated on `main` 2026-09-30; milestones below).
 2. **v0.10 upgrade waves: first batch on `main`** (`41eb69c`, beta `v0.9.0-beta.10`): P0/P2, P1, U1, U5, U2. P3/P6 parked (see below).
-3. **Next: full UI remake** (`docs/plans/ui-remake.md`, spec `design/DESIGN-v2.md`). Backend v0.10 work
-   resumes after the remake from the "Not started" rows below.
+3. **UI remake v2: complete on `main`** (2026-10-02, `a649d0a`): UI-0 foundation, UI-1 shell/Home/Session/drawer (user-approved at checkpoint C-UI, with seamless tone-based separation), UI-2 Library/Models/Settings/Onboarding/Review/palette/states, UI-3 legacy cleanup + polish. Gates: check 63/63, e2e 5/5 phases, 20/20 web flows, screenshots `design/screenshots/v2/` (both themes, 1440 and 1024). Backend v0.10 work resumes from the "Not started" rows below.
 
 ## Milestones (original plan)
 
@@ -53,7 +52,7 @@ indexes) and must ship in all build targets.
 
 ## Known gaps
 
-- Real-domains paid-guardrails e2e is intermittent under load (approval part sometimes absent after allow-once); passes in isolation.
+- UI nits left: Models page title size vs other pages; two provider cards wrap "Manage key". Legacy palette tokens still used by a few components (UI-3 cleanup was partial).
 
 - 2 s packaged start-up is a target, not met on cold CI runners (advisory warning; fails above 10 s).
 - grep and checkpoint snapshots on a 50k-file repo are slow on this laptop with Defender real-time

@@ -1,6 +1,6 @@
 # Ferry UI remake plan (v2)
 
-Status: **planned, starts after the in-flight v0.10 lanes are integrated** (WP-A, WP-B, WP-C, W1-A, W1-B, U5).
+Status: **complete** (2026-10-02, on `main`). Paid-approval audit bug, mock-profile onboarding bug, review toolbar visibility and several focus/stacking bugs were found and fixed during the remake.
 Spec: `design/DESIGN-v2.md` (authoritative). Decisions: Ferry violet accent, on-demand drawer, Geist,
 dark + light together. Library: **shadcn/ui** (Radix + Tailwind v4, MIT) — Ferry already uses Radix,
 Tailwind v4, cmdk, lucide and sonner, so this is an evolution of the stack, not a new one.
