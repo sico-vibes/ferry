@@ -38,10 +38,11 @@ const releaseChannel = releaseChannelForVersion(
   process.env.FERRY_RELEASE_VERSION ?? app.getVersion(),
 );
 
-// Packaged builds use the icon embedded in the .exe by electron-builder (build/icon.ico).
+// Keep a standalone icon resource for BrowserWindow in packaged builds.
 const DEV_WINDOW_ICON = join(import.meta.dirname, '../../build/icon.ico');
 
 app.setName('Ferry');
+if (process.platform === 'win32') app.setAppUserModelId('dev.ferry.app');
 const e2eUserDataPath = process.env.FERRY_E2E_USER_DATA_DIR;
 if (e2eUserDataPath) app.setPath('userData', e2eUserDataPath);
 
@@ -359,7 +360,7 @@ async function createWindow(): Promise<void> {
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: WINDOW_BACKGROUND, symbolColor: WINDOW_SYMBOL, height: 36 },
     backgroundColor: WINDOW_BACKGROUND,
-    ...(app.isPackaged ? {} : { icon: DEV_WINDOW_ICON }),
+    icon: app.isPackaged ? join(process.resourcesPath, 'app-icon.ico') : DEV_WINDOW_ICON,
     show: false,
     webPreferences: {
       contextIsolation: true,
@@ -631,7 +632,6 @@ app
         await rm(oldUserData, { recursive: false }).catch(() => undefined);
       }
     }
-    app.setAppUserModelId('dev.ferry.app');
     if (gotLock) {
       launchCore();
       if (process.env.FERRY_E2E_USER_DATA_DIR) console.log('FERRY_MAIN_READY');

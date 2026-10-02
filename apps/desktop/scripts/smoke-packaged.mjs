@@ -9,6 +9,26 @@ import { chromium, expect } from '@playwright/test';
 const packageRoot = resolve(import.meta.dirname, '..');
 const executable =
   process.env.FERRY_SMOKE_EXECUTABLE ?? join(packageRoot, 'release', 'win-unpacked', 'Ferry.exe');
+const iconMetadata = spawnSync(
+  'powershell.exe',
+  [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    '(Get-Item -LiteralPath $env:FERRY_SMOKE_EXECUTABLE).VersionInfo.ProductName',
+  ],
+  {
+    encoding: 'utf8',
+    env: { ...process.env, FERRY_SMOKE_EXECUTABLE: executable },
+    windowsHide: true,
+    timeout: 15_000,
+  },
+);
+if (iconMetadata.error || iconMetadata.status !== 0 || iconMetadata.stdout?.trim() !== 'Ferry')
+  throw new Error(
+    `Packaged executable metadata smoke failed: ${iconMetadata.error?.message ?? iconMetadata.stderr ?? iconMetadata.stdout ?? iconMetadata.status}`,
+  );
+console.log('Packaged executable ProductName is Ferry');
 const cliShim =
   process.env.FERRY_SMOKE_CLI ??
   join(packageRoot, 'release', 'win-unpacked', 'resources', 'cli', 'ferry.cmd');

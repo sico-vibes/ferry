@@ -63,6 +63,8 @@ asar: true
 extraResources:
   - from: out/cli
     to: cli
+  - from: build/icon.ico
+    to: app-icon.ico
 electronLanguages:
   - en-US
 npmRebuild: false
