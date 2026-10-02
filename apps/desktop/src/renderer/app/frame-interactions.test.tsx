@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FerryProvider } from '../data/client';
 import { useFerryEvents } from '../data/events';
-import { ProviderFilterNav, SettingsSectionNav } from './LegacyContextNav';
+import { SettingsSectionNav } from './LegacyContextNav';
 import { RightPanel } from './right-panel/RightPanel';
 import { useUI } from '../state/ui';
 import { DEFAULT_LAYOUT } from '../state/ui-layout';
@@ -108,11 +108,7 @@ describe('desktop frame interactions', () => {
     expect(mockShellOutput('nonsense')).toBe('mock shell: command not available in demo');
   });
 
-  it('renders contextual navigation for legacy pages', async () => {
-    mount(<ProviderFilterNav />);
-    expect(await screen.findByRole('navigation', { name: 'Provider filters' })).toBeTruthy();
-    expect(await screen.findByText(/Gemini API/)).toBeTruthy();
-    cleanup();
+  it('renders contextual navigation for the legacy settings page', async () => {
     mount(<SettingsSectionNav />);
     expect(await screen.findByRole('navigation', { name: 'Settings sections' })).toBeTruthy();
   });

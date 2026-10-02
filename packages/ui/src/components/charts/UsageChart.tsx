@@ -31,12 +31,12 @@ function TooltipContent({
   if (!active || !payload?.length) return null;
   const unit = metric === 'requests' ? 'requests' : metric === 'tokens' ? 'tokens' : 'USD';
   return (
-    <div className="min-w-36 rounded-card border border-border-soft bg-panel p-2.5 shadow-[var(--highlight-top)]">
-      <p className="mb-1.5 text-meta font-medium text-text-2">{label}</p>
+    <div className="min-w-36 rounded-card border border-border bg-card p-3 shadow-[var(--shadow-popover)]">
+      <p className="mb-1.5 text-ui-meta font-medium text-muted-foreground">{label}</p>
       {payload.map((item) => (
         <p className="flex items-center justify-between gap-4 text-meta" key={item.name}>
-          <span className="text-text-2">{names.get(item.name ?? '') ?? item.name}</span>
-          <b className="font-medium tabular-nums text-text-1">
+          <span className="text-muted-foreground">{names.get(item.name ?? '') ?? item.name}</span>
+          <b className="font-medium tabular-nums text-foreground">
             {metric === 'cost'
               ? `$${(item.value ?? 0).toFixed(2)}`
               : `${formatQuotaValue(item.value ?? 0, metric === 'tokens' ? 'tokens' : 'requests')} ${unit}`}
@@ -70,24 +70,24 @@ export function UsageChart({
   const names = new Map(providers.map((id) => [id, providerNames[id] ?? id]));
   return (
     <div
-      className="h-44 min-h-44 w-full"
+      className="h-52 min-h-52 w-full"
       role="img"
       aria-label={`14 day stacked ${metric} usage by provider`}
     >
       <ResponsiveContainer height="100%" width="100%">
         <BarChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-          <CartesianGrid stroke="var(--border-hair)" vertical={false} />
+          <CartesianGrid stroke="var(--border)" vertical={false} />
           <XAxis
             axisLine={false}
             tickLine={false}
             dataKey="date"
-            tick={{ fill: 'var(--text-3)', fontSize: 11 }}
+            tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }}
           />
           <YAxis
             axisLine={false}
             tickLine={false}
             width={44}
-            tick={{ fill: 'var(--text-3)', fontSize: 11 }}
+            tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }}
             tickFormatter={(value: number) =>
               formatQuotaValue(
                 value,

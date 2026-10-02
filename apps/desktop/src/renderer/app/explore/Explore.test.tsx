@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FerryClient, ModelListQuery } from '@ferry/client';
 import type { ModelInfo, Provider } from '@ferry/shared';
 import { FerryProvider } from '../../data/client';
-import { ExploreCanvas } from './Explore';
+import { ModelsCanvas } from './Explore';
 
 const pushToast = vi.fn();
 const navigate = vi.fn();
@@ -21,7 +21,14 @@ vi.mock('../../state/toasts', () => ({
   useToasts: (selector: (state: { push: typeof pushToast }) => unknown) =>
     selector({ push: pushToast }),
 }));
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => navigate,
+  useRouterState: ({
+    select,
+  }: {
+    select: (state: { location: { pathname: string } }) => unknown;
+  }) => select({ location: { pathname: '/models' } }),
+}));
 
 const provider = (overrides: Partial<Provider> = {}): Provider => ({
   id: 'mistral' as Provider['id'],
@@ -62,7 +69,7 @@ function setup() {
   return render(
     <FerryProvider client={client}>
       <QueryClientProvider client={queryClient}>
-        <ExploreCanvas />
+        <ModelsCanvas />
       </QueryClientProvider>
     </FerryProvider>,
   );
@@ -166,7 +173,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-describe('Explore providers and models', () => {
+describe('Models providers and catalog', () => {
   it('requires explicit suspension risk acknowledgement before login', async () => {
     const user = userEvent.setup();
     setup();
@@ -188,7 +195,7 @@ describe('Explore providers and models', () => {
     setup();
     await screen.findByRole('button', { name: 'Test Mistral' }, { timeout: 10_000 });
     await user.click(
-      within(screen.getByRole('region', { name: 'Provider filter' })).getByRole('button', {
+      within(screen.getByRole('navigation', { name: 'Provider filters' })).getByRole('button', {
         name: 'Free',
       }),
     );
@@ -249,6 +256,7 @@ describe('Explore providers and models', () => {
   it('sorts models by name and changes sort direction', async () => {
     const user = userEvent.setup();
     setup();
+    await user.click(await screen.findByRole('tab', { name: 'Models' }));
     await waitFor(() => {
       expect(modelListSpy).toHaveBeenCalled();
     });
@@ -280,6 +288,7 @@ describe('Explore providers and models', () => {
       return { items: filtered.slice(offset, offset + limit), total: filtered.length };
     });
     setup();
+    await user.click(await screen.findByRole('tab', { name: 'Models' }));
     await screen.findByText('Model 01');
     await user.selectOptions(screen.getByRole('combobox', { name: 'Models per page' }), '25');
     expect(await screen.findByText('1–25 of 60')).toBeTruthy();

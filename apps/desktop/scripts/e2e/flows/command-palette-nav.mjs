@@ -10,7 +10,7 @@ export async function run(page, ctx) {
   };
   let dialog = await open();
   await dialog.getByRole('option', { name: 'Go to Usage' }).click();
-  await ctx.expect(page.getByRole('heading', { name: 'Usage', exact: true })).toBeVisible({
+  await ctx.expect(page.getByRole('tab', { name: 'Usage', exact: true })).toBeVisible({
     timeout: 10_000,
   });
 
@@ -24,7 +24,7 @@ export async function run(page, ctx) {
 
   dialog = await open();
   await dialog.getByRole('option', { name: 'Go to Models' }).click();
-  await ctx.expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible();
+  await ctx.expect(page.getByRole('heading', { name: 'Models', exact: true })).toBeVisible();
 
   await page.keyboard.press('Control+k');
   void dialog;

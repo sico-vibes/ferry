@@ -156,11 +156,8 @@ try {
     await page.getByRole('button', { name: 'Finish setup' }).click();
   }
   await page.getByRole('button', { name: 'Models', exact: true }).click();
-  await expect(page.getByRole('region', { name: 'Explore providers and models' })).toBeVisible();
-  await page
-    .getByRole('region', { name: 'Explore providers and models' })
-    .getByRole('button', { name: /Add provider/ })
-    .click();
+  await expect(page.getByRole('heading', { name: 'Models', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /Add provider/ }).click();
   await page.getByRole('button', { name: /OpenAI API/ }).click();
   await expect(page.getByRole('dialog', { name: 'Manage OpenAI API key' })).toBeVisible();
 
@@ -213,14 +210,9 @@ try {
     `Fake usage headers were not reflected in history: ${JSON.stringify(liveQuota.history)}`,
   );
 
-  await page
-    .getByRole('navigation', { name: 'Explore sections' })
-    .getByRole('button', { name: 'Usage' })
-    .click();
+  await page.getByRole('tab', { name: 'Usage', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Usage dashboard' })).toBeVisible();
-  await expect(
-    page.getByRole('navigation', { name: 'Explore sections' }).getByText('Demo data'),
-  ).toHaveCount(0);
+  await expect(page.getByText('Demo data')).toHaveCount(0);
   const usageDashboard = page.getByRole('region', { name: 'Usage dashboard' });
   await expect(
     usageDashboard.getByRole('img', {
@@ -228,15 +220,12 @@ try {
     }),
   ).toBeVisible();
   await expect(
-    usageDashboard.getByRole('img', { name: '14 day stacked requests usage by provider' }),
+    usageDashboard.getByRole('img', { name: '14 day stacked tokens usage by provider' }),
   ).toBeVisible();
 
+  await page.getByRole('tab', { name: 'Providers', exact: true }).click();
   await page
-    .getByRole('navigation', { name: 'Explore sections' })
-    .getByRole('button', { name: 'Providers' })
-    .click();
-  await page
-    .getByRole('region', { name: 'Provider filter' })
+    .getByRole('navigation', { name: 'Provider filters' })
     .getByRole('button', { name: 'All' })
     .click();
   await page.getByRole('textbox', { name: 'Search providers' }).fill('OpenAI');

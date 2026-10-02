@@ -1,9 +1,9 @@
 export const name = 'chain-labels';
 
 export async function run(page, ctx) {
-  await page.goto(new URL('/explore', ctx.url).href);
+  await page.goto(new URL('/models', ctx.url).href);
   await page.locator('.app-shell').waitFor();
-  await page.getByRole('heading', { name: 'Providers' }).waitFor();
+  await page.getByRole('heading', { name: 'Models', exact: true }).waitFor();
   await ctx.capture(page, 'provider-cards-data-use.png');
 
   await page.goto(new URL('/', ctx.url).href);

@@ -353,15 +353,15 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
             </div>
           )}
           <div
-            className={`canvas-slot ${pathname === '/' || pathname === '/library' || (pathname.startsWith('/s/') && !pathname.includes('/review/')) ? '' : 'ferry-legacy-scope'}`}
+            className={`canvas-slot ${pathname === '/' || pathname === '/library' || pathname.startsWith('/models') || (pathname.startsWith('/s/') && !pathname.includes('/review/')) ? '' : 'ferry-legacy-scope'}`}
           >
             {import.meta.env.DEV && new URLSearchParams(location.search).has('perf-render') ? (
               <Profiler
                 id={
                   pathname.startsWith('/s/')
                     ? 'Session'
-                    : pathname.startsWith('/explore')
-                      ? 'Explore'
+                    : pathname.startsWith('/models') || pathname.startsWith('/explore')
+                      ? 'Models'
                       : pathname.startsWith('/settings')
                         ? 'Settings'
                         : 'Home'

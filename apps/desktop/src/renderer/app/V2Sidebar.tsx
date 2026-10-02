@@ -78,7 +78,7 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
     await client.settings.update({ theme });
     await cache.invalidateQueries({ queryKey: keys.settings });
   };
-  const go = (path: '/' | '/library' | '/explore' | '/settings') => {
+  const go = (path: '/' | '/library' | '/models' | '/settings') => {
     void navigate({ to: path });
   };
   const activateSession = (id: SessionId, title: string) => {
@@ -126,10 +126,10 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
           <NavButton
             label="Models"
             icon={<Boxes />}
-            active={pathname.startsWith('/explore')}
+            active={pathname.startsWith('/models') || pathname.startsWith('/explore')}
             collapsed={collapsed}
             onClick={() => {
-              go('/explore');
+              go('/models');
             }}
           />
           <button
@@ -243,7 +243,7 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
         )}
         {collapsed && <div className="v2-rail-spacer" />}
         <div className="v2-sidebar-bottom">
-          {!collapsed && (
+          {!collapsed && !pathname.startsWith('/models') && (
             <section className="v2-capacity-card" aria-label="Capacity">
               <div className="v2-capacity-top">
                 <span>≈ {String(count)} steps left today</span>
@@ -252,7 +252,7 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
               <Progress value={percent} aria-label={`${String(percent)}% capacity remaining`} />
               <button
                 onClick={() => {
-                  go('/explore');
+                  go('/models');
                 }}
               >
                 Add provider

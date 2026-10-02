@@ -30,6 +30,9 @@ const states = [
   'library-detail',
   'library-instructions',
   'library-permissions',
+  'models-providers',
+  'models-catalog',
+  'models-usage',
 ];
 const filename = (state, theme, viewport) =>
   `${state}-${theme}-${viewport.width}x${viewport.height}.png`;
@@ -75,6 +78,18 @@ async function captureState(browser, state, theme, viewport) {
       }
     } else if (state === 'home-idle') {
       await page.getByRole('textbox', { name: 'Message Ferry' }).focus();
+    } else if (state.startsWith('models-')) {
+      const route =
+        state === 'models-usage'
+          ? '/models/usage'
+          : state === 'models-catalog'
+            ? '/models/catalog'
+            : '/models';
+      const tab =
+        state === 'models-usage' ? 'Usage' : state === 'models-catalog' ? 'Models' : 'Providers';
+      await page.goto(new URL(route, baseUrl).href);
+      await page.getByRole('heading', { name: 'Models', exact: true }).waitFor();
+      await page.getByRole('tab', { name: tab, exact: true }).waitFor();
     } else if (state === 'session-idle' || state === 'drawer-open') {
       await page.goto(new URL('/s/session_3', baseUrl).href);
       await page.locator('.transcript-viewport').waitFor();

@@ -61,15 +61,15 @@ export function QuotaWindowBar({ window }: { window: QuotaWindow }) {
       : Math.min(100, (window.used / window.limit) * 100);
   const color =
     percent === 100
-      ? 'var(--danger)'
+      ? 'var(--destructive)'
       : percent !== null && percent >= 80
-        ? 'var(--warn)'
-        : 'var(--blue-500)';
+        ? 'var(--warning)'
+        : 'var(--primary)';
   const reset = countdown(window.resetAt, now);
   return (
     <div className="grid gap-1.5" aria-label={`${window.metric} ${window.periodLabel}`}>
-      <div className="flex items-center justify-between gap-3 text-meta">
-        <span className="flex min-w-0 items-center gap-1.5 truncate text-text-2">
+      <div className="flex items-center justify-between gap-3 text-ui-meta">
+        <span className="flex min-w-0 items-center gap-1.5 truncate text-muted-foreground">
           <ConfidenceDot confidence={window.confidence} />
           <span className="truncate">
             {window.metric === 'usd' ? 'Cost' : window.metric === 'tokens' ? 'Tokens' : 'Requests'}{' '}
@@ -77,7 +77,7 @@ export function QuotaWindowBar({ window }: { window: QuotaWindow }) {
           </span>
         </span>
         <span
-          className="shrink-0 font-medium tabular-nums text-text-1"
+          className="shrink-0 font-medium tabular-nums text-foreground"
           title={window.limit === null ? 'Limit unknown' : undefined}
         >
           {window.limit === null
@@ -90,7 +90,7 @@ export function QuotaWindowBar({ window }: { window: QuotaWindow }) {
           window.limit === null ? 'Limit unknown' : `${String(Math.round(percent ?? 0))}% used`
         }
         title={window.limit === null ? 'Limit unknown' : undefined}
-        className="h-1.5 overflow-hidden rounded-pill bg-raised"
+        className="h-1.5 overflow-hidden rounded-pill bg-muted"
         role={percent === null ? 'img' : 'meter'}
         {...(percent === null
           ? {}
@@ -98,12 +98,12 @@ export function QuotaWindowBar({ window }: { window: QuotaWindow }) {
       >
         {window.limit !== null && (
           <span
-            className="block h-full rounded-pill transition-[width] duration-160 motion-reduce:transition-none"
+            className="block h-full rounded-pill transition-[width] duration-150 motion-reduce:transition-none"
             style={{ width: `${String(percent)}%`, backgroundColor: color }}
           />
         )}
       </div>
-      {reset && <span className="text-[10px] leading-3 text-text-3">Resets in {reset}</span>}
+      {reset && <span className="text-ui-meta text-muted-foreground">Resets in {reset}</span>}
     </div>
   );
 }

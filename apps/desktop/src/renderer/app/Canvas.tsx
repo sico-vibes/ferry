@@ -509,17 +509,17 @@ export function PartView({
             onStop={paidCapReached ? () => void client.sessions.cancel(sessionId) : undefined}
             onAddProvider={
               !paidCapReached && presentation.allExhausted
-                ? () => void navigate({ to: '/explore' })
+                ? () => void navigate({ to: '/models' })
                 : undefined
             }
           />
           {presentation.summary.startsWith('No available model —') ? (
             <button
               className="rounded-md bg-blue-tint px-3 py-1.5 text-label font-medium text-link"
-              onClick={() => void navigate({ to: '/explore' })}
+              onClick={() => void navigate({ to: '/models' })}
               type="button"
             >
-              Explore providers
+              View providers
             </button>
           ) : null}
         </div>

@@ -201,9 +201,9 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
       useUI
         .getState()
         .setExploreFilter(
-          action.slice('explore:'.length) as 'All' | 'Free' | 'Credits' | 'Paid' | 'CLI',
+          action.slice('explore:'.length) as 'All' | 'Free' | 'Needs attention' | 'Configured',
         );
-      await navigate({ to: '/explore' });
+      await navigate({ to: '/models' });
       return;
     }
     switch (action) {
@@ -250,10 +250,10 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
           );
         break;
       case 'explore':
-        await navigate({ to: '/explore' });
+        await navigate({ to: '/models' });
         break;
       case 'usage':
-        await navigate({ to: '/explore/usage' });
+        await navigate({ to: '/models/usage' });
         break;
       case 'library':
         await navigate({ to: '/library' });
@@ -319,9 +319,9 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
     { id: 'theme', label: 'Toggle theme', shortcut: '' },
     { id: 'model', label: 'Switch model', shortcut: '' },
     { id: 'explore', label: 'Go to Models', shortcut: '' },
-    ...(['All', 'Free', 'Credits', 'Paid', 'CLI'] as const).map((filter) => ({
+    ...(['All', 'Free', 'Needs attention', 'Configured'] as const).map((filter) => ({
       id: `explore:${filter}`,
-      label: `Explore ${filter}`,
+      label: `Filter providers: ${filter}`,
       shortcut: '',
     })),
     { id: 'usage', label: 'Go to Usage', shortcut: '' },

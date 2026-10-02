@@ -77,19 +77,16 @@ export function ResetsTimeline({
     else markers.push({ position, resets: [reset] });
   }
   return (
-    <section
-      aria-label="Upcoming quota resets"
-      className="rounded-card border border-border-hair bg-card p-3.5"
-    >
+    <section aria-label="Upcoming quota resets" className="rounded-card bg-card p-5">
       <header className="mb-3 flex items-baseline justify-between">
-        <h2 className="text-label font-semibold text-text-1">Resets</h2>
-        <span className="text-meta text-text-3">Next 24 hours</span>
+        <h2 className="text-ui-label font-semibold text-foreground">Resets</h2>
+        <span className="text-ui-meta text-muted-foreground">Next 24 hours</span>
       </header>
       <div className="relative mx-1 h-12">
-        <div className="absolute inset-x-0 top-5 h-px bg-border-soft" />
+        <div className="absolute inset-x-0 top-5 h-px bg-border" />
         <span
           aria-hidden="true"
-          className="absolute top-2.5 h-6 w-px bg-blue-500"
+          className="absolute top-2.5 h-6 w-px bg-primary"
           style={{
             left: '0%',
           }}
@@ -101,13 +98,13 @@ export function ResetsTimeline({
           const label = marker.resets
             .map((reset) => {
               const providerName = providerNames[reset.providerId] ?? reset.providerId;
-              return `${providerName} · ${relativeLabel(reset.at, now)} · ${timeLabel(reset.at)}`;
+              return `${providerName}, ${relativeLabel(reset.at, now)}, ${timeLabel(reset.at)}`;
             })
             .join('; ');
           return (
             <button
               aria-label={`${String(marker.resets.length)} reset${marker.resets.length === 1 ? '' : 's'} near ${names.join(', ')}: ${label}`}
-              className="absolute top-1 inline-flex h-5 min-w-5 -translate-x-1/2 items-center justify-center rounded-pill border-2 border-blue-500 bg-canvas px-1 text-meta font-semibold tabular-nums text-text-1 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+              className="absolute top-1 inline-flex h-6 min-w-6 -translate-x-1/2 items-center justify-center rounded-full bg-primary px-1 text-ui-meta font-semibold tabular-nums text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               key={marker.resets.map((reset) => `${reset.providerId}:${reset.windowId}`).join('|')}
               style={{
                 left: `${String(marker.position)}%`,
@@ -119,7 +116,7 @@ export function ResetsTimeline({
             </button>
           );
         })}
-        <span className="absolute inset-x-0 top-7 flex justify-between text-[11px] leading-4 text-text-3">
+        <span className="absolute inset-x-0 top-7 flex justify-between text-ui-meta text-muted-foreground">
           <span>Now</span>
           <span>+24h</span>
         </span>
@@ -127,18 +124,20 @@ export function ResetsTimeline({
       <ul className="mt-2 grid gap-1.5">
         {resets.slice(0, 4).map((reset) => (
           <li
-            className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 text-meta"
+            className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 text-ui-meta"
             key={`${reset.providerId}:${reset.windowId}`}
           >
-            <span className="truncate text-text-2">
+            <span className="truncate text-muted-foreground">
               {providerNames[reset.providerId] ?? reset.providerId}
             </span>
-            <time className="shrink-0 tabular-nums text-text-1">
-              {relativeLabel(reset.at, now)} · {timeLabel(reset.at)}
+            <time className="shrink-0 tabular-nums text-foreground">
+              {relativeLabel(reset.at, now)}, {timeLabel(reset.at)}
             </time>
           </li>
         ))}
-        {resets.length === 0 && <li className="text-meta text-text-3">No scheduled resets</li>}
+        {resets.length === 0 && (
+          <li className="text-ui-meta text-muted-foreground">No scheduled resets</li>
+        )}
       </ul>
     </section>
   );
