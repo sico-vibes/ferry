@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, FolderOpen, Sparkles } from 'lucide-react';
-import { FerryMark, GradientText, Pill, RadioCards, SegmentedControl, TextField } from '@ferry/ui';
+import { Check, FolderOpen } from 'lucide-react';
+import { FerryMark, Pill, RadioCards, TextField } from '@ferry/ui';
 import type { ProviderId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { keys } from '../data/queries';
@@ -84,7 +84,9 @@ export function OnboardingCanvas() {
   const cache = useQueryClient();
   const navigate = useNavigate();
   const toast = useToasts((state) => state.push);
-  const [step, setStep] = useState(() => Number(localStorage.getItem('ferry.onboardingStep') ?? 0));
+  const [step, setStep] = useState(() =>
+    Math.min(2, Math.max(0, Number(localStorage.getItem('ferry.onboardingStep') ?? 0))),
+  );
   const [selected, setSelected] = useState<string[]>(() => {
     try {
       const value: unknown = JSON.parse(localStorage.getItem('ferry.onboardingProviders') ?? '[]');
@@ -98,9 +100,6 @@ export function OnboardingCanvas() {
   const [keysByProvider, setKeysByProvider] = useState<Record<string, string>>({});
   const [cloudflareAccountId, setCloudflareAccountId] = useState('');
   const [tested, setTested] = useState<Record<string, string>>({});
-  const [profile, setProfile] = useState('');
-  const [delegation, setDelegation] = useState('suggest');
-  const [terse, setTerse] = useState('lite');
   useEffect(() => {
     localStorage.setItem('ferry.onboardingStep', String(step));
     localStorage.setItem('ferry.onboardingProviders', JSON.stringify(selected));
@@ -117,19 +116,10 @@ export function OnboardingCanvas() {
     profiles.find((item) => item.builtin && item.name === 'Auto-Free') ??
     profiles.find((item) => item.builtin) ??
     profiles[0];
-  const selectedProfile = profiles.find((item) => item.id === profile) ?? defaultProfile;
   const finish = async () => {
     await client.settings.update({
       onboardingComplete: true,
-      ...(selectedProfile ? { activeProfileId: selectedProfile.id } : {}),
-      delegationMode: delegation as 'off' | 'suggest' | 'auto',
-      optimizers: {
-        terse: terse as 'off' | 'lite' | 'full' | 'ultra',
-        toolOutputFilters: true,
-        recoveryHandles: true,
-        contextHygiene: true,
-        rtk: false,
-      },
+      ...(defaultProfile ? { activeProfileId: defaultProfile.id } : {}),
     });
     await cache.invalidateQueries({ queryKey: keys.settings });
     await navigate({ to: '/' });
@@ -153,7 +143,7 @@ export function OnboardingCanvas() {
     const result = await client.providers.probe(id as ProviderId);
     setTested((old) => ({
       ...old,
-      [id]: `${result.message} · ${result.latencyMs === null ? 'CLI' : `${String(result.latencyMs)} ms`} · Next: choose a profile below.`,
+      [id]: `${result.message}; ${result.latencyMs === null ? 'CLI' : `${String(result.latencyMs)} ms`}; next, open a folder to start coding.`,
     }));
     await cache.invalidateQueries({ queryKey: ['providers'] });
   };
@@ -166,7 +156,7 @@ export function OnboardingCanvas() {
   };
   return (
     <section
-      className="canvas onboarding-page page-scroll-canvas"
+      className="onboarding-page page-scroll-canvas"
       data-audit-spacing="intentional"
       onKeyDown={(event) => {
         if (event.key !== 'Enter' || event.defaultPrevented) return;
@@ -174,314 +164,231 @@ export function OnboardingCanvas() {
         if (target instanceof HTMLElement && target.closest('button, input, textarea, select, a'))
           return;
         event.preventDefault();
-        setStep((current) => Math.min(3, current + 1));
+        setStep((current) => Math.min(2, current + 1));
       }}
     >
-      <div className="onboarding-top">
-        <div className="onboarding-brand">
-          <FerryMark variant="icon" size={30} />
-          <span>Ferry</span>
-        </div>
-        <button className="text-button" onClick={() => void finish()}>
-          Skip setup
-        </button>
-      </div>
-      <div className="onboarding-content">
-        <div className="step-dots" role="group" aria-label={`Step ${String(step + 1)} of 4`}>
-          {[0, 1, 2, 3].map((item) => (
-            <span key={item} className={item <= step ? 'active' : ''} />
-          ))}
-        </div>
-        {step === 0 && (
-          <div className="welcome-step">
-            <div className="onboarding-logo">
-              <FerryMark variant="brand" size={40} />
-            </div>
-            <h1>
-              <GradientText>Code on every free model.</GradientText>
-            </h1>
-            <p>
-              Ferry routes each step to a model with capacity, then keeps the work moving when
-              limits change.
-            </p>
-            <Pill
-              variant="blue-tint"
-              onClick={() => {
-                setStep(1);
-              }}
-            >
-              Get started <span aria-hidden="true">→</span>
-            </Pill>
+      <div className="onboarding-card">
+        <div className="onboarding-top">
+          <div className="onboarding-brand">
+            <FerryMark variant="icon" size={30} />
+            <span>Ferry</span>
           </div>
-        )}
-        {step === 1 && (
-          <div className="onboarding-step">
-            <span className="eyebrow">STEP 2 OF 4</span>
-            <h1>Choose providers</h1>
-            <p>Pick the free providers Ferry can use. Add keys now or come back later.</p>
-            <RadioCards
-              multi
-              value={selected}
-              onValueChange={(value) => {
-                setSelected(value as string[]);
-              }}
-              options={recommended.map((id) => {
-                const provider = providers.find((item) => item.id === id);
-                const info = providerDetails[id];
-                return {
-                  value: id,
-                  title: provider?.name ?? id,
-                  ...(info?.limit ? { description: info.limit } : {}),
-                  ...(info?.tag ? { badge: info.tag } : {}),
-                };
-              })}
-            />
-            <details className="grid gap-3">
-              <summary className="text-label cursor-pointer">More free providers</summary>
-              <RadioCards
-                multi
-                value={selected}
-                onValueChange={(value) => {
-                  setSelected(value as string[]);
-                }}
-                options={moreFreeProviders.map((id) => {
-                  const provider = providers.find((item) => item.id === id);
-                  const info = providerDetails[id];
-                  return {
-                    value: id,
-                    title: provider?.name ?? id,
-                    ...(info?.limit ? { description: info.limit } : {}),
-                    ...(info?.tag ? { badge: info.tag } : {}),
-                  };
-                })}
-              />
-            </details>
-            <details className="grid gap-3">
-              <summary className="text-label cursor-pointer">Credits &amp; trials</summary>
-              <RadioCards
-                multi
-                value={selected}
-                onValueChange={(value) => {
-                  setSelected(value as string[]);
-                }}
-                options={creditsProviders.map((id) => {
-                  const provider = providers.find((item) => item.id === id);
-                  const info = providerDetails[id];
-                  return {
-                    value: id,
-                    title: provider?.name ?? id,
-                    ...(info?.limit ? { description: info.limit } : {}),
-                    ...(info?.tag ? { badge: info.tag } : {}),
-                  };
-                })}
-              />
-            </details>
-            <details className="grid gap-3">
-              <summary className="text-label cursor-pointer">Unavailable</summary>
-              <ul className="grid gap-2">
-                {unavailableProviders.map(([name, reason]) => (
-                  <li className="onboarding-key" key={name}>
-                    <strong>{name}</strong>
-                    <small className="muted">{reason}</small>
-                  </li>
-                ))}
-              </ul>
-            </details>
-            {selected.map((id) => {
-              const provider = providers.find((item) => item.id === id);
-              const keyless = provider?.keyStatus === 'not_applicable';
-              return (
-                <div className="onboarding-key" key={id}>
-                  <div>
-                    <strong>{provider?.name ?? id}</strong>
-                    <a
-                      href={provider?.signupUrl ?? '#'}
-                      onClick={(event) => {
-                        if (!provider?.signupUrl) event.preventDefault();
-                      }}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Get key ↗
-                    </a>
-                  </div>
-                  {id === 'cloudflare-workers-ai' && (
-                    <TextField
-                      label="Cloudflare account ID"
-                      value={cloudflareAccountId}
-                      onChange={(value) => {
-                        setCloudflareAccountId(value);
-                      }}
-                      placeholder="Account ID"
-                    />
-                  )}
-                  {!keyless && (
-                    <TextField
-                      label={`${provider?.name ?? id} API key${id === 'llm7' ? ' (optional)' : ''}`}
-                      masked
-                      value={keysByProvider[id] ?? ''}
-                      onChange={(value) => {
-                        setKeysByProvider((old) => ({ ...old, [id]: value }));
-                      }}
-                      placeholder="Paste API key"
-                    />
-                  )}
-                  {keyless && (
-                    <small className="muted">No key required for anonymous access.</small>
-                  )}
-                  {id === 'llm7' && (
-                    <small className="muted">
-                      Anonymous access works without a key; an email token raises the free limits.
-                    </small>
-                  )}
-                  <div className="button-row">
-                    {!keyless && (
-                      <Pill size="sm" onClick={() => void saveKey(id)}>
-                        Save key
-                      </Pill>
-                    )}
-                    <Pill
-                      size="sm"
-                      aria-label={`Test ${provider?.name ?? id}`}
-                      onClick={() => void testProvider(id)}
-                      leadingIcon={<Check size={13} />}
-                    >
-                      Test
-                    </Pill>
-                    {tested[id] && <small className="muted">{tested[id]}</small>}
-                  </div>
-                </div>
-              );
-            })}
-            <div className="onboarding-actions">
-              <Pill
-                onClick={() => {
-                  setStep(0);
-                }}
-              >
-                Back
-              </Pill>
+          <button className="text-button" onClick={() => void finish()}>
+            Skip setup
+          </button>
+        </div>
+        <div className="onboarding-content">
+          <div className="step-dots" role="group" aria-label={`Step ${String(step + 1)} of 3`}>
+            {[0, 1, 2].map((item) => (
+              <span key={item} className={item <= step ? 'active' : ''} />
+            ))}
+          </div>
+          {step === 0 && (
+            <div className="welcome-step">
+              <div className="onboarding-logo">
+                <FerryMark variant="brand" size={40} />
+              </div>
+              <h1>Code with Ferry.</h1>
+              <p>Connect a provider, choose a project, and start your first session.</p>
               <Pill
                 variant="blue-tint"
-                onClick={() => {
-                  setStep(2);
-                }}
-              >
-                Continue
-              </Pill>
-            </div>
-          </div>
-        )}
-        {step === 2 && (
-          <div className="onboarding-step">
-            <span className="eyebrow">STEP 3 OF 4</span>
-            <h1>Set your defaults</h1>
-            <p>You can change these choices any time in Settings.</p>
-            <h3>Default profile</h3>
-            <RadioCards
-              value={selectedProfile?.id ?? profile}
-              onValueChange={(value) => {
-                setProfile(value as string);
-              }}
-              options={profiles
-                .filter((item) => ['Auto-Free', 'Best Available', 'Fast'].includes(item.name))
-                .map((item) => ({
-                  value: item.id,
-                  title: item.name,
-                  description: item.description,
-                  ...(item.name === 'Auto-Free' ? { badge: 'Free first' } : {}),
-                }))}
-            />
-            <div className="form-grid">
-              <label>
-                <span>Delegation</span>
-                <SegmentedControl
-                  label="Delegation"
-                  value={delegation}
-                  onValueChange={setDelegation}
-                  options={[
-                    { value: 'off', label: 'Off' },
-                    { value: 'suggest', label: 'Suggest' },
-                    { value: 'auto', label: 'Auto' },
-                  ]}
-                />
-              </label>
-              <label>
-                <span>Answer detail</span>
-                <SegmentedControl
-                  label="Answer detail"
-                  value={terse}
-                  onValueChange={setTerse}
-                  options={[
-                    { value: 'off', label: 'Full' },
-                    { value: 'lite', label: 'Lite' },
-                    { value: 'full', label: 'Short' },
-                  ]}
-                />
-              </label>
-            </div>
-            <div className="onboarding-actions">
-              <Pill
                 onClick={() => {
                   setStep(1);
                 }}
               >
-                Back
-              </Pill>
-              <Pill
-                variant="blue-tint"
-                onClick={() => {
-                  setStep(3);
-                }}
-              >
                 Continue
               </Pill>
             </div>
-          </div>
-        )}
-        {step === 3 && (
-          <div className="welcome-step final-step">
-            <div className="onboarding-logo">
-              <FolderOpen size={24} />
-            </div>
-            <span className="eyebrow">STEP 4 OF 4</span>
-            <h1>Open a folder</h1>
-            <p>
-              Choose a repo to start your first Ferry session. You can add more workspaces from
-              Library.
-            </p>
-            <Pill
-              variant="blue-tint"
-              onClick={() => void chooseFolder()}
-              leadingIcon={<FolderOpen size={15} />}
-            >
-              Open folder
-            </Pill>
-            <button className="text-button" onClick={() => void finish()}>
-              Skip for now
-            </button>
-            <div className="onboarding-actions">
-              <Pill
-                onClick={() => {
-                  setStep(2);
+          )}
+          {step === 1 && (
+            <div className="onboarding-step">
+              <h1>Add a free provider</h1>
+              <p>Pick the free providers Ferry can use. Add keys now or come back later.</p>
+              <RadioCards
+                multi
+                value={selected}
+                onValueChange={(value) => {
+                  setSelected(value as string[]);
                 }}
-              >
-                Back
-              </Pill>
-              <Pill
-                variant="blue-tint"
-                onClick={() => void finish()}
-                leadingIcon={<Sparkles size={14} />}
-              >
-                Finish setup
-              </Pill>
+                options={recommended.map((id) => {
+                  const provider = providers.find((item) => item.id === id);
+                  const info = providerDetails[id];
+                  return {
+                    value: id,
+                    title: provider?.name ?? id,
+                    ...(info?.limit ? { description: info.limit } : {}),
+                    ...(info?.tag ? { badge: info.tag } : {}),
+                  };
+                })}
+              />
+              <details className="grid gap-3">
+                <summary className="text-label cursor-pointer">More free providers</summary>
+                <RadioCards
+                  multi
+                  value={selected}
+                  onValueChange={(value) => {
+                    setSelected(value as string[]);
+                  }}
+                  options={moreFreeProviders.map((id) => {
+                    const provider = providers.find((item) => item.id === id);
+                    const info = providerDetails[id];
+                    return {
+                      value: id,
+                      title: provider?.name ?? id,
+                      ...(info?.limit ? { description: info.limit } : {}),
+                      ...(info?.tag ? { badge: info.tag } : {}),
+                    };
+                  })}
+                />
+              </details>
+              <details className="grid gap-3">
+                <summary className="text-label cursor-pointer">Credits &amp; trials</summary>
+                <RadioCards
+                  multi
+                  value={selected}
+                  onValueChange={(value) => {
+                    setSelected(value as string[]);
+                  }}
+                  options={creditsProviders.map((id) => {
+                    const provider = providers.find((item) => item.id === id);
+                    const info = providerDetails[id];
+                    return {
+                      value: id,
+                      title: provider?.name ?? id,
+                      ...(info?.limit ? { description: info.limit } : {}),
+                      ...(info?.tag ? { badge: info.tag } : {}),
+                    };
+                  })}
+                />
+              </details>
+              <details className="grid gap-3">
+                <summary className="text-label cursor-pointer">Unavailable</summary>
+                <ul className="grid gap-2">
+                  {unavailableProviders.map(([name, reason]) => (
+                    <li className="onboarding-key" key={name}>
+                      <strong>{name}</strong>
+                      <small className="muted">{reason}</small>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+              {selected.map((id) => {
+                const provider = providers.find((item) => item.id === id);
+                const keyless = provider?.keyStatus === 'not_applicable';
+                return (
+                  <div className="onboarding-key" key={id}>
+                    <div>
+                      <strong>{provider?.name ?? id}</strong>
+                      <a
+                        href={provider?.signupUrl ?? '#'}
+                        onClick={(event) => {
+                          if (!provider?.signupUrl) event.preventDefault();
+                        }}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Get key ↗
+                      </a>
+                    </div>
+                    {id === 'cloudflare-workers-ai' && (
+                      <TextField
+                        label="Cloudflare account ID"
+                        value={cloudflareAccountId}
+                        onChange={(value) => {
+                          setCloudflareAccountId(value);
+                        }}
+                        placeholder="Account ID"
+                      />
+                    )}
+                    {!keyless && (
+                      <TextField
+                        label={`${provider?.name ?? id} API key${id === 'llm7' ? ' (optional)' : ''}`}
+                        masked
+                        value={keysByProvider[id] ?? ''}
+                        onChange={(value) => {
+                          setKeysByProvider((old) => ({ ...old, [id]: value }));
+                        }}
+                        placeholder="Paste API key"
+                      />
+                    )}
+                    {keyless && (
+                      <small className="muted">No key required for anonymous access.</small>
+                    )}
+                    {id === 'llm7' && (
+                      <small className="muted">
+                        Anonymous access works without a key; an email token raises the free limits.
+                      </small>
+                    )}
+                    <div className="button-row">
+                      {!keyless && (
+                        <Pill size="sm" onClick={() => void saveKey(id)}>
+                          Save key
+                        </Pill>
+                      )}
+                      <Pill
+                        size="sm"
+                        aria-label={`Test ${provider?.name ?? id}`}
+                        onClick={() => void testProvider(id)}
+                        leadingIcon={<Check size={13} />}
+                      >
+                        Test
+                      </Pill>
+                      {tested[id] && <small className="muted">{tested[id]}</small>}
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="onboarding-actions">
+                <Pill
+                  onClick={() => {
+                    setStep(0);
+                  }}
+                >
+                  Back
+                </Pill>
+                <Pill
+                  variant="blue-tint"
+                  onClick={() => {
+                    setStep(2);
+                  }}
+                >
+                  Continue
+                </Pill>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+          {step === 2 && (
+            <div className="welcome-step final-step">
+              <div className="onboarding-logo">
+                <FolderOpen size={24} />
+              </div>
+              <h1>Open a folder</h1>
+              <p>
+                Choose a project to start your first Ferry session. You can add more folders from
+                Library.
+              </p>
+              <div className="onboarding-actions">
+                <Pill
+                  onClick={() => {
+                    setStep(1);
+                  }}
+                >
+                  Back
+                </Pill>
+                <Pill variant="blue-tint" onClick={() => void finish()}>
+                  Continue
+                </Pill>
+              </div>
+              <button className="text-button" onClick={() => void chooseFolder()}>
+                Open folder
+              </button>
+            </div>
+          )}
+        </div>
+        <footer className="onboarding-footer">
+          Your provider keys stay in the local Ferry client.
+        </footer>
       </div>
-      <footer className="onboarding-footer">
-        Your provider keys stay in the local Ferry client.
-      </footer>
     </section>
   );
 }

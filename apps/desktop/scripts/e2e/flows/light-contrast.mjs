@@ -106,7 +106,7 @@ export async function run(page, { url, expect }) {
         }),
       };
     });
-    expect(legacy.isLegacy, `${route} should remain on the legacy surface`).toBe(true);
+    expect(legacy.isLegacy, `${route} should use its expected surface`).toBe(route !== '/settings');
     expect(legacy.mismatches, `${route} has surface utilities detached from light tokens`).toEqual(
       [],
     );

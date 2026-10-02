@@ -1623,6 +1623,132 @@ body {
   min-height: 0;
   flex: 1;
 }
+.v2-settings-route .v2-chat-header {
+  background: var(--sidebar);
+}
+.v2-settings-page {
+  display: grid;
+  width: 100%;
+  min-height: 0;
+  grid-template-columns: 208px minmax(0, 1fr);
+  gap: var(--space-8);
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  background: var(--background);
+  padding: var(--space-8);
+  color: var(--foreground);
+}
+.v2-settings-nav {
+  display: flex;
+  align-self: start;
+  flex-direction: column;
+  gap: var(--spacing);
+  padding-top: var(--spacing);
+}
+.v2-settings-nav button {
+  min-height: 36px;
+  border: 0;
+  border-radius: var(--radius-button);
+  background: transparent;
+  padding: var(--space-2) var(--space-3);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+.v2-settings-nav button:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.v2-settings-nav button.active {
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-weight: 550;
+}
+.v2-settings-content {
+  display: grid;
+  width: min(100%, 800px);
+  align-content: start;
+  gap: var(--space-6);
+  min-width: 0;
+}
+.v2-settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-6);
+}
+.v2-settings-header h1 {
+  margin: 0 0 var(--space-2);
+  color: var(--foreground);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+  letter-spacing: -0.01em;
+}
+.v2-settings-header p {
+  max-width: 65ch;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 20px;
+}
+.v2-settings-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-2);
+}
+.v2-settings-page .settings-group-card {
+  gap: var(--space-3);
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--card);
+  padding: var(--space-4);
+  color: var(--foreground);
+}
+.v2-settings-page .settings-group-card .ferry-section-title {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 16px;
+  line-height: 24px;
+}
+.v2-settings-page .setting-row {
+  min-height: 52px;
+  gap: calc(var(--space-4) + var(--spacing));
+  border-color: var(--border);
+  padding: var(--space-2) 0;
+}
+.v2-settings-page .setting-row strong,
+.v2-settings-page .setting-row > div:first-child {
+  color: var(--foreground);
+}
+.v2-settings-page .setting-row small,
+.v2-settings-page .muted,
+.v2-settings-page .text-meta {
+  color: var(--muted-foreground);
+}
+.v2-settings-page .settings-group-card :is(input, textarea, select, [role='combobox']) {
+  border-color: var(--input);
+}
+.v2-settings-page .settings-group-card textarea {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.v2-settings-page .settings-group-card .profile-option {
+  border-color: transparent;
+  background: transparent;
+  color: var(--foreground);
+}
+.v2-settings-page .settings-group-card .profile-option.is-active {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.v2-settings-page .settings-group-card + .settings-group-card {
+  margin-top: 0;
+}
 .v2-home-layout {
   display: flex;
   width: min(100% - 48px, 768px);
@@ -4419,4 +4545,173 @@ body {
 button:not(:disabled):active,
 [role='button']:not([aria-disabled='true']):active {
   transform: translateY(1px) scale(0.985);
+}
+
+.v2-settings-page {
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--background);
+  padding: var(--space-8);
+  --bg-app: var(--background);
+  --bg-panel: var(--sidebar);
+  --bg-canvas: var(--background);
+  --bg-card: var(--card);
+  --bg-raised: var(--muted);
+  --bg-input: var(--muted);
+  --bg-blue-tint: var(--accent);
+  --border-hair: var(--border);
+  --border-soft: var(--border);
+  --border-strong: var(--input);
+  --text-1: var(--foreground);
+  --text-2: var(--muted-foreground);
+  --text-3: var(--muted-foreground);
+  --text-link: var(--accent-foreground);
+  --text-on-gradient: var(--primary-foreground);
+  --blue-500: var(--primary);
+  --blue-600: var(--primary);
+  --warn: var(--warning);
+  --danger: var(--destructive);
+  --legacy-success: var(--success);
+}
+.v2-settings-nav button {
+  border-radius: var(--radius-button);
+}
+.v2-settings-page .settings-group-card {
+  border-radius: var(--radius-card);
+  padding: var(--space-4);
+}
+.v2-settings-page .bg-blue-tint,
+.v2-onboarding-shell .bg-blue-tint {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+}
+.v2-onboarding-shell {
+  min-height: 100dvh;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: var(--space-8) var(--space-6);
+}
+.v2-onboarding-shell .onboarding-page {
+  display: flex;
+  width: min(560px, 100%);
+  min-height: 0;
+  max-height: calc(100dvh - var(--space-8) - var(--space-8));
+  flex: 0 0 auto;
+  align-items: stretch;
+  justify-content: flex-start;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--card);
+  padding: var(--space-4);
+  color: var(--foreground);
+}
+.onboarding-card {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+.v2-onboarding-shell .onboarding-top {
+  flex: 0 0 auto;
+}
+.v2-onboarding-shell .onboarding-brand {
+  gap: var(--space-2);
+  color: var(--foreground);
+  font-size: 14px;
+}
+.v2-onboarding-shell .onboarding-content {
+  width: 100%;
+  min-height: 0;
+  margin: var(--space-6) 0 0;
+  overflow: auto;
+}
+.v2-onboarding-shell .step-dots {
+  gap: var(--space-2);
+  margin-bottom: var(--space-6);
+}
+.v2-onboarding-shell .step-dots span {
+  width: 8px;
+  height: 8px;
+  background: var(--muted);
+}
+.v2-onboarding-shell .step-dots span.active {
+  width: 24px;
+  background: var(--primary);
+}
+.v2-onboarding-shell .welcome-step,
+.v2-onboarding-shell .onboarding-step {
+  gap: var(--space-4);
+}
+.v2-onboarding-shell .welcome-step h1,
+.v2-onboarding-shell .onboarding-step h1 {
+  color: var(--foreground);
+  font-size: 24px;
+  line-height: 32px;
+  letter-spacing: -0.01em;
+}
+.v2-onboarding-shell .welcome-step p,
+.v2-onboarding-shell .onboarding-step > p {
+  color: var(--muted-foreground);
+  font-size: 14px;
+  line-height: 22px;
+}
+.v2-onboarding-shell .onboarding-logo {
+  border-color: var(--border);
+  border-radius: var(--radius-card);
+  background: var(--muted);
+  color: var(--accent-foreground);
+}
+.v2-onboarding-shell .onboarding-key {
+  border-color: var(--border);
+  border-radius: var(--radius-button);
+  background: var(--muted);
+}
+.v2-onboarding-shell .onboarding-key a {
+  color: var(--accent-foreground);
+}
+.v2-onboarding-shell .onboarding-actions {
+  margin-top: var(--space-2);
+}
+.v2-onboarding-shell .onboarding-footer {
+  margin-top: calc(var(--space-4) + var(--spacing));
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.v2-onboarding-shell .text-button {
+  color: var(--accent-foreground);
+  cursor: pointer;
+}
+@media (max-width: 900px) {
+  .v2-settings-page {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+    padding: var(--space-6);
+  }
+  .v2-settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+  .v2-settings-nav button {
+    flex: 0 0 auto;
+  }
+  .v2-settings-content {
+    width: 100%;
+  }
+}
+@media (max-width: 560px) {
+  .v2-settings-page {
+    padding: var(--space-4);
+  }
+  .v2-settings-header {
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .v2-onboarding-shell {
+    padding: var(--space-4);
+  }
+  .v2-onboarding-shell .onboarding-page {
+    padding: var(--space-4);
+  }
 }

@@ -156,7 +156,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     };
   }, []);
   const onboardingPage =
-    settings?.onboardingComplete === false && (pathname === '/onboarding' || pathname === '/');
+    pathname === '/onboarding' || (settings?.onboardingComplete === false && pathname === '/');
   const fullCanvasPage = onboardingPage || pathname.includes('/review/');
   const bottomOpen = useUI((state) => state.bottomOpen);
   const createChat = async () => {
@@ -319,7 +319,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
 
   return (
     <div
-      className={`ferry-ui v2-app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed ? 'right-is-collapsed' : ''} ${pathname === '/' || pathname.startsWith('/s/') ? 'v2-chat-route' : 'v2-legacy-route'}`}
+      className={`ferry-ui v2-app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed ? 'right-is-collapsed' : ''} ${pathname === '/' || pathname.startsWith('/s/') ? 'v2-chat-route' : pathname.startsWith('/settings') ? 'v2-settings-route' : 'v2-legacy-route'}`}
       data-density={density}
     >
       <div className="title-strip" aria-hidden="true" />
@@ -353,7 +353,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
             </div>
           )}
           <div
-            className={`canvas-slot ${pathname === '/' || (pathname.startsWith('/s/') && !pathname.includes('/review/')) ? '' : 'ferry-legacy-scope'}`}
+            className={`canvas-slot ${pathname === '/' || pathname.startsWith('/settings') || (pathname.startsWith('/s/') && !pathname.includes('/review/')) ? '' : 'ferry-legacy-scope'}`}
           >
             {import.meta.env.DEV && new URLSearchParams(location.search).has('perf-render') ? (
               <Profiler

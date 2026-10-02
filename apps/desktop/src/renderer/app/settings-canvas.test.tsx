@@ -34,18 +34,16 @@ afterEach(() => {
 describe('SettingsCanvas', () => {
   it('renders one page heading for each Settings section', async () => {
     const sections = [
-      ['General', 'Settings'],
+      ['General', 'General'],
       ['Profiles', 'Profiles'],
-      ['Providers & Keys', 'Providers & Keys'],
-      ['Gateway', 'Gateway'],
-      ['Advanced', 'Advanced'],
+      ['Providers & keys', 'Providers & keys'],
+      ['Routing', 'Routing'],
       ['Optimizers', 'Optimizers'],
       ['Delegation', 'Delegation'],
       ['Permissions', 'Permissions'],
-      ['Skills', 'Skills'],
-      ['MCP', 'MCP'],
-      ['Data & Privacy', 'Data & Privacy'],
-      ['Developer', 'Developer'],
+      ['Gateway', 'Gateway'],
+      ['Data & privacy', 'Data & privacy'],
+      ['Shortcuts', 'Shortcuts'],
       ['About', 'About'],
     ] as const;
 
@@ -78,11 +76,12 @@ describe('SettingsCanvas', () => {
   it('shows user-toggleable routing techniques and persists changes through settings', async () => {
     const client = createMockFerryClient({ behavior: 'test' });
     const user = userEvent.setup();
-    useUI.setState({ settingsSection: 'Advanced' });
+    useUI.setState({ settingsSection: 'Routing' });
     mount(client);
     const toggle = await screen.findByRole('switch', { name: 'Sticky sessions' });
     expect(toggle.getAttribute('data-state')).toBe('checked');
     await user.click(toggle);
+    await user.click(await screen.findByRole('button', { name: 'Save changes' }));
     await waitFor(async () => {
       expect((await client.settings.get()).routing.stickySessions).toBe(false);
     });
@@ -104,7 +103,7 @@ describe('SettingsCanvas', () => {
     const toggle = await screen.findByRole('switch', { name: 'Planner/editor split' });
     expect(toggle.getAttribute('data-state')).toBe('checked');
     await user.click(toggle);
-    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(async () => {
       expect(
         (await client.profiles.list()).find((profile) => profile.name === 'Auto-Free')?.roles
@@ -116,19 +115,20 @@ describe('SettingsCanvas', () => {
   it('keeps training-provider avoidance off by default and persists the privacy toggle', async () => {
     const client = createMockFerryClient({ behavior: 'test' });
     const user = userEvent.setup();
-    useUI.setState({ settingsSection: 'Data & Privacy' });
+    useUI.setState({ settingsSection: 'Data & privacy' });
     mount(client);
     const toggle = await screen.findByRole('switch', {
       name: 'Avoid providers that train on my prompts',
     });
     expect(toggle.getAttribute('data-state')).toBe('unchecked');
     await user.click(toggle);
+    await user.click(await screen.findByRole('button', { name: 'Save changes' }));
     await waitFor(async () => {
       expect((await client.settings.get()).routing.avoidTrainingProviders).toBe(true);
     });
   });
 
-  it('persists trial-credit opt-ins per provider from Providers & Keys', async () => {
+  it('persists trial-credit opt-ins per provider from Providers & keys', async () => {
     const client = createMockFerryClient({ behavior: 'test' });
     const originalList = client.providers.list.bind(client.providers);
     vi.spyOn(client.providers, 'list').mockImplementation(async () =>
@@ -136,7 +136,7 @@ describe('SettingsCanvas', () => {
         provider.id === 'cerebras' ? { ...provider, tag: 'trial' } : provider,
       ),
     );
-    useUI.setState({ settingsSection: 'Providers & Keys' });
+    useUI.setState({ settingsSection: 'Providers & keys' });
     const user = userEvent.setup();
     mount(client);
     const toggle = await screen.findByRole('switch', {
@@ -144,6 +144,7 @@ describe('SettingsCanvas', () => {
     });
     expect(toggle.getAttribute('data-state')).toBe('unchecked');
     await user.click(toggle);
+    await user.click(await screen.findByRole('button', { name: 'Save changes' }));
     await waitFor(async () => {
       expect((await client.settings.get()).routing.trialOptInProviders).toContain('cerebras');
     });
@@ -170,7 +171,7 @@ describe('SettingsCanvas', () => {
   });
 
   it('shows the connected core details and disables domains with no registered handlers', async () => {
-    useUI.setState({ settingsSection: 'Developer' });
+    useUI.setState({ settingsSection: 'About' });
     window.ferryHost = {
       getEngineStatus: vi.fn().mockResolvedValue({ status: 'connected', pid: 4321 }),
     } as never;
@@ -193,6 +194,7 @@ describe('SettingsCanvas', () => {
       },
     } as never;
     mount();
+    fireEvent.click(screen.getByText('Developer diagnostics'));
     expect((await screen.findByText('connected')).textContent).toBe('connected');
     expect(screen.getByText('connected · PID 4321 · ferry/1').textContent).toContain('4321');
     expect(

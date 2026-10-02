@@ -5,16 +5,14 @@ export type Density = 'comfortable' | 'compact';
 export type SettingsSection =
   | 'General'
   | 'Profiles'
-  | 'Providers & Keys'
-  | 'Gateway'
-  | 'Advanced'
+  | 'Providers & keys'
+  | 'Routing'
   | 'Optimizers'
   | 'Delegation'
   | 'Permissions'
-  | 'Skills'
-  | 'MCP'
-  | 'Data & Privacy'
-  | 'Developer'
+  | 'Gateway'
+  | 'Data & privacy'
+  | 'Shortcuts'
   | 'About';
 export interface OpenTab {
   id: SessionId;

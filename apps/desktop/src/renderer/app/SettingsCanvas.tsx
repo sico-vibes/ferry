@@ -10,13 +10,11 @@ import {
   Checkbox,
   Dialog,
   FerryMark,
-  PageHeader,
   Pill,
   Section,
   SegmentedControl,
   Select,
   Slider,
-  Stack,
   Switch,
   TextField,
 } from '@ferry/ui';
@@ -28,23 +26,36 @@ import { Info } from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
 import { OAuthProviderRows } from './OAuthProviderRows';
 import { saveKeybindings, useKeybindings } from '../state/keybindings';
-import { SettingsSectionNav } from './LegacyContextNav';
+import type { SettingsSection } from '../state/ui.types';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
+const settingsSections: SettingsSection[] = [
+  'General',
+  'Profiles',
+  'Providers & keys',
+  'Routing',
+  'Optimizers',
+  'Delegation',
+  'Permissions',
+  'Gateway',
+  'Data & privacy',
+  'Shortcuts',
+  'About',
+];
 const settingsPageCopy: Record<string, { title: string; description: string }> = {
-  General: { title: 'Settings', description: 'Control how Ferry works across your workspaces.' },
+  General: { title: 'General', description: 'Set the way Ferry looks and behaves.' },
   Profiles: {
     title: 'Profiles',
     description: 'Choose the models and limits Ferry uses for each kind of work.',
   },
-  'Providers & Keys': {
-    title: 'Providers & Keys',
+  'Providers & keys': {
+    title: 'Providers & keys',
     description: 'Connect providers and review their access and data use.',
   },
   Gateway: {
     title: 'Gateway',
     description: 'Connect coding tools to Ferry’s local OpenAI and Anthropic compatible API.',
   },
-  Advanced: { title: 'Advanced', description: 'Tune routing behavior, reliability, and recovery.' },
+  Routing: { title: 'Routing', description: 'Choose how Ferry selects models and manages limits.' },
   Optimizers: {
     title: 'Optimizers',
     description: 'Choose how Ferry keeps context focused during longer runs.',
@@ -57,11 +68,9 @@ const settingsPageCopy: Record<string, { title: string; description: string }> =
     title: 'Permissions',
     description: 'Control which workspace actions Ferry can take.',
   },
-  Developer: { title: 'Developer', description: 'Inspect local engine state and diagnostics.' },
-  Skills: { title: 'Skills', description: 'Choose which reusable workflows Ferry can use.' },
-  MCP: { title: 'MCP', description: 'Manage local tool server connections.' },
-  'Data & Privacy': {
-    title: 'Data & Privacy',
+  Shortcuts: { title: 'Shortcuts', description: 'Review and edit Ferry keyboard shortcuts.' },
+  'Data & privacy': {
+    title: 'Data & privacy',
     description: 'Review local storage and provider data handling.',
   },
   About: { title: 'About', description: 'Ferry version and project information.' },
@@ -205,7 +214,21 @@ export function SettingsCanvas() {
       off();
     };
   }, [section]);
-  const { data: settings } = useSettings();
+  const { data: settingsData } = useSettings();
+  const [pendingBySection, setPendingBySection] = useState<
+    Partial<Record<SettingsSection, Parameters<typeof client.settings.update>[0]>>
+  >({});
+  const pendingSettings = pendingBySection[section];
+  const settings = settingsData
+    ? {
+        ...settingsData,
+        ...pendingSettings,
+        optimizers: { ...settingsData.optimizers, ...pendingSettings?.optimizers },
+        routing: { ...settingsData.routing, ...pendingSettings?.routing },
+        paidCaps: { ...settingsData.paidCaps, ...pendingSettings?.paidCaps },
+        developer: { ...settingsData.developer, ...pendingSettings?.developer },
+      }
+    : undefined;
   const { data: profiles = [] } = useProfiles();
   const { data: providers = [] } = useQuery({
     queryKey: ['providers'],
@@ -316,9 +339,43 @@ export function SettingsCanvas() {
       setTestingProvider(null);
     }
   };
-  const update = async (patch: Parameters<typeof client.settings.update>[0]) => {
-    await client.settings.update(patch);
-    await cache.invalidateQueries({ queryKey: keys.settings });
+  const update = (patch: Parameters<typeof client.settings.update>[0]) => {
+    setPendingBySection((current) => {
+      const previous = current[section] ?? {};
+      return {
+        ...current,
+        [section]: {
+          ...previous,
+          ...patch,
+          ...(patch.optimizers
+            ? { optimizers: { ...previous.optimizers, ...patch.optimizers } }
+            : {}),
+          ...(patch.routing ? { routing: { ...previous.routing, ...patch.routing } } : {}),
+          ...(patch.paidCaps ? { paidCaps: { ...previous.paidCaps, ...patch.paidCaps } } : {}),
+          ...(patch.developer ? { developer: { ...previous.developer, ...patch.developer } } : {}),
+        },
+      };
+    });
+    return Promise.resolve();
+  };
+  const saveSettings = async () => {
+    if (!pendingSettings) return;
+    try {
+      await client.settings.update(pendingSettings);
+      await cache.invalidateQueries({ queryKey: keys.settings });
+      setPendingBySection((current) => {
+        const next = { ...current };
+        Reflect.deleteProperty(next, section);
+        return next;
+      });
+      toast({ kind: 'success', title: 'Settings saved', body: null });
+    } catch (error) {
+      toast({
+        kind: 'error',
+        title: 'Settings could not be saved',
+        body: error instanceof Error ? error.message : String(error),
+      });
+    }
   };
   const mutateProfile = <K extends keyof Profile>(key: K, value: Profile[K]) => {
     setProfileDraft((current) => (current ? { ...current, [key]: value } : current));
@@ -330,7 +387,7 @@ export function SettingsCanvas() {
     if (!profileDraft) return;
     await client.profiles.save(profileDraft);
     await cache.invalidateQueries({ queryKey: keys.profiles });
-    toast({ kind: 'success', title: 'Profile saved', body: profileDraft.name });
+    toast({ kind: 'success', title: `Profile saved: ${profileDraft.name}`, body: null });
   };
   const toggleOptimizer = (
     key: 'toolOutputFilters' | 'recoveryHandles' | 'contextHygiene' | 'rtk',
@@ -347,67 +404,78 @@ export function SettingsCanvas() {
     await cache.invalidateQueries({ queryKey: keys.mcp });
   };
   const body = () => {
-    if (section === 'General')
+    if (section === 'General' || section === 'Shortcuts')
       return (
         <>
-          <Group title="Appearance">
-            <SettingRow title="Theme" helper={'Choose dark, light, or follow your display.'}>
-              <SegmentedControl
-                label="Theme"
-                value={settings?.theme ?? 'dark'}
-                onValueChange={(value) =>
-                  void update({ theme: value as NonNullable<typeof settings>['theme'] })
-                }
-                options={[
-                  { value: 'dark', label: 'Dark' },
-                  { value: 'light', label: 'Light' },
-                  { value: 'system', label: 'System' },
-                ]}
-              />
-            </SettingRow>
-            <SettingRow title="Home style" helper="Choose when Home uses the compact layout.">
-              <SegmentedControl
-                label="Home style"
-                value={settings?.homeStyle ?? 'auto'}
-                onValueChange={(value) =>
-                  void update({ homeStyle: value as NonNullable<typeof settings>['homeStyle'] })
-                }
-                options={[
-                  { value: 'auto', label: 'Auto' },
-                  { value: 'hero', label: 'Always show hero' },
-                  { value: 'compact', label: 'Compact' },
-                ]}
-              />
-            </SettingRow>
-            <SettingRow title="Font scale" helper="Adjust interface text size.">
-              <div className="range-control">
-                <Slider
-                  label="Font scale"
-                  min={0.85}
-                  max={1.3}
-                  step={0.05}
-                  value={settings?.fontScale ?? 1}
-                  onValueChange={(value) => void update({ fontScale: value })}
+          {section === 'General' && (
+            <Group title="Appearance">
+              <SettingRow title="Theme" helper={'Choose dark, light, or follow your display.'}>
+                <SegmentedControl
+                  label="Theme"
+                  value={settings?.theme ?? 'dark'}
+                  onValueChange={(value) =>
+                    void update({ theme: value as NonNullable<typeof settings>['theme'] })
+                  }
+                  options={[
+                    { value: 'dark', label: 'Dark' },
+                    { value: 'light', label: 'Light' },
+                    { value: 'system', label: 'System' },
+                  ]}
                 />
-                <span>{(settings?.fontScale ?? 1).toFixed(2)}×</span>
-              </div>
-            </SettingRow>
-            <SettingRow
-              title="Restore tabs"
-              helper="Reopen your last session tabs when Ferry starts."
-            >
-              <Switch
-                label="Restore tabs"
-                checked={settings?.restoreTabs ?? false}
-                onCheckedChange={(restoreTabs) => void update({ restoreTabs })}
-              />
-            </SettingRow>
-            <SettingRow title="First run" helper="Review the provider and workspace setup again.">
-              <Pill size="sm" onClick={() => void navigate({ to: '/onboarding' })}>
-                Run onboarding again
-              </Pill>
-            </SettingRow>
-          </Group>
+              </SettingRow>
+              <SettingRow title="Home style" helper="Choose when Home uses the compact layout.">
+                <SegmentedControl
+                  label="Home style"
+                  value={settings?.homeStyle ?? 'auto'}
+                  onValueChange={(value) =>
+                    void update({ homeStyle: value as NonNullable<typeof settings>['homeStyle'] })
+                  }
+                  options={[
+                    { value: 'auto', label: 'Auto' },
+                    { value: 'hero', label: 'Always show hero' },
+                    { value: 'compact', label: 'Compact' },
+                  ]}
+                />
+              </SettingRow>
+              <SettingRow title="Font scale" helper="Adjust interface text size.">
+                <div className="range-control">
+                  <Slider
+                    label="Font scale"
+                    min={0.85}
+                    max={1.3}
+                    step={0.05}
+                    value={settings?.fontScale ?? 1}
+                    onValueChange={(value) => void update({ fontScale: value })}
+                  />
+                  <span>{(settings?.fontScale ?? 1).toFixed(2)}×</span>
+                </div>
+              </SettingRow>
+              <SettingRow
+                title="Restore tabs"
+                helper="Reopen your last session tabs when Ferry starts."
+              >
+                <Switch
+                  label="Restore tabs"
+                  checked={settings?.restoreTabs ?? false}
+                  onCheckedChange={(restoreTabs) => void update({ restoreTabs })}
+                />
+              </SettingRow>
+              <SettingRow title="First run" helper="Review the provider and workspace setup again.">
+                <Pill
+                  size="sm"
+                  onClick={() => {
+                    localStorage.removeItem('ferry.onboardingStep');
+                    void client.settings
+                      .update({ onboardingComplete: false })
+                      .then(() => cache.invalidateQueries({ queryKey: keys.settings }))
+                      .then(() => navigate({ to: '/onboarding' }));
+                  }}
+                >
+                  Run onboarding again
+                </Pill>
+              </SettingRow>
+            </Group>
+          )}
           <Group title="Keyboard shortcuts">
             <p className="muted">
               Edit keybindings.json in Ferry's config folder. Changes reload automatically.
@@ -429,34 +497,38 @@ export function SettingsCanvas() {
                 setKeybindingsDraft(event.target.value);
               }}
             />
-            <Pill
-              size="sm"
-              onClick={() => {
-                saveKeybindings(keybindingsDraft)
-                  .then((errors) => {
-                    if (errors.length)
+            {keybindingsDraft !== keybindings.content && (
+              <Pill
+                size="sm"
+                onClick={() => {
+                  saveKeybindings(keybindingsDraft)
+                    .then((errors) => {
+                      if (errors.length)
+                        toast({
+                          kind: 'error',
+                          title: 'Keybindings validation failed',
+                          body: errors.join('; '),
+                        });
+                      else toast({ kind: 'success', title: 'Keybindings saved', body: null });
+                    })
+                    .catch((error: unknown) => {
                       toast({
                         kind: 'error',
-                        title: 'Keybindings validation failed',
-                        body: errors.join('; '),
+                        title: 'Could not save keybindings',
+                        body: error instanceof Error ? error.message : String(error),
                       });
-                    else toast({ kind: 'success', title: 'Keybindings saved', body: null });
-                  })
-                  .catch((error: unknown) => {
-                    toast({
-                      kind: 'error',
-                      title: 'Could not save keybindings',
-                      body: error instanceof Error ? error.message : String(error),
                     });
-                  });
-              }}
-            >
-              Save keybindings
-            </Pill>
+                }}
+              >
+                Save changes
+              </Pill>
+            )}
           </Group>
-          <Group title="Quick access">
-            <p className="muted">Your Ferry setup stays local to this demo client.</p>
-          </Group>
+          {section === 'General' && (
+            <Group title="Quick access">
+              <p className="muted">Your Ferry setup stays local to this demo client.</p>
+            </Group>
+          )}
         </>
       );
     if (section === 'Profiles')
@@ -540,9 +612,13 @@ export function SettingsCanvas() {
                   >
                     Delete
                   </Pill>
-                  <Pill size="sm" variant="blue-tint" onClick={() => void saveProfile()}>
-                    Save
-                  </Pill>
+                  {(!profiles.find((item) => item.id === profileDraft.id) ||
+                    JSON.stringify(profileDraft) !==
+                      JSON.stringify(profiles.find((item) => item.id === profileDraft.id))) && (
+                    <Pill size="sm" variant="blue-tint" onClick={() => void saveProfile()}>
+                      Save changes
+                    </Pill>
+                  )}
                 </div>
               </div>
               <div className="form-grid">
@@ -950,7 +1026,7 @@ export function SettingsCanvas() {
           )}
         </div>
       );
-    if (section === 'Providers & Keys')
+    if (section === 'Providers & keys')
       return (
         <Group>
           <p className="muted">
@@ -1321,7 +1397,7 @@ export function SettingsCanvas() {
           </Group>
         </>
       );
-    if (section === 'Advanced')
+    if (section === 'Routing')
       return (
         <>
           <Group title="Paid spending caps">
@@ -1364,7 +1440,7 @@ export function SettingsCanvas() {
               />
             </div>
           </Group>
-          <Group title="Advanced">
+          <Group title="Routing behavior">
             <SettingRow
               title="Planner/editor roles"
               helper="Role model selection uses catalog quality priors, context fit, tool support, and observed reliability."
@@ -1696,300 +1772,305 @@ export function SettingsCanvas() {
           }
         />
       );
-    if (section === 'Developer')
+    if (section === 'Data & privacy')
       return (
-        <DeveloperSettings
-          providerHealth={providers}
-          mockLatency={settings?.developer.mockLatency ?? false}
-          injectErrors={settings?.developer.injectErrors ?? false}
-          realDomains={settings?.developer.realDomains ?? []}
-          availableDomains={window.ferryEngineHello?.realDomains ?? []}
-          update={(patch) =>
-            void update({
-              developer: {
-                showReferenceOverlay: settings?.developer.showReferenceOverlay ?? false,
-                mockLatency: patch.mockLatency ?? settings?.developer.mockLatency ?? false,
-                injectErrors: patch.injectErrors ?? settings?.developer.injectErrors ?? false,
-                realDomains: patch.realDomains ?? settings?.developer.realDomains ?? [],
-              },
-            })
-          }
-        />
-      );
-    if (section === 'Skills')
-      return (
-        <Group title="Skills">
-          <p className="muted">Enable local instructions and workflows.</p>
-          {skills.map((skill) => (
-            <SettingRow key={skill.id} title={skill.name} helper={skill.description}>
+        <>
+          <Group title="Data use and retention">
+            <p className="muted">
+              Provider data practices vary by plan and endpoint. Review each provider's terms before
+              adding a key.
+            </p>
+            <SettingRow
+              title="Avoid providers that train on my prompts"
+              helper="Off by default. When enabled, Auto routing skips providers whose catalog data says prompts may be used for training or service improvement."
+            >
               <Switch
-                label={skill.name}
-                checked={skill.enabled}
-                onCheckedChange={(value) => void toggleSkill(skill.id, value)}
+                label="Avoid providers that train on my prompts"
+                checked={settings?.routing.avoidTrainingProviders ?? false}
+                onCheckedChange={(avoidTrainingProviders) =>
+                  settings &&
+                  void update({
+                    routing: { ...settings.routing, avoidTrainingProviders },
+                  })
+                }
               />
             </SettingRow>
-          ))}
-          <Pill
-            size="sm"
-            onClick={() => {
-              toast({
-                kind: 'info',
-                title: 'Import from ~/.claude/skills',
-                body: 'Import is available in the connected desktop app.',
-              });
-            }}
-          >
-            Import from ~/.claude/skills
-          </Pill>
-        </Group>
-      );
-    if (section === 'MCP')
-      return (
-        <Group title="MCP servers">
-          <p className="muted">Connect local tools through Model Context Protocol.</p>
-          {mcps.map((server) => (
-            <SettingRow
-              key={server.id}
-              title={server.name}
-              helper={`${server.transport} · ${String(server.toolCount)} tools`}
-            >
-              <div className="inline-control">
-                <span className="status-pill">{server.status}</span>
-                <Switch
-                  label={server.name}
-                  checked={server.status === 'connected'}
-                  onCheckedChange={(value) => void toggleMcp(server.id, value)}
+            {providers
+              .filter((provider) => provider.dataUse)
+              .map((provider) => (
+                <SettingRow
+                  key={provider.id}
+                  title={provider.name}
+                  helper={provider.dataUse ?? ''}
                 />
-              </div>
-            </SettingRow>
-          ))}
-          <Pill
-            size="sm"
-            onClick={() => {
-              setAddMcp(true);
-            }}
-          >
-            Add server
-          </Pill>
-        </Group>
-      );
-    if (section === 'Data & Privacy')
-      return (
-        <Group title="Data & Privacy">
-          <p className="muted">
-            Provider data practices vary by plan and endpoint. Review each provider's terms before
-            adding a key.
-          </p>
-          <SettingRow
-            title="Avoid providers that train on my prompts"
-            helper="Off by default. When enabled, Auto routing skips providers whose catalog data says prompts may be used for training or service improvement."
-          >
-            <Switch
-              label="Avoid providers that train on my prompts"
-              checked={settings?.routing.avoidTrainingProviders ?? false}
-              onCheckedChange={(avoidTrainingProviders) =>
-                settings &&
-                void update({
-                  routing: { ...settings.routing, avoidTrainingProviders },
-                })
-              }
-            />
-          </SettingRow>
-          {providers
-            .filter((provider) => provider.dataUse)
-            .map((provider) => (
-              <SettingRow key={provider.id} title={provider.name} helper={provider.dataUse ?? ''} />
-            ))}
-          <SettingRow
-            title="Log retention"
-            helper="Choose how long local activity stays available."
-          >
-            <Select
-              label="Log retention"
-              value={logRetention}
-              onValueChange={(value) => {
-                setLogRetention(value);
-                localStorage.setItem('ferry.logRetention', value);
-              }}
-              options={[
-                { value: '7', label: '7 days' },
-                { value: '30', label: '30 days' },
-                { value: '90', label: '90 days' },
-                { value: 'forever', label: 'Keep until cleared' },
-              ]}
-            />
-          </SettingRow>
-          <div className="button-row">
-            <Pill
-              size="sm"
-              onClick={() => {
-                toast({
-                  kind: 'success',
-                  title: 'Export prepared',
-                  body: 'Export is ready.',
-                });
-              }}
-            >
-              Export data
-            </Pill>
-            <Pill
-              size="sm"
-              onClick={() => {
-                setConfirm('Delete local data?');
-              }}
-            >
-              Delete local data
-            </Pill>
-          </div>
-        </Group>
-      );
-    return (
-      <Group title="About Ferry">
-        <div className="about-card">
-          <div className="ferry-mark-large">
-            <FerryMark variant="icon" size={48} />
-          </div>
-          <div>
-            <strong>Ferry</strong>
-            <p>Version {window.ferryHost?.versions.app ?? info?.version ?? '0.9.0'}</p>
-            <p>
-              Channel {window.ferryHost?.channel ?? 'beta'} · Commit{' '}
-              {window.ferryHost?.commit ?? 'unknown'}
-            </p>
-          </div>
-        </div>
-        {window.ferryHost && (
-          <>
+              ))}
             <SettingRow
-              title="Update channel"
-              helper="Beta receives the latest pre-release builds. Stable will be available after its first release."
+              title="Log retention"
+              helper="Choose how long local activity stays available."
             >
-              <SegmentedControl
-                label="Update channel"
-                value={window.ferryHost.channel}
-                onValueChange={() => undefined}
+              <Select
+                label="Log retention"
+                value={logRetention}
+                onValueChange={(value) => {
+                  setLogRetention(value);
+                  localStorage.setItem('ferry.logRetention', value);
+                }}
                 options={[
-                  { value: 'beta', label: 'Beta' },
-                  { value: 'stable', label: 'Stable', disabled: true },
+                  { value: '7', label: '7 days' },
+                  { value: '30', label: '30 days' },
+                  { value: '90', label: '90 days' },
+                  { value: 'forever', label: 'Keep until cleared' },
                 ]}
               />
             </SettingRow>
-            <SettingRow
-              title="Automatic downloads"
-              helper="Download updates when they are available. Restart Ferry to finish installing."
-            >
-              <Switch
-                label="Automatically download updates"
-                checked={updateState.autoDownload}
-                onCheckedChange={(enabled) => {
-                  void window.ferryHost?.setAutoDownload(enabled).then(setUpdateState);
-                }}
-              />
-            </SettingRow>
-            <SettingRow
-              title="Updates"
-              helper={
-                updateState.error ??
-                (updateState.status === 'not-available'
-                  ? 'Ferry is up to date.'
-                  : updateState.status === 'available'
-                    ? `Version ${updateState.version ?? 'new'} is downloading.`
-                    : updateState.status === 'downloaded'
-                      ? `Version ${updateState.version ?? 'new'} is ready to install.`
-                      : 'Check the public Ferry Releases page for the latest beta.')
-              }
-            >
-              <div className="button-row">
-                <Pill
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    setCheckingUpdates(true);
-                    void window.ferryHost
-                      ?.checkForUpdates()
-                      .then(setUpdateState)
-                      .finally(() => {
-                        setCheckingUpdates(false);
-                      });
-                  }}
-                >
-                  {checkingUpdates ? 'Checking…' : 'Check for updates'}
-                </Pill>
-                {updateState.status === 'available' && !updateState.autoDownload && (
-                  <Pill
-                    size="sm"
-                    variant="blue-tint"
-                    onClick={() => {
-                      void window.ferryHost?.downloadUpdate().then(setUpdateState);
-                    }}
-                  >
-                    Download update
-                  </Pill>
-                )}
-              </div>
-            </SettingRow>
-            {updateState.status === 'downloaded' && (
+            <div className="button-row">
               <Pill
                 size="sm"
-                variant="blue-tint"
                 onClick={() => {
-                  void window.ferryHost?.installUpdate();
+                  toast({
+                    kind: 'success',
+                    title: 'Export prepared',
+                    body: 'Export is ready.',
+                  });
                 }}
               >
-                Restart to update
+                Export data
               </Pill>
-            )}
-          </>
-        )}
-        <h3>Notices</h3>
-        <div className="notice-list">
-          <span>React Bits · MIT + Commons Clause</span>
-          <span>lucide · ISC</span>
-          <span>simple-icons · CC0</span>
-          <span>Inter · OFL</span>
-        </div>
-      </Group>
-    );
-  };
-  const pageCopy =
-    settingsPageCopy[section] ??
-    ({
-      title: 'Settings',
-      description: 'Control how Ferry works across your workspaces.',
-    } as const);
-  return (
-    <section className="canvas settings-page legacy-context-page">
-      <SettingsSectionNav />
-      <Stack className="settings-page-content" gap={4}>
-        <main className="settings-content settings-content-framed">
-          <PageHeader
-            eyebrow="PREFERENCES"
-            title={pageCopy.title}
-            subtitle={pageCopy.description}
-            actions={
-              section === 'General' ? (
-                <Pill
-                  onClick={() => {
-                    setConfirm('Reset layout?');
-                    setConfirmAction(() => () => {
-                      useUI.getState().resetLayout();
-                      toast({
-                        kind: 'success',
-                        title: 'Layout reset',
-                        body: 'Panel sizes and positions are back to default.',
-                      });
-                    });
-                  }}
-                  variant="outline"
-                >
-                  Reset layout
-                </Pill>
-              ) : undefined
+              <Pill
+                size="sm"
+                onClick={() => {
+                  setConfirm('Delete local data?');
+                }}
+              >
+                Delete local data
+              </Pill>
+            </div>
+          </Group>
+          <Group title="Integrations">
+            <p className="muted">Connect local tools through Model Context Protocol.</p>
+            {mcps.map((server) => (
+              <SettingRow
+                key={server.id}
+                title={server.name}
+                helper={`${server.transport} - ${String(server.toolCount)} tools`}
+              >
+                <div className="inline-control">
+                  <span className="status-pill">{server.status}</span>
+                  <Switch
+                    label={server.name}
+                    checked={server.status === 'connected'}
+                    onCheckedChange={(value) => void toggleMcp(server.id, value)}
+                  />
+                </div>
+              </SettingRow>
+            ))}
+            <Pill
+              size="sm"
+              onClick={() => {
+                setAddMcp(true);
+              }}
+            >
+              Add server
+            </Pill>
+          </Group>
+          <Group title="Local workflows">
+            <p className="muted">Enable local instructions and reusable workflows.</p>
+            {skills.map((skill) => (
+              <SettingRow key={skill.id} title={skill.name} helper={skill.description}>
+                <Switch
+                  label={skill.name}
+                  checked={skill.enabled}
+                  onCheckedChange={(value) => void toggleSkill(skill.id, value)}
+                />
+              </SettingRow>
+            ))}
+          </Group>
+        </>
+      );
+    return (
+      <>
+        <details className="settings-developer-details">
+          <summary>Developer diagnostics</summary>
+          <DeveloperSettings
+            providerHealth={providers}
+            mockLatency={settings?.developer.mockLatency ?? false}
+            injectErrors={settings?.developer.injectErrors ?? false}
+            realDomains={settings?.developer.realDomains ?? []}
+            availableDomains={window.ferryEngineHello?.realDomains ?? []}
+            update={(patch) =>
+              void update({
+                developer: {
+                  showReferenceOverlay: settings?.developer.showReferenceOverlay ?? false,
+                  mockLatency: patch.mockLatency ?? settings?.developer.mockLatency ?? false,
+                  injectErrors: patch.injectErrors ?? settings?.developer.injectErrors ?? false,
+                  realDomains: patch.realDomains ?? settings?.developer.realDomains ?? [],
+                },
+              })
             }
           />
-          {body()}
-        </main>
-      </Stack>
+        </details>
+        <Group title="About Ferry">
+          <div className="about-card">
+            <div className="ferry-mark-large">
+              <FerryMark variant="icon" size={48} />
+            </div>
+            <div>
+              <strong>Ferry</strong>
+              <p>Version {window.ferryHost?.versions.app ?? info?.version ?? '0.9.0'}</p>
+              <p>
+                Channel {window.ferryHost?.channel ?? 'beta'} · Commit{' '}
+                {window.ferryHost?.commit ?? 'unknown'}
+              </p>
+            </div>
+          </div>
+          {window.ferryHost && (
+            <>
+              <SettingRow
+                title="Update channel"
+                helper="Beta receives the latest pre-release builds. Stable will be available after its first release."
+              >
+                <SegmentedControl
+                  label="Update channel"
+                  value={window.ferryHost.channel}
+                  onValueChange={() => undefined}
+                  options={[
+                    { value: 'beta', label: 'Beta' },
+                    { value: 'stable', label: 'Stable', disabled: true },
+                  ]}
+                />
+              </SettingRow>
+              <SettingRow
+                title="Automatic downloads"
+                helper="Download updates when they are available. Restart Ferry to finish installing."
+              >
+                <Switch
+                  label="Automatically download updates"
+                  checked={updateState.autoDownload}
+                  onCheckedChange={(enabled) => {
+                    void window.ferryHost?.setAutoDownload(enabled).then(setUpdateState);
+                  }}
+                />
+              </SettingRow>
+              <SettingRow
+                title="Updates"
+                helper={
+                  updateState.error ??
+                  (updateState.status === 'not-available'
+                    ? 'Ferry is up to date.'
+                    : updateState.status === 'available'
+                      ? `Version ${updateState.version ?? 'new'} is downloading.`
+                      : updateState.status === 'downloaded'
+                        ? `Version ${updateState.version ?? 'new'} is ready to install.`
+                        : 'Check the public Ferry Releases page for the latest beta.')
+                }
+              >
+                <div className="button-row">
+                  <Pill
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setCheckingUpdates(true);
+                      void window.ferryHost
+                        ?.checkForUpdates()
+                        .then(setUpdateState)
+                        .finally(() => {
+                          setCheckingUpdates(false);
+                        });
+                    }}
+                  >
+                    {checkingUpdates ? 'Checking…' : 'Check for updates'}
+                  </Pill>
+                  {updateState.status === 'available' && !updateState.autoDownload && (
+                    <Pill
+                      size="sm"
+                      variant="blue-tint"
+                      onClick={() => {
+                        void window.ferryHost?.downloadUpdate().then(setUpdateState);
+                      }}
+                    >
+                      Download update
+                    </Pill>
+                  )}
+                </div>
+              </SettingRow>
+              {updateState.status === 'downloaded' && (
+                <Pill
+                  size="sm"
+                  variant="blue-tint"
+                  onClick={() => {
+                    void window.ferryHost?.installUpdate();
+                  }}
+                >
+                  Restart to update
+                </Pill>
+              )}
+            </>
+          )}
+          <h3>Notices</h3>
+          <div className="notice-list">
+            <span>React Bits · MIT + Commons Clause</span>
+            <span>lucide · ISC</span>
+            <span>simple-icons · CC0</span>
+            <span>Inter · OFL</span>
+          </div>
+        </Group>
+      </>
+    );
+  };
+  const pageCopy = settingsPageCopy[section] ?? {
+    title: section,
+    description: 'Adjust how Ferry works across your workspaces.',
+  };
+  return (
+    <section className="canvas v2-settings-page">
+      <nav className="v2-settings-nav" aria-label="Settings sections">
+        {settingsSections.map((name) => (
+          <button
+            aria-current={section === name ? 'page' : undefined}
+            className={section === name ? 'active' : ''}
+            key={name}
+            onClick={() => {
+              useUI.getState().setSettingsSection(name);
+            }}
+            type="button"
+          >
+            {name}
+          </button>
+        ))}
+      </nav>
+      <main className="v2-settings-content">
+        <header className="v2-settings-header">
+          <div>
+            <h1>{pageCopy.title}</h1>
+            <p>{pageCopy.description}</p>
+          </div>
+          <div className="v2-settings-actions">
+            {section === 'General' && (
+              <Pill
+                onClick={() => {
+                  setConfirm('Reset layout?');
+                  setConfirmAction(() => () => {
+                    useUI.getState().resetLayout();
+                    toast({
+                      kind: 'success',
+                      title: 'Layout reset',
+                      body: 'Panel sizes and positions are back to default.',
+                    });
+                  });
+                }}
+              >
+                Reset layout
+              </Pill>
+            )}
+            {pendingSettings && (
+              <Pill variant="blue-tint" onClick={() => void saveSettings()}>
+                Save changes
+              </Pill>
+            )}
+          </div>
+        </header>
+        {body()}
+      </main>
       <ProviderKeyDialog
         provider={keyProvider}
         open={Boolean(keyProvider)}

@@ -164,7 +164,7 @@ try {
     ).toBeVisible();
 
     await page.goto(`${url}/onboarding`);
-    await page.getByRole('button', { name: /Get started/ }).click();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await page.getByRole('button', { name: 'Gemini API' }).click();
     await page.getByRole('button', { name: 'OpenRouter (free models)' }).click();
     await page
@@ -180,7 +180,7 @@ try {
     await page.getByRole('button', { name: 'Test OpenRouter (free models)', exact: true }).click();
     await page.getByRole('button', { name: 'Continue' }).click();
     await page.getByRole('button', { name: 'Continue' }).click();
-    await page.getByRole('button', { name: 'Skip for now' }).click();
+    await page.getByRole('button', { name: 'Skip setup' }).click();
     await expect(page).toHaveURL(new URL('/', url).href);
 
     await page.goto(`${url}/settings`);
@@ -189,13 +189,13 @@ try {
       .getByRole('button', { name: 'Profiles' })
       .click();
     await page
-      .locator('.settings-content')
+      .locator('.v2-settings-content')
       .getByRole('button', { name: /Best Available/ })
       .first()
       .click();
     await page.getByRole('textbox', { name: 'Daily cap ($)' }).fill('3.5');
     await page.getByRole('textbox', { name: 'Monthly cap ($)' }).fill('25');
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.getByRole('button', { name: 'Save changes', exact: true }).click();
     await expect(page.getByText('Profile saved: Best Available')).toBeVisible();
 
     await page.goto(`${url}/library`);

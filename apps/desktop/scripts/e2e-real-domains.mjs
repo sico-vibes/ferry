@@ -312,8 +312,10 @@ async function startEmbeddedCore() {
       const text = message.text();
       if (/FERRY_(PRELOAD|RENDERER|RPC)/.test(text)) console.log(`[E2E_RENDERER] ${text}`);
     });
-    const getStarted = page.getByRole('button', { name: /Get started/ });
-    await expect(getStarted.or(page.getByRole('button', { name: 'Models' })).first()).toBeVisible({
+    const onboardingContinue = page.getByRole('button', { name: 'Continue', exact: true });
+    await expect(
+      onboardingContinue.or(page.getByRole('button', { name: 'Models' })).first(),
+    ).toBeVisible({
       timeout: 20_000,
     });
     await page.waitForFunction(
@@ -327,11 +329,11 @@ async function startEmbeddedCore() {
     const helloDomains = await page.evaluate(() => window.ferryEngineHello?.realDomains ?? []);
     assert.ok(helloDomains.length > 0, 'File renderer hello must include real domains');
     console.log(`File renderer real client connected with ${String(helloDomains.length)} domains`);
-    if (await getStarted.isVisible().catch(() => false)) {
-      await getStarted.click();
+    if (await onboardingContinue.isVisible().catch(() => false)) {
+      await onboardingContinue.click();
       await page.getByRole('button', { name: 'Continue' }).click();
       await page.getByRole('button', { name: 'Continue' }).click();
-      await page.getByRole('button', { name: 'Finish setup' }).click();
+      await page.getByRole('button', { name: 'Skip setup' }).click();
     }
     await page.getByRole('button', { name: 'Library', exact: true }).click();
     await page.waitForFunction(() => Boolean(window.ferryRpcClient), undefined, {
