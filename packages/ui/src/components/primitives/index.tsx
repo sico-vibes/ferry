@@ -9,8 +9,7 @@ import {
   siOpenrouter,
   siSupabase,
 } from 'simple-icons';
-import { BadgeCheck, Plus, Sparkles } from 'lucide-react';
-import { GlowLine } from '../../effects/GlowLine';
+import { Plus, Sparkles } from 'lucide-react';
 import { cn } from '../../lib/cn';
 
 const focus =
@@ -100,32 +99,6 @@ export function Pill({
   );
 }
 
-export function MiniAdd({
-  label = 'Add',
-  onClick,
-  className,
-}: {
-  label?: string;
-  onClick?: () => void;
-  className?: string;
-}) {
-  return (
-    <button
-      aria-label={label}
-      className={cn(
-        `inline-flex size-7 shrink-0 items-center justify-center rounded-full text-white transition hover:brightness-110 active:scale-[.98] ${focus}`,
-        className,
-      )}
-      onClick={onClick}
-      type="button"
-    >
-      <span className="flex size-4 items-center justify-center rounded-full bg-blue-mini">
-        <Plus aria-hidden="true" size={10} strokeWidth={2.5} />
-      </span>
-    </button>
-  );
-}
-
 export function KbdChip({
   children = 'Ctrl F',
   className,
@@ -142,17 +115,6 @@ export function KbdChip({
     >
       {children}
     </kbd>
-  );
-}
-
-export function VerifiedBadge({ className }: { className?: string }) {
-  return (
-    <BadgeCheck
-      aria-label="Verified"
-      className={cn('size-[14px] fill-blue-500 text-white', className)}
-      role="img"
-      strokeWidth={2.5}
-    />
   );
 }
 
@@ -235,12 +197,6 @@ export function NewChatButton({
         </defs>
         <Sparkles fill={`url(#${gradientId})`} stroke={`url(#${gradientId})`} size={14} />
       </svg>
-      <GlowLine
-        orientation="horizontal"
-        from="15%"
-        to="85%"
-        className="bottom-[-1px] opacity-80 transition-opacity group-hover:opacity-100"
-      />
     </button>
   );
 }

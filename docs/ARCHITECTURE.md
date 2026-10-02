@@ -18,7 +18,7 @@ packages/
   config/ storage/ secrets/ testkit/ catalog/ providers/ quota/ router/
   workspace/ optimizer/ agent/ delegate/ core/                    (Part B)
 skills/         bundled skills (terse, delegate, handoff, review) (Part B)
-design/         reference/, DESIGN.md, screenshots/
+design/         reference/, DESIGN-v2.md, archive/, screenshots/
 ```
 
 ## Runtime (target)

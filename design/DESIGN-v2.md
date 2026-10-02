@@ -1,7 +1,7 @@
 # Ferry UI v2 — design spec (authoritative for the UI remake)
 
-Status: approved direction 2026-10-01. Supersedes `design/DESIGN.md` for every screen rebuilt in the remake
-(the old spec stays for reference until the last legacy screen is gone).
+Status: approved direction 2026-10-01. Supersedes `design/archive/DESIGN-v1.md` for every screen rebuilt in the remake
+(the former spec is archived at `design/archive/DESIGN-v1.md`).
 
 Reference: the user's "Voxa AI" chat screenshot — a quiet two-column dark app: left sidebar
 (brand, New chat, Library, Discover, chat history, upgrade card, user row), one centred conversation

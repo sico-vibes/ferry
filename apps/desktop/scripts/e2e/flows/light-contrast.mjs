@@ -76,40 +76,4 @@ export async function run(page, { url, expect }) {
       );
     }
   }
-
-  for (const route of ['/settings', '/models', '/library']) {
-    await page.goto(new URL(route, url).href);
-    await page.getByRole('navigation', { name: 'Primary' }).waitFor();
-    const legacy = await page.evaluate(() => {
-      const shell = document.querySelector('.v2-legacy-route');
-      const surfaces = Array.from(
-        document.querySelectorAll('.bg-card, .bg-raised, .bg-rail-tile-active'),
-      );
-      const normalized = (value) => {
-        const probe = document.createElement('span');
-        probe.style.backgroundColor = value;
-        document.body.append(probe);
-        const color = getComputedStyle(probe).backgroundColor;
-        probe.remove();
-        return color;
-      };
-      return {
-        isLegacy: Boolean(shell),
-        mismatches: surfaces.flatMap((surface) => {
-          const utility = ['bg-card', 'bg-raised', 'bg-rail-tile-active'].find((name) =>
-            surface.classList.contains(name),
-          );
-          if (!utility) return [];
-          const expected = normalized(`var(--${utility})`);
-          const actual = getComputedStyle(surface).backgroundColor;
-          return actual === expected ? [] : [`${utility}: ${actual} instead of ${expected}`];
-        }),
-      };
-    });
-    expect(legacy.isLegacy, `${route} should use its expected surface`).toBe(route !== '/settings');
-    expect(legacy.mismatches, `${route} has surface utilities detached from light tokens`).toEqual(
-      [],
-    );
-  }
-  // UI-3 removes the legacy block entirely.
 }

@@ -495,9 +495,9 @@ current Part-A/Part-B split; UI items are mock-compatible now.
    `orchestration.ts#L590-L601`).
 5. **Sidebar shelves + drag state changes** — *Low-medium.* Add Snoozed/Settled shelves and
    drag-to-settle/pin to `Sidebar.tsx`; reuse `docs/user/thread-sidebar.md#L48-L77` interaction
-   details. Pairs with Ferry's existing 5s Undo contract (`design/DESIGN.md#L284`).
+   details. Pairs with Ferry's existing 5s Undo contract (`design/archive/DESIGN-v1.md#L284`).
 6. **Undo-toast for reversible thread actions + `mod+z`** — *Low.* Align Ferry's 5s Undo
-   (`design/DESIGN.md#L284`) with a command-style `thread.undo` (`docs/user/keybindings.md#L114-L118`).
+   (`design/archive/DESIGN-v1.md#L284`) with a command-style `thread.undo` (`docs/user/keybindings.md#L114-L118`).
 7. **Diff review polish** — *Medium.* Ferry already has `ReviewCanvas.tsx`/`reviewActions.ts` and
    `MONACO` diff. Add: file tree, mark-viewed, inline comments, whitespace toggle, and (if needed)
    a worker to keep big diffs off the main thread (pattern: `DiffWorkerPoolProvider.tsx`). Do not
@@ -585,7 +585,7 @@ current Part-A/Part-B split; UI items are mock-compatible now.
 ### Files read for this report (primary evidence)
 
 Ferry: `README.md`, `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/ROUTING.md`, `docs/DELEGATION.md`,
-`docs/GATEWAY.md`, `docs/STATUS.md`, `design/DESIGN.md`, `LICENSE`, `package.json`,
+`docs/GATEWAY.md`, `docs/STATUS.md`, `design/archive/DESIGN-v1.md`, `LICENSE`, `package.json`,
 `packages/shared/src/domain/{session,provider,quota}.ts`, `packages/agent/src/loop.ts`,
 `packages/delegate/src/index.ts`, `packages/workspace/src/git.ts`,
 `apps/desktop/src/renderer/app/{Canvas,Sidebar}.tsx`, `packages/ui/src/components/chat/index.tsx`.

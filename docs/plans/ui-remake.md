@@ -21,7 +21,7 @@ reference, with no duplicate controls, one primary action per view, and strict s
 Each lane: works in its own worktree from the integrated main, keeps routes and client contracts,
 adds/updates screenshots in `design/screenshots/v2/`, and must pass full `check` + desktop
 `test:e2e` (run by the orchestrator outside the sandbox). Old components are deleted only after no
-screen uses them; `design/DESIGN.md` is archived when UI-3 completes.
+screen uses them; `design/DESIGN.md` has been archived as `design/archive/DESIGN-v1.md`.
 
 ## Duplicate-control audit (today → v2 home)
 

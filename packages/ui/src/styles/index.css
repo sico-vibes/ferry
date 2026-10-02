@@ -1,6 +1,5 @@
 @import 'tailwindcss';
 @import '../fonts/geist.css';
-@import '../fonts/inter.css';
 @import './tokens.css';
 @import './effects.css';
 @import './brand.css';
@@ -47,7 +46,7 @@
   --radius-input: var(--r-input);
   --radius-item: var(--r-item);
   --radius-pill: var(--r-pill);
-  --font-sans: 'Inter Variable', system-ui, sans-serif;
+  --font-sans: 'Geist', system-ui, sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, monospace;
 
   /* shadcn semantic palette for v2 primitives. */
@@ -149,7 +148,7 @@
     min-height: 100%;
     background: var(--bg-app);
     color: var(--text-1);
-    font-family: 'Inter Variable', system-ui, sans-serif;
+    font-family: 'Geist', system-ui, sans-serif;
     font-feature-settings: 'cv11', 'ss01';
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;

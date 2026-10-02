@@ -271,7 +271,7 @@ export function HomeCanvas() {
     }
   };
   return (
-    <CanvasPanel dots={false} className="home-canvas v2-home-canvas">
+    <CanvasPanel className="home-canvas v2-home-canvas">
       <div className="v2-home-layout">
         <div className="v2-home-greeting">
           <FerryMark size={36} variant="brand" />
@@ -1290,7 +1290,6 @@ export function SessionCanvas() {
   );
   return (
     <CanvasPanel
-      dots={false}
       overflowContained
       className={`session-canvas v2-session-canvas ${density === 'compact' ? 'density-compact' : ''}`}
     >
@@ -1406,7 +1405,7 @@ export function SessionCanvas() {
 
 export function PlaceholderCanvas({ title }: { title: string }) {
   return (
-    <CanvasPanel dots={false}>
+    <CanvasPanel>
       <div className="session-empty">
         <h1>{title}</h1>
         <p>{title} is coming later.</p>

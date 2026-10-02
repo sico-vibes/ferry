@@ -23,9 +23,9 @@ Types/signatures to honor (pasted verbatim).
 </interfaces>
 
 <design>
-UI tasks only: DESIGN.md sections to follow (e.g. §2 tokens, §4.2 sidebar) and the reference crops to OPEN with your image viewer:
+UI tasks only: DESIGN-v2.md sections to follow (e.g. §2 tokens, §4.2 sidebar) and the reference crops to OPEN with your image viewer:
 - design/reference/crops/<name>.png
-Numbers in DESIGN.md are authoritative. Use tokens only — no raw color literals.
+Numbers in DESIGN-v2.md are authoritative. Use tokens only — no raw color literals.
 </design>
 
 <acceptance>

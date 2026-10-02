@@ -12,7 +12,7 @@ export async function run(page, ctx) {
   await review.waitFor({ timeout: 20_000 });
   await review.click();
   await page.waitForURL(/\/review\//);
-  await ctx.expect(page.locator('.v2-app-shell .canvas-slot.ferry-legacy-scope')).toHaveCount(0);
+  await ctx.expect(page.locator('.v2-app-shell .canvas-slot')).toHaveCount(1);
   await ctx.expect(page.getByRole('region', { name: 'Delegation review' })).toBeVisible();
   await ctx.expect(page.locator('.review-toolbar')).toBeInViewport();
   await ctx.expect(page.getByRole('button', { name: 'Back to session' })).toBeInViewport();

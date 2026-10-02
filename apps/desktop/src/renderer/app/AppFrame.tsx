@@ -320,7 +320,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
 
   return (
     <div
-      className={`ferry-ui v2-app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed || reviewPage ? 'right-is-collapsed' : ''} ${reviewPage ? 'v2-review-route' : pathname === '/' || pathname.startsWith('/s/') ? 'v2-chat-route' : pathname.startsWith('/settings') ? 'v2-settings-route' : 'v2-legacy-route'}`}
+      className={`ferry-ui v2-app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed || reviewPage ? 'right-is-collapsed' : ''} ${reviewPage ? 'v2-review-route' : pathname === '/' || pathname.startsWith('/s/') ? 'v2-chat-route' : pathname.startsWith('/settings') ? 'v2-settings-route' : ''}`}
       data-density={density}
     >
       <div className="title-strip" aria-hidden="true" />
@@ -353,9 +353,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
               </button>
             </div>
           )}
-          <div
-            className={`canvas-slot ${pathname === '/' || pathname === '/library' || pathname.startsWith('/models') || pathname.startsWith('/settings') || pathname.startsWith('/s/') ? '' : 'ferry-legacy-scope'}`}
-          >
+          <div className="canvas-slot">
             {import.meta.env.DEV && new URLSearchParams(location.search).has('perf-render') ? (
               <Profiler
                 id={
