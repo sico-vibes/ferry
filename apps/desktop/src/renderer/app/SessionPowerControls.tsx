@@ -583,7 +583,7 @@ export function ComposerModelChip({
           <PopoverPrimitive.Content
             align="start"
             aria-label="Choose model"
-            className="model-picker-popover"
+            className="ferry-ui model-picker-popover"
             collisionPadding={12}
             id={dialogId}
             role="dialog"

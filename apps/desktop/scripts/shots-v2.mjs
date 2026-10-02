@@ -84,6 +84,7 @@ async function captureState(browser, state, theme, viewport) {
       }
     }
 
+    await page.mouse.move(0, 0);
     await page.screenshot({ path: join(outputDirectory, filename(state, theme, viewport)) });
     console.log(`Captured ${label}`);
   } catch (error) {

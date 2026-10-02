@@ -872,13 +872,11 @@ body {
   width: 440px;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border-soft);
+  border: 1px solid var(--border);
   border-radius: var(--r-card);
-  background: var(--bg-raised);
+  background: var(--card);
   padding: var(--space-2);
-  box-shadow:
-    0 16px 40px color-mix(in srgb, var(--bg-app), transparent 20%),
-    var(--highlight-top);
+  box-shadow: var(--shadow-popover);
   animation: ferry-fade-in 160ms ease-out;
 }
 .model-picker-popover .model-command {
@@ -1246,6 +1244,10 @@ body {
 
 /* Ferry UI v2 app shell and chat surfaces. */
 .v2-app-shell {
+  --border-hair: var(--border);
+  --border-soft: var(--border);
+  --border-strong: var(--border);
+  --sidebar-border: var(--border);
   position: relative;
   width: 100%;
   height: 100dvh;
@@ -1276,7 +1278,6 @@ body {
   min-height: 0;
   flex-direction: column;
   gap: 20px;
-  border-right: 1px solid var(--border);
   background: var(--sidebar);
   padding: 16px 12px 12px;
   color: var(--sidebar-foreground);
@@ -1593,8 +1594,8 @@ body {
 }
 .v2-profile-badge {
   border-color: transparent;
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--muted);
+  color: var(--foreground);
 }
 .v2-chat-header button svg {
   stroke-width: 1.75;
@@ -1773,8 +1774,8 @@ body {
   stroke-width: 1.75;
 }
 .v2-composer-chip {
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--muted);
+  color: var(--foreground);
 }
 .v2-composer-send {
   display: flex;
@@ -1814,6 +1815,7 @@ body {
   gap: 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
+  background: var(--card);
   margin-bottom: 8px;
   padding: 8px 10px;
   color: var(--foreground);
@@ -1989,9 +1991,9 @@ body {
   gap: 7px;
   border: 0;
   border-radius: 10px;
-  background: var(--accent);
+  background: var(--muted);
   padding: 0 8px;
-  color: var(--accent-foreground);
+  color: var(--foreground);
   font: inherit;
   font-size: 12px;
 }
@@ -2002,13 +2004,21 @@ body {
 .v2-chat-route .v2-disclaimer {
   margin-bottom: 16px;
 }
+.v2-app-shell .handoff-chip {
+  border-color: transparent;
+  background: var(--muted);
+}
+.v2-app-shell .session-error-card {
+  border-color: var(--border-hair);
+  background: var(--card);
+}
 .v2-drawer-content {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  border-left: 1px solid var(--border);
   background: var(--card);
   padding: 20px;
+  box-shadow: var(--shadow-popover);
 }
 .v2-drawer-heading {
   display: flex;
@@ -2035,7 +2045,6 @@ body {
 .v2-drawer-tabs {
   display: flex;
   gap: 4px;
-  border-bottom: 1px solid var(--border);
 }
 .v2-drawer-tabs button {
   min-height: 36px;
@@ -2060,7 +2069,11 @@ body {
   overflow: auto;
 }
 .v2-drawer-body > .right-panel {
-  display: block;
+  display: flex;
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  flex-direction: column;
   width: auto;
   height: 100%;
   border: 0;
@@ -2114,6 +2127,12 @@ body {
   box-shadow: none;
   --tw-ring-shadow: 0 0 transparent;
 }
+.v2-app-shell input:not(.v2-composer-input),
+.v2-app-shell textarea:not(.v2-composer-input),
+.v2-app-shell select,
+.v2-app-shell [role='combobox'] {
+  border-color: var(--input);
+}
 .v2-legacy-route .v2-chat-header {
   background: var(--sidebar);
 }
@@ -2133,7 +2152,6 @@ body {
   --accent: var(--bg-raised);
   --accent-foreground: var(--text-1);
   --border: var(--border-soft);
-  --input: var(--border-soft);
   --ring: var(--blue-500);
   --sidebar: var(--bg-panel);
   color: var(--text-1);

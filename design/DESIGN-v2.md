@@ -34,8 +34,8 @@ Rules that apply to every screen:
 ## 2. Tokens (CSS variables, shadcn/ui naming, both themes)
 
 Implemented as CSS variables in `@ferry/ui` with the shadcn/ui names so components work unchanged.
-Values below are the starting point; the contrast test must pass AA (4.5:1 text, 3:1 UI parts) on
-every surface in both themes, adjusting lightness only (keep hue).
+Text must pass AA at 4.5:1 in both themes. Inputs and focus indicators need 3:1 boundaries;
+surface tones may be differentiated by color and spacing without a boundary contrast ratio.
 
 | Token | Dark | Light | Use |
 |---|---|---|---|
@@ -43,7 +43,8 @@ every surface in both themes, adjusting lightness only (keep hue).
 | `--sidebar` | `#131219` | `#F4F3F8` | sidebar |
 | `--card` | `#17161D` | `#FFFFFF` | composer, cards, menus |
 | `--muted` | `#1E1D25` | `#EFEEF4` | hover, chips, inputs |
-| `--border` | `#2A2833` | `#E3E1EA` | region borders, inputs |
+| `--border` | `rgba(255,255,255,.06)` | `rgba(23,21,30,.07)` | hairline separators only |
+| `--input` | `rgba(255,255,255,.12)` | `rgba(23,21,30,.14)` | form-field boundaries |
 | `--foreground` | `#EDECF2` | `#17151E` | primary text |
 | `--muted-foreground` | `#A19EAE` | `#5E5A6B` | secondary text |
 | `--primary` | `#6D5BD0` | `#5B47B8` | primary button, active item, focus |
@@ -53,6 +54,14 @@ every surface in both themes, adjusting lightness only (keep hue).
 | `--ring` | `#8F7AE0` | `#6552A3` | focus ring (2 px, offset 2) |
 | `--destructive` | `#E5484D` | `#CE2C31` | destructive only |
 | `--success` / `--warning` | `#3DD68C` / `#F5A524` | `#1A7F4B` / `#A35A00` | status dots/text only |
+
+Regions and elements use surface tone and spacing instead of solid outlines: no divider between
+sidebar and content, no rule under the chat header, and no rules between sections (use 24–32 px
+spacing). Cards, composer, tool groups, approval and delegation cards, menus, popovers, capacity
+card, and drawer sit on `--card` with at most a `--border` hairline. Rows use spacing or a hairline.
+Chips use `--muted` fill without a stroke; quick-start chips may keep a hairline. Drawer separation
+uses tone and the soft shadow without a stroke. Strong outlines are reserved for the focus ring
+(2 px with 2 px offset) and form inputs (`--input`).
 
 Brand (unchanged, logo only): `#C8B5F5`, `#8F7AE0`, `#6552A3`, ink `#090622`.
 

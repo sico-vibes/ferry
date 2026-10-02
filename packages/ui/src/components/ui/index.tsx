@@ -195,10 +195,10 @@ export function SheetContent({
   overlayClassName?: string;
 }) {
   const position = {
-    top: 'inset-x-0 top-0 border-b',
-    right: 'inset-y-0 right-0 h-full w-[min(400px,90vw)] border-l',
-    bottom: 'inset-x-0 bottom-0 border-t',
-    left: 'inset-y-0 left-0 h-full w-[min(400px,90vw)] border-r',
+    top: 'inset-x-0 top-0',
+    right: 'inset-y-0 right-0 h-full w-[min(400px,90vw)]',
+    bottom: 'inset-x-0 bottom-0',
+    left: 'inset-y-0 left-0 h-full w-[min(400px,90vw)]',
   }[side];
   return (
     <DialogPortal>
