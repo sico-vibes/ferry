@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ChevronDown, ChevronRight, Wrench } from 'lucide-react';
+import { Children, useEffect, useState, type ReactNode } from 'react';
+import { ChevronDown, ChevronRight, LoaderCircle, Wrench } from 'lucide-react';
 import type { AgentEvent } from '@ferry/shared';
 import { cn } from '../../lib/cn';
 import { focusRingClass } from '../primitives';
@@ -202,63 +202,123 @@ function ToolItem({
 export function AgentTimeline({
   events,
   onShowFull,
+  modelName,
+  activity,
+  startedAt,
 }: {
   events: readonly AgentEvent[];
   onShowFull?: (handle: string) => void;
+  modelName?: string;
+  activity?: ReactNode;
+  startedAt?: string;
 }) {
-  if (!events.length) return null;
+  const [open, setOpen] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const lanes = buildTimelineLanes(events);
+  const lastStatus = [...events].reverse().find((event) => event.type === 'status');
+  const running = lastStatus?.type === 'status' && lastStatus.status === 'running';
+  const activeTool = [...events].reverse().find((event) => event.type === 'tool_use');
+  useEffect(() => {
+    if (!running) return;
+    const interval = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [running]);
+  if (!events.length && Children.count(activity) === 0 && !modelName) return null;
+  const firstTime = events[0] ? Date.parse(events[0].timestamp) : 0;
+  const lastEvent = events.at(-1);
+  const lastTime = lastEvent ? Date.parse(lastEvent.timestamp) : firstTime;
+  const durationMs =
+    events.reduce((duration, event) => Math.max(duration, event.durationMs ?? 0), 0) ||
+    Math.max(0, lastTime - firstTime);
+  const startedAtMs = startedAt ? Date.parse(startedAt) : firstTime;
+  const elapsedMs = running ? Math.max(0, now - startedAtMs) : durationMs;
+  const elapsed = `${String(Math.max(1, Math.round(elapsedMs / 1000)))}s`;
+  const currentStep =
+    activeTool?.type === 'tool_use' &&
+    ['bash', 'run_command', 'shell', 'terminal'].includes(activeTool.tool.toLowerCase())
+      ? 'command'
+      : activeTool?.type === 'tool_use'
+        ? prettyTool(activeTool.tool)
+        : null;
   const unavailable = lanes.model.some(
     (event) => event.type === 'status' && event.reasoningAvailable === false,
   );
   return (
-    <section
-      aria-label="Agent timeline"
-      className="grid gap-3 rounded-xl border border-border-hair bg-raised/40 p-3 md:grid-cols-2"
-    >
-      <div className="min-w-0 space-y-2">
-        <h3 className="text-meta font-medium text-text-3">Model</h3>
-        {unavailable && (
-          <p className="text-meta text-text-3">This model doesn’t share its reasoning.</p>
+    <section aria-label="Agent activity" className="space-y-2">
+      <button
+        aria-expanded={open}
+        className={cn(
+          'flex w-full items-center gap-2 text-left text-label text-text-3',
+          focusRingClass,
         )}
-        {lanes.model.map((event) =>
-          event.type === 'thinking' ? (
-            <ThinkingEvent event={event} key={event.id} />
-          ) : event.type === 'text' ? (
-            <p className="whitespace-pre-wrap text-label text-text-2" key={event.id}>
-              {event.content}
-            </p>
-          ) : event.type === 'error' ? (
-            <p className="text-label text-danger" key={event.id}>
-              {event.message}
-            </p>
-          ) : event.type === 'status' && event.reasoningAvailable !== false ? (
-            <p className="text-meta text-text-3" key={event.id}>
-              {event.message ?? event.status}
-            </p>
-          ) : event.type === 'usage' ? (
-            <p className="text-meta tabular-nums text-text-3" key={event.id}>
-              Step usage: {String(event.inputTokens ?? 0)} in · {String(event.outputTokens ?? 0)}{' '}
-              out
-              {event.reasoningTokens ? ` · ${String(event.reasoningTokens)} reasoning` : ''} tokens
-              {event.durationMs == null ? '' : ` · ${(event.durationMs / 1000).toFixed(1)}s`}
-            </p>
-          ) : null,
-        )}
-      </div>
-      <div className="min-w-0 space-y-2">
-        <h3 className="text-meta font-medium text-text-3">Tools</h3>
-        {lanes.tools.map((item) => (
-          <ToolItem
-            item={item}
-            key={
-              'type' in item ? `${item.tool}-${item.steps.at(0)?.call.id ?? 'group'}` : item.call.id
-            }
-            {...(onShowFull ? { onShowFull } : {})}
+        onClick={() => {
+          setOpen((value) => !value);
+        }}
+        type="button"
+      >
+        {running ? (
+          <LoaderCircle
+            aria-hidden="true"
+            className="animate-spin motion-reduce:animate-none"
+            size={14}
           />
-        ))}
-        {!lanes.tools.length && <p className="text-meta text-text-3">No tool calls</p>}
-      </div>
+        ) : open ? (
+          <ChevronDown aria-hidden="true" size={14} />
+        ) : (
+          <ChevronRight aria-hidden="true" size={14} />
+        )}
+        <span>{running ? `Working... ${elapsed}` : `Worked for ${elapsed}`}</span>
+        {running && currentStep && <span className="text-text-2">Running {currentStep}</span>}
+        {modelName && <span className="ml-auto text-meta text-text-3">{modelName}</span>}
+      </button>
+      {open && (
+        <div className="space-y-2 pl-5 text-meta text-text-3">
+          <div className="min-w-0 space-y-2">
+            {unavailable && <p>This model doesn’t share its reasoning.</p>}
+            {lanes.model.map((event) =>
+              event.type === 'thinking' ? (
+                <ThinkingEvent event={event} key={event.id} />
+              ) : event.type === 'error' ? (
+                <p className="text-label text-danger" key={event.id}>
+                  {event.message}
+                </p>
+              ) : event.type === 'status' &&
+                event.id === lastStatus?.id &&
+                event.reasoningAvailable !== false ? (
+                <p className="text-meta text-text-3" key={event.id}>
+                  {event.message ?? event.status}
+                </p>
+              ) : event.type === 'usage' ? (
+                <p className="text-meta tabular-nums text-text-3" key={event.id}>
+                  Step usage: {String(event.inputTokens ?? 0)} in ·{' '}
+                  {String(event.outputTokens ?? 0)} out
+                  {event.reasoningTokens
+                    ? ` · ${String(event.reasoningTokens)} reasoning`
+                    : ''}{' '}
+                  tokens
+                  {event.durationMs == null ? '' : ` · ${(event.durationMs / 1000).toFixed(1)}s`}
+                </p>
+              ) : null,
+            )}
+          </div>
+          {lanes.tools.map((item) => (
+            <ToolItem
+              item={item}
+              key={
+                'type' in item
+                  ? `${item.tool}-${item.steps.at(0)?.call.id ?? 'group'}`
+                  : item.call.id
+              }
+              {...(onShowFull ? { onShowFull } : {})}
+            />
+          ))}
+          {activity}
+        </div>
+      )}
     </section>
   );
 }

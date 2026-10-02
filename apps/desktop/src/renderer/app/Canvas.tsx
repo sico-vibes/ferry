@@ -714,19 +714,45 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
       }}
     >
       {message.role === 'user' ? (
-        <UserMessage>
-          {message.parts
-            .filter((part) => part.type === 'text')
-            .map((part) => part.text)
-            .join('')}
-        </UserMessage>
+        <div className="message-answer">
+          <UserMessage>
+            {message.parts
+              .filter((part) => part.type === 'text')
+              .map((part) => part.text)
+              .join('')}
+          </UserMessage>
+        </div>
       ) : (
-        <AssistantMessage
-          modelName={modelName}
-          {...(message.agentRole ? { agentRole: message.agentRole } : {})}
-        >
+        <AssistantMessage {...(message.agentRole ? { agentRole: message.agentRole } : {})}>
           <AgentTimeline
             events={timelineEvents}
+            modelName={modelName}
+            startedAt={message.createdAt}
+            activity={message.parts.flatMap((part) => {
+              if (part.type === 'handoff_marker') {
+                const from = shortModel(part.from, []);
+                const to = shortModel(part.to, []);
+                return [
+                  <HandoffMarker
+                    key={part.id}
+                    from={from}
+                    to={to}
+                    reason={part.reason}
+                    briefingTokens={part.briefingTokens}
+                    explanation={part.explanation}
+                  />,
+                ];
+              }
+              if (part.type === 'approval_request' && part.state !== 'pending') {
+                const label = `${part.state === 'denied' ? 'Denied' : 'Allowed'}: ${part.detail}`;
+                return [
+                  <p className="text-meta text-text-3" key={part.id}>
+                    {label}
+                  </p>,
+                ];
+              }
+              return [];
+            })}
             {...(timelineEvents.length
               ? {
                   onShowFull: (handle: string) => {
@@ -736,6 +762,11 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
               : {})}
           />
           {groupParts(message.parts).map((part) => {
+            if (
+              part.type === 'handoff_marker' ||
+              (part.type === 'approval_request' && part.state !== 'pending')
+            )
+              return null;
             if (
               (timelineHasTools && (part.type === 'tool_group' || part.type === 'tool_call')) ||
               (timelineHasThinking && part.type === 'reasoning') ||
@@ -760,26 +791,30 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
                 startedAt={message.createdAt}
               />
             ) : (
-              <PartView
-                key={part.id}
-                part={part}
-                sessionId={sessionId}
-                canRetry={canRetry}
-                isStreaming={part.id === streamPartId}
-                onFull={onFullOutput}
-                onDiff={() => {
-                  setRightTab('changes');
-                }}
-                onReview={(runId) =>
-                  void navigate({ to: '/s/$sessionId/review/$runId', params: { sessionId, runId } })
-                }
-                onCancel={(id) => void client.delegation.cancel(id)}
-                onPickAnother={onPickModel}
-              />
+              <div className={part.type === 'text' ? 'message-answer' : undefined} key={part.id}>
+                <PartView
+                  part={part}
+                  sessionId={sessionId}
+                  canRetry={canRetry}
+                  isStreaming={part.id === streamPartId}
+                  onFull={onFullOutput}
+                  onDiff={() => {
+                    setRightTab('changes');
+                  }}
+                  onReview={(runId) =>
+                    void navigate({
+                      to: '/s/$sessionId/review/$runId',
+                      params: { sessionId, runId },
+                    })
+                  }
+                  onCancel={(id) => void client.delegation.cancel(id)}
+                  onPickAnother={onPickModel}
+                />
+              </div>
             );
           })}
           {streamingText !== null && !streamingPartIsInMessage && (
-            <div className="whitespace-pre-wrap break-words">
+            <div className="message-answer whitespace-pre-wrap break-words">
               {streamingText}
               <StreamingCursor />
             </div>

@@ -23,6 +23,9 @@ const themes = ['dark', 'light'];
 const states = [
   'home-idle',
   'session-idle',
+  'session-activity-collapsed',
+  'session-activity-expanded',
+  'session-approval-pending',
   'session-streaming',
   'approval-pending',
   'drawer-open',
@@ -139,6 +142,21 @@ async function captureState(browser, state, theme, viewport) {
       } else if (state === 'onboarding-folder') {
         await page.getByRole('button', { name: 'Continue', exact: true }).click();
         await page.getByRole('button', { name: 'Continue', exact: true }).click();
+      }
+    } else if (
+      state === 'session-activity-collapsed' ||
+      state === 'session-activity-expanded' ||
+      state === 'session-approval-pending'
+    ) {
+      await page.getByRole('textbox', { name: 'Message Ferry' }).fill('Fix flaky tests');
+      await page.getByRole('button', { name: 'Send', exact: true }).click();
+      await page.waitForURL(/\/s\//);
+      if (state === 'session-approval-pending') {
+        await page.getByRole('button', { name: 'Allow once', exact: true }).waitFor();
+      } else {
+        const activity = page.getByRole('button', { name: /Worked for/ });
+        await activity.waitFor();
+        if (state === 'session-activity-expanded') await activity.click();
       }
     } else if (state === 'session-idle' || state === 'drawer-open') {
       await page.goto(new URL('/s/session_3', baseUrl).href);

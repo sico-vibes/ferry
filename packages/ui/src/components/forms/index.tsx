@@ -81,7 +81,7 @@ export function Tooltip({ children, content }: { children: ReactNode; content: R
       <TooltipPrimitive.Root>
         <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
         <TooltipPrimitive.Portal>
-          <TooltipPrimitive.Content sideOffset={6} className="ferry-tooltip">
+          <TooltipPrimitive.Content collisionPadding={12} sideOffset={6} className="ferry-tooltip">
             {content}
             <TooltipPrimitive.Arrow className="fill-raised" />
           </TooltipPrimitive.Content>

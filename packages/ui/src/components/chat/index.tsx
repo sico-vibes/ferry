@@ -68,24 +68,16 @@ export function ModelBadge({ modelName }: { modelName: string }) {
   );
 }
 export function AssistantMessage({
-  modelName,
   agentRole,
   children,
 }: {
-  modelName: string;
+  modelName?: string;
   agentRole?: 'planner' | 'editor';
   children: ReactNode;
 }) {
   return (
     <article className="space-y-3">
-      <div className="flex items-center gap-2">
-        {agentRole && (
-          <span className="rounded-full border border-border-hair bg-raised px-2 py-0.5 text-meta font-medium text-text-2">
-            {agentRole === 'planner' ? 'Plan' : 'Edit'}
-          </span>
-        )}
-        <ModelBadge modelName={modelName} />
-      </div>
+      {agentRole && <span className="sr-only">{agentRole === 'planner' ? 'Plan' : 'Edit'}</span>}
       <div className="space-y-3 text-chat leading-6 text-text-1">{children}</div>
     </article>
   );
@@ -510,7 +502,7 @@ export function HandoffMarker({
         >
           <ArrowLeftRight aria-hidden="true" size={13} />
           <span>
-            Switched from <b>{from}</b> to <b>{to}</b> because of {reason}
+            Switched to <b>{to}</b> - {reason.replace('_', ' ')} on <b>{from}</b>
           </span>
           <span className="sr-only">{explanation}</span>
         </button>
