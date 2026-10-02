@@ -26,6 +26,11 @@ const states = [
   'session-streaming',
   'approval-pending',
   'drawer-open',
+  'drawer-changes',
+  'drawer-terminal',
+  'drawer-agent-log',
+  'command-palette',
+  'review',
 ];
 const filename = (state, theme, viewport) =>
   `${state}-${theme}-${viewport.width}x${viewport.height}.png`;
@@ -56,8 +61,12 @@ async function captureState(browser, state, theme, viewport) {
     page.setDefaultTimeout(30_000);
     await configureTheme(page, theme);
 
-    if (state === 'home-idle') {
+    if (state === 'home-idle' || state === 'command-palette') {
       await page.getByRole('textbox', { name: 'Message Ferry' }).focus();
+      if (state === 'command-palette') {
+        await page.keyboard.press('Control+k');
+        await page.getByRole('dialog', { name: 'Command palette' }).waitFor();
+      }
     } else if (state === 'session-idle' || state === 'drawer-open') {
       await page.goto(new URL('/s/session_3', baseUrl).href);
       await page.locator('.transcript-viewport').waitFor();
@@ -66,6 +75,42 @@ async function captureState(browser, state, theme, viewport) {
         await page.getByRole('button', { name: 'Toggle drawer' }).click();
         await page.getByRole('tablist', { name: 'Session drawer tabs' }).waitFor();
       }
+    } else if (state.startsWith('drawer-')) {
+      await page.goto(new URL('/s/session_3', baseUrl).href);
+      await page.locator('.transcript-viewport').waitFor();
+      await selectTheme(page, theme);
+      await page.getByRole('button', { name: 'Toggle drawer' }).click();
+      const tabs = page.getByRole('tablist', { name: 'Session drawer tabs' });
+      await tabs.waitFor();
+      if (state !== 'drawer-open') {
+        await tabs
+          .getByRole('tab', {
+            name: state === 'drawer-changes' ? 'Changes' : 'Terminal',
+            exact: true,
+          })
+          .click();
+      }
+      if (state === 'drawer-agent-log') {
+        await page.getByRole('radio', { name: 'Agent log' }).click();
+        await page.getByLabel('Agent log').waitFor();
+      } else if (state === 'drawer-terminal') {
+        await page.locator('.terminal-host').waitFor();
+      } else if (state === 'drawer-changes') {
+        await page.getByText('Changes', { exact: true }).waitFor();
+      }
+    } else if (state === 'review') {
+      await page
+        .getByRole('textbox', { name: 'Message Ferry' })
+        .fill('Delegate the adapter refactor');
+      await page.getByRole('button', { name: 'Send', exact: true }).click();
+      await page.getByRole('button', { name: 'Allow once', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Allow once', exact: true }).click();
+      await page
+        .getByRole('button', { name: 'Review diff', exact: true })
+        .waitFor({ timeout: 30_000 });
+      await page.getByRole('button', { name: 'Review diff', exact: true }).click();
+      await page.getByRole('region', { name: 'Delegation review' }).waitFor();
+      await page.locator('.monaco-diff-editor').waitFor({ timeout: 30_000 });
     } else {
       const speed = state === 'session-streaming' ? 8 : 1;
       await page.goto(new URL(`/?speed=${String(speed)}`, baseUrl).href);

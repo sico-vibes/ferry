@@ -157,7 +157,8 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   }, []);
   const onboardingPage =
     settings?.onboardingComplete === false && (pathname === '/onboarding' || pathname === '/');
-  const fullCanvasPage = onboardingPage || pathname.includes('/review/');
+  const reviewPage = pathname.includes('/review/');
+  const fullCanvasPage = onboardingPage || reviewPage;
   const bottomOpen = useUI((state) => state.bottomOpen);
   const createChat = async () => {
     try {
@@ -319,16 +320,16 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
 
   return (
     <div
-      className={`ferry-ui v2-app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed ? 'right-is-collapsed' : ''} ${pathname === '/' || pathname.startsWith('/s/') ? 'v2-chat-route' : 'v2-legacy-route'}`}
+      className={`ferry-ui v2-app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed || reviewPage ? 'right-is-collapsed' : ''} ${reviewPage ? 'v2-review-route' : pathname === '/' || pathname.startsWith('/s/') ? 'v2-chat-route' : 'v2-legacy-route'}`}
       data-density={density}
     >
       <div className="title-strip" aria-hidden="true" />
       <div
-        className={`v2-app-grid ${!rightCollapsed && pathname.startsWith('/s/') ? 'drawer-open' : ''}`}
+        className={`v2-app-grid ${!rightCollapsed && !reviewPage && pathname.startsWith('/s/') ? 'drawer-open' : ''}`}
       >
         <V2Sidebar onNewChat={() => void createChat()} />
         <main className="v2-main-column">
-          <V2ChatHeader />
+          {!reviewPage && <V2ChatHeader />}
           {(!networkOnline || simulatedOffline) && (
             <div className="offline-warning" role="status">
               Offline - local work is saved. Provider requests will retry when the network returns.
@@ -353,7 +354,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
             </div>
           )}
           <div
-            className={`canvas-slot ${pathname === '/' || (pathname.startsWith('/s/') && !pathname.includes('/review/')) ? '' : 'ferry-legacy-scope'}`}
+            className={`canvas-slot ${pathname === '/' || (pathname.startsWith('/s/') && !reviewPage) || reviewPage ? '' : 'ferry-legacy-scope'}`}
           >
             {import.meta.env.DEV && new URLSearchParams(location.search).has('perf-render') ? (
               <Profiler
@@ -378,7 +379,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
             )}
           </div>
         </main>
-        {!rightCollapsed && pathname.startsWith('/s/') && (
+        {!rightCollapsed && pathname.startsWith('/s/') && !reviewPage && (
           <UiV2.Sheet
             open
             modal={!wideDrawer}

@@ -3,7 +3,7 @@ import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Bell, Check, ChevronDown, Search, X } from 'lucide-react';
 import { Popover as PopoverPrimitive } from 'radix-ui';
-import { DataUseBadge, Dialog, FerryMark, Pill, ShowMoreList, TagBadge } from '@ferry/ui';
+import { DataUseBadge, Dialog, FerryMark, Pill, ShowMoreList, Skeleton, TagBadge } from '@ferry/ui';
 import type { ModelRef, PartId, ProfileId, SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { listAllModels } from '@ferry/client';
@@ -444,7 +444,7 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
         </PaletteCommand>
       ) : (
         <div className="command-palette" role="status">
-          Loading actions…
+          <Skeleton rows={4} />
         </div>
       )}
     </Dialog>

@@ -298,7 +298,7 @@ export function RightPanel({
                 )}
               </>
             ) : activeSessionLoading ? (
-              <p className="empty-search">Loading this session's plan…</p>
+              <Skeleton rows={5} />
             ) : currentSessionId ? (
               <p className="empty-search">No plan has been added to this session yet.</p>
             ) : (
@@ -321,17 +321,17 @@ function ChangesPanel({ detail }: { detail: ReturnType<typeof useSessionDetail>[
   const client = useFerryClient();
   const navigate = useNavigate();
   const cache = useQueryClient();
-  const { data: checkpoints = [] } = useQuery({
+  const { data: checkpoints = [], isLoading: checkpointsLoading } = useQuery({
     queryKey: ['checkpoints', detail?.session.id],
     queryFn: () => (detail ? client.checkpoints.list(detail.session.id) : Promise.resolve([])),
     enabled: Boolean(detail?.session.id),
   });
-  const { data: runs = [] } = useQuery({
+  const { data: runs = [], isLoading: runsLoading } = useQuery({
     queryKey: ['delegation', detail?.session.id],
     queryFn: () => (detail ? client.delegation.runs(detail.session.id) : Promise.resolve([])),
     enabled: Boolean(detail?.session.id),
   });
-  const { data: changes = [] } = useQuery({
+  const { data: changes = [], isLoading: changesLoading } = useQuery({
     queryKey: ['session-changes', detail?.session.id],
     queryFn: () =>
       Promise.resolve(
@@ -354,65 +354,83 @@ function ChangesPanel({ detail }: { detail: ReturnType<typeof useSessionDetail>[
   const unique = [
     ...new Map([...changes, ...delegated].map((change) => [change.path, change])).values(),
   ];
+  const additions = unique.reduce((total, change) => total + change.additions, 0);
+  const deletions = unique.reduce((total, change) => total + change.deletions, 0);
   const reviewRun = runs.find((run) => run.touchedFiles.length > 0);
   return (
     <section className="task-panel">
       <h2>
         <FileCode2 size={14} /> Changes <span>{unique.length}</span>
       </h2>
-      {reviewRun && detail && (
-        <button
-          className="change-row"
-          onClick={() =>
-            void navigate({
-              to: '/s/$sessionId/review/$runId',
-              params: { sessionId: detail.session.id, runId: reviewRun.id },
-            })
-          }
-          type="button"
+      {unique.length > 0 && (
+        <p
+          className="change-diffstat"
+          aria-label={`${String(additions)} additions, ${String(deletions)} deletions`}
         >
-          Open review <span>{reviewRun.lane}</span>
-        </button>
+          {unique.length} {unique.length === 1 ? 'file' : 'files'} changed
+          <span className="text-success">+{additions}</span>
+          <span className="text-danger">-{deletions}</span>
+        </p>
       )}
-      {unique.length ? (
-        unique.map((change) => (
-          <button
-            className="change-row"
-            key={change.path}
-            onClick={() => {
-              setSelected(change);
-            }}
-          >
-            <code>{change.path}</code>
-            <span className="text-success">+{change.additions}</span>
-            <span className="text-danger">−{change.deletions}</span>
-          </button>
-        ))
+      {checkpointsLoading || runsLoading || changesLoading ? (
+        <Skeleton rows={5} />
       ) : (
-        <p className="empty-search">No changed files yet.</p>
-      )}
-      {checkpoints.length > 0 && (
-        <section aria-label="Checkpoints" className="checkpoint-list">
-          <h3>Checkpoints</h3>
-          {checkpoints.map((checkpoint) => (
+        <>
+          {reviewRun && detail && (
             <button
               className="change-row"
-              key={checkpoint.id}
-              aria-label={`Restore checkpoint ${checkpoint.label}`}
               onClick={() =>
-                void client.checkpoints.restore(checkpoint.id).then(async () => {
-                  await cache.invalidateQueries({
-                    queryKey: ['checkpoints', detail?.session.id],
-                  });
+                void navigate({
+                  to: '/s/$sessionId/review/$runId',
+                  params: { sessionId: detail.session.id, runId: reviewRun.id },
                 })
               }
               type="button"
             >
-              <span>{checkpoint.label}</span>
-              <span>Restore</span>
+              Open review <span>{reviewRun.lane}</span>
             </button>
-          ))}
-        </section>
+          )}
+          {unique.length ? (
+            unique.map((change) => (
+              <button
+                className="change-row"
+                key={change.path}
+                onClick={() => {
+                  setSelected(change);
+                }}
+              >
+                <code>{change.path}</code>
+                <span className="text-success">+{change.additions}</span>
+                <span className="text-danger">−{change.deletions}</span>
+              </button>
+            ))
+          ) : (
+            <p className="empty-search">No changed files yet.</p>
+          )}
+          {checkpoints.length > 0 && (
+            <section aria-label="Checkpoints" className="checkpoint-list">
+              <h3>Checkpoints</h3>
+              {checkpoints.map((checkpoint) => (
+                <button
+                  className="change-row"
+                  key={checkpoint.id}
+                  aria-label={`Restore checkpoint ${checkpoint.label}`}
+                  onClick={() =>
+                    void client.checkpoints.restore(checkpoint.id).then(async () => {
+                      await cache.invalidateQueries({
+                        queryKey: ['checkpoints', detail?.session.id],
+                      });
+                    })
+                  }
+                  type="button"
+                >
+                  <span>{checkpoint.label}</span>
+                  <span>Restore</span>
+                </button>
+              ))}
+            </section>
+          )}
+        </>
       )}
       {selected && (
         <div className="diff-view">

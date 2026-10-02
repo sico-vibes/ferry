@@ -6,7 +6,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Terminal, X } from 'lucide-react';
-import { SegmentedControl } from '@ferry/ui';
+import { SegmentedControl, Skeleton } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { useUI } from '../state/ui';
 
@@ -79,7 +79,7 @@ export function BottomPanel({ sessionId: activeSessionId }: { sessionId?: Sessio
   const path = useRouterState({ select: (state) => state.location.pathname });
   const sessionId =
     activeSessionId ?? (path.startsWith('/s/') ? (path.slice(3) as SessionId) : null);
-  const { data } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['session', sessionId],
     queryFn: () => (sessionId ? client.sessions.get(sessionId as never) : Promise.resolve(null)),
     enabled: Boolean(sessionId),
@@ -89,6 +89,17 @@ export function BottomPanel({ sessionId: activeSessionId }: { sessionId?: Sessio
   const setBottomTab = useUI((s) => s.setBottomTab);
   const toggleBottom = useUI((s) => s.toggleBottom);
   const isDrawer = activeSessionId !== undefined;
+  const agentLogRows =
+    data?.messages.flatMap((message) =>
+      message.parts
+        .filter((part) => part.type === 'tool_call')
+        .map((part) => ({
+          id: part.id,
+          at: message.createdAt,
+          title: part.title,
+          status: part.status,
+        })),
+    ) ?? [];
   return (
     <section
       aria-label={isDrawer ? 'Session tools' : 'Bottom panel'}
@@ -173,17 +184,19 @@ export function BottomPanel({ sessionId: activeSessionId }: { sessionId?: Sessio
         <TerminalView />
       ) : (
         <div aria-label="Agent log" className="agent-log" role="region">
-          {data?.messages.flatMap((message) =>
-            message.parts
-              .filter((part) => part.type === 'tool_call')
-              .map((part) => (
-                <div className="agent-log-row" key={part.id}>
-                  <time>{new Date(message.createdAt).toLocaleTimeString()}</time>
-                  <span>{part.title}</span>
-                  <code>{part.status}</code>
-                </div>
-              )),
-          ) ?? <p className="muted">Tool calls from this session will appear here.</p>}
+          {isLoading ? (
+            <Skeleton rows={5} />
+          ) : agentLogRows.length ? (
+            agentLogRows.map((row) => (
+              <div className="agent-log-row" key={row.id}>
+                <time>{new Date(row.at).toLocaleTimeString()}</time>
+                <span>{row.title}</span>
+                <code>{row.status}</code>
+              </div>
+            ))
+          ) : (
+            <p className="muted">Tool calls from this session will appear here.</p>
+          )}
         </div>
       )}
     </section>
