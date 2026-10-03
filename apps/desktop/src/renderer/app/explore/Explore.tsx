@@ -383,6 +383,8 @@ export function ModelsCanvas() {
                       onManageKey={() => {
                         openManage(provider);
                       }}
+                      priority={settings?.routing.providerPriorities[provider.id] ?? 0}
+                      weight={settings?.routing.providerWeights[provider.id] ?? 1}
                       onTest={() => void probe(provider)}
                       onToggle={(enabled) => void toggleProvider(provider, enabled)}
                       probing={probing === provider.id}
@@ -701,6 +703,7 @@ export function ModelsCanvas() {
         </UiV2.DialogContent>
       </UiV2.Dialog>
       <ProviderKeyDialog
+        showRoutingControls
         provider={activeProvider}
         open={dialogMode === 'manage' && Boolean(activeProvider)}
         onOpenChange={(open) => {

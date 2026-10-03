@@ -735,6 +735,17 @@ export function SettingsCanvas() {
                     mutateProfile('description', value);
                   }}
                 />
+                <Select
+                  label="Account affinity"
+                  value={profileDraft.affinityMode}
+                  onValueChange={(value) => {
+                    mutateProfile('affinityMode', value as Profile['affinityMode']);
+                  }}
+                  options={[
+                    { value: 'soft', label: 'Soft, switch after failure' },
+                    { value: 'strict', label: 'Strict, keep this account' },
+                  ]}
+                />
               </div>
               <h3>Planner/editor split</h3>
               <SettingRow

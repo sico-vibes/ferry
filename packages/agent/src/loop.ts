@@ -40,6 +40,7 @@ import {
   type CapacityView,
   type ModelStats,
   StickySessionLedger,
+  preferStickyAffinity,
   isToolDeferred,
   shouldRetireModel,
   type ReliabilityObservation,
@@ -216,6 +217,7 @@ export interface AgentOptions {
   acquireQuotaLease?: (model: ModelInfo, tokens: number) => (() => void) | null;
   stickyState?: Readonly<Record<string, StickyRoute>>;
   onStickyState?: (state: Record<string, StickyRoute>) => void;
+  providerAffinityKey?: (providerId: string) => string | undefined;
   probeHeuristicCooldowns?: () => Promise<void>;
   toolRejectionState?: readonly ToolRejection[];
   onToolRejectionState?: (entries: ToolRejection[]) => void;
@@ -806,13 +808,19 @@ export class AgentLoop {
               this.pruneReliability();
               this.options.onReliabilityState?.([...this.reliability]);
             }
-            if (successRouting?.stickySessions)
+            if (successRouting?.stickySessions) {
+              const providerKeyId = this.options.providerAffinityKey?.(model.providerId);
               this.sticky.set(
                 sessionId,
                 model.ref,
                 this.now(),
                 successRouting.stickyTtlMinutes * 60_000,
+                {
+                  providerId: model.providerId,
+                  ...(providerKeyId ? { providerKeyId } : {}),
+                },
               );
+            }
             this.options.onStickyState?.(this.sticky.snapshot());
             this.toolRejections.splice(
               0,
@@ -1576,7 +1584,10 @@ export class AgentLoop {
     const withinFailedSize = (model: ModelInfo) =>
       (this.requestTooLargeAt.get(model.ref) ?? Number.POSITIVE_INFINITY) <= inputTokens;
     const routing = this.options.routingSettings?.();
-    const stickyRef = routing?.stickySessions ? this.sticky.get(sessionId, this.now()) : undefined;
+    const stickyRoute = routing?.stickySessions
+      ? this.sticky.getRoute(sessionId, this.now())
+      : undefined;
+    const stickyRef = stickyRoute?.modelRef;
     const eligible = (model: ModelInfo) =>
       !this.sessionBadKeys.get(sessionId)?.has(model.providerId) &&
       !locked?.has(model.ref) &&
@@ -1585,9 +1596,12 @@ export class AgentLoop {
     const resolved = this.options.resolveCandidates?.(this.options.profile, step, inputTokens);
     if (resolved)
       return this.selectResilient(
-        resolved
-          .filter(eligible)
-          .sort((a, b) => Number(b.ref === stickyRef) - Number(a.ref === stickyRef)),
+        preferStickyAffinity(
+          resolved.filter(eligible),
+          stickyRoute,
+          this.options.profile.affinityMode,
+          (providerId) => this.options.providerAffinityKey?.(providerId) ?? undefined,
+        ),
       );
     const candidates = scoreModels({
       models: this.options.catalog.models,

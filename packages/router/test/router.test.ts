@@ -758,6 +758,102 @@ describe('step classification and routing', () => {
     );
   });
 
+  it('keeps the historical deterministic ordering when provider knobs are at their defaults', () => {
+    const geminiProvider = { ...provider, id: 'gemini' as Provider['id'] };
+    const groqProvider = { ...provider, id: 'groq' as Provider['id'] };
+    const geminiModel = {
+      ...model,
+      ref: 'gemini/llama' as ModelInfo['ref'],
+      providerId: geminiProvider.id,
+    };
+    const groqModel = {
+      ...model,
+      ref: 'groq/llama' as ModelInfo['ref'],
+      providerId: groqProvider.id,
+    };
+    const input = {
+      models: [groqModel, geminiModel],
+      providers: [groqProvider, geminiProvider],
+      capacity: { providers: [groqProvider, geminiProvider], now: '2026-09-24T12:00:00.000Z' },
+      profile,
+      step: 'edit' as const,
+      estimate: { inputTokens: 100 },
+    };
+    const defaults = scoreModels(input).map(({ ref }) => ref);
+    expect(defaults).toEqual(['gemini/llama', 'groq/llama']);
+    expect(
+      scoreModels({
+        ...input,
+        routing: { ...DEFAULT_ROUTING_SETTINGS, providerPriorities: {}, providerWeights: {} },
+      }).map(({ ref }) => ref),
+    ).toEqual(defaults);
+  });
+
+  it('orders by hard priority tiers and uses seeded weighted sampling for near-equal candidates', () => {
+    const geminiProvider = { ...provider, id: 'gemini' as Provider['id'] };
+    const groqProvider = { ...provider, id: 'groq' as Provider['id'] };
+    const geminiModel = {
+      ...model,
+      ref: 'gemini/llama' as ModelInfo['ref'],
+      providerId: geminiProvider.id,
+    };
+    const groqModel = {
+      ...model,
+      ref: 'groq/llama' as ModelInfo['ref'],
+      providerId: groqProvider.id,
+    };
+    const base = {
+      models: [geminiModel, groqModel],
+      providers: [geminiProvider, groqProvider],
+      capacity: { providers: [geminiProvider, groqProvider], now: '2026-09-24T12:00:00.000Z' },
+      profile,
+      step: 'edit' as const,
+      estimate: { inputTokens: 100 },
+    };
+    expect(
+      scoreModels({
+        ...base,
+        models: [
+          { ...geminiModel, quality: 0.2 },
+          { ...groqModel, quality: 1 },
+        ],
+        routing: {
+          ...DEFAULT_ROUTING_SETTINGS,
+          providerPriorities: { [geminiProvider.id]: 1 },
+          providerWeights: {},
+        },
+      })[0]?.ref,
+    ).toBe('gemini/llama');
+
+    let wins = 0;
+    for (let seed = 1; seed <= 400; seed += 1) {
+      let state = seed;
+      const random = () => {
+        state = (state * 1_664_525 + 1_013_904_223) >>> 0;
+        return state / 4_294_967_296;
+      };
+      const geminiAltModel = {
+        ...geminiModel,
+        ref: 'gemini/llama-alt' as ModelInfo['ref'],
+      };
+      if (
+        scoreModels({
+          ...base,
+          models: [...base.models, geminiAltModel],
+          routing: {
+            ...DEFAULT_ROUTING_SETTINGS,
+            providerPriorities: {},
+            providerWeights: { [geminiProvider.id]: 3, [groqProvider.id]: 1 },
+          },
+          random,
+        })[0]?.ref.startsWith('gemini/') === true
+      )
+        wins += 1;
+    }
+    expect(wins).toBeGreaterThan(260);
+    expect(wins).toBeLessThan(340);
+  });
+
   it('returns deterministic candidates with an explanation', () => {
     const first = scoreModels({
       models: [model],

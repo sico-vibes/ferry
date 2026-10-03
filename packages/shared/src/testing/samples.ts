@@ -234,6 +234,7 @@ export const sampleProfile: Profile = {
   name: 'Balanced',
   icon: 'Layers',
   description: 'Balanced profile',
+  affinityMode: 'soft',
   builtin: true,
   pinned: false,
   allowedProviders: 'all_free',
@@ -336,6 +337,8 @@ export const sampleSettings: Settings = {
     rampFloor: 0.1,
     logicalModelMappings: [],
     providerOverrides: {},
+    providerPriorities: {},
+    providerWeights: {},
   },
   developer: {
     showReferenceOverlay: false,

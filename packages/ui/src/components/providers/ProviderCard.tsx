@@ -15,12 +15,16 @@ export function ProviderCard({
   onTest,
   onManageKey,
   onToggle,
+  priority = 0,
+  weight = 1,
 }: {
   provider: Provider;
   probing?: boolean;
   onTest?: () => void;
   onManageKey?: () => void;
   onToggle?: (enabled: boolean) => void;
+  priority?: number;
+  weight?: number;
 }) {
   const cooldown = provider.cooldownUntil
     ? Math.max(0, Math.ceil((new Date(provider.cooldownUntil).getTime() - Date.now()) / 1000))
@@ -99,6 +103,20 @@ export function ProviderCard({
             onCheckedChange={(enabled) => onToggle?.(enabled)}
           />
         </header>
+        {(priority !== 0 || weight !== 1) && (
+          <div className="flex flex-wrap gap-1.5" aria-label="Provider routing preferences">
+            {priority !== 0 && (
+              <span className="rounded-full bg-accent px-2 py-0.5 text-ui-meta text-accent-foreground">
+                Priority {priority}
+              </span>
+            )}
+            {weight !== 1 && (
+              <span className="rounded-full bg-accent px-2 py-0.5 text-ui-meta text-accent-foreground">
+                Weight {weight}
+              </span>
+            )}
+          </div>
+        )}
         {provider.tag === 'promo' && (
           <p className="text-ui-meta text-warning">Promotional access may end without notice.</p>
         )}
@@ -179,8 +197,8 @@ export function ProviderCard({
               {probing ? <LatticeLoader label="Testing" /> : null}
               {probing ? 'Testing\u2026' : 'Test'}
             </Button>
-            <Button aria-label="Manage key" onClick={onManageKey} size="sm" variant="ghost">
-              Manage key
+            <Button aria-label="Manage provider" onClick={onManageKey} size="sm" variant="ghost">
+              Manage
             </Button>
           </div>
         </footer>

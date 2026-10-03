@@ -111,7 +111,15 @@ function routingSettings(services: FerryServices) {
 
 export function createGatewayController(services: FerryServices) {
   let handle: GatewayHandle | undefined;
-  const stickyRoutes = new Map<string, { modelRef: string; expiresAt: number }>();
+  const stickyRoutes = new Map<
+    string,
+    {
+      modelRef: string;
+      providerId?: string | undefined;
+      providerKeyId?: string | undefined;
+      expiresAt: number;
+    }
+  >();
   const allModels = () =>
     [
       ...services.catalog.models,
@@ -254,11 +262,30 @@ export function createGatewayController(services: FerryServices) {
             ].filter((item): item is (typeof candidates)[number] => Boolean(item))
           : routed;
       const sticky = stickyRoutes.get(input.sessionHint);
-      if (sticky && sticky.expiresAt > services.clock.now().getTime())
-        ordered = [
-          ...ordered.filter((item) => item.ref === sticky.modelRef),
-          ...ordered.filter((item) => item.ref !== sticky.modelRef),
-        ];
+      const profileValues = services.settings.get('profiles');
+      const selectedProfileRecord = [
+        ...BUILTIN_PROFILES,
+        ...(Array.isArray(profileValues) ? (profileValues as typeof BUILTIN_PROFILES) : []),
+      ].find((entry) => entry.id === profileId(selectedProfile));
+      const affinityProviderId =
+        sticky?.providerId ?? sticky?.modelRef.slice(0, sticky.modelRef.indexOf('/'));
+      const matchesAffinity = (item: (typeof candidates)[number]) => {
+        if (!sticky || !affinityProviderId || item.providerId !== affinityProviderId) return false;
+        return (
+          !sticky.providerKeyId ||
+          services.providerKeys.get(item.providerId)?.id === sticky.providerKeyId
+        );
+      };
+      if (!explicit && sticky && sticky.expiresAt > services.clock.now().getTime()) {
+        ordered =
+          selectedProfileRecord?.affinityMode === 'strict'
+            ? ordered.filter(matchesAffinity)
+            : [
+                ...ordered.filter(matchesAffinity),
+                ...ordered.filter((item) => !matchesAffinity(item) && item.ref === sticky.modelRef),
+                ...ordered.filter((item) => !matchesAffinity(item) && item.ref !== sticky.modelRef),
+              ];
+      }
       if (!ordered.length) throw new Error('No eligible provider model is configured');
       let lastError: unknown;
       for (const model of ordered) {
@@ -356,6 +383,10 @@ export function createGatewayController(services: FerryServices) {
           });
           stickyRoutes.set(input.sessionHint, {
             modelRef: model.ref,
+            providerId,
+            ...(services.providerKeys.get(providerId)?.id
+              ? { providerKeyId: services.providerKeys.get(providerId)?.id }
+              : {}),
             expiresAt: services.clock.now().getTime() + 30 * 60 * 1000,
           });
           return { id: `gw-${String(Date.now())}`, model: model.ref, ...result };
@@ -389,6 +420,7 @@ export function createGatewayController(services: FerryServices) {
               ? { headers: providerError.response.headers }
               : {}),
           });
+          stickyRoutes.delete(input.sessionHint);
           const rawMessage =
             typed.message || (error instanceof Error ? error.message : 'Provider request failed');
           lastError = new Error(rawMessage.replaceAll(key, '[REDACTED]'));
