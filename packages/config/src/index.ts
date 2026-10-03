@@ -263,28 +263,12 @@ export function createLogger({
   const transport = pino.transport({ targets });
   const logger = pino(options, transport);
   return Object.assign(logger, {
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        const onError = (error: Error) => {
-          transport.off('close', onClose);
-          reject(error);
-        };
-        const onClose = () => {
-          transport.off('error', onError);
-          resolve();
-        };
-        transport.once('error', onError);
-        transport.once('close', onClose);
-        logger.flush((flushError) => {
-          if (flushError) {
-            transport.off('error', onError);
-            transport.off('close', onClose);
-            reject(flushError);
-            return;
-          }
-          transport.end();
-        });
-      }),
+    close: () => {
+      // Ending the worker is fire-and-forget: flush callbacks can remain pending
+      // after Pino unreferences its worker, which strands short-lived CLI runs.
+      transport.end();
+      return Promise.resolve();
+    },
   });
 }
 export function redactSecretText(text: string): string {

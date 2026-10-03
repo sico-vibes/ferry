@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createGatewayKey, type GatewayKey } from '@ferry/gateway';
 import { openDatabase, SettingsRepository } from '@ferry/storage';
 import { canonicalizePath } from '@ferry/shared/node-paths';
+import { resolveEngineDataDirectory } from './data-directory.js';
 
 export interface GatewayStatusFile {
   pid: number;
@@ -14,7 +14,7 @@ export interface GatewayStatusFile {
 }
 
 export function gatewayDataDir(dataDir?: string): string {
-  return canonicalizePath(dataDir ?? join(homedir(), '.ferry'));
+  return canonicalizePath(resolveEngineDataDirectory(dataDir));
 }
 
 export async function writeGatewayStatus(

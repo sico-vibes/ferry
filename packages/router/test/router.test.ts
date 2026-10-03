@@ -779,8 +779,14 @@ describe('step classification and routing', () => {
       step: 'edit' as const,
       estimate: { inputTokens: 100 },
     };
-    const defaults = scoreModels(input).map(({ ref }) => ref);
+    let randomCalls = 0;
+    const random = () => {
+      randomCalls += 1;
+      return 0.5;
+    };
+    const defaults = scoreModels({ ...input, random }).map(({ ref }) => ref);
     expect(defaults).toEqual(['gemini/llama', 'groq/llama']);
+    expect(randomCalls).toBe(0);
     expect(
       scoreModels({
         ...input,

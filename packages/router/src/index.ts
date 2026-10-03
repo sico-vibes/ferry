@@ -531,7 +531,8 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       cooldownOrder ||
       b.priority - a.priority ||
       b.score - a.score ||
-      a.refKey.localeCompare(b.refKey)
+      // Use UTF-16 code-unit order so default routing is stable across host locales.
+      (a.refKey < b.refKey ? -1 : a.refKey > b.refKey ? 1 : 0)
     );
   });
   if (scored.some((candidate) => candidate.weight !== 1)) {
@@ -560,7 +561,9 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
         const sample = Math.max(Number.EPSILON, Math.min(1, random()));
         providerKeys.set(candidate.providerId, -Math.log(sample) / candidate.weight);
       }
-      const providerOrder = [...providerKeys].sort((a, b) => a[1] - b[1]).map(([id]) => id);
+      const providerOrder = [...providerKeys]
+        .sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+        .map(([id]) => id);
       const ordered = providerOrder.flatMap((providerId) =>
         group.filter((candidate) => candidate.providerId === providerId),
       );

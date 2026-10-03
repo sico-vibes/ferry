@@ -2,7 +2,7 @@ import { defineCommand, runMain } from 'citty';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { createClientAsync } from './client.js';
+import { createClientAsync, prepareEngineDataDirectory } from './client.js';
 import { good, muted, warn } from './colors.js';
 import {
   clearGatewayStatus,
@@ -262,7 +262,9 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     verbose = flags.values.verbose === true;
     validateFlags(flags.values);
     const command = flags.positionals[0];
-    const dataDir = stringFlag(flags.values['data-dir']);
+    const dataDir =
+      stringFlag(flags.values['data-dir']) ??
+      (process.env.FERRY_DATA_DIR?.trim() ? process.env.FERRY_DATA_DIR : undefined);
     const cwd = stringFlag(flags.values.cwd) ?? process.cwd();
     const engine =
       command === 'serve' && flags.values.gateway === true
@@ -287,8 +289,10 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       )
         throw new CliError(2, 'Non-interactive OAuth login requires --i-understand-the-risk.');
     }
-    if (command === 'gateway')
-      return await gatewayCommand(flags.positionals.slice(1), json, gatewayDataDir(dataDir));
+    if (command === 'gateway') {
+      const engineDataDir = await prepareEngineDataDirectory(dataDir);
+      return await gatewayCommand(flags.positionals.slice(1), json, gatewayDataDir(engineDataDir));
+    }
     client = await createClientAsync({
       engine,
       ...(dataDir ? { dataDir } : {}),
@@ -618,7 +622,7 @@ export async function routingSettings(
   const settings = await client.settings.get();
   const routing = RoutingSettingsSchema.parse(settings.routing);
   if (action === 'list' && key === undefined) {
-    const rows = Object.fromEntries(
+    const rows: Record<string, unknown> = Object.fromEntries(
       Object.entries(routing).map(([name, value]) => [
         name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`),
         value,
@@ -628,7 +632,10 @@ export async function routingSettings(
       json,
       rows,
       Object.entries(rows)
-        .map(([name, enabled]) => `${name}: ${String(enabled)}`)
+        .map(
+          ([name, value]) =>
+            `${name}: ${typeof value === 'boolean' ? String(value) : (JSON.stringify(value) ?? '')}`,
+        )
         .join('\n') + '\n',
     );
     return 0;
