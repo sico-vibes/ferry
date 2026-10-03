@@ -334,6 +334,8 @@ export const sampleSettings: Settings = {
     stickyTtlMinutes: 30,
     rampStart: 0.2,
     rampFloor: 0.1,
+    logicalModelMappings: [],
+    providerOverrides: {},
   },
   developer: {
     showReferenceOverlay: false,

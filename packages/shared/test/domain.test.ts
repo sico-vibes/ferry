@@ -67,8 +67,17 @@ describe('domain schemas', () => {
       stickyTtlMinutes: 30,
       rampStart: 0.2,
       rampFloor: 0.1,
+      logicalModelMappings: [],
+      providerOverrides: {},
     });
     expect(() => domain.RoutingSettingsSchema.parse({ stickyTtlMinutes: 0 })).toThrow();
+    expect(() =>
+      domain.LogicalModelMappingSchema.parse({
+        logicalName: 'ferry/auto-free',
+        providerId: 'groq',
+        upstreamId: 'model',
+      }),
+    ).toThrow();
   });
   for (const [name, schema, sample] of cases) {
     it(`${name} accepts its sample and rejects invalid input`, () => {

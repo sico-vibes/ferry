@@ -7,7 +7,7 @@ import {
   newId,
   type Provider,
 } from '@ferry/shared';
-import { discoverProviderModels, probe } from '@ferry/providers';
+import { discoverProviderModels, probe, resolveProviderRequestOverrides } from '@ferry/providers';
 import { z } from 'zod';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
@@ -301,8 +301,17 @@ export function register(host: CoreHost, services: FerryServices): void {
         return result;
       }
       const baseUrl = baseUrlFor(services, id);
+      const stored = services.settings.get('global');
+      const routing =
+        typeof stored === 'object' && stored !== null && 'routing' in stored
+          ? stored.routing
+          : undefined;
+      const overrides = RoutingSettingsSchema.parse(routing ?? {}).providerOverrides[id];
       const result = ProbeResultSchema.parse(
-        await probe(id, key, { ...(baseUrl ? { baseUrl } : {}) }),
+        await probe(id, key, {
+          ...(baseUrl ? { baseUrl } : {}),
+          overrides: resolveProviderRequestOverrides(id, overrides),
+        }),
       );
       if (result.errorKind === 'offline') {
         const failures = (providerProbeBackoff.get(id)?.failures ?? 0) + 1;

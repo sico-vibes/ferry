@@ -38,6 +38,15 @@ describe('catalog data', () => {
     expect(catalog.models.length).toBeGreaterThan(100);
     expect(catalog.models.every((model) => ModelInfoSchema.safeParse(model).success)).toBe(true);
     expect(catalog.providers.some((provider) => provider.provider === 'openrouter')).toBe(true);
+    expect(catalog.logicalModels).toContainEqual({
+      logicalName: 'gpt-oss-120b',
+      providerId: 'groq',
+      upstreamId: 'openai/gpt-oss-120b',
+    });
+    expect(catalog.providerOverrides?.openrouter?.headers).toMatchObject({
+      'HTTP-Referer': 'https://ferry.dev',
+      'X-Title': 'Ferry',
+    });
     expect(catalog.providers.some((provider) => provider.dead)).toBe(false);
     expect(
       (await loadCatalog({ includeDead: true })).providers.some((provider) => provider.dead),

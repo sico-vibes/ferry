@@ -27,6 +27,8 @@ import {
   type QuotaObservation,
   type RawCallObservation,
   type UsageRecord,
+  ProviderRequestOverridesSchema,
+  type ProviderRequestOverrides,
 } from '@ferry/shared';
 export type {
   ProbeResult,
@@ -46,6 +48,24 @@ export interface ModelFactoryOptions {
   fetch?: typeof globalThis.fetch;
   headers?: Record<string, string>;
   sessionId?: string;
+}
+
+/** Combine provider catalog defaults with user settings, with user fields taking precedence. */
+export function resolveProviderRequestOverrides(
+  providerId: string,
+  custom?: Partial<ProviderRequestOverrides>,
+): ProviderRequestOverrides {
+  const defaults = ProviderRequestOverridesSchema.parse(
+    providerCatalogData.providerOverrides?.[providerId] ?? {},
+  );
+  return ProviderRequestOverridesSchema.parse({
+    ...defaults,
+    ...custom,
+    stripParams: [...new Set([...defaults.stripParams, ...(custom?.stripParams ?? [])])],
+    forceParams: { ...defaults.forceParams, ...(custom?.forceParams ?? {}) },
+    headers: { ...defaults.headers, ...(custom?.headers ?? {}) },
+    statusRemaps: [...(custom?.statusRemaps ?? []), ...defaults.statusRemaps],
+  });
 }
 
 export class OfflineProviderError extends Error {
@@ -198,14 +218,9 @@ export function createLanguageModel(ref: ModelRef, opts: ModelFactoryOptions): L
         ...fetchOptions,
       }).chat(modelId);
     case 'openrouter': {
-      const openRouterHeaders = {
-        ...headers,
-        'HTTP-Referer': 'https://ferry.dev',
-        'X-Title': 'Ferry',
-      };
       return createOpenRouter({
         apiKey: opts.apiKey,
-        headers: openRouterHeaders,
+        headers,
         ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
         ...fetchOptions,
       })(modelId);
@@ -285,6 +300,7 @@ export interface ProviderChatInput {
   onText?: (text: string) => void;
   onToolCall?: (call: { id: string; name: string; arguments: string }) => void;
   onObservation?: (observation: RawCallObservation) => void;
+  overrides?: ProviderRequestOverrides;
 }
 
 /** Execute one provider chat turn and return normalized text, tools, usage, and finish state. */
@@ -299,6 +315,7 @@ export async function streamProviderChat(input: ProviderChatInput) {
         model: input.model,
       },
       input.fetch ?? globalThis.fetch,
+      input.overrides ?? resolveProviderRequestOverrides(providerFromRef(input.model)),
     ),
   });
   const sdkTools = Object.fromEntries(
@@ -382,6 +399,7 @@ export function createObservedFetch(
   onObservation: (observation: RawCallObservation) => void,
   defaults: { providerId?: string; model?: string } = {},
   fetchImpl: typeof globalThis.fetch = globalThis.fetch,
+  overrides: ProviderRequestOverrides = ProviderRequestOverridesSchema.parse({}),
 ): typeof globalThis.fetch {
   return async (input, init) => {
     const startedAt = Date.now();
@@ -392,7 +410,49 @@ export function createObservedFetch(
     const providerId =
       defaults.providerId ?? new URL(url, 'http://localhost').hostname.split('.')[0] ?? 'unknown';
     try {
-      const response = await fetchImpl(input, init);
+      const requestHeaders = new Headers(
+        init?.headers ?? (input instanceof Request ? input.headers : undefined),
+      );
+      for (const [name, value] of Object.entries(overrides.headers))
+        requestHeaders.set(name, value);
+      let requestInit: RequestInit = { ...init, headers: requestHeaders };
+      const changesBody =
+        overrides.stripParams.length > 0 || Object.keys(overrides.forceParams).length > 0;
+      const body = changesBody
+        ? (init?.body ??
+          (input instanceof Request && input.body ? await input.clone().text() : undefined))
+        : undefined;
+      if (typeof body === 'string' && changesBody) {
+        try {
+          const parsed: unknown = JSON.parse(body);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const shaped = { ...(parsed as Record<string, unknown>) };
+            const filtered = Object.fromEntries(
+              Object.entries(shaped).filter(([key]) => !overrides.stripParams.includes(key)),
+            );
+            Object.assign(filtered, overrides.forceParams);
+            requestInit = { ...requestInit, body: JSON.stringify(filtered) };
+          }
+        } catch {
+          // Non-JSON request bodies are passed through unchanged.
+        }
+      }
+      let response = await fetchImpl(input, requestInit);
+      if (!response.ok && overrides.statusRemaps.some((item) => item.from === response.status)) {
+        const responseText = await response.clone().text();
+        const remap = overrides.statusRemaps.find(
+          (item) =>
+            item.from === response.status &&
+            (!item.messageIncludes ||
+              responseText.toLowerCase().includes(item.messageIncludes.toLowerCase())),
+        );
+        if (remap)
+          response = new Response(responseText, {
+            status: remap.to,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
+      }
       const rateLimitHeaders: Record<string, string> = {};
       response.headers.forEach((value, name) => {
         if (isRateLimitHeader(name)) rateLimitHeaders[name.toLowerCase()] = value;
@@ -979,6 +1039,7 @@ export interface ProbeOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   probeModels?: string[];
+  overrides?: ProviderRequestOverrides;
 }
 
 function providerCatalog(): ReturnType<typeof loadCatalog> {
@@ -1061,6 +1122,7 @@ async function probeWithSignal(
         (observation) => observations.push(observation),
         { providerId, model: modelId },
         probeOptions.fetch ?? globalThis.fetch,
+        probeOptions.overrides ?? resolveProviderRequestOverrides(providerId),
       );
       try {
         const languageModel = createLanguageModel(`${providerId}/${modelId}` as ModelRef, {

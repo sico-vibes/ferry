@@ -10,6 +10,10 @@ import {
   TierSchema,
   type ModelInfo,
   type Tier,
+  LogicalModelMappingSchema,
+  ProviderRequestOverridesSchema,
+  type LogicalModelMapping,
+  type ProviderRequestOverrides,
 } from '@ferry/shared';
 import { z } from 'zod';
 
@@ -69,6 +73,8 @@ export const CatalogSchema = z.object({
   tiers: TierCatalogSchema,
   capabilities: z.record(z.string(), z.unknown()).optional(),
   qualityPriors: z.record(z.string(), z.unknown()).optional(),
+  logicalModels: z.array(LogicalModelMappingSchema).optional(),
+  providerOverrides: z.record(z.string(), ProviderRequestOverridesSchema).optional(),
 });
 
 export {
@@ -152,6 +158,10 @@ export async function loadCatalog(
     readFile(join(data, 'tiers.yaml'), 'utf8'),
     readdir(join(data, 'limits')),
   ]);
+  const [logicalModelsText, providerOverridesText] = await Promise.all([
+    readFile(join(data, 'logical-models.json'), 'utf8'),
+    readFile(join(data, 'provider-overrides.json'), 'utf8'),
+  ]);
   const [capabilities, qualityPriors] = await Promise.all([
     loadCapabilityRegistry(data, options.liveModels),
     loadQualityPriors(data),
@@ -212,6 +222,12 @@ export async function loadCatalog(
     tiers,
     capabilities,
     qualityPriors,
+    logicalModels: z.array(LogicalModelMappingSchema).parse(JSON.parse(logicalModelsText)),
+    providerOverrides: z
+      .record(z.string(), ProviderRequestOverridesSchema)
+      .parse(JSON.parse(providerOverridesText)),
     warnings,
   });
 }
+
+export type { LogicalModelMapping, ProviderRequestOverrides };

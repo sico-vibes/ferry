@@ -6,7 +6,7 @@ import {
   type StepGeneratorInput,
 } from '@ferry/agent';
 import type { RawCallObservation } from '@ferry/providers';
-import { probe as probeProvider } from '@ferry/providers';
+import { probe as probeProvider, resolveProviderRequestOverrides } from '@ferry/providers';
 import {
   ProviderIdSchema,
   ProviderSchema,
@@ -545,7 +545,18 @@ export function createSessionDependencies(
         }
       }
       const generator = createStepGenerator(
-        { apiKeys, providerBaseUrls, providerFetch, emit, onObservation: observe },
+        {
+          apiKeys,
+          providerBaseUrls,
+          providerFetch,
+          emit,
+          onObservation: observe,
+          providerOverrides: (model) =>
+            resolveProviderRequestOverrides(
+              model.providerId,
+              routingSettings().providerOverrides[model.providerId],
+            ),
+        },
         req.model,
         req.messages.at(-1)?.sessionId ?? '',
       );

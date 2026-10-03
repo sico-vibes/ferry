@@ -19,7 +19,14 @@ import {
   PageHeader,
 } from '@ferry/ui';
 import { FERRY_DOMAINS } from '@ferry/shared';
-import type { Profile, Provider, StepKind, Tier } from '@ferry/shared';
+import {
+  ProviderRequestOverridesSchema,
+  type LogicalModelMapping,
+  type Profile,
+  type Provider,
+  type StepKind,
+  type Tier,
+} from '@ferry/shared';
 import type { RoutingSettings } from '@ferry/shared';
 import type { UpdateSnapshot } from '../../main/update-state.js';
 import { Eye, EyeOff, Info } from 'lucide-react';
@@ -1463,6 +1470,9 @@ export function SettingsCanvas() {
                           'ferry/best',
                           'ferry/fast',
                           'ferry/long-context',
+                          ...(settings?.routing.logicalModelMappings.map(
+                            (mapping) => mapping.logicalName,
+                          ) ?? []),
                           ...models.map((model) => model.ref),
                         ].map((id) => [id, { name: id }]),
                       ),
@@ -1559,6 +1569,13 @@ export function SettingsCanvas() {
               />
             </SettingRow>
           </Group>
+          {settings && (
+            <RoutingMappingsEditor
+              routing={settings.routing}
+              providers={providers}
+              update={(routing) => void update({ routing })}
+            />
+          )}
           <Group title="Routing">
             <p className="muted">
               Choose how Ferry balances continuity, reliability, and provider capacity.
@@ -2269,6 +2286,186 @@ function Group({ title, children }: { title?: string; children: React.ReactNode 
     </Section>
   );
 }
+
+function RoutingMappingsEditor({
+  routing,
+  providers,
+  update,
+}: {
+  routing: RoutingSettings;
+  providers: Provider[];
+  update: (routing: RoutingSettings) => void;
+}) {
+  const [providerId, setProviderId] = useState(providers[0]?.id ?? 'groq');
+  const [overrideDraft, setOverrideDraft] = useState('');
+  const [overrideError, setOverrideError] = useState('');
+  const selectedOverrides = routing.providerOverrides[providerId as Provider['id']] ?? {
+    stripParams: [],
+    forceParams: {},
+    headers: {},
+    statusRemaps: [],
+  };
+  useEffect(() => {
+    setOverrideDraft(JSON.stringify(selectedOverrides, null, 2));
+    setOverrideError('');
+  }, [providerId, routing.providerOverrides]);
+
+  const changeMapping = (index: number, mapping: LogicalModelMapping) => {
+    const logicalModelMappings = routing.logicalModelMappings.map((item, itemIndex) =>
+      itemIndex === index ? mapping : item,
+    );
+    update({ ...routing, logicalModelMappings });
+  };
+
+  return (
+    <>
+      <Group title="Logical model mappings">
+        <p className="muted">
+          Give one model name to multiple upstream models. Gateway requests still use normal routing
+          eligibility and free-first scoring.
+        </p>
+        <div className="routing-mapping-table" role="table" aria-label="Logical model mappings">
+          <div className="routing-mapping-row routing-mapping-header" role="row">
+            <span role="columnheader">Logical name</span>
+            <span role="columnheader">Provider</span>
+            <span role="columnheader">Upstream ID</span>
+            <span />
+          </div>
+          {routing.logicalModelMappings.map((mapping, index) => (
+            <div
+              className="routing-mapping-row"
+              key={`${mapping.logicalName}-${String(index)}`}
+              role="row"
+            >
+              <input
+                aria-label={`Logical name ${String(index + 1)}`}
+                value={mapping.logicalName}
+                onChange={(event) => {
+                  changeMapping(index, { ...mapping, logicalName: event.target.value });
+                }}
+              />
+              <select
+                aria-label={`Provider ${String(index + 1)}`}
+                value={mapping.providerId}
+                onChange={(event) => {
+                  changeMapping(index, {
+                    ...mapping,
+                    providerId: event.target.value as Provider['id'],
+                  });
+                }}
+              >
+                {providers.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                aria-label={`Upstream ID ${String(index + 1)}`}
+                value={mapping.upstreamId}
+                onChange={(event) => {
+                  changeMapping(index, { ...mapping, upstreamId: event.target.value });
+                }}
+              />
+              <UiV2.Button
+                size="icon"
+                variant="ghost"
+                aria-label={`Remove mapping ${mapping.logicalName}`}
+                onClick={() => {
+                  update({
+                    ...routing,
+                    logicalModelMappings: routing.logicalModelMappings.filter(
+                      (_, itemIndex) => itemIndex !== index,
+                    ),
+                  });
+                }}
+              >
+                {'\u00d7'}
+              </UiV2.Button>
+            </div>
+          ))}
+        </div>
+        <UiV2.Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            update({
+              ...routing,
+              logicalModelMappings: [
+                ...routing.logicalModelMappings,
+                {
+                  logicalName: 'my-model',
+                  providerId: providers[0]?.id ?? ('groq' as Provider['id']),
+                  upstreamId: '',
+                },
+              ],
+            });
+          }}
+        >
+          Add mapping
+        </UiV2.Button>
+      </Group>
+      <Group title="Provider request overrides">
+        <p className="muted">
+          Strip or force request parameters, add headers, or map an upstream error status. Catalog
+          defaults are included when no user value replaces them.
+        </p>
+        <label className="v2-settings-field">
+          <span>Provider</span>
+          <select
+            value={providerId}
+            onChange={(event) => {
+              setProviderId(event.target.value);
+            }}
+          >
+            {providers.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="v2-settings-field">
+          <span>Overrides (JSON)</span>
+          <textarea
+            aria-label="Provider request overrides JSON"
+            className="routing-overrides-editor"
+            spellCheck={false}
+            value={overrideDraft}
+            onChange={(event) => {
+              setOverrideDraft(event.target.value);
+            }}
+          />
+        </label>
+        {overrideError && (
+          <p className="text-destructive" role="alert">
+            {overrideError}
+          </p>
+        )}
+        <UiV2.Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            try {
+              const parsed: unknown = JSON.parse(overrideDraft);
+              const validated = ProviderRequestOverridesSchema.parse(parsed);
+              update({
+                ...routing,
+                providerOverrides: { ...routing.providerOverrides, [providerId]: validated },
+              });
+              setOverrideError('');
+            } catch (error) {
+              setOverrideError(error instanceof Error ? error.message : String(error));
+            }
+          }}
+        >
+          Apply override
+        </UiV2.Button>
+      </Group>
+    </>
+  );
+}
+
 function SettingRow({
   title,
   helper,

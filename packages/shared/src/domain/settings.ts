@@ -2,6 +2,31 @@ import { z } from 'zod';
 import { DelegationModeSchema, PermissionModeSchema, ThemeSchema } from './common.js';
 import { ProfileIdSchema, ProviderIdSchema } from './ids.js';
 import { OptimizerTogglesSchema } from './profile.js';
+export const LogicalModelMappingSchema = z.object({
+  logicalName: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[a-zA-Z0-9._:-]+$/),
+  providerId: ProviderIdSchema,
+  upstreamId: z.string().min(1).max(256),
+});
+export const ProviderRequestOverridesSchema = z.object({
+  stripParams: z.array(z.string().min(1).max(128)).default([]),
+  forceParams: z.record(z.string(), z.unknown()).default({}),
+  headers: z.record(z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/), z.string()).default({}),
+  statusRemaps: z
+    .array(
+      z.object({
+        from: z.number().int().min(400).max(599),
+        to: z.number().int().min(400).max(599),
+        messageIncludes: z.string().max(256).optional(),
+      }),
+    )
+    .default([]),
+});
+export type LogicalModelMapping = z.infer<typeof LogicalModelMappingSchema>;
+export type ProviderRequestOverrides = z.infer<typeof ProviderRequestOverridesSchema>;
 const RoutingSettingsFieldsSchema = z.object({
   stickySessions: z.boolean(),
   smartReliability: z.boolean(),
@@ -14,6 +39,8 @@ const RoutingSettingsFieldsSchema = z.object({
   stickyTtlMinutes: z.number().int().min(1).max(1440),
   rampStart: z.number().min(0.01).max(1),
   rampFloor: z.number().min(0).max(1),
+  logicalModelMappings: z.array(LogicalModelMappingSchema),
+  providerOverrides: z.record(ProviderIdSchema, ProviderRequestOverridesSchema),
 });
 export const RoutingSettingsSchema = RoutingSettingsFieldsSchema.extend({
   stickySessions: z.boolean().default(true),
@@ -30,6 +57,8 @@ export const RoutingSettingsSchema = RoutingSettingsFieldsSchema.extend({
   stickyTtlMinutes: z.number().int().min(1).max(1440).default(30),
   rampStart: z.number().min(0.01).max(1).default(0.2),
   rampFloor: z.number().min(0).max(1).default(0.1),
+  logicalModelMappings: z.array(LogicalModelMappingSchema).default([]),
+  providerOverrides: z.record(ProviderIdSchema, ProviderRequestOverridesSchema).default({}),
 });
 export const DEFAULT_ROUTING_SETTINGS = RoutingSettingsSchema.parse({});
 export type RoutingSettings = z.infer<typeof RoutingSettingsSchema>;

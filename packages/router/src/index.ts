@@ -1,6 +1,7 @@
 import type {
   ModelCandidate,
   ModelInfo,
+  LogicalModelMapping,
   Profile,
   Provider,
   StepKind,
@@ -242,6 +243,29 @@ export interface SpendCaps {
 }
 
 export const UNKNOWN_PRICE_ESTIMATE_USD = 0.01;
+
+/** Resolve one logical model into the concrete catalog models configured for it. */
+export function resolveLogicalModelCandidates(
+  logicalName: string,
+  models: readonly ModelInfo[],
+  catalogMappings: readonly LogicalModelMapping[],
+  userMappings: readonly LogicalModelMapping[] = [],
+): ModelInfo[] {
+  const merged = new Map<string, LogicalModelMapping>();
+  for (const mapping of catalogMappings) {
+    if (mapping.logicalName === logicalName)
+      merged.set(`${mapping.logicalName}\u0000${mapping.providerId}`, mapping);
+  }
+  for (const mapping of userMappings) {
+    if (mapping.logicalName === logicalName)
+      merged.set(`${mapping.logicalName}\u0000${mapping.providerId}`, mapping);
+  }
+  const byRef = new Map<string, ModelInfo>(models.map((model) => [model.ref, model]));
+  return [...merged.values()].flatMap((mapping) => {
+    const model = byRef.get(`${mapping.providerId}/${mapping.upstreamId}`);
+    return model ? [model] : [];
+  });
+}
 
 export function estimateSpend(
   usage: SpendUsage,

@@ -16,6 +16,7 @@ import {
   mergeUsage,
   probe,
   streamProviderChat,
+  resolveProviderRequestOverrides,
 } from '../src/index.js';
 
 const servers: FakeProviderServer[] = [];
@@ -25,6 +26,46 @@ afterEach(async () => {
 });
 
 describe('provider adapters', () => {
+  it('applies catalog and user request overrides and remaps quota errors for routing', async () => {
+    let sentBody: Record<string, unknown> = {};
+    let sentHeaders = new Headers();
+    let observationStatus: number | null | undefined;
+    const overrides = resolveProviderRequestOverrides('openrouter', {
+      stripParams: ['temperature'],
+      forceParams: { parallel_tool_calls: false, max_tokens: 77 },
+      headers: { 'X-Ferry-Test': 'enabled' },
+      statusRemaps: [{ from: 400, to: 429, messageIncludes: 'quota exceeded' }],
+    });
+    const observed = createObservedFetch(
+      (observation) => {
+        observationStatus = observation.statusCode;
+      },
+      { providerId: 'openrouter', model: 'openrouter/test-model' },
+      (_input, init) => {
+        const body = init?.body;
+        sentBody = JSON.parse(typeof body === 'string' ? body : '') as Record<string, unknown>;
+        sentHeaders = new Headers(init?.headers);
+        return Promise.resolve(
+          new Response('{"error":{"message":"quota exceeded"}}', { status: 400 }),
+        );
+      },
+      overrides,
+    );
+    const response = await observed('https://provider.invalid/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'test-model', temperature: 0.4, max_tokens: 10 }),
+    });
+    expect(sentBody).toEqual({ model: 'test-model', max_tokens: 77, parallel_tool_calls: false });
+    expect(sentHeaders.get('X-Ferry-Test')).toBe('enabled');
+    expect(sentHeaders.get('HTTP-Referer')).toBe('https://ferry.dev');
+    expect(response.status).toBe(429);
+    expect(observationStatus).toBe(429);
+    expect(mapProviderError({ statusCode: response.status, message: 'quota exceeded' }).kind).toBe(
+      'quota_exhausted',
+    );
+  });
+
   it('constructs SDK models for supported native and compatible providers', () => {
     const refs = [
       'gemini/gemini-2.5-flash',
