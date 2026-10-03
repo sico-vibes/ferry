@@ -58,12 +58,20 @@ export interface FerryClient {
         profile: string;
         allowedModels: string[];
         rateLimit: number | null;
+        tokenLimitPerMinute: number | null;
+        tokenLimitPerDay: number | null;
+        concurrencyLimit: number | null;
         compressToolResults: boolean;
         terseSystemPrompt: boolean;
         createdAt: string;
         lastUsedAt: string | null;
         revokedAt: string | null;
-        usage: { requests: number; inputTokens: number; outputTokens: number };
+        usage: {
+          requests: number;
+          successfulRequests: number;
+          inputTokens: number;
+          outputTokens: number;
+        };
       }[]
     >;
     createKey(input: {
@@ -76,6 +84,9 @@ export interface FerryClient {
         profile?: string;
         allowedModels?: string[];
         rateLimit?: number | null;
+        tokenLimitPerMinute?: number | null;
+        tokenLimitPerDay?: number | null;
+        concurrencyLimit?: number | null;
         compressToolResults?: boolean;
         terseSystemPrompt?: boolean;
       };

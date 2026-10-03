@@ -835,6 +835,7 @@ export function register(host: CoreHost, services: FerryServices): void {
                     {
                       inputTokens: row.inputTokens ?? 0,
                       outputTokens: row.outputTokens ?? 0,
+                      cachedTokens: row.cachedTokens ?? 0,
                     },
                     model,
                   ).amountUsd
@@ -1060,6 +1061,7 @@ export function register(host: CoreHost, services: FerryServices): void {
                       {
                         inputTokens: record.inputTokens ?? 0,
                         outputTokens: record.outputTokens ?? 0,
+                        cachedTokens: record.cachedTokens ?? 0,
                       },
                       model,
                     )

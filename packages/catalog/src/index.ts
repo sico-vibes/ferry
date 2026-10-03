@@ -57,6 +57,7 @@ export const ProviderLimitsSchema = z.object({
   required_headers: z.array(z.string().min(1)).optional(),
   probe_models: z.array(z.string().min(1)).optional(),
   key_required: z.boolean().optional(),
+  cached_input_ratio: z.number().nonnegative().max(1).optional(),
   optional: z.boolean().optional(),
   dead: z.boolean().optional(),
   windows: z.array(WindowSchema),
@@ -105,7 +106,7 @@ interface SnapshotModel {
   tool_call?: boolean;
   reasoning?: boolean;
   limit?: { context?: number; output?: number };
-  cost?: { input?: number; output?: number };
+  cost?: { input?: number; output?: number; cache_read?: number };
 }
 interface SnapshotProvider {
   name?: string;
@@ -134,6 +135,10 @@ export function normalizeModels(snapshot: unknown, tiers: TierCatalog = {}): Mod
         free: (model.cost?.input ?? 0) === 0 && (model.cost?.output ?? 0) === 0,
         priceInPerM: model.cost?.input ?? null,
         priceOutPerM: model.cost?.output ?? null,
+        ...(model.cost?.cache_read === undefined
+          ? {}
+          : { priceCachedInPerM: model.cost.cache_read }),
+        cachedInputRatio: 1,
       });
       if (normalized.success) result.push(normalized.data);
     }
@@ -190,6 +195,9 @@ export async function loadCatalog(
     )
     .map((provider) => `Provider limits for ${provider.provider} are older than 60 days.`);
   const models = normalizeModels(JSON.parse(snapshotText), tiers).map((model) => {
+    const providerCacheRatio = providers.find(
+      (provider) => provider.provider === model.providerId,
+    )?.cached_input_ratio;
     const capability =
       capabilities[model.ref] ?? capabilities[model.ref.slice(model.ref.indexOf('/') + 1)];
     const bareId = model.ref.slice(model.ref.indexOf('/') + 1);
@@ -203,6 +211,7 @@ export async function loadCatalog(
     const confidence = quality?.confidence ?? 0.1;
     return {
       ...model,
+      cachedInputRatio: providerCacheRatio ?? model.cachedInputRatio ?? 1,
       toolCalling: capability?.toolCall ?? true,
       ...(capability ? { capability } : {}),
       quality: score,

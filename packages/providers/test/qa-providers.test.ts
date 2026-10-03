@@ -170,7 +170,7 @@ describe('QA providers: usage mapping', () => {
       inputTokenDetails: { cacheReadTokens: 3, cacheWriteTokens: 4 },
       outputTokenDetails: { reasoningTokens: 2 },
     });
-    expect(details.cachedTokens).toBe(7);
+    expect(details.cachedTokens).toBe(3);
     expect(details.reasoningTokens).toBe(2);
     expect(details.status).toBe('success');
   });

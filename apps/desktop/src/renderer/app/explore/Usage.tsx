@@ -62,6 +62,7 @@ export function UsageTab() {
       .map((provider) => provider.id),
   );
   const maxSteps = Math.max(1, ...(capacity?.perProvider ?? []).map((item) => item.stepsLeft ?? 0));
+  const cachedTokens = history.reduce((sum, item) => sum + (item.cachedTokens ?? 0), 0);
 
   return (
     <div aria-label="Usage dashboard" className="grid gap-8" role="region">
@@ -162,6 +163,9 @@ export function UsageTab() {
           )}
         </header>
         <UsageChart data={history} metric="tokens" providerNames={providerNames} />
+        <p className="text-ui-meta text-muted-foreground">
+          Cached input tokens: <span className="tabular-nums">{number(cachedTokens)}</span>
+        </p>
         <ShowMoreList
           ariaLabel="Providers in chart"
           items={[...new Set(history.map((item) => item.providerId))]}

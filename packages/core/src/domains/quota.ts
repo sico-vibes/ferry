@@ -36,11 +36,13 @@ export function register(host: CoreHost, services: FerryServices): void {
               providerId: usage.providerId,
               requests: 0,
               inputTokens: 0,
+              cachedTokens: 0,
               outputTokens: 0,
               costUsd: 0,
             };
             point.requests += 1;
             point.inputTokens += usage.inputTokens ?? 0;
+            point.cachedTokens = (point.cachedTokens ?? 0) + (usage.cachedTokens ?? 0);
             point.outputTokens += usage.outputTokens ?? 0;
             point.costUsd += usage.costUsd ?? 0;
             rows.set(key, point);
@@ -59,6 +61,7 @@ export function register(host: CoreHost, services: FerryServices): void {
               providerId: observation.providerId,
               requests: 0,
               inputTokens: 0,
+              cachedTokens: 0,
               outputTokens: 0,
               costUsd: 0,
             };

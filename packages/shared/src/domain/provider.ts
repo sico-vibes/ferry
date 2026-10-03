@@ -93,6 +93,10 @@ export const ModelInfoSchema = z.object({
   free: z.boolean(),
   priceInPerM: z.number().nonnegative().nullable(),
   priceOutPerM: z.number().nonnegative().nullable(),
+  /** Cached prompt-read price per million tokens when published by the catalog. */
+  priceCachedInPerM: z.number().nonnegative().nullable().optional(),
+  /** Cached prompt multiplier when the catalog has no exact cached-read price. */
+  cachedInputRatio: z.number().nonnegative().max(1).optional(),
   capability: z
     .object({
       toolCall: z.boolean().nullable(),

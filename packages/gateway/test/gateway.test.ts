@@ -12,7 +12,17 @@ import {
 
 const created = createGatewayKey({ name: 'tests', profile: 'auto-free' });
 const entries: GatewayKey[] = [created.key];
-const totals = new Map<string, { requests: number; inputTokens: number; outputTokens: number }>();
+const totals = new Map<
+  string,
+  {
+    requests: number;
+    successfulRequests: number;
+    inputTokens: number;
+    outputTokens: number;
+    tokenEvents: { at: string; tokens: number }[];
+    requestEvents: string[];
+  }
+>();
 const received: Parameters<GatewayRuntime['complete']>[0][] = [];
 const runtime: GatewayRuntime = {
   store: {
@@ -30,13 +40,61 @@ const runtime: GatewayRuntime = {
       const key = entries.find((item) => item.id === id);
       if (key) key.lastUsedAt = at;
     },
-    usage: (id) => totals.get(id) ?? { requests: 0, inputTokens: 0, outputTokens: 0 },
-    recordUsage: (id, inputTokens, outputTokens) => {
-      const old = totals.get(id) ?? { requests: 0, inputTokens: 0, outputTokens: 0 };
+    usage: (id) =>
+      totals.get(id) ?? {
+        requests: 0,
+        successfulRequests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        tokenEvents: [],
+        requestEvents: [],
+      },
+    recordRequest: (id, at) => {
+      const old = totals.get(id) ?? {
+        requests: 0,
+        successfulRequests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        tokenEvents: [],
+        requestEvents: [],
+      };
       totals.set(id, {
+        ...old,
         requests: old.requests + 1,
+        requestEvents: [...old.requestEvents, at],
+      });
+    },
+    recentRequests: (id, now) =>
+      (totals.get(id)?.requestEvents ?? []).filter(
+        (at) => Date.parse(now) - Date.parse(at) < 60_000,
+      ).length,
+    tokenUsage: (id, now) => {
+      const old = totals.get(id);
+      const events = old?.tokenEvents ?? [];
+      return {
+        minuteTokens: events
+          .filter((event) => Date.parse(now) - Date.parse(event.at) < 60_000)
+          .reduce((sum, event) => sum + event.tokens, 0),
+        dayTokens: events
+          .filter((event) => event.at.slice(0, 10) === now.slice(0, 10))
+          .reduce((sum, event) => sum + event.tokens, 0),
+      };
+    },
+    recordUsage: (id, inputTokens, outputTokens, at) => {
+      const old = totals.get(id) ?? {
+        requests: 0,
+        successfulRequests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        tokenEvents: [],
+        requestEvents: [],
+      };
+      totals.set(id, {
+        ...old,
+        successfulRequests: old.successfulRequests + 1,
         inputTokens: old.inputTokens + inputTokens,
         outputTokens: old.outputTokens + outputTokens,
+        tokenEvents: [...old.tokenEvents, { at, tokens: inputTokens + outputTokens }],
       });
     },
   },
@@ -71,6 +129,9 @@ afterEach(async () => {
   created.key.revokedAt = null;
   created.key.allowedModels = [];
   created.key.rateLimit = null;
+  created.key.tokenLimitPerMinute = null;
+  created.key.tokenLimitPerDay = null;
+  created.key.concurrencyLimit = null;
   totals.clear();
   received.splice(0);
 });
@@ -438,5 +499,76 @@ describe('Ferry gateway', () => {
       });
     expect((await request()).status).toBe(200);
     expect((await request()).status).toBe(429);
+  }, 30_000);
+  it('enforces token budgets with OpenAI and Anthropic rate-limit errors', async () => {
+    const handle = await startGateway({ runtime, port: 0 });
+    stop = () => handle.close();
+    created.key.tokenLimitPerMinute = 1;
+    const openAi = await fetch(`http://127.0.0.1:${String(handle.port)}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+    });
+    expect(openAi.status).toBe(429);
+    expect(openAi.headers.get('retry-after')).toBe('60');
+    expect(await openAi.json()).toMatchObject({ error: { type: 'rate_limit_error' } });
+
+    created.key.tokenLimitPerMinute = null;
+    created.key.tokenLimitPerDay = 1;
+    const anthropic = await fetch(`http://127.0.0.1:${String(handle.port)}/v1/messages`, {
+      method: 'POST',
+      headers: { 'x-api-key': created.secret, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        max_tokens: 8,
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+    });
+    expect(anthropic.status).toBe(429);
+    expect(anthropic.headers.get('retry-after')).toBeTruthy();
+    expect(await anthropic.json()).toMatchObject({
+      type: 'error',
+      error: { type: 'rate_limit_error' },
+    });
+  }, 30_000);
+  it('limits concurrent requests and counts total separately from successful calls', async () => {
+    let begin: (() => void) | undefined;
+    let finish: (() => void) | undefined;
+    const entered = new Promise<void>((resolve) => (begin = resolve));
+    const paused = new Promise<void>((resolve) => (finish = resolve));
+    const slowRuntime: GatewayRuntime = {
+      ...runtime,
+      complete: async () => {
+        begin?.();
+        await paused;
+        throw new Error('failed after provider attempt');
+      },
+    };
+    const handle = await startGateway({ runtime: slowRuntime, port: 0 });
+    stop = () => handle.close();
+    created.key.concurrencyLimit = 1;
+    const request = () =>
+      fetch(`http://127.0.0.1:${String(handle.port)}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'ferry/auto-free',
+          messages: [{ role: 'user', content: 'Hi' }],
+        }),
+      });
+    const first = request();
+    await entered;
+    const second = await request();
+    expect(second.status).toBe(429);
+    expect(second.headers.get('retry-after')).toBe('1');
+    finish?.();
+    expect((await first).status).toBe(500);
+    expect(runtime.store.usage(created.key.id)).toMatchObject({
+      requests: 1,
+      successfulRequests: 0,
+    });
   }, 30_000);
 });

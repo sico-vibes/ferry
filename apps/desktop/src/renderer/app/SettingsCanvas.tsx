@@ -248,7 +248,17 @@ export function SettingsCanvas() {
   const [gatewayProfile, setGatewayProfile] = useState('auto-free');
   const [gatewaySecret, setGatewaySecret] = useState('');
   const [gatewayKeyDrafts, setGatewayKeyDrafts] = useState<
-    Record<string, { allowedModels: string; rateLimit: string; profile: string }>
+    Record<
+      string,
+      {
+        allowedModels: string;
+        rateLimit: string;
+        tokenLimitPerMinute: string;
+        tokenLimitPerDay: string;
+        concurrencyLimit: string;
+        profile: string;
+      }
+    >
   >({});
   const [benchmarkMode, setBenchmarkMode] = useState(
     () => localStorage.getItem('ferry.benchmarkMode') === 'true',
@@ -1345,13 +1355,20 @@ export function SettingsCanvas() {
                     const draft = gatewayKeyDrafts[key.id] ?? {
                       allowedModels: key.allowedModels.join(', '),
                       rateLimit: key.rateLimit === null ? '' : String(key.rateLimit),
+                      tokenLimitPerMinute:
+                        key.tokenLimitPerMinute === null ? '' : String(key.tokenLimitPerMinute),
+                      tokenLimitPerDay:
+                        key.tokenLimitPerDay === null ? '' : String(key.tokenLimitPerDay),
+                      concurrencyLimit:
+                        key.concurrencyLimit === null ? '' : String(key.concurrencyLimit),
                       profile: key.profile,
                     };
                     return (
                       <>
                         <strong>{key.name}</strong>
                         <p>
-                          {key.profile} · {key.usage.requests} requests ·{' '}
+                          {key.profile}: {key.usage.requests} total requests,{' '}
+                          {key.usage.successfulRequests} successful.
                           {key.lastUsedAt
                             ? `Last used ${new Date(key.lastUsedAt).toLocaleString()}`
                             : 'Never used'}
@@ -1395,14 +1412,54 @@ export function SettingsCanvas() {
                             }));
                           }}
                         />
+                        <SettingsInput
+                          label="Tokens per minute (blank means unlimited)"
+                          value={draft.tokenLimitPerMinute}
+                          onChange={(value) => {
+                            setGatewayKeyDrafts((current) => ({
+                              ...current,
+                              [key.id]: { ...draft, tokenLimitPerMinute: value },
+                            }));
+                          }}
+                        />
+                        <SettingsInput
+                          label="Tokens per day (blank means unlimited)"
+                          value={draft.tokenLimitPerDay}
+                          onChange={(value) => {
+                            setGatewayKeyDrafts((current) => ({
+                              ...current,
+                              [key.id]: { ...draft, tokenLimitPerDay: value },
+                            }));
+                          }}
+                        />
+                        <SettingsInput
+                          label="Concurrent requests (blank means unlimited)"
+                          value={draft.concurrencyLimit}
+                          onChange={(value) => {
+                            setGatewayKeyDrafts((current) => ({
+                              ...current,
+                              [key.id]: { ...draft, concurrencyLimit: value },
+                            }));
+                          }}
+                        />
                         <UiV2.Button
                           onClick={() => {
-                            const rateLimit = draft.rateLimit.trim()
-                              ? Number(draft.rateLimit)
-                              : null;
+                            const numberOrNull = (value: string) =>
+                              value.trim() ? Number(value) : null;
+                            const rateLimit = numberOrNull(draft.rateLimit);
+                            const tokenLimitPerMinute = numberOrNull(draft.tokenLimitPerMinute);
+                            const tokenLimitPerDay = numberOrNull(draft.tokenLimitPerDay);
+                            const concurrencyLimit = numberOrNull(draft.concurrencyLimit);
                             if (
-                              rateLimit !== null &&
-                              (!Number.isInteger(rateLimit) || rateLimit < 1)
+                              [
+                                rateLimit,
+                                tokenLimitPerMinute,
+                                tokenLimitPerDay,
+                                concurrencyLimit,
+                              ].some(
+                                (value) =>
+                                  value !== null && (!Number.isInteger(value) || value < 1),
+                              )
                             )
                               return;
                             const allowedModels = draft.allowedModels
@@ -1412,7 +1469,14 @@ export function SettingsCanvas() {
                             void client.gateway
                               .updateKey({
                                 id: key.id,
-                                patch: { allowedModels, rateLimit, profile: draft.profile },
+                                patch: {
+                                  allowedModels,
+                                  rateLimit,
+                                  tokenLimitPerMinute,
+                                  tokenLimitPerDay,
+                                  concurrencyLimit,
+                                  profile: draft.profile,
+                                },
                               })
                               .then(() => {
                                 setGatewayKeyDrafts((current) => {

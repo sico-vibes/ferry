@@ -381,11 +381,12 @@ export class QuotaEngine {
       (sum, record) => sum + (record.planUnits ?? this.costFor(record)),
       0,
     );
+    const cachedAdjustedTokens = inWindow.reduce((sum, record) => sum + this.tokensFor(record), 0);
     const used =
       window.metric === 'requests'
         ? amounts.requests
         : window.metric === 'tokens'
-          ? amounts.tokens
+          ? cachedAdjustedTokens
           : window.metric === 'usd'
             ? pricedUsd
             : pricedCredits;
@@ -477,13 +478,26 @@ export class QuotaEngine {
   private updateAverage(record: UsageRecord): void {
     const key = `${record.providerId}:${record.modelRef}:${record.stepKind ?? 'unknown'}`;
     const old = this.averages.get(key) ?? { tokens: 0, cost: 0, samples: 0 };
-    const tokens = (record.inputTokens ?? 0) + (record.outputTokens ?? 0);
+    const tokens = this.tokensFor(record);
     const cost = this.costFor(record);
     this.averages.set(key, {
       tokens: old.samples ? old.tokens * 0.8 + tokens * 0.2 : tokens,
       cost: old.samples ? old.cost * 0.8 + cost * 0.2 : cost,
       samples: old.samples + 1,
     });
+  }
+  private tokensFor(record: UsageRecord): number {
+    const model = this.models.find((entry) => entry.ref === record.modelRef);
+    const input = record.inputTokens ?? 0;
+    const cached = Math.min(input, record.cachedTokens ?? 0);
+    const cachedRatio =
+      model?.priceCachedInPerM !== null &&
+      model?.priceCachedInPerM !== undefined &&
+      model.priceInPerM !== null &&
+      model.priceInPerM > 0
+        ? model.priceCachedInPerM / model.priceInPerM
+        : (model?.cachedInputRatio ?? 1);
+    return input - cached + cached * cachedRatio + (record.outputTokens ?? 0);
   }
   private costFor(record: UsageRecord): number {
     if (record.costUsd !== undefined) return record.costUsd;
@@ -494,7 +508,9 @@ export class QuotaEngine {
     let cost =
       (uncachedInput * (model?.priceInPerM ?? 0) * (multipliers?.input ?? 1) +
         (record.outputTokens ?? 0) * (model?.priceOutPerM ?? 0) * (multipliers?.output ?? 1) +
-        cached * (model?.priceInPerM ?? 0) * (multipliers?.cached ?? 1)) /
+        cached *
+          (model?.priceCachedInPerM ?? (model?.priceInPerM ?? 0) * (model?.cachedInputRatio ?? 1)) *
+          (multipliers?.cached ?? 1)) /
       1_000_000;
     if (record.headers?.offPeak === true) cost *= multipliers?.offPeak ?? 1;
     return cost;

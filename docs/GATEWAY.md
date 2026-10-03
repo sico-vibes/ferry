@@ -12,6 +12,8 @@ Available profile aliases are `ferry/auto-free`, `ferry/best`, `ferry/fast`, and
 
 Add custom logical mappings in **Settings > Routing > Logical model mappings**. Each row contains a slash-free logical name, provider ID, and upstream model ID. For example, a logical name may map to `groq` / `openai/gpt-oss-120b`, `cerebras` / `gpt-oss-120b`, and `openrouter` / `openai/gpt-oss-120b:free`. User entries replace the catalog mapping for the same logical name and provider; entries for other providers stay in the pool.
 
+Available profile aliases are `ferry/auto-free`, `ferry/best`, `ferry/fast`, and `ferry/long-context`. Enabled concrete model IDs use `provider/model`. `/v1/models` advertises the profile aliases even when no concrete model is currently available. Each key can be limited to selected model IDs, requests per minute, estimated tokens per minute, tokens per UTC day, and concurrent requests. Leave a limit blank in Settings to keep it unlimited.
+
 ## OpenCode
 
 Add a provider entry to `opencode.json` (replace the port and key with the values shown by Ferry):
@@ -81,6 +83,12 @@ Ferry routes through configured provider models, existing profile eligibility, q
 Gateway requests use provider request overrides from the catalog, layered with **Settings > Routing > Provider request overrides**. A user value replaces the catalog value for that provider. Overrides strip or force JSON request parameters, add request headers, and optionally remap a response status when its body contains a configured phrase. Mapped statuses are used for quota and fallback classification.
 
 Ferry may retry another eligible model only before any streamed text or tool call has been emitted. Once output starts, an error is returned as an OpenAI error chunk or Anthropic error event. A client may need to retry the whole operation. The gateway does not execute client tools; tool calls are passed back to the client.
+
+### Per-key budgets and counters
+
+Settings > Gateway shows the total request count and successful request count separately. Total requests include authenticated inference attempts after request-per-minute and concurrency admission; successful requests increment only when Ferry returns usage from a completed provider call. Counters are stored in Ferry's local settings database. Token usage windows survive restarts: tokens per minute uses a rolling 60-second window, and tokens per day rolls over at 00:00 UTC.
+
+Before a provider call, Ferry estimates input tokens from the request text and reserves the requested output allowance (`max_tokens`). If this estimate would exceed a token budget, Ferry returns HTTP 429 with `Retry-After`. OpenAI requests receive the standard `{ "error": ... }` shape; Anthropic Messages requests receive the standard `{ "type": "error", "error": ... }` shape. In-flight estimates also count toward concurrent reservations. Completed calls settle token counters from the provider's reported input and output usage. Budget errors do not call the provider.
 
 ## Security
 

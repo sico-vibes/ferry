@@ -10,6 +10,9 @@ export interface GatewayKey {
   profile: GatewayProfile;
   allowedModels: string[];
   rateLimit: number | null;
+  tokenLimitPerMinute: number | null;
+  tokenLimitPerDay: number | null;
+  concurrencyLimit: number | null;
   compressToolResults: boolean;
   terseSystemPrompt: boolean;
   createdAt: string;
@@ -21,8 +24,16 @@ export interface GatewayStore {
   list(): GatewayKey[];
   put(key: GatewayKey): void;
   delete(id: string): void;
-  recordUsage(keyId: string, inputTokens: number, outputTokens: number): void;
-  usage(keyId: string): { requests: number; inputTokens: number; outputTokens: number };
+  recordRequest(keyId: string, at: string): void;
+  recentRequests(keyId: string, now: string): number;
+  recordUsage(keyId: string, inputTokens: number, outputTokens: number, at: string): void;
+  tokenUsage(keyId: string, now: string): { minuteTokens: number; dayTokens: number };
+  usage(keyId: string): {
+    requests: number;
+    successfulRequests: number;
+    inputTokens: number;
+    outputTokens: number;
+  };
   touch(keyId: string, at: string): void;
 }
 export interface GatewayMessage {
@@ -91,6 +102,11 @@ const aliases: Record<string, GatewayProfile> = {
   'ferry/long-context': 'long-context',
 };
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
+const secondsToUtcDayReset = (now: Date) =>
+  Math.ceil(
+    (Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1) - now.getTime()) /
+      1000,
+  );
 
 export function pruneRateState<K>(state: Map<K, number[]>, now: number): void {
   for (const [key, times] of state) {
@@ -119,6 +135,9 @@ export function createGatewayKey(
     profile: input.profile,
     allowedModels: input.allowedModels ?? [],
     rateLimit: input.rateLimit ?? null,
+    tokenLimitPerMinute: input.tokenLimitPerMinute ?? null,
+    tokenLimitPerDay: input.tokenLimitPerDay ?? null,
+    concurrencyLimit: input.concurrencyLimit ?? null,
     compressToolResults: input.compressToolResults ?? true,
     terseSystemPrompt: input.terseSystemPrompt ?? false,
     createdAt: now.toISOString(),
@@ -368,6 +387,7 @@ async function handleChat(
   res: ServerResponse,
   runtime: GatewayRuntime,
   key: GatewayKey,
+  reserve: (key: GatewayKey, tokens: number) => { retryAfter: number | null; release(): void },
 ): Promise<void> {
   let input: GatewayRequest;
   try {
@@ -395,6 +415,15 @@ async function handleChat(
       !(await runtime.models(key)).includes(model))
   ) {
     json(res, 404, errorBody(`Unknown model: ${input.model}`, 'model_not_found'));
+    return;
+  }
+  const reserved = reserve(
+    key,
+    Math.ceil(JSON.stringify(input).length / 4) + Math.max(0, input.max_tokens ?? 0),
+  );
+  if (reserved.retryAfter !== null) {
+    res.setHeader('retry-after', String(reserved.retryAfter));
+    json(res, 429, errorBody('Ferry gateway key token budget exceeded', 'rate_limit_error'));
     return;
   }
   const controller = new AbortController();
@@ -449,6 +478,7 @@ async function handleChat(
           tools = [...(tools ?? []), tool];
         },
       });
+      reserved.release();
       beginStream();
       usage.inputTokens = result.inputTokens;
       usage.outputTokens = result.outputTokens;
@@ -478,6 +508,7 @@ async function handleChat(
         sessionHint,
         signal: controller.signal,
       });
+      reserved.release();
       usage.inputTokens = result.inputTokens;
       usage.outputTokens = result.outputTokens;
       json(res, 200, {
@@ -511,8 +542,14 @@ async function handleChat(
         },
       });
     }
-    runtime.store.recordUsage(key.id, usage.inputTokens, usage.outputTokens);
+    runtime.store.recordUsage(
+      key.id,
+      usage.inputTokens,
+      usage.outputTokens,
+      new Date().toISOString(),
+    );
   } catch (error) {
+    reserved.release();
     const mapped = mappedFailure(error);
     if (res.headersSent) {
       res.write(
@@ -528,6 +565,7 @@ async function handleAnthropic(
   res: ServerResponse,
   runtime: GatewayRuntime,
   key: GatewayKey,
+  reserve: (key: GatewayKey, tokens: number) => { retryAfter: number | null; release(): void },
 ): Promise<void> {
   let payload: Record<string, unknown>;
   try {
@@ -556,6 +594,15 @@ async function handleAnthropic(
       !(await runtime.models(key)).includes(model))
   ) {
     json(res, 404, anthropicError(`Unknown model: ${originalModel}`, 'not_found_error'));
+    return;
+  }
+  const reserved = reserve(
+    key,
+    Math.ceil(JSON.stringify(payload).length / 4) + Math.max(0, Number(payload.max_tokens) || 0),
+  );
+  if (reserved.retryAfter !== null) {
+    res.setHeader('retry-after', String(reserved.retryAfter));
+    json(res, 429, anthropicError('Ferry gateway key token budget exceeded', 'rate_limit_error'));
     return;
   }
   const tools = anthropicTools(payload.tools);
@@ -651,6 +698,7 @@ async function handleAnthropic(
           toolCalls.push(call);
         },
       });
+      reserved.release();
       beginStream();
       if (textStarted.value) send('content_block_stop', { type: 'content_block_stop', index: 0 });
       for (let i = 0; i < (result.toolCalls?.length ?? 0); i++) {
@@ -681,7 +729,12 @@ async function handleAnthropic(
       });
       send('message_stop', { type: 'message_stop' });
       res.end();
-      runtime.store.recordUsage(key.id, result.inputTokens, result.outputTokens);
+      runtime.store.recordUsage(
+        key.id,
+        result.inputTokens,
+        result.outputTokens,
+        new Date().toISOString(),
+      );
     } else {
       const result = await runtime.complete({
         key,
@@ -694,7 +747,13 @@ async function handleAnthropic(
         sessionHint,
         signal: controller.signal,
       });
-      runtime.store.recordUsage(key.id, result.inputTokens, result.outputTokens);
+      reserved.release();
+      runtime.store.recordUsage(
+        key.id,
+        result.inputTokens,
+        result.outputTokens,
+        new Date().toISOString(),
+      );
       json(res, 200, {
         id,
         type: 'message',
@@ -715,6 +774,7 @@ async function handleAnthropic(
       });
     }
   } catch (error) {
+    reserved.release();
     const mapped = mappedFailure(error);
     if (res.headersSent) {
       res.write(
@@ -729,7 +789,41 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
   if (options.allowLan && !options.allowLanConfirmed)
     throw new Error('LAN gateway binding requires explicit confirmation');
   const host = options.allowLan ? '0.0.0.0' : '127.0.0.1';
-  const requestTimes = new Map<string, number[]>();
+  const activeRequests = new Map<string, number>();
+  const reservedTokens = new Map<string, { minute: number; day: number }>();
+  const reserveTokens = (key: GatewayKey, tokens: number) => {
+    const now = new Date();
+    const persisted = options.runtime.store.tokenUsage(key.id, now.toISOString());
+    const reserved = reservedTokens.get(key.id) ?? { minute: 0, day: 0 };
+    const perMinute = persisted.minuteTokens + reserved.minute;
+    const perDay = persisted.dayTokens + reserved.day;
+    const exceededMinute =
+      key.tokenLimitPerMinute !== null && perMinute + tokens > key.tokenLimitPerMinute;
+    const exceededDay = key.tokenLimitPerDay !== null && perDay + tokens > key.tokenLimitPerDay;
+    if (exceededMinute || exceededDay) {
+      return {
+        retryAfter: exceededMinute ? 60 : secondsToUtcDayReset(now),
+        release: () => undefined,
+      };
+    }
+    reservedTokens.set(key.id, { minute: reserved.minute + tokens, day: reserved.day + tokens });
+    let released = false;
+    return {
+      retryAfter: null,
+      release: () => {
+        if (released) return;
+        released = true;
+        const current = reservedTokens.get(key.id);
+        if (!current) return;
+        const next = {
+          minute: Math.max(0, current.minute - tokens),
+          day: Math.max(0, current.day - tokens),
+        };
+        if (next.minute === 0 && next.day === 0) reservedTokens.delete(key.id);
+        else reservedTokens.set(key.id, next);
+      },
+    };
+  };
   const failedAuth = new Map<string, number[]>();
   const rejectBrowserOrigin = (req: IncomingMessage, res: ServerResponse): boolean => {
     if (!req.headers.origin) return false;
@@ -755,7 +849,6 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
   };
   const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const now = Date.now();
-    pruneRateState(requestTimes, now);
     pruneRateState(failedAuth, now);
     if (rejectBrowserOrigin(req, res)) return;
     const path = new URL(req.url ?? '/', 'http://localhost').pathname;
@@ -803,9 +896,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
       }
       failedAuth.delete(req.socket.remoteAddress ?? 'unknown');
       if (key.rateLimit !== null) {
-        const now = Date.now();
-        const recent = (requestTimes.get(key.id) ?? []).filter((at) => now - at < 60_000);
-        if (recent.length >= key.rateLimit) {
+        if (
+          options.runtime.store.recentRequests(key.id, new Date().toISOString()) >= key.rateLimit
+        ) {
           res.setHeader('retry-after', '60');
           json(
             res,
@@ -816,12 +909,34 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
           );
           return;
         }
-        recent.push(now);
-        requestTimes.set(key.id, recent);
       }
+      if (
+        key.concurrencyLimit !== null &&
+        (activeRequests.get(key.id) ?? 0) >= key.concurrencyLimit
+      ) {
+        res.setHeader('retry-after', '1');
+        json(
+          res,
+          429,
+          path === '/v1/messages'
+            ? anthropicError('Ferry gateway key concurrency limit exceeded', 'rate_limit_error')
+            : errorBody('Ferry gateway key concurrency limit exceeded', 'rate_limit_error'),
+        );
+        return;
+      }
+      const requestAt = new Date().toISOString();
+      options.runtime.store.recordRequest(key.id, requestAt);
+      activeRequests.set(key.id, (activeRequests.get(key.id) ?? 0) + 1);
       options.runtime.store.touch(key.id, new Date().toISOString());
-      if (path === '/v1/messages') await handleAnthropic(req, res, options.runtime, key);
-      else await handleChat(req, res, options.runtime, key);
+      try {
+        if (path === '/v1/messages')
+          await handleAnthropic(req, res, options.runtime, key, reserveTokens);
+        else await handleChat(req, res, options.runtime, key, reserveTokens);
+      } finally {
+        const active = activeRequests.get(key.id) ?? 1;
+        if (active <= 1) activeRequests.delete(key.id);
+        else activeRequests.set(key.id, active - 1);
+      }
       return;
     }
     json(res, 404, errorBody('Not found', 'not_found'));

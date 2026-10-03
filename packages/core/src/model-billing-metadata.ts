@@ -19,6 +19,8 @@ export function preserveCatalogBillingMetadata(
       free: openRouterFree || (model.providerId === 'openrouter' ? false : model.free),
       priceInPerM: catalogPrice(model.priceInPerM, catalogModel?.priceInPerM),
       priceOutPerM: catalogPrice(model.priceOutPerM, catalogModel?.priceOutPerM),
+      priceCachedInPerM: model.priceCachedInPerM ?? catalogModel?.priceCachedInPerM ?? null,
+      cachedInputRatio: model.cachedInputRatio ?? catalogModel?.cachedInputRatio ?? 1,
     };
   });
 }

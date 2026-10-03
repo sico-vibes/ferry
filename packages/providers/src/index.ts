@@ -500,11 +500,7 @@ export function mergeUsage(
     outputTokenDetails?: { reasoningTokens?: number | null };
   } = {},
 ): UsageRecord {
-  const cachedTokens =
-    usage.cachedInputTokens ??
-    ((usage.inputTokenDetails?.cacheReadTokens ?? 0) +
-      (usage.inputTokenDetails?.cacheWriteTokens ?? 0) ||
-      null);
+  const cachedTokens = usage.cachedInputTokens ?? usage.inputTokenDetails?.cacheReadTokens ?? null;
   const reasoningTokens = usage.reasoningTokens ?? usage.outputTokenDetails?.reasoningTokens;
   return UsageRecordSchema.parse({
     id: globalThis.crypto.randomUUID(),

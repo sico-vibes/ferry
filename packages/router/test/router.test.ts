@@ -905,6 +905,30 @@ describe('spend guardrails and simulations', () => {
     ).toBe(false);
   });
 
+  it('prices cached input at the catalog price or configured ratio for spend caps', () => {
+    const priced = { priceInPerM: 2, priceOutPerM: 4, priceCachedInPerM: 0.1 };
+    expect(
+      calculateSpend({ inputTokens: 1_000_000, cachedTokens: 600_000, outputTokens: 0 }, priced),
+    ).toBeCloseTo(0.86);
+    expect(
+      calculateSpend(
+        { inputTokens: 1_000_000, cachedTokens: 600_000, outputTokens: 0 },
+        { priceInPerM: 2, priceOutPerM: 4, cachedInputRatio: 0.25 },
+      ),
+    ).toBeCloseTo(1.1);
+    expect(
+      canSpend(
+        { ...profile, paidAllowed: true },
+        { sessionUsd: 0, dayUsd: 0, monthUsd: 0, paidCallsThisSession: 0 },
+        { sessionUsd: 1.2, dayUsd: null, monthUsd: null },
+        calculateSpend(
+          { inputTokens: 1_000_000, cachedTokens: 600_000, outputTokens: 0 },
+          { priceInPerM: 2, priceOutPerM: 4, cachedInputRatio: 0.25 },
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it('enforces the profile session cap and honors only explicit pre-authorization', () => {
     const capped = { ...profile, caps: { ...profile.caps, sessionUsd: 3 } };
     expect(
