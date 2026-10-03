@@ -1,10 +1,12 @@
 import {
   ProbeResultSchema,
+  ProviderKeySchema,
   ProviderIdSchema,
   ProviderSchema,
   RoutingSettingsSchema,
   QuotaObservationSchema,
   newId,
+  redactKnownSecretText,
   type Provider,
 } from '@ferry/shared';
 import { discoverProviderModels, probe, resolveProviderRequestOverrides } from '@ferry/providers';
@@ -14,6 +16,7 @@ import type { FerryServices } from '../services.js';
 import { invalidateSessionProviderKeyCache } from '../session-deps.js';
 import { getModelDiscovery } from './model-discovery.js';
 import { isCoreWindowActive, onCoreWindowActiveChange } from '../runtime-activity.js';
+import { hasUsableProviderKey } from '../services.js';
 
 const ProviderIdInput = ProviderIdSchema;
 const KeyInput = z.string().trim().min(1).max(4096);
@@ -38,7 +41,13 @@ function providerRecord(services: FerryServices, id: string): Provider {
   if (!limits) throw rpcDomainError(-32044, 'not_found', `Provider not found: ${id}`);
   const saved = services.providers.get(id);
   const keyRef = services.providerKeys.get(id);
-  const keyStatus: Provider['keyStatus'] = keyRef ? (saved?.keyStatus ?? 'unchecked') : 'missing';
+  const keys = services.providerKeyEntries.list(id);
+  const keyStatus: Provider['keyStatus'] =
+    keyRef || keys.length
+      ? keys.length && !hasUsableProviderKey(services, id)
+        ? 'invalid'
+        : (saved?.keyStatus ?? 'unchecked')
+      : 'missing';
   const availableModels = saved?.availableModels;
   const modelCount = availableModels?.length ?? 0;
   const cooldown = services.cooldowns.get(id);
@@ -52,7 +61,15 @@ function providerRecord(services: FerryServices, id: string): Provider {
     kind: limits.tag === 'subscription_cli' ? 'cli' : 'api',
     brand: null,
     keyStatus,
-    enabled: saved?.enabled ?? (Boolean(keyRef) || limits.key_required === false),
+    keyCount: keys.length || (keyRef ? 1 : 0),
+    autoDisableEnabled: saved?.autoDisableEnabled ?? true,
+    autoDisableFailureCount: saved?.autoDisableFailureCount ?? 3,
+    autoDisableFailureWindowMinutes: saved?.autoDisableFailureWindowMinutes ?? 10,
+    autoDisableStatusCodes: saved?.autoDisableStatusCodes ?? [],
+    autoDisableKeywords: saved?.autoDisableKeywords ?? [],
+    autoDisableMinutes: saved?.autoDisableMinutes ?? 60,
+    enabled:
+      saved?.enabled ?? (hasUsableProviderKey(services, id) || limits.key_required === false),
     health: activeCooldown
       ? 'cooldown'
       : saved?.health === 'cooldown'
@@ -78,6 +95,30 @@ function providerRecord(services: FerryServices, id: string): Provider {
     windows: services.quota.getWindows(id),
     stepsLeftToday: services.quota.stepsLeft(id),
   });
+}
+
+function ensureLegacyKeyEntry(services: FerryServices, id: string) {
+  const entries = services.providerKeyEntries.list(id);
+  if (entries.length) return entries;
+  const legacyKey = services.providerKeys.get(id);
+  if (!legacyKey) return entries;
+  const now = services.clock.now().toISOString();
+  const entry = {
+    id: `${id}:1`,
+    providerId: id,
+    keyId: '1',
+    label: 'Key 1',
+    position: 0,
+    enabled: true,
+    status: 'ok' as const,
+    lastError: null,
+    cooldownUntil: null,
+    keyringRef: legacyKey.keyringRef,
+    createdAt: legacyKey.createdAt,
+    updatedAt: now,
+  };
+  services.providerKeyEntries.put(entry);
+  return [entry];
 }
 
 function saveProvider(services: FerryServices, provider: Provider): Provider {
@@ -135,12 +176,35 @@ export function register(host: CoreHost, services: FerryServices): void {
         healthRecoveryTimer = undefined;
         for (const { provider: id } of services.catalog.providers) {
           const saved = services.providers.get(id);
-          if (
-            saved &&
+          if (!saved) continue;
+          const entries = services.providerKeyEntries.list(id);
+          const unhealthyKeys = entries.filter(
+            (entry) =>
+              entry.enabled &&
+              (entry.status === 'invalid' ||
+                (entry.status === 'disabled' &&
+                  entry.cooldownUntil !== null &&
+                  Date.parse(entry.cooldownUntil) <= services.clock.now().getTime()) ||
+                (entry.status === 'rate_limited' &&
+                  (!entry.cooldownUntil ||
+                    Date.parse(entry.cooldownUntil) <= services.clock.now().getTime()))),
+          );
+          if (unhealthyKeys.length) {
+            for (const entry of unhealthyKeys)
+              void host
+                .dispatch({
+                  jsonrpc: '2.0',
+                  id: `key-recovery-${id}-${entry.keyId}`,
+                  method: 'providers.probe',
+                  params: [id, entry.keyId],
+                })
+                .catch(() => undefined);
+          } else if (
             (saved.health !== 'ok' || saved.keyStatus === 'invalid') &&
-            services.providerKeys.get(id)
-          )
+            hasUsableProviderKey(services, id)
+          ) {
             void modelDiscovery.refreshIfStale(id);
+          }
         }
         scheduleHealthRecovery();
       },
@@ -159,7 +223,7 @@ export function register(host: CoreHost, services: FerryServices): void {
     services.catalog.providers.forEach(({ provider: id }) => {
       const saved = services.providers.get(id);
       if (
-        services.providerKeys.get(id) ||
+        hasUsableProviderKey(services, id) ||
         (saved?.enabled &&
           services.catalog.providers.find((item) => item.provider === id)?.key_required === false)
       )
@@ -179,6 +243,20 @@ export function register(host: CoreHost, services: FerryServices): void {
         providerId: id,
         keyringRef: id,
         createdAt: services.clock.now().toISOString(),
+      });
+      services.providerKeyEntries.put({
+        id: `${id}:1`,
+        providerId: id,
+        keyId: '1',
+        label: 'Key 1',
+        position: 0,
+        enabled: true,
+        status: 'ok',
+        lastError: null,
+        cooldownUntil: null,
+        keyringRef: id,
+        createdAt: services.clock.now().toISOString(),
+        updatedAt: services.clock.now().toISOString(),
       });
       const current = providerRecord(services, id);
       saveProvider(services, {
@@ -220,17 +298,107 @@ export function register(host: CoreHost, services: FerryServices): void {
     list() {
       return services.catalog.providers.map((entry) => providerRecord(services, entry.provider));
     },
+    async listKeys(rawId: unknown) {
+      const id = ProviderIdInput.parse(rawId);
+      return Promise.all(
+        ensureLegacyKeyEntry(services, id).map(async (entry) => {
+          const secret = await services.secrets.get(entry.keyringRef);
+          return ProviderKeySchema.parse({
+            id: entry.keyId,
+            providerId: id,
+            label: entry.label,
+            order: entry.position,
+            enabled: entry.enabled,
+            status: entry.enabled ? entry.status : 'disabled',
+            lastFour: secret?.slice(-4) ?? '',
+            usageToday: services.providerKeyUsage.today(id, entry.keyId, services.clock.now()),
+            lastError: entry.lastError,
+            cooldownUntil: entry.cooldownUntil,
+          });
+        }),
+      );
+    },
+    async addKey(rawId: unknown, rawLabel: unknown, rawKey: unknown) {
+      const id = ProviderIdInput.parse(rawId);
+      const label = z.string().trim().min(1).max(80).parse(rawLabel);
+      const key = KeyInput.parse(rawKey);
+      const entries = ensureLegacyKeyEntry(services, id);
+      const keyId = String(Math.max(0, ...entries.map((entry) => Number(entry.keyId) || 0)) + 1);
+      const keyringRef = `${id}:${keyId}`;
+      const now = services.clock.now().toISOString();
+      await services.secrets.set(keyringRef, key);
+      services.providerKeyEntries.put({
+        id: `${id}:${keyId}`,
+        providerId: id,
+        keyId,
+        label,
+        position: entries.length,
+        enabled: true,
+        status: 'ok',
+        lastError: null,
+        cooldownUntil: null,
+        keyringRef,
+        createdAt: now,
+        updatedAt: now,
+      });
+      if (!services.providerKeys.get(id))
+        services.providerKeys.put({ id, providerId: id, keyringRef, createdAt: now });
+      invalidateSessionProviderKeyCache(services, id);
+      const provider = saveProvider(services, {
+        ...providerRecord(services, id),
+        keyStatus: 'unchecked',
+        enabled: true,
+      });
+      host.emit('provider.updated', provider);
+      return {
+        id: keyId,
+        providerId: id,
+        label,
+        order: entries.length,
+        enabled: true,
+        status: 'ok' as const,
+        lastFour: key.slice(-4),
+        usageToday: { requests: 0, tokens: 0 },
+        lastError: null,
+        cooldownUntil: null,
+      };
+    },
     async setKey(rawId: unknown, rawKey: unknown) {
       const id = ProviderIdInput.parse(rawId);
       const key = KeyInput.parse(rawKey);
       const current = providerRecord(services, id);
+      const entries = services.providerKeyEntries.list(id);
+      const primary = entries[0];
+      const legacyKey = services.providerKeys.get(id);
+      const keyId = primary?.keyId ?? '1';
+      const now = services.clock.now().toISOString();
       await services.secrets.set(id, key);
       services.providerKeys.put({
         id,
         providerId: id,
         keyringRef: id,
-        createdAt: services.clock.now().toISOString(),
+        createdAt: primary?.createdAt ?? now,
       });
+      services.providerKeyEntries.put({
+        id: primary?.id ?? `${id}:${keyId}`,
+        providerId: id,
+        keyId,
+        label: primary?.label ?? 'Key 1',
+        position: 0,
+        enabled: true,
+        status: 'ok',
+        lastError: null,
+        cooldownUntil: null,
+        keyringRef: id,
+        createdAt: primary?.createdAt ?? now,
+        updatedAt: now,
+      });
+      const replacedKeyringRefs = new Set([
+        ...(primary ? [primary.keyringRef] : []),
+        ...(legacyKey ? [legacyKey.keyringRef] : []),
+      ]);
+      for (const keyringRef of replacedKeyringRefs)
+        if (keyringRef !== id) await services.secrets.delete(keyringRef);
       invalidateSessionProviderKeyCache(services, id);
       const provider = saveProvider(services, {
         ...current,
@@ -255,8 +423,14 @@ export function register(host: CoreHost, services: FerryServices): void {
     async removeKey(rawId: unknown) {
       const id = ProviderIdInput.parse(rawId);
       const current = providerRecord(services, id);
-      await services.secrets.delete(id);
+      const keyringRefs = new Set([
+        id,
+        ...services.providerKeyEntries.list(id).map((entry) => entry.keyringRef),
+      ]);
+      for (const keyringRef of keyringRefs) await services.secrets.delete(keyringRef);
       services.providerKeys.delete(id);
+      for (const entry of services.providerKeyEntries.list(id))
+        services.providerKeyEntries.delete(id, entry.keyId);
       invalidateSessionProviderKeyCache(services, id);
       services.cooldowns.delete(id);
       const provider = saveProvider(services, {
@@ -270,10 +444,107 @@ export function register(host: CoreHost, services: FerryServices): void {
       host.emit('provider.updated', provider);
       return provider;
     },
-    async probe(rawId: unknown) {
+    async removeKeyEntry(rawId: unknown, rawKeyId: unknown) {
+      const id = ProviderIdInput.parse(rawId);
+      const keyId = z.string().min(1).parse(rawKeyId);
+      const entry = services.providerKeyEntries.list(id).find((item) => item.keyId === keyId);
+      if (!entry) return;
+      await services.secrets.delete(entry.keyringRef);
+      services.providerKeyEntries.delete(id, keyId);
+      const remaining = services.providerKeyEntries.list(id);
+      if (remaining.length) {
+        const first = remaining[0];
+        if (first)
+          services.providerKeys.put({
+            id,
+            providerId: id,
+            keyringRef: first.keyringRef,
+            createdAt: first.createdAt,
+          });
+      } else {
+        services.providerKeys.delete(id);
+      }
+      invalidateSessionProviderKeyCache(services, id);
+      const current = providerRecord(services, id);
+      const provider = saveProvider(services, {
+        ...current,
+        keyStatus: remaining.length ? current.keyStatus : 'missing',
+        enabled: remaining.length > 0 && current.enabled,
+      });
+      host.emit('provider.updated', provider);
+    },
+    setKeyEnabled(rawId: unknown, rawKeyId: unknown, rawEnabled: unknown) {
+      const id = ProviderIdInput.parse(rawId);
+      const keyId = z.string().min(1).parse(rawKeyId);
+      const enabled = EnabledInput.parse(rawEnabled);
+      const entry = services.providerKeyEntries.list(id).find((item) => item.keyId === keyId);
+      if (!entry)
+        throw rpcDomainError(-32044, 'not_found', `Provider key not found: ${id}/${keyId}`);
+      services.providerKeyEntries.put({
+        ...entry,
+        enabled,
+        status: enabled ? (entry.status === 'disabled' ? 'ok' : entry.status) : 'disabled',
+        updatedAt: services.clock.now().toISOString(),
+      });
+      invalidateSessionProviderKeyCache(services, id);
+    },
+    reorderKeys(rawId: unknown, rawKeyIds: unknown) {
+      const id = ProviderIdInput.parse(rawId);
+      const keyIds = z.array(z.string().min(1)).parse(rawKeyIds);
+      const entries = services.providerKeyEntries.list(id);
+      if (
+        keyIds.length !== entries.length ||
+        new Set(keyIds).size !== entries.length ||
+        entries.some((entry) => !keyIds.includes(entry.keyId))
+      )
+        throw rpcDomainError(
+          -32602,
+          'validation',
+          'Key order must include each provider key exactly once',
+        );
+      const now = services.clock.now().toISOString();
+      keyIds.forEach((keyId, position) => {
+        const entry = entries.find((item) => item.keyId === keyId);
+        if (entry) services.providerKeyEntries.put({ ...entry, position, updatedAt: now });
+      });
+    },
+    setAutoDisablePolicy(rawId: unknown, rawPolicy: unknown) {
+      const id = ProviderIdInput.parse(rawId);
+      const policy = z
+        .object({
+          enabled: z.boolean(),
+          failureCount: z.number().int().min(2).max(20),
+          failureWindowMinutes: z.number().int().min(1).max(1440),
+          statusCodes: z.array(z.number().int().min(100).max(599)),
+          keywords: z.array(z.string().trim().min(1).max(120)),
+          disableMinutes: z.number().int().min(1).max(1440),
+        })
+        .parse(rawPolicy);
+      const current = providerRecord(services, id);
+      const provider = saveProvider(services, {
+        ...current,
+        autoDisableEnabled: policy.enabled,
+        autoDisableFailureCount: policy.failureCount,
+        autoDisableFailureWindowMinutes: policy.failureWindowMinutes,
+        autoDisableStatusCodes: policy.statusCodes,
+        autoDisableKeywords: policy.keywords,
+        autoDisableMinutes: policy.disableMinutes,
+      });
+      host.emit('provider.updated', provider);
+      return provider;
+    },
+    async probe(rawId: unknown, rawKeyId?: unknown) {
       const id = ProviderIdInput.parse(rawId);
       const current = providerRecord(services, id);
-      const key = await services.secrets.get(id);
+      const keyEntries = ensureLegacyKeyEntry(services, id);
+      const requestedKeyId = rawKeyId === undefined ? undefined : z.string().min(1).parse(rawKeyId);
+      const keyEntry = requestedKeyId
+        ? keyEntries.find((entry) => entry.keyId === requestedKeyId)
+        : (keyEntries.find((entry) => entry.enabled && entry.status !== 'invalid') ??
+          keyEntries[0]);
+      const key = keyEntry
+        ? await services.secrets.get(keyEntry.keyringRef)
+        : await services.secrets.get(services.providerKeys.get(id)?.keyringRef ?? id);
       const backoff = providerProbeBackoff.get(id);
       const nowMs = services.clock.now().getTime();
       if (backoff && backoff.retryAt > nowMs) {
@@ -313,6 +584,26 @@ export function register(host: CoreHost, services: FerryServices): void {
           overrides: resolveProviderRequestOverrides(id, overrides),
         }),
       );
+      if (keyEntry) {
+        const status = result.ok
+          ? 'ok'
+          : result.errorKind === 'auth'
+            ? 'invalid'
+            : result.errorKind === 'rate_limit' || result.errorKind === 'quota_exhausted'
+              ? 'rate_limited'
+              : keyEntry.status;
+        services.providerKeyEntries.put({
+          ...keyEntry,
+          status,
+          lastError: result.ok ? null : redactKnownSecretText(result.message),
+          cooldownUntil:
+            status === 'rate_limited'
+              ? (result.windows.find((window) => window.resetAt)?.resetAt ??
+                new Date(services.clock.now().getTime() + 60_000).toISOString())
+              : null,
+          updatedAt: services.clock.now().toISOString(),
+        });
+      }
       if (result.errorKind === 'offline') {
         const failures = (providerProbeBackoff.get(id)?.failures ?? 0) + 1;
         providerProbeBackoff.set(id, {

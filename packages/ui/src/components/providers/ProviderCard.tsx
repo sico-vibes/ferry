@@ -48,7 +48,7 @@ export function ProviderCard({
         : provider.health === 'unknown'
           ? 'bg-muted-foreground'
           : 'bg-success';
-  const keyText = terminalHealth
+  const keyStatusText = terminalHealth
     ? 'Needs attention: enter the key again'
     : provider.keyStatus === 'valid'
       ? 'Key valid'
@@ -59,6 +59,10 @@ export function ProviderCard({
           : provider.keyStatus === 'not_applicable'
             ? 'No key needed (CLI)'
             : 'Key unchecked';
+  const keyText =
+    provider.keyCount && provider.keyCount > 1
+      ? `${String(provider.keyCount)} keys, ${keyStatusText}`
+      : keyStatusText;
   const displayName = provider.name.replace(/ Inference \(Free Trial.*\)$/i, '');
   const trialNote = /free trial/i.test(provider.name)
     ? 'Free trial uses provider credits; availability depends on the account.'

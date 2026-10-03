@@ -4,14 +4,16 @@ import { createLogger, getDataPaths, type DataPaths } from '@ferry/config';
 import { KeyringSecretStore, MemorySecretStore, type SecretStore } from '@ferry/secrets';
 import { loadCatalog, type Catalog } from '@ferry/catalog';
 import { QuotaEngine } from '@ferry/quota';
-import { parseOpenRouterKey } from '@ferry/providers';
-import { QuotaObservationSchema, newId } from '@ferry/shared';
+import { autoDisableUntil, parseOpenRouterKey, type KeyFailure } from '@ferry/providers';
+import { QuotaObservationSchema, newId, redactKnownSecretText } from '@ferry/shared';
 import { canonicalizePath } from '@ferry/shared/node-paths';
 import {
   CheckpointRepository,
   ProviderRepository,
   ModelCacheRepository,
   ProviderKeyRepository,
+  ProviderKeyEntryRepository,
+  ProviderKeyUsageDailyRepository,
   RequestRepository,
   QuotaObservationRepository,
   CooldownRepository,
@@ -26,6 +28,7 @@ import {
   openDatabase,
   salvageReadableTables,
   type DatabaseConnection,
+  type ProviderKeyEntry,
 } from '@ferry/storage';
 
 export interface FerryClock {
@@ -59,12 +62,64 @@ export interface FerryServices {
   readonly providers: ProviderRepository;
   readonly models: ModelCacheRepository;
   readonly providerKeys: ProviderKeyRepository;
+  readonly providerKeyEntries: ProviderKeyEntryRepository;
+  readonly providerKeyUsage: ProviderKeyUsageDailyRepository;
   readonly cooldowns: CooldownRepository;
   readonly quotaObservations: QuotaObservationRepository;
   readonly handoffs: HandoffRepository;
   readonly logger: ReturnType<typeof createLogger>;
   readonly databaseRecoveryMessage?: string;
   dispose(): Promise<void>;
+}
+
+const providerKeyFailures = new WeakMap<FerryServices, Map<string, KeyFailure[]>>();
+
+export function recordProviderKeyFailure(
+  services: FerryServices,
+  entry: ProviderKeyEntry,
+  statusCode: number,
+  message: string,
+): void {
+  const saved = services.providers.get(entry.providerId);
+  const now = services.clock.now().getTime();
+  let histories = providerKeyFailures.get(services);
+  if (!histories) {
+    histories = new Map();
+    providerKeyFailures.set(services, histories);
+  }
+  const history = (histories.get(entry.id) ?? []).filter(
+    (failure) => now - failure.at <= (saved?.autoDisableFailureWindowMinutes ?? 10) * 60_000,
+  );
+  const current: KeyFailure = { statusCode, message, at: now };
+  history.push(current);
+  histories.set(entry.id, history);
+  let status = entry.status;
+  let cooldownUntil: string | null = null;
+  if ((statusCode === 401 || statusCode === 403) && saved?.autoDisableEnabled !== false)
+    status = 'invalid';
+  else if (statusCode === 429) {
+    status = 'rate_limited';
+    cooldownUntil = new Date(now + 60_000).toISOString();
+  } else if (saved?.autoDisableEnabled !== false) {
+    const disabledUntil = autoDisableUntil(history.slice(0, -1), current, {
+      statusCodes: saved?.autoDisableStatusCodes ?? [],
+      keywords: saved?.autoDisableKeywords ?? [],
+      failureCount: saved?.autoDisableFailureCount ?? 3,
+      windowMs: (saved?.autoDisableFailureWindowMinutes ?? 10) * 60_000,
+      disableForMs: (saved?.autoDisableMinutes ?? 60) * 60_000,
+    });
+    if (disabledUntil !== undefined) {
+      status = 'disabled';
+      cooldownUntil = new Date(disabledUntil).toISOString();
+    }
+  }
+  services.providerKeyEntries.put({
+    ...entry,
+    status,
+    lastError: redactKnownSecretText(message),
+    cooldownUntil,
+    updatedAt: new Date(now).toISOString(),
+  });
 }
 
 export async function createServices({
@@ -113,6 +168,28 @@ export async function createServices({
   const providers = new ProviderRepository(db.client);
   const models = new ModelCacheRepository(db.client);
   const providerKeys = new ProviderKeyRepository(db.client);
+  const providerKeyEntries = new ProviderKeyEntryRepository(db.client);
+  const providerKeyUsage = new ProviderKeyUsageDailyRepository(db.client);
+  const legacyKeyEntryTime = (clock ?? { now: () => new Date() }).now().toISOString();
+  for (const { provider } of catalog.providers) {
+    if (providerKeyEntries.list(provider).length) continue;
+    const legacyKey = providerKeys.get(provider);
+    if (!legacyKey) continue;
+    providerKeyEntries.put({
+      id: `${provider}:1`,
+      providerId: provider,
+      keyId: '1',
+      label: 'Key 1',
+      position: 0,
+      enabled: true,
+      status: 'ok',
+      lastError: null,
+      cooldownUntil: null,
+      keyringRef: legacyKey.keyringRef,
+      createdAt: legacyKey.createdAt,
+      updatedAt: legacyKeyEntryTime,
+    });
+  }
   const cooldowns = new CooldownRepository(db.client);
   const quotaObservations = new QuotaObservationRepository(db.client);
   const handoffs = new HandoffRepository(db.client);
@@ -120,7 +197,24 @@ export async function createServices({
     catalog,
     eligibleProviders: () =>
       catalog.providers.flatMap(({ provider, key_required }) => {
-        const hasKey = Boolean(providerKeys.get(provider));
+        const entries = providerKeyEntries.list(provider);
+        const hasKey = entries.length
+          ? entries.some(
+              (entry) =>
+                entry.enabled &&
+                entry.status !== 'invalid' &&
+                (entry.status !== 'disabled' ||
+                  Boolean(
+                    entry.cooldownUntil &&
+                    Date.parse(entry.cooldownUntil) <=
+                      (clock ?? { now: () => new Date() }).now().getTime(),
+                  )) &&
+                (entry.status !== 'rate_limited' ||
+                  !entry.cooldownUntil ||
+                  Date.parse(entry.cooldownUntil) <=
+                    (clock ?? { now: () => new Date() }).now().getTime()),
+            )
+          : Boolean(providerKeys.get(provider));
         const saved = providers.get(provider);
         const enabled = saved?.enabled ?? (hasKey || key_required === false);
         return enabled && !saved?.freeTierUnsupported && (hasKey || key_required === false)
@@ -203,6 +297,8 @@ export async function createServices({
     providers,
     models,
     providerKeys,
+    providerKeyEntries,
+    providerKeyUsage,
     cooldowns,
     quotaObservations,
     handoffs,
@@ -218,6 +314,22 @@ export async function createServices({
       db.close();
     },
   };
+}
+
+export function hasUsableProviderKey(services: FerryServices, providerId: string): boolean {
+  const entries = services.providerKeyEntries.list(providerId);
+  if (!entries.length) return Boolean(services.providerKeys.get(providerId));
+  const now = services.clock.now().getTime();
+  return entries.some(
+    (entry) =>
+      entry.enabled &&
+      entry.status !== 'invalid' &&
+      (entry.status !== 'disabled' ||
+        Boolean(entry.cooldownUntil && Date.parse(entry.cooldownUntil) <= now)) &&
+      (entry.status !== 'rate_limited' ||
+        !entry.cooldownUntil ||
+        Date.parse(entry.cooldownUntil) <= now),
+  );
 }
 
 function isCorruptDatabaseError(error: unknown): boolean {

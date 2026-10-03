@@ -105,6 +105,34 @@ function expectNoKey(text: string, label: string): void {
 }
 
 describe('QA-w2 core: key safety across every surface', () => {
+  it('adopts a legacy keyring reference and keeps setKey on the first key index', async () => {
+    const fake = await startServer();
+    const h = await makeHarness(fake);
+    const id = ProviderIdSchema.parse('openai');
+    try {
+      await h.services.secrets.set(id, 'legacy-secret-aaaa');
+      h.services.providerKeys.put({
+        id,
+        providerId: id,
+        keyringRef: id,
+        createdAt: '2026-10-03T00:00:00.000Z',
+      });
+
+      const migrated = await h.rpc.providers.listKeys(id);
+      expect(migrated).toMatchObject([{ id: '1', order: 0, lastFour: 'aaaa' }]);
+      await h.rpc.providers.addKey(id, 'Second account', 'second-secret-bbbb');
+      await h.rpc.providers.setKey(id, 'replacement-secret-cccc');
+
+      expect(await h.rpc.providers.listKeys(id)).toMatchObject([
+        { id: '1', order: 0, lastFour: 'cccc' },
+        { id: '2', order: 1, lastFour: 'bbbb' },
+      ]);
+    } finally {
+      await h.close();
+      await fake.stop();
+    }
+  }, 30_000);
+
   it('never exposes a set key through RPC, events, DB, logs, or system.info', async () => {
     const fake = await startServer();
     const h = await makeHarness(fake);

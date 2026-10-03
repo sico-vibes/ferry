@@ -35,6 +35,19 @@ describe('QA providers domain', () => {
     expect(invalid.ok).toBe(false);
   });
 
+  it('keeps the legacy setKey API on the first key entry', async () => {
+    const client = makeClient();
+    const gemini = providerId(client, 'gemini');
+    await client.providers.setKey(gemini, 'first-key');
+    await client.providers.addKey(gemini, 'Second account', 'second-account');
+    await client.providers.setKey(gemini, 'replacement-secret');
+
+    const entries = await client.providers.listKeys(gemini);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({ id: '1', order: 0, lastFour: 'cret' });
+    expect(entries[1]).toMatchObject({ id: '2', order: 1, lastFour: 'ount' });
+  });
+
   it('probes a valid provider, marks it valid and emits provider.updated', async () => {
     const client = makeClient();
     const mistral = providerId(client, 'mistral');

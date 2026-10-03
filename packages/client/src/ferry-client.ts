@@ -136,9 +136,29 @@ export interface FerryClient {
   };
   providers: {
     list(): Promise<Provider[]>;
+    listKeys(id: ProviderId): Promise<import('@ferry/shared').ProviderKey[]>;
     setKey(id: ProviderId, key: string): Promise<Provider>;
+    addKey(
+      id: ProviderId,
+      label: string,
+      key: string,
+    ): Promise<import('@ferry/shared').ProviderKey>;
     removeKey(id: ProviderId): Promise<Provider>;
-    probe(id: ProviderId): Promise<ProbeResult>;
+    removeKeyEntry(id: ProviderId, keyId: string): Promise<void>;
+    setKeyEnabled(id: ProviderId, keyId: string, enabled: boolean): Promise<void>;
+    reorderKeys(id: ProviderId, keyIds: string[]): Promise<void>;
+    setAutoDisablePolicy(
+      id: ProviderId,
+      policy: {
+        enabled: boolean;
+        failureCount: number;
+        failureWindowMinutes: number;
+        statusCodes: number[];
+        keywords: string[];
+        disableMinutes: number;
+      },
+    ): Promise<Provider>;
+    probe(id: ProviderId, keyId?: string): Promise<ProbeResult>;
     setEnabled(id: ProviderId, v: boolean): Promise<Provider>;
     setBillingEnabled(id: ProviderId, v: boolean): Promise<Provider>;
   };

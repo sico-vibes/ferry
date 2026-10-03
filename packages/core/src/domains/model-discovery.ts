@@ -1,5 +1,5 @@
 import { discoverProviderModels } from '@ferry/providers';
-import { ProviderIdSchema } from '@ferry/shared';
+import { ProviderIdSchema, redactKnownSecretText } from '@ferry/shared';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 
@@ -69,7 +69,24 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
       const baseUrl = baseUrlFor(services, id);
       if (services.env.NODE_ENV === 'test' && !isLoopbackUrl(baseUrl)) return;
 
-      const key = (await services.secrets.get(id)) ?? '';
+      const keyEntries = services.providerKeyEntries.list(id);
+      const usableEntry = keyEntries.find(
+        (entry) =>
+          entry.enabled &&
+          entry.status !== 'invalid' &&
+          (entry.status !== 'disabled' ||
+            Boolean(
+              entry.cooldownUntil &&
+              Date.parse(entry.cooldownUntil) <= services.clock.now().getTime(),
+            )) &&
+          (entry.status !== 'rate_limited' ||
+            !entry.cooldownUntil ||
+            Date.parse(entry.cooldownUntil) <= services.clock.now().getTime()),
+      );
+      const key =
+        (await services.secrets.get(
+          usableEntry?.keyringRef ?? services.providerKeys.get(id)?.keyringRef ?? id,
+        )) ?? '';
       const keylessEnabled = limits.key_required === false && current.enabled;
       const endpointDeclared = limits.models_endpoint === '/models';
       if (!key && !keylessEnabled && !endpointDeclared) return;
@@ -117,13 +134,39 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
         const failures = (saved.discoveryFailures ?? 0) + 1;
         const unsupported = errorClass === 'not_found';
         const authFailure = errorClass === 'auth';
+        if (authFailure && usableEntry) {
+          services.providerKeyEntries.put({
+            ...usableEntry,
+            status: 'invalid',
+            lastError: redactKnownSecretText(
+              error instanceof Error ? error.message : String(error),
+            ),
+            cooldownUntil: null,
+            updatedAt: failedAt,
+          });
+        }
+        const anotherUsableKey = keyEntries.some(
+          (entry) =>
+            entry.keyId !== usableEntry?.keyId &&
+            entry.enabled &&
+            entry.status !== 'invalid' &&
+            (entry.status !== 'disabled' ||
+              Boolean(
+                entry.cooldownUntil &&
+                Date.parse(entry.cooldownUntil) <= services.clock.now().getTime(),
+              )) &&
+            (entry.status !== 'rate_limited' ||
+              !entry.cooldownUntil ||
+              Date.parse(entry.cooldownUntil) <= services.clock.now().getTime()),
+        );
+        const providerAuthFailure = authFailure && !anotherUsableKey;
         const updated = {
           ...saved,
           discoveryFailedAt: failedAt,
           discoveryFailures: failures,
-          discoveryErrorClass: errorClass,
+          discoveryErrorClass: authFailure && anotherUsableKey ? 'unknown' : errorClass,
           ...(unsupported ? { discoveryUnsupported: true, modelsVerifiedAt: failedAt } : {}),
-          ...(authFailure
+          ...(providerAuthFailure
             ? { keyStatus: 'invalid' as const, health: 'auth_invalid' as const }
             : {}),
         };
@@ -136,7 +179,7 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
               providerId: id,
               errorClass,
               failures,
-              retryInMs: unsupported || authFailure ? null : delayMs,
+              retryInMs: unsupported || providerAuthFailure ? null : delayMs,
             },
             'Provider model discovery failed',
           );

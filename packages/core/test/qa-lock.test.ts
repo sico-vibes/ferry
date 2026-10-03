@@ -45,6 +45,8 @@ describe('QA single-writer lock', () => {
     const first = new CoreHost({ dataDir: path });
     await first.start();
     try {
+      const staleTime = new Date(Date.now() - 10_000);
+      await utimes(join(path, 'core.lock'), staleTime, staleTime);
       await expect(new CoreHost({ dataDir: path }).start()).rejects.toBeInstanceOf(CoreLockError);
       await expect(new CoreHost({ dataDir: path }).start()).rejects.toThrow(/already running/i);
       await expect(

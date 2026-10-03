@@ -567,7 +567,8 @@ async function isStaleLock(lockPath: string): Promise<boolean> {
   }
   if (typeof content === 'object' && content !== null && 'pid' in content) {
     const pid = content.pid;
-    if (typeof pid === 'number' && Number.isSafeInteger(pid) && pid > 1 && pid !== process.pid) {
+    if (pid === process.pid) return false;
+    if (typeof pid === 'number' && Number.isSafeInteger(pid) && pid > 1) {
       try {
         process.kill(pid, 0);
         return false;

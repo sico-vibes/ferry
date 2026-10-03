@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ReadOutputInputSchema } from './domain/session.js';
+import { ProviderIdSchema } from './domain/ids.js';
 
 export const FERRY_PROTOCOL = 'ferry/1' as const;
 export const DomainErrorKindSchema = z.enum([
@@ -34,8 +35,14 @@ export const FERRY_METHODS = [
   'checkpoints.diff',
   'checkpoints.restore',
   'providers.list',
+  'providers.listKeys',
   'providers.setKey',
+  'providers.addKey',
   'providers.removeKey',
+  'providers.removeKeyEntry',
+  'providers.setKeyEnabled',
+  'providers.reorderKeys',
+  'providers.setAutoDisablePolicy',
   'providers.probe',
   'providers.setEnabled',
   'providers.setBillingEnabled',
@@ -85,6 +92,24 @@ export const FERRY_METHOD_PARAMS_SCHEMAS: Readonly<
   Record<string, z.ZodType<unknown[]> | undefined>
 > = {
   'sessions.readOutput': z.tuple([ReadOutputInputSchema]),
+  'providers.listKeys': z.tuple([ProviderIdSchema]),
+  'providers.setKey': z.tuple([ProviderIdSchema, z.string()]),
+  'providers.addKey': z.tuple([ProviderIdSchema, z.string(), z.string()]),
+  'providers.removeKeyEntry': z.tuple([ProviderIdSchema, z.string()]),
+  'providers.setKeyEnabled': z.tuple([ProviderIdSchema, z.string(), z.boolean()]),
+  'providers.reorderKeys': z.tuple([ProviderIdSchema, z.array(z.string())]),
+  'providers.setAutoDisablePolicy': z.tuple([
+    ProviderIdSchema,
+    z.object({
+      enabled: z.boolean(),
+      failureCount: z.number().int().min(2).max(20),
+      failureWindowMinutes: z.number().int().min(1).max(1440),
+      statusCodes: z.array(z.number().int().min(100).max(599)),
+      keywords: z.array(z.string().trim().min(1).max(120)),
+      disableMinutes: z.number().int().min(1).max(1440),
+    }),
+  ]),
+  'providers.probe': z.tuple([ProviderIdSchema, z.string().optional()]),
 };
 export const FERRY_EVENTS = [
   'session.updated',

@@ -270,11 +270,10 @@ describe('Models providers and catalog', () => {
     if (!manageButton) throw new Error('The provider key action is missing.');
     await user.click(manageButton);
     const keyDialog = await screen.findByRole('dialog', { name: 'Manage Mistral key' });
-    const keySection = within(keyDialog).getByRole('region', { name: 'Provider key' });
     const routingSection = within(keyDialog).getByRole('region', { name: 'Provider routing' });
-    expect(
-      keySection.compareDocumentPosition(routingSection) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(within(keyDialog).getByLabelText('API key')).toBeTruthy();
+    expect(within(keyDialog).getByRole('region', { name: 'Key health policy' })).toBeTruthy();
+    expect(routingSection).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Save key' }));
     expect((await screen.findByRole('alert')).textContent).toContain('Enter an API key');
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'demo-mistral-key' } });

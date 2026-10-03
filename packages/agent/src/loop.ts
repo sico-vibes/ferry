@@ -217,7 +217,7 @@ export interface AgentOptions {
   acquireQuotaLease?: (model: ModelInfo, tokens: number) => (() => void) | null;
   stickyState?: Readonly<Record<string, StickyRoute>>;
   onStickyState?: (state: Record<string, StickyRoute>) => void;
-  providerAffinityKey?: (providerId: string) => string | undefined;
+  providerAffinityKey?: (providerId: string, sessionId: string) => string | undefined;
   probeHeuristicCooldowns?: () => Promise<void>;
   toolRejectionState?: readonly ToolRejection[];
   onToolRejectionState?: (entries: ToolRejection[]) => void;
@@ -809,7 +809,7 @@ export class AgentLoop {
               this.options.onReliabilityState?.([...this.reliability]);
             }
             if (successRouting?.stickySessions) {
-              const providerKeyId = this.options.providerAffinityKey?.(model.providerId);
+              const providerKeyId = this.options.providerAffinityKey?.(model.providerId, sessionId);
               this.sticky.set(
                 sessionId,
                 model.ref,
@@ -1600,7 +1600,7 @@ export class AgentLoop {
           resolved.filter(eligible),
           stickyRoute,
           this.options.profile.affinityMode,
-          (providerId) => this.options.providerAffinityKey?.(providerId) ?? undefined,
+          (providerId) => this.options.providerAffinityKey?.(providerId, sessionId) ?? undefined,
         ),
       );
     const candidates = scoreModels({

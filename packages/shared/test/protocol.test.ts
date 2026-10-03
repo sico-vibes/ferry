@@ -17,6 +17,22 @@ describe('ferry/1 JSON-RPC contract', () => {
     expect(FERRY_PROTOCOL).toBe('ferry/1');
     expect(FERRY_METHODS).toContain('sessions.send');
     expect(FERRY_METHODS).toContain('sessions.readOutput');
+    expect(FERRY_METHODS).toEqual(
+      expect.arrayContaining([
+        'providers.listKeys',
+        'providers.addKey',
+        'providers.removeKeyEntry',
+        'providers.setKeyEnabled',
+        'providers.reorderKeys',
+        'providers.setAutoDisablePolicy',
+      ]),
+    );
+    expect(FERRY_METHOD_PARAMS_SCHEMAS['providers.listKeys']?.safeParse(['openai']).success).toBe(
+      true,
+    );
+    expect(FERRY_METHOD_PARAMS_SCHEMAS['providers.probe']?.safeParse(['openai']).success).toBe(
+      true,
+    );
     expect(
       readOutputParamsSchema.safeParse([{ sessionId: 'session_1', handle: 'recovery_1' }]).success,
     ).toBe(true);

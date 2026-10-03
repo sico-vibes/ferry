@@ -23,6 +23,7 @@ const storageMigrations = [
   '0001_initial.sql',
   '0002_interrupted_sessions.sql',
   '0003_agent_events.sql',
+  '0004_provider_key_entries.sql',
 ].map((filename) => join(migrationsDirectory, filename));
 export const STORAGE_SCHEMA_VERSION = storageMigrations.length;
 export interface DatabaseConnection {
@@ -74,6 +75,8 @@ const salvageTables = [
   'optimizer_events',
   'optimizer_blobs',
   'provider_keys',
+  'provider_key_entries',
+  'provider_key_usage_daily',
   'models_cache',
   'settings_kv',
   'requests',
@@ -235,6 +238,79 @@ export interface KeyReference {
   providerId: string;
   keyringRef: string;
   createdAt: string;
+}
+export interface ProviderKeyEntry {
+  id: string;
+  providerId: string;
+  keyId: string;
+  label: string;
+  position: number;
+  enabled: boolean;
+  status: 'ok' | 'rate_limited' | 'invalid' | 'disabled';
+  lastError: string | null;
+  cooldownUntil: string | null;
+  keyringRef: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export class ProviderKeyEntryRepository {
+  constructor(private readonly client: Database.Database) {}
+  list(providerId: string): ProviderKeyEntry[] {
+    const rows = this.client
+      .prepare(
+        `SELECT id,provider_id AS providerId,key_id AS keyId,label,position,enabled,status,last_error AS lastError,cooldown_until AS cooldownUntil,keyring_ref AS keyringRef,created_at AS createdAt,updated_at AS updatedAt FROM provider_key_entries WHERE provider_id=? ORDER BY position,key_id`,
+      )
+      .all(providerId) as (Omit<ProviderKeyEntry, 'enabled'> & { enabled: number })[];
+    return rows.map((entry) => ({ ...entry, enabled: Boolean(entry.enabled) }));
+  }
+  put(entry: ProviderKeyEntry): void {
+    this.client
+      .prepare(
+        `INSERT INTO provider_key_entries (id,provider_id,key_id,label,position,enabled,status,last_error,cooldown_until,keyring_ref,created_at,updated_at) VALUES (@id,@providerId,@keyId,@label,@position,@enabled,@status,@lastError,@cooldownUntil,@keyringRef,@createdAt,@updatedAt) ON CONFLICT(provider_id,key_id) DO UPDATE SET label=excluded.label,position=excluded.position,enabled=excluded.enabled,status=excluded.status,last_error=excluded.last_error,cooldown_until=excluded.cooldown_until,keyring_ref=excluded.keyring_ref,updated_at=excluded.updated_at`,
+      )
+      .run({ ...entry, enabled: entry.enabled ? 1 : 0 });
+  }
+  delete(providerId: string, keyId: string): boolean {
+    return (
+      this.client
+        .prepare('DELETE FROM provider_key_entries WHERE provider_id=? AND key_id=?')
+        .run(providerId, keyId).changes > 0
+    );
+  }
+}
+export interface ProviderKeyUsage {
+  requests: number;
+  tokens: number;
+}
+export class ProviderKeyUsageDailyRepository {
+  constructor(private readonly client: Database.Database) {}
+  record(
+    providerId: string,
+    keyId: string,
+    occurredAt: Date,
+    inputTokens: number,
+    outputTokens: number,
+  ): void {
+    const day = occurredAt.toISOString().slice(0, 10);
+    this.client
+      .prepare(
+        `INSERT INTO provider_key_usage_daily (day,provider_id,key_id,requests,tokens) VALUES (?,?,?,1,?) ON CONFLICT(day,provider_id,key_id) DO UPDATE SET requests=requests+1,tokens=tokens+excluded.tokens`,
+      )
+      .run(
+        day,
+        providerId,
+        keyId,
+        Math.max(0, Math.round(inputTokens)) + Math.max(0, Math.round(outputTokens)),
+      );
+  }
+  today(providerId: string, keyId: string, at = new Date()): ProviderKeyUsage {
+    const row = this.client
+      .prepare(
+        'SELECT requests,tokens FROM provider_key_usage_daily WHERE day=? AND provider_id=? AND key_id=?',
+      )
+      .get(at.toISOString().slice(0, 10), providerId, keyId) as ProviderKeyUsage | undefined;
+    return row ?? { requests: 0, tokens: 0 };
+  }
 }
 export class ProviderKeyRepository {
   constructor(private readonly client: Database.Database) {}

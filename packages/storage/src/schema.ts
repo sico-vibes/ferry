@@ -1,4 +1,4 @@
-import { integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 const aggregate = (name: string) =>
   sqliteTable(name, {
@@ -13,6 +13,31 @@ export const providerKeys = sqliteTable('provider_keys', {
   keyringRef: text('keyring_ref').notNull(),
   createdAt: text('created_at').notNull(),
 });
+export const providerKeyEntries = sqliteTable('provider_key_entries', {
+  id: text('id').primaryKey(),
+  providerId: text('provider_id').notNull(),
+  keyId: text('key_id').notNull(),
+  label: text('label').notNull(),
+  position: integer('position').notNull(),
+  enabled: integer('enabled').notNull(),
+  status: text('status').notNull(),
+  lastError: text('last_error'),
+  cooldownUntil: text('cooldown_until'),
+  keyringRef: text('keyring_ref').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+export const providerKeyUsageDaily = sqliteTable(
+  'provider_key_usage_daily',
+  {
+    day: text('day').notNull(),
+    providerId: text('provider_id').notNull(),
+    keyId: text('key_id').notNull(),
+    requests: integer('requests').notNull(),
+    tokens: integer('tokens').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.day, table.providerId, table.keyId] })],
+);
 export const modelsCache = sqliteTable('models_cache', {
   id: text('id').primaryKey(),
   providerId: text('provider_id').notNull(),
