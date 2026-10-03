@@ -10,6 +10,7 @@ import { oauthModelCatalog } from '@ferry/oauth';
 import { modelSupportsTools } from '@ferry/router';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
+import { hasUsableProviderKey } from '../services.js';
 import { getModelDiscovery } from './model-discovery.js';
 import { preserveCatalogBillingMetadata } from '../model-billing-metadata.js';
 import { z } from 'zod';
@@ -113,7 +114,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       if (!session) return [];
       const cachedModels = services.catalog.providers.flatMap(({ provider, key_required }) => {
         const saved = services.providers.get(provider);
-        const hasKey = Boolean(services.providerKeys.get(provider));
+        const hasKey = hasUsableProviderKey(services, provider);
         const enabled = saved?.enabled ?? (hasKey || key_required === false);
         return enabled && !saved?.freeTierUnsupported && (hasKey || key_required === false)
           ? services.models.list(provider)

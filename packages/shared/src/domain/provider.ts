@@ -13,6 +13,22 @@ export const ProviderTagSchema = z.enum([
   'caution',
 ]);
 export type ProviderTag = z.infer<typeof ProviderTagSchema>;
+export const ProviderKeySchema = z.object({
+  id: z.string(),
+  providerId: ProviderIdSchema,
+  label: z.string(),
+  order: z.number().int().nonnegative(),
+  enabled: z.boolean(),
+  status: z.enum(['ok', 'rate_limited', 'invalid', 'disabled']),
+  lastFour: z.string().max(4),
+  usageToday: z.object({
+    requests: z.number().int().nonnegative(),
+    tokens: z.number().int().nonnegative(),
+  }),
+  lastError: z.string().nullable(),
+  cooldownUntil: z.iso.datetime().nullable(),
+});
+export type ProviderKey = z.infer<typeof ProviderKeySchema>;
 export const QuotaWindowSchema = z.object({
   id: z.string(),
   scope: z.enum(['provider', 'model']),
@@ -38,6 +54,13 @@ export const ProviderSchema = z.object({
   kind: z.enum(['api', 'cli']),
   brand: z.string().nullable(),
   keyStatus: z.enum(['missing', 'valid', 'invalid', 'unchecked', 'not_applicable']),
+  keyCount: z.number().int().nonnegative().optional(),
+  autoDisableEnabled: z.boolean().optional(),
+  autoDisableFailureCount: z.number().int().min(2).max(20).optional(),
+  autoDisableFailureWindowMinutes: z.number().int().min(1).max(1440).optional(),
+  autoDisableStatusCodes: z.array(z.number().int().min(100).max(599)).optional(),
+  autoDisableKeywords: z.array(z.string().trim().min(1).max(120)).optional(),
+  autoDisableMinutes: z.number().int().min(1).max(1440).optional(),
   enabled: z.boolean(),
   health: z.enum(['ok', 'cooldown', 'down', 'unknown', 'auth_invalid', 'account_disabled']),
   cooldownUntil: z.iso.datetime().nullable(),

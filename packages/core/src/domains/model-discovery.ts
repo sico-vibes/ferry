@@ -69,7 +69,24 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
       const baseUrl = baseUrlFor(services, id);
       if (services.env.NODE_ENV === 'test' && !isLoopbackUrl(baseUrl)) return;
 
-      const key = (await services.secrets.get(id)) ?? '';
+      const keyEntries = services.providerKeyEntries.list(id);
+      const usableEntry = keyEntries.find(
+        (entry) =>
+          entry.enabled &&
+          entry.status !== 'invalid' &&
+          (entry.status !== 'disabled' ||
+            Boolean(
+              entry.cooldownUntil &&
+              Date.parse(entry.cooldownUntil) <= services.clock.now().getTime(),
+            )) &&
+          (entry.status !== 'rate_limited' ||
+            !entry.cooldownUntil ||
+            Date.parse(entry.cooldownUntil) <= services.clock.now().getTime()),
+      );
+      const key =
+        (await services.secrets.get(
+          usableEntry?.keyringRef ?? services.providerKeys.get(id)?.keyringRef ?? id,
+        )) ?? '';
       const keylessEnabled = limits.key_required === false && current.enabled;
       const endpointDeclared = limits.models_endpoint === '/models';
       if (!key && !keylessEnabled && !endpointDeclared) return;

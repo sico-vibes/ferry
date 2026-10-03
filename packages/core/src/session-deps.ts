@@ -6,7 +6,11 @@ import {
   type StepGeneratorInput,
 } from '@ferry/agent';
 import type { RawCallObservation } from '@ferry/providers';
-import { probe as probeProvider, resolveProviderRequestOverrides } from '@ferry/providers';
+import {
+  probe as probeProvider,
+  ProviderKeyRotation,
+  resolveProviderRequestOverrides,
+} from '@ferry/providers';
 import {
   ProviderIdSchema,
   ProviderSchema,
@@ -31,7 +35,7 @@ import {
   canProbeCooldown,
 } from '@ferry/router';
 import { oauthModelCatalog, streamOAuthStep } from '@ferry/oauth';
-import type { FerryServices } from './services.js';
+import { hasUsableProviderKey, recordProviderKeyFailure, type FerryServices } from './services.js';
 import { z } from 'zod';
 
 const providerKeyPresence = new WeakMap<FerryServices, Map<string, boolean>>();
@@ -51,7 +55,7 @@ function hasProviderKey(services: FerryServices, providerId: string): boolean {
   }
   let present = cache.get(providerId);
   if (present === undefined) {
-    present = Boolean(services.providerKeys.get(providerId));
+    present = hasUsableProviderKey(services, providerId);
     cache.set(providerId, present);
   }
   return present;
@@ -81,7 +85,7 @@ export function createSessionDependencies(
   observe: (observation: RawCallObservation) => void;
 } {
   const apiKeys: Record<string, string> = {};
-  const loadedApiKeys = new Set<string>();
+  const providerKeyRotation = new ProviderKeyRotation();
   const providerBaseUrls = Object.fromEntries(
     services.catalog.providers.flatMap(({ provider }) => {
       const envName = `FERRY_PROVIDER_BASE_URL_${provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
@@ -509,20 +513,32 @@ export function createSessionDependencies(
       const providerId = req.model.providerId;
       if (oauthModelCatalog.some((model) => model.providerId === providerId))
         return await streamOAuthStep(services.secrets, { ...req, signal });
-      if (!loadedApiKeys.has(providerId)) {
-        loadedApiKeys.add(providerId);
-        // The key reference is authoritative; look up the secret only for the selected candidate.
-        if (hasProviderKey(services, providerId)) {
-          const key = await services.secrets.get(providerId);
-          if (key) apiKeys[providerId] = key;
-        }
-      }
+      const entries = services.providerKeyEntries.list(providerId);
+      const selectedKey = providerKeyRotation.select(
+        providerId,
+        entries.map((entry) => ({ ...entry, order: entry.position })),
+        services.clock.now(),
+      );
+      const key = selectedKey
+        ? await services.secrets.get(selectedKey.keyringRef)
+        : entries.length === 0 && hasProviderKey(services, providerId)
+          ? await services.secrets.get(
+              services.providerKeys.get(providerId)?.keyringRef ?? providerId,
+            )
+          : undefined;
+      if (key) apiKeys[providerId] = key;
+      else Reflect.deleteProperty(apiKeys, providerId);
+      const outputState = { started: false };
+      const emitStep = (event: AgentEvent) => {
+        if (event.type === 'session.delta' && event.text) outputState.started = true;
+        emit(event);
+      };
       const generator = createStepGenerator(
         {
           apiKeys,
           providerBaseUrls,
           providerFetch,
-          emit,
+          emit: emitStep,
           onObservation: observe,
           providerOverrides: (model) =>
             resolveProviderRequestOverrides(
@@ -534,12 +550,45 @@ export function createSessionDependencies(
         req.messages.at(-1)?.sessionId ?? '',
       );
       try {
-        return await generator({
+        const generated = await generator({
           ...req,
           modelHints: { ...req.modelHints, ...modelHintsFromRegistry(req.model) },
           signal,
         });
+        if (selectedKey && selectedKey.status !== 'ok')
+          services.providerKeyEntries.put({
+            ...selectedKey,
+            status: 'ok',
+            lastError: null,
+            cooldownUntil: null,
+            updatedAt: services.clock.now().toISOString(),
+          });
+        if (selectedKey)
+          services.providerKeyUsage.record(
+            providerId,
+            selectedKey.keyId,
+            services.clock.now(),
+            generated.inputTokens ?? 0,
+            generated.outputTokens ?? 0,
+          );
+        return generated;
       } catch (error) {
+        if (selectedKey) {
+          const statusCode = providerErrorStatus(error);
+          recordProviderKeyFailure(
+            services,
+            selectedKey,
+            statusCode,
+            providerErrorMessageForRouting(error),
+          );
+        }
+        if (
+          selectedKey &&
+          !outputState.started &&
+          [401, 403, 429].includes(providerErrorStatus(error)) &&
+          hasUsableProviderKey(services, providerId)
+        )
+          return await gateway.streamStep(req, signal);
         const savedProvider = services.providers.get(providerId);
         const unsupportedFreeTier =
           providerId === 'opencode' &&

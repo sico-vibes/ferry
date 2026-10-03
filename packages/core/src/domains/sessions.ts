@@ -40,6 +40,7 @@ import { createMcpManager } from './mcp.js';
 import { McpServerConfigSchema } from '@ferry/extensions';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
+import { hasUsableProviderKey } from '../services.js';
 import { preserveCatalogBillingMetadata } from '../model-billing-metadata.js';
 import { createSessionDependencies } from '../session-deps.js';
 import { oauthModelCatalog } from '@ferry/oauth';
@@ -364,7 +365,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         const configuredProviders = services.catalog.providers.filter(
           ({ provider, key_required }) => {
             const saved = services.providers.get(provider);
-            const hasKey = Boolean(services.providerKeys.get(provider));
+            const hasKey = hasUsableProviderKey(services, provider);
             return (saved?.enabled ?? hasKey) && (hasKey || key_required === false);
           },
         );

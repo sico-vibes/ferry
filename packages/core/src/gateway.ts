@@ -1,4 +1,8 @@
-import { resolveProviderRequestOverrides, streamProviderChat } from '@ferry/providers';
+import {
+  ProviderKeyRotation,
+  resolveProviderRequestOverrides,
+  streamProviderChat,
+} from '@ferry/providers';
 import type { ModelMessage } from '@ferry/providers';
 import { genericFilter, terseSystemText } from '@ferry/optimizer';
 import {
@@ -16,6 +20,7 @@ import {
   type GatewayMessage,
 } from '@ferry/gateway';
 import type { FerryServices } from './services.js';
+import { hasUsableProviderKey, recordProviderKeyFailure } from './services.js';
 
 interface GatewaySettings {
   enabled: boolean;
@@ -150,6 +155,7 @@ function routingSettings(services: FerryServices) {
 
 export function createGatewayController(services: FerryServices) {
   let handle: GatewayHandle | undefined;
+  const providerKeyRotation = new ProviderKeyRotation();
   const stickyRoutes = new Map<
     string,
     {
@@ -170,8 +176,7 @@ export function createGatewayController(services: FerryServices) {
           (entry) => entry.provider === model.providerId,
         );
         const availableCredentials =
-          Boolean(services.providerKeys.get(model.providerId)) ||
-          configured?.key_required === false;
+          hasUsableProviderKey(services, model.providerId) || configured?.key_required === false;
         return (
           (saved?.enabled ?? availableCredentials) &&
           availableCredentials &&
@@ -347,7 +352,9 @@ export function createGatewayController(services: FerryServices) {
         if (!sticky || !affinityProviderId || item.providerId !== affinityProviderId) return false;
         return (
           !sticky.providerKeyId ||
-          services.providerKeys.get(item.providerId)?.id === sticky.providerKeyId
+          services.providerKeyEntries
+            .list(item.providerId)
+            .some((entry) => entry.id === sticky.providerKeyId)
         );
       };
       if (!explicit && sticky && sticky.expiresAt > services.clock.now().getTime()) {
@@ -362,9 +369,41 @@ export function createGatewayController(services: FerryServices) {
       }
       if (!ordered.length) throw new Error('No eligible provider model is configured');
       let lastError: unknown;
-      for (const model of ordered) {
+      const now = services.clock.now().getTime();
+      const withKeyFallback = ordered.flatMap((model) => {
+        const count = services.providerKeyEntries
+          .list(model.providerId)
+          .filter(
+            (key) =>
+              key.enabled &&
+              key.status !== 'invalid' &&
+              (key.status !== 'disabled' ||
+                Boolean(key.cooldownUntil && Date.parse(key.cooldownUntil) <= now)) &&
+              (key.status !== 'rate_limited' ||
+                !key.cooldownUntil ||
+                Date.parse(key.cooldownUntil) <= now),
+          ).length;
+        return Array.from({ length: Math.max(1, count) }, () => model);
+      });
+      for (const model of withKeyFallback) {
         const providerId = model.providerId;
-        const key = await services.secrets.get(providerId);
+        const entries = services.providerKeyEntries.list(providerId);
+        const stickyKeyId = stickyRoutes.get(input.sessionHint)?.providerKeyId;
+        const stickyKey = entries.find((entry) => entry.id === stickyKeyId);
+        const providerKey = stickyKey
+          ? { ...stickyKey, order: stickyKey.position }
+          : providerKeyRotation.select(
+              providerId,
+              entries.map((entry) => ({ ...entry, order: entry.position })),
+              services.clock.now(),
+            );
+        const key = providerKey
+          ? await services.secrets.get(providerKey.keyringRef)
+          : services.providerKeyEntries.list(providerId).length === 0
+            ? await services.secrets.get(
+                services.providerKeys.get(providerId)?.keyringRef ?? providerId,
+              )
+            : undefined;
         if (!key) continue;
         const envName = `FERRY_PROVIDER_BASE_URL_${providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
         const outputState = { started: false };
@@ -446,6 +485,14 @@ export function createGatewayController(services: FerryServices) {
             },
           });
           const timestamp = services.clock.now().toISOString();
+          if (providerKey)
+            services.providerKeyUsage.record(
+              providerId,
+              providerKey.keyId,
+              new Date(timestamp),
+              result.inputTokens,
+              result.outputTokens,
+            );
           services.quota.recordUsage({
             id: `gateway:${input.key.id}:${timestamp}`,
             providerId,
@@ -458,9 +505,7 @@ export function createGatewayController(services: FerryServices) {
           stickyRoutes.set(input.sessionHint, {
             modelRef: model.ref,
             providerId,
-            ...(services.providerKeys.get(providerId)?.id
-              ? { providerKeyId: services.providerKeys.get(providerId)?.id }
-              : {}),
+            ...(providerKey?.id ? { providerKeyId: providerKey.id } : {}),
             expiresAt: services.clock.now().getTime() + 30 * 60 * 1000,
           });
           return { id: `gw-${String(Date.now())}`, model: model.ref, ...result };
@@ -494,6 +539,15 @@ export function createGatewayController(services: FerryServices) {
               ? { headers: providerError.response.headers }
               : {}),
           });
+          const providerStatus = Number(
+            providerError.statusCode ??
+              providerError.status ??
+              (providerError.response && typeof providerError.response === 'object'
+                ? (providerError.response as { status?: unknown }).status
+                : 0),
+          );
+          if (providerKey)
+            recordProviderKeyFailure(services, providerKey, providerStatus, typed.message);
           stickyRoutes.delete(input.sessionHint);
           const rawMessage =
             typed.message || (error instanceof Error ? error.message : 'Provider request failed');

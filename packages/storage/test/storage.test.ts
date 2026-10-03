@@ -7,6 +7,8 @@ import {
   openDatabase,
   runRetention,
   RequestRepository,
+  ProviderKeyEntryRepository,
+  ProviderKeyUsageDailyRepository,
   SessionRepository,
   STORAGE_SCHEMA_VERSION,
 } from '../src/index.js';
@@ -18,6 +20,89 @@ afterEach(async () => {
 });
 
 describe('@ferry/storage', () => {
+  it('migrates a legacy provider credential into key 1 without changing its keyring reference', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ferry-key-migration-'));
+    dirs.push(dir);
+    const path = join(dir, 'ferry.sqlite');
+    const db = await openDatabase(path);
+    try {
+      db.client.prepare('DELETE FROM provider_key_entries').run();
+      db.client
+        .prepare(
+          'INSERT INTO provider_keys (id,provider_id,keyring_ref,created_at) VALUES (?,?,?,?)',
+        )
+        .run('openai', 'openai', 'openai', '2026-10-03T00:00:00.000Z');
+      db.client.pragma('user_version = 3');
+      db.close();
+      const migrated = await openDatabase(path);
+      try {
+        expect(new ProviderKeyEntryRepository(migrated.client).list('openai')).toEqual([
+          expect.objectContaining({
+            providerId: 'openai',
+            keyId: '1',
+            label: 'Key 1',
+            keyringRef: 'openai',
+            enabled: true,
+            status: 'ok',
+          }),
+        ]);
+      } finally {
+        migrated.close();
+      }
+    } finally {
+      // The in-memory connection was closed above before migration replay.
+    }
+  });
+  it('stores provider key ordering and health independently', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const repository = new ProviderKeyEntryRepository(db.client);
+      const now = new Date().toISOString();
+      for (const [keyId, position, status] of [
+        ['1', 0, 'rate_limited'],
+        ['2', 1, 'ok'],
+      ] as const) {
+        repository.put({
+          id: `groq:${keyId}`,
+          providerId: 'groq',
+          keyId,
+          label: `Account ${keyId}`,
+          position,
+          enabled: true,
+          status,
+          lastError: status === 'ok' ? null : 'HTTP 429',
+          cooldownUntil: status === 'ok' ? null : '2026-10-03T01:00:00.000Z',
+          keyringRef: `groq:${keyId}`,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      expect(repository.list('groq').map(({ keyId, status }) => [keyId, status])).toEqual([
+        ['1', 'rate_limited'],
+        ['2', 'ok'],
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+  it('aggregates successful usage per key for the current UTC day', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const repository = new ProviderKeyUsageDailyRepository(db.client);
+      const at = new Date('2026-10-03T12:00:00.000Z');
+      repository.record('openai', '1', at, 12, 4);
+      repository.record('openai', '1', at, 3, 2);
+      repository.record('openai', '2', at, 100, 20);
+      expect(repository.today('openai', '1', at)).toEqual({ requests: 2, tokens: 21 });
+      expect(repository.today('openai', '2', at)).toEqual({ requests: 1, tokens: 120 });
+      expect(repository.today('openai', '1', new Date('2026-10-04T00:00:00.000Z'))).toEqual({
+        requests: 0,
+        tokens: 0,
+      });
+    } finally {
+      db.close();
+    }
+  });
   it('migrates an empty database, round-trips shared aggregates and tolerates concurrent inserts', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ferry-db-'));
     dirs.push(dir);
