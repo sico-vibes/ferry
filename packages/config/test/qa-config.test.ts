@@ -213,4 +213,11 @@ describe('QA config: project config', () => {
       loadProjectConfig(dir, { FERRY_PERMISSION_MODE: 'totally-not-a-mode' }),
     ).resolves.toMatchObject({ permissionMode: 'ask' });
   });
+
+  it('does not wait for transport worker shutdown when closing a buffered logger', async () => {
+    const logsDir = await tempDir('ferry-qa-logger-close-');
+    const logger = createLogger({ logsDir });
+    logger.info('close-marker');
+    await logger.close();
+  }, 30_000);
 });

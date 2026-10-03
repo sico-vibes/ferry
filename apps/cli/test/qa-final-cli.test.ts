@@ -121,6 +121,10 @@ describe('QA final: settings routing and provider doctor hygiene', () => {
     expect(rows).toHaveProperty('sticky-sessions');
     expect(rows).toHaveProperty('avoid-training-providers');
     expect(rows['sticky-sessions']).toBe(true);
+    const human = runCli(['settings', 'routing', 'list', '--data-dir', dataDir]);
+    expect(human.status).toBe(0);
+    expect(human.stdout).toContain('sticky-sessions: true');
+    expect(human.stdout).toContain('provider-priorities: {}');
 
     const set = runCli([
       'settings',

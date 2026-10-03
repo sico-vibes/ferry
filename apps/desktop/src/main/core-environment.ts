@@ -8,6 +8,8 @@ const operatingSystemEnvironment = [
   'USERPROFILE',
   'APPDATA',
   'LOCALAPPDATA',
+  'FERRY_DATA_DIR',
+  'FERRY_KEYRING_SERVICE',
 ] as const;
 
 const isolatedE2eEnvironment = [

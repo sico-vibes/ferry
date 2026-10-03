@@ -271,7 +271,10 @@ function launchCore(): void {
   const coreEnvironment = buildCoreEnvironment(process.env, app.isPackaged);
   coreEnvironment.FERRY_REAL_DOMAINS ??= FERRY_DOMAINS.join(',');
   coreEnvironment.FERRY_CORE_DATA_DIR =
-    coreEnvironment.FERRY_HOME ?? join(app.getPath('userData'), 'engine');
+    coreEnvironment.FERRY_DATA_DIR ??
+    coreEnvironment.FERRY_HOME ??
+    join(app.getPath('userData'), 'engine');
+  delete coreEnvironment.FERRY_DATA_DIR;
   delete coreEnvironment.FERRY_HOME;
   coreEnvironment.FERRY_LOG_DIRECT = 'true';
   const child = utilityProcess.fork(coreEntry, [], {
@@ -323,20 +326,7 @@ function launchCore(): void {
       console.log(`FERRY_CORE_READY ${JSON.stringify(message)}`);
   });
   child.on('exit', (code) => {
-    if (process.env.FERRY_E2E_USER_DATA_DIR)
-      console.error(
-        `FERRY_CORE_EXIT ${JSON.stringify({ coreGeneration: generation, pid: child.pid, code })}`,
-      );
-    traceCore('utility-exit', { coreGeneration: generation, utilityPid: child.pid ?? null, code });
-    if (coreProcess !== child || shuttingDown) return;
-    coreProcess = null;
-    corePid = null;
-    coreReady = false;
-    coreListening = false;
-    restartCount += 1;
-    broadcastEngineRestarting();
-    const delay = Math.min(500 * 2 ** Math.min(restartCount - 1, 5), 15_000);
-    coreRestartTimer = setTimeout(launchCore, delay);
+    handleCoreExit(child, code);
   });
   child.on('spawn', () => {
     corePid = child.pid ?? null;
@@ -347,6 +337,33 @@ function launchCore(): void {
       );
     traceCore('utility-spawn', { coreGeneration: generation, utilityPid: corePid });
   });
+}
+
+function handleCoreExit(child: UtilityProcess, code: number | null): void {
+  if (process.env.FERRY_E2E_USER_DATA_DIR)
+    console.error(`FERRY_CORE_EXIT ${JSON.stringify({ coreGeneration, pid: child.pid, code })}`);
+  traceCore('utility-exit', { coreGeneration, utilityPid: child.pid ?? null, code });
+  if (coreProcess !== child || shuttingDown) return;
+  coreProcess = null;
+  corePid = null;
+  coreReady = false;
+  coreListening = false;
+  restartCount += 1;
+  broadcastEngineRestarting();
+  if (coreRestartTimer) clearTimeout(coreRestartTimer);
+  const delay = Math.min(500 * 2 ** Math.min(restartCount - 1, 5), 15_000);
+  coreRestartTimer = setTimeout(launchCore, delay);
+}
+
+function utilityProcessIsAlive(child: UtilityProcess): boolean {
+  const pid = child.pid;
+  if (typeof pid !== 'number') return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }
 
 async function createWindow(): Promise<void> {
@@ -528,9 +545,12 @@ ipcMain.on('ferry:connect-core', (event, rawToken: unknown) => {
 ipcMain.handle('ferry:engine-status', (event, ...args: unknown[]) => {
   if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
   EmptyIpcArgsSchema.parse(args);
-  const status = { status: coreReady ? 'connected' : 'restarting' };
+  if (coreReady && coreProcess && !utilityProcessIsAlive(coreProcess))
+    handleCoreExit(coreProcess, null);
+  const processId = coreProcess?.pid ?? null;
+  const status = { status: coreReady && processId !== null ? 'connected' : 'restarting' };
   return process.env.FERRY_E2E_USER_DATA_DIR
-    ? { ...status, pid: coreProcess?.pid ?? corePid }
+    ? { ...status, ...(processId !== null ? { pid: processId } : {}) }
     : status;
 });
 ipcMain.handle('ferry:process-metrics', (event, ...args: unknown[]) => {

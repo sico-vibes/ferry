@@ -61,13 +61,16 @@ app.onRequest('session/prompt', async ({ params, client, signal }) => {
       { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
     ],
   });
-  await client.notify('session/update', {
-    sessionId: params.sessionId,
-    update: {
-      sessionUpdate: 'agent_message_chunk',
-      content: { type: 'text', text: 'Fake agent finished.' },
-    },
-  });
+  const sendFinalUpdate = () =>
+    client.notify('session/update', {
+      sessionId: params.sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Fake agent finished.' },
+      },
+    });
+  if (process.env.FAKE_ACP_DELAY_FINAL_UPDATE === '1') setTimeout(() => void sendFinalUpdate(), 50);
+  else await sendFinalUpdate();
   return { stopReason: 'end_turn', usage: { inputTokens: 7, outputTokens: 4 } };
 });
 app.connect(ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)));

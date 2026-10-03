@@ -119,14 +119,19 @@ function hasRunningNsisUninstallerCopy() {
     "$matches = @(Get-Process | Where-Object { $_.Path -like '*\\~nsu*' -and $_.ProcessName -match '^(Un_|Au_)' }); if ($matches.Count -gt 0) { 'running' } else { 'idle' }";
   return powershell(script) === 'running';
 }
-async function install(installer, directory, profile, addToPath = false) {
+async function install(installer, directory, profile, addToPath = false, testOptions = false) {
   await access(installer);
   const env = {
     ...process.env,
     APPDATA: join(profile, 'Roaming'),
     LOCALAPPDATA: join(profile, 'Local'),
   };
-  const installArgs = ['/S', ...(addToPath ? ['/ADD_TO_PATH'] : []), `/D=${directory}`];
+  const installArgs = [
+    '/S',
+    ...(addToPath ? ['/ADD_TO_PATH'] : []),
+    ...(testOptions ? ['/TEST_OPTIONS'] : []),
+    `/D=${directory}`,
+  ];
   run(installer, installArgs, { env, timeout: 240_000 });
   await access(join(directory, 'Ferry.exe'));
   await access(join(directory, 'Uninstall Ferry.exe'));
@@ -366,11 +371,34 @@ try {
   const pathProfile = join(tempRoot, 'path-profile');
   originalUserPath = userPath();
   didSetUserPath = true;
-  await install(generatedUpgradeInstaller, pathInstall, pathProfile, true);
+  await install(generatedUpgradeInstaller, pathInstall, pathProfile, false, true);
   const addedPath = userPath();
   const cliPath = join(pathInstall, 'resources', 'cli');
   const addedEntries = matchingPathEntries(addedPath, cliPath);
-  assert.ok(addedEntries.length > 0, 'Installer did not add its CLI directory to user PATH');
+  assert.equal(
+    addedEntries.length,
+    1,
+    'Installer did not add exactly one CLI directory to user PATH',
+  );
+  const optionsState = powershell(
+    "if ((Get-ItemProperty 'HKCU:\\Software\\Ferry' -ErrorAction SilentlyContinue).ExplorerMenu -eq 1 -and (Test-Path 'HKCU:\\Software\\Classes\\Directory\\shell\\Ferry\\command')) { 'enabled' } else { 'disabled' }",
+  );
+  assert.equal(optionsState, 'enabled', 'Interactive Open in Ferry option was not applied');
+  record('Stored interactive options apply PATH and Open in Ferry', 'PASS');
+  run(generatedUpgradeInstaller, ['/S', `/D=${pathInstall}`], {
+    env: {
+      ...process.env,
+      APPDATA: join(pathProfile, 'Roaming'),
+      LOCALAPPDATA: join(pathProfile, 'Local'),
+    },
+    timeout: 240_000,
+  });
+  assert.equal(
+    matchingPathEntries(userPath(), cliPath).length,
+    1,
+    'Upgrade did not preserve the selected PATH option exactly once',
+  );
+  record('Silent upgrade preserves PATH and avoids a duplicate entry', 'PASS');
   const cliPathAliases = new Set([lexicalPath(cliPath), ...addedEntries.map(lexicalPath)]);
   const canVerifyRemoveData =
     isCi && !(await exists(realFerryData)) && !(await exists(realLegacyData));
@@ -409,7 +437,15 @@ try {
     'Uninstall left the selected Ferry CLI PATH entry behind',
   );
   assert.deepEqual(registryRowsForLocation(pathInstall), []);
-  record('Opt-in uninstall removes PATH entry and registry key', 'PASS');
+  const explorerMenuAfterUninstall = powershell(
+    "if (Test-Path 'HKCU:\\Software\\Classes\\Directory\\shell\\Ferry') { 'present' } else { 'absent' }",
+  );
+  assert.equal(
+    explorerMenuAfterUninstall,
+    'absent',
+    'Uninstall left the Open in Ferry menu behind',
+  );
+  record('Opt-in uninstall removes PATH entry and both integration registry keys', 'PASS');
 } catch (error) {
   record(
     'Install/upgrade/uninstall smoke',

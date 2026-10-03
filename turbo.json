@@ -2,7 +2,14 @@
   "$schema": "https://turbo.build/schema.json",
   "tasks": {
     "typecheck": { "dependsOn": ["^typecheck"] },
-    "lint": {},
+    "lint": {
+      "dependsOn": ["^typecheck"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/eslint.config.js",
+        "$TURBO_ROOT$/tsconfig.base.json"
+      ]
+    },
     "test": { "outputs": [] },
     "build": { "dependsOn": ["^build"], "outputs": ["dist/**", "out/**"] },
     "dev": { "cache": false, "persistent": true }

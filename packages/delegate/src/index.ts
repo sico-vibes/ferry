@@ -1243,6 +1243,7 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
   const args = request.args ?? [];
   assertSafeArguments(args);
   const invocation = commandInvocation(executable, args);
+  let connection: ClientConnection | undefined;
   const child = execa(invocation.file, invocation.args, {
     cwd: request.cwd,
     env: { ...process.env, ...request.env },
@@ -1252,6 +1253,16 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
     detached: process.platform !== 'win32',
     ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
   });
+  child.stdin.on('error', () => {
+    // A crashing or cancelled ACP child can close stdin between RPC frames.
+    // Close the client side so pending requests settle instead of leaking EPIPE.
+    connection?.close();
+  });
+  const stdoutEnded = new Promise<void>((resolveEnd, rejectEnd) => {
+    child.stdout.once('end', resolveEnd);
+    child.stdout.once('error', rejectEnd);
+  });
+  void stdoutEnded.catch(() => undefined);
   child.stderr.on('data', (chunk: Buffer) =>
     request.onProgress?.(`ACP: ${chunk.toString('utf8').trimEnd()}`),
   );
@@ -1266,7 +1277,6 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
   let outputTokens = 0;
   let costUsd: number | null = null;
   let threadId: string | null = null;
-  let connection: ClientConnection | undefined;
   let killInFlight: Promise<void> | undefined;
   const killTree = async () => {
     if (process.platform === 'win32') child.kill('SIGTERM');
@@ -1462,6 +1472,12 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
         outputTokens = usage.outputTokens ?? outputTokens;
         costUsd = usage.costUsd ?? costUsd;
       }
+      // ACP agents may flush a final session/update after resolving session/prompt.
+      // Keep stdout open for a bounded drain window before asking the child to close it.
+      await new Promise<void>((resolveDrain) => setTimeout(resolveDrain, 250));
+      child.stdin.end();
+      await stdoutEnded;
+      await activeConnection.closed;
       activeConnection.close();
       await killTree();
     })();
