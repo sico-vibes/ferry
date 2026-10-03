@@ -123,6 +123,22 @@ describe('external CLI adapters', () => {
     await rm(result.artifactsDir, { recursive: true, force: true });
   }, 30_000);
 
+  it('captures a final ACP update delivered after the prompt response', async () => {
+    const root = await tempRoot();
+    const result = await runAdapter('acp', {
+      prompt: 'Implement a change',
+      cwd: root,
+      executable: process.execPath,
+      args: [fakeAcpAgent],
+      permissionPolicy: 'scoped_write',
+      timeoutMs: 5_000,
+      env: { FAKE_ACP_DELAY_FINAL_UPDATE: '1' },
+    });
+
+    expect(result.finalMessage).toBe('Fake agent finished.');
+    await rm(result.artifactsDir, { recursive: true, force: true });
+  }, 30_000);
+
   it('denies ACP filesystem escapes and surfaces authentication methods without handling credentials', async () => {
     const root = await tempRoot();
     const methods: unknown[] = [];

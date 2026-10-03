@@ -1252,6 +1252,10 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
     detached: process.platform !== 'win32',
     ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
   });
+  const stdoutEnded = new Promise<void>((resolveEnd, rejectEnd) => {
+    child.stdout.once('end', resolveEnd);
+    child.stdout.once('error', rejectEnd);
+  });
   child.stderr.on('data', (chunk: Buffer) =>
     request.onProgress?.(`ACP: ${chunk.toString('utf8').trimEnd()}`),
   );
@@ -1462,6 +1466,9 @@ async function runAcpAdapter(request: AdapterRequest): Promise<AdapterResult> {
         outputTokens = usage.outputTokens ?? outputTokens;
         costUsd = usage.costUsd ?? costUsd;
       }
+      child.stdin.end();
+      await stdoutEnded;
+      await activeConnection.closed;
       activeConnection.close();
       await killTree();
     })();
