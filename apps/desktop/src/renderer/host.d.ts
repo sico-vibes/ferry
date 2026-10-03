@@ -5,6 +5,7 @@ declare global {
       platform: string;
       displayName: string;
       versions: { app: string; electron: string };
+      getAppInfo(): Promise<{ version: string; dataDir: string }>;
       channel: string;
       commit: string;
       e2eDiagnosticsEnabled?: boolean;

@@ -147,7 +147,6 @@ export function DialogContent({
       <DialogPrimitive.Content
         className={cn(
           'ferry-ui fixed left-1/2 top-1/2 z-50 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-card border border-border bg-card p-6 text-card-foreground shadow-[var(--shadow-popover)] transition duration-200 ease-out data-[state=open]:animate-[ferry-ui-dialog-in_200ms_ease-out_both] data-[state=closed]:animate-[ferry-ui-fade-out_200ms_ease-in_both] motion-reduce:animate-none motion-reduce:transition-none',
-          focus,
           className,
         )}
         {...props}

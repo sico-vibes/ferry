@@ -2120,7 +2120,17 @@ body {
   align-items: center;
   gap: 12px;
 }
+.v2-header-title {
+  flex: 1 1 40%;
+  max-width: 60%;
+}
+.v2-header-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
 .v2-title-button {
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   border: 0;
   background: transparent;
@@ -2284,6 +2294,14 @@ body {
 }
 .v2-about-dialog {
   max-width: 480px;
+}
+.v2-about-dialog {
+  outline: none;
+}
+.v2-about-close {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
 }
 .v2-about-details > div {
   display: grid;
@@ -2602,10 +2620,6 @@ body {
   opacity: 0;
   pointer-events: none;
   transition: opacity 150ms ease-out;
-}
-.transcript-message:is(:hover, :focus-within) .v2-message-actions {
-  opacity: 1;
-  pointer-events: auto;
 }
 .v2-message-actions button {
   border: 0;

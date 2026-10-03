@@ -66,6 +66,105 @@ describe('AgentTimeline', () => {
     assert.ok(screen.getByText('28 chars · ~7 tokens'));
   });
 
+  it('hides tool rows, thinking, and usage until the activity disclosure is expanded', () => {
+    const events: AgentEvent[] = [
+      {
+        id: 'thinking-hidden',
+        type: 'thinking',
+        timestamp: '2026-09-30T10:00:00.000Z',
+        content: 'Private reasoning details',
+      },
+      call('one', 'read_file'),
+      call('two', 'read_file'),
+      call('three', 'read_file'),
+      {
+        id: 'usage-hidden',
+        type: 'usage',
+        timestamp: '2026-09-30T10:00:01.000Z',
+        inputTokens: 7,
+        outputTokens: 3,
+      },
+    ];
+    render(<AgentTimeline events={events} />);
+    expect(screen.queryByText(/read file calls/)).toBeNull();
+    expect(screen.queryByText(/Private reasoning details/)).toBeNull();
+    expect(screen.queryByText(/Step usage/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Worked for/ }));
+    expect(screen.getByText(/3 read file calls/)).toBeTruthy();
+    fireEvent.click(screen.getByText(/3 read file calls/));
+    expect(screen.getAllByText('read file')).toHaveLength(3);
+    expect(screen.getByText('Private reasoning details')).toBeTruthy();
+    expect(screen.getByText(/Step usage/)).toBeTruthy();
+  });
+
+  it('shows the active command name in the collapsed running header', () => {
+    render(
+      <AgentTimeline
+        events={[
+          {
+            id: 'running-status',
+            type: 'status',
+            timestamp: '2026-09-30T10:00:00.000Z',
+            status: 'running',
+          },
+          {
+            id: 'active-command',
+            type: 'tool_use',
+            timestamp: '2026-09-30T10:00:01.000Z',
+            callId: 'command-1',
+            tool: 'run_command',
+            input: { command: 'pnpm test --filter ui' },
+          },
+        ]}
+        startedAt="2026-09-30T10:00:00.000Z"
+      />,
+    );
+    expect(screen.getByRole('button', { name: /Working.*command: pnpm/ })).toBeTruthy();
+    expect(screen.queryByText('pnpm test --filter ui')).toBeNull();
+  });
+  it('shows the running tool title ahead of the plan step before streamed text arrives', () => {
+    render(
+      <AgentTimeline
+        events={[
+          {
+            id: 'stale-completed-status',
+            type: 'status',
+            timestamp: '2026-09-30T10:00:00.000Z',
+            status: 'completed',
+          },
+          call('active-tool', 'edit_file'),
+        ]}
+        startedAt="2026-09-30T10:00:00.000Z"
+        isRunning
+        runningToolTitle="Bound retry delay and add jitter"
+        currentStep="Trace the retry policy"
+      />,
+    );
+    expect(
+      screen.getByRole('button', {
+        name: /Working\.\.\. (?:\d+s|>1h) - Bound retry delay and add jitter/,
+      }),
+    ).toBeTruthy();
+  });
+  it('uses the active plan step when no tool call is running', () => {
+    render(
+      <AgentTimeline
+        events={[
+          {
+            id: 'running-status',
+            type: 'status',
+            timestamp: '2026-09-30T10:00:00.000Z',
+            status: 'running',
+          },
+        ]}
+        startedAt="2026-09-30T10:00:00.000Z"
+        currentStep="Trace the retry policy"
+      />,
+    );
+    expect(
+      screen.getByRole('button', { name: /Working\.\.\. (?:\d+s|>1h) - Trace the retry policy/ }),
+    ).toBeTruthy();
+  });
   it('keeps the reasoning-unavailable note inside the collapsed activity', () => {
     render(
       <AgentTimeline

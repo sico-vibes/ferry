@@ -126,7 +126,7 @@ describe('V2Sidebar new chat', () => {
     useUI.getState().setSelectedWorkspace(workspace.id);
     const openHelp = vi.fn().mockResolvedValue(undefined);
     window.ferryHost = {
-      versions: { app: '0.9.0-beta.1', electron: '44.0.0' },
+      versions: { app: '0.9.0', electron: '44.0.0' },
       channel: 'beta',
       openHelp,
       revealDataFolder: vi.fn().mockResolvedValue(undefined),
@@ -148,10 +148,7 @@ describe('V2Sidebar new chat', () => {
     queryClient.setQueryData(keys.profiles, await client.profiles.list());
     queryClient.setQueryData(keys.capacity, await client.quota.capacity());
     const systemInfo = await client.system.info();
-    queryClient.setQueryData(keys.system, {
-      ...systemInfo,
-      dataDir: 'test-data-folder',
-    });
+    queryClient.setQueryData(keys.system, systemInfo);
     render(
       <FerryProvider client={client}>
         <QueryClientProvider client={queryClient}>
@@ -166,7 +163,7 @@ describe('V2Sidebar new chat', () => {
     expect(dialog.textContent).toContain(window.ferryHost.versions.app);
     expect(dialog.textContent).toContain('beta');
     expect(dialog.textContent).toContain(systemInfo.version);
-    expect(dialog.textContent).toContain('Unavailable');
+    expect(dialog.textContent).toContain(systemInfo.dataDir);
     expect(dialog.textContent).toContain('MIT');
     await userEvent.keyboard('{Escape}');
     await userEvent.click(await screen.findByRole('button', { name: /^User menu$/ }));

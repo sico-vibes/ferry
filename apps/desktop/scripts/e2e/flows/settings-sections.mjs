@@ -74,7 +74,10 @@ export async function run(page, ctx) {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'windowControlsOverlay', {
       configurable: true,
-      value: { getTitlebarAreaRect: () => ({ x: 0, y: 0, width: 1300, height: 56 }) },
+      value: {
+        visible: true,
+        getTitlebarAreaRect: () => ({ x: 0, y: 0, width: 1300, height: 56 }),
+      },
     });
   });
   await page.goto(new URL('/s/session_3', ctx.url).toString());

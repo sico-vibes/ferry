@@ -10,7 +10,7 @@ export function createSystemDomain(_store: MockStore, deps: MockDeps): FerryClie
         version: '0.9.0',
         mock: true,
         platform: navigator.userAgent.includes('Windows') ? 'win32' : 'web',
-        dataDir: null,
+        dataDir: 'C:\\Users\\Jordan\\AppData\\Roaming\\Ferry',
         realDomains: [],
       };
     },

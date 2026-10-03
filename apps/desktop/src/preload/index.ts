@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld('ferryHost', {
     app: releaseVersion,
     electron: process.versions.electron,
   },
+  getAppInfo: (): Promise<{ version: string; dataDir: string }> =>
+    ipcRenderer.invoke('ferry:app-info') as Promise<{ version: string; dataDir: string }>,
   channel: releaseChannelForVersion(releaseVersion).displayChannel,
   commit: process.env.FERRY_COMMIT ?? 'unknown',
   e2eDiagnosticsEnabled,

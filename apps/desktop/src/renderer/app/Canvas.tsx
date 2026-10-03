@@ -667,16 +667,25 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   const cache = useQueryClient();
   const navigate = useNavigate();
   const setRightTab = useUI((state) => state.setRightTab);
+  const openReview = (runId: RunId) => {
+    void navigate({
+      to: '/s/$sessionId/review/$runId',
+      params: { sessionId, runId },
+    });
+  };
   const streamingText = useStreamedText(streamPartId);
   const streamingPartIsInMessage =
     streamPartId !== null && message.parts.some((part) => part.id === streamPartId);
-  const timelineHasTools = timelineEvents.some((event) => event.type === 'tool_use');
   const timelineHasThinking = timelineEvents.some((event) => event.type === 'thinking');
-  const timelineHasText = timelineEvents.some((event) => event.type === 'text');
-  const messageText = message.parts
-    .filter((part) => part.type === 'text')
-    .map((part) => part.text)
+  const answerText = timelineEvents
+    .flatMap((event) => (event.type === 'text' ? [event.content] : []))
     .join('');
+  const hasMessageAnswer = message.parts.some((part) => part.type === 'text');
+  const messageText =
+    message.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('') || answerText;
   const copyMessage = () => void navigator.clipboard.writeText(messageText);
   const retryMessage = async () => {
     try {
@@ -725,7 +734,25 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
             events={timelineEvents}
             modelName={modelName}
             startedAt={message.createdAt}
-            activity={message.parts.flatMap((part) => {
+            isRunning={isRunning}
+            runningToolTitle={message.parts.reduce<string | null>(
+              (title, part) =>
+                part.type === 'tool_call' && part.status === 'running' ? part.title : title,
+              null,
+            )}
+            currentStep={planSteps.find((step) => step.status === 'active')?.label ?? null}
+            activity={groupParts(message.parts).flatMap((part) => {
+              if (
+                part.type === 'text' ||
+                (part.type === 'approval_request' && part.state === 'pending') ||
+                part.type === 'delegation' ||
+                part.type === 'checkpoint' ||
+                part.type === 'tool_group' ||
+                part.type === 'tool_call' ||
+                part.type === 'error'
+              )
+                return [];
+              if (timelineHasThinking && part.type === 'reasoning') return [];
               if (part.type === 'handoff_marker') {
                 const from = shortModel(part.from, []);
                 const to = shortModel(part.to, []);
@@ -742,7 +769,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
                   />,
                 ];
               }
-              if (part.type === 'approval_request' && part.state !== 'pending') {
+              if (part.type === 'approval_request') {
                 const label = `${part.state === 'denied' ? 'Denied' : 'Allowed'}: ${part.detail}`;
                 return [
                   <p className="text-meta text-text-3" key={part.id}>
@@ -750,7 +777,16 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
                   </p>,
                 ];
               }
-              return [];
+
+              return [
+                <ReasoningPart
+                  key={part.id}
+                  text={part.text}
+                  steps={planSteps}
+                  running={isRunning}
+                  startedAt={message.createdAt}
+                />,
+              ];
             })}
             {...(timelineEvents.length
               ? {
@@ -760,37 +796,29 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
                 }
               : {})}
           />
-          {groupParts(message.parts).map((part) => {
+          {groupParts(message.parts).flatMap((part) => {
             if (
-              part.type === 'handoff_marker' ||
-              (part.type === 'approval_request' && part.state !== 'pending')
+              (part.type !== 'approval_request' || part.state !== 'pending') &&
+              part.type !== 'delegation' &&
+              part.type !== 'checkpoint' &&
+              part.type !== 'tool_call' &&
+              part.type !== 'error' &&
+              part.type !== 'tool_group'
             )
-              return null;
-            if (
-              (timelineHasTools && (part.type === 'tool_group' || part.type === 'tool_call')) ||
-              (timelineHasThinking && part.type === 'reasoning') ||
-              (timelineHasText && part.type === 'text')
-            )
-              return null;
-            return part.type === 'tool_group' ? (
-              <ToolStepGroup
-                key={part.parts[0]?.id ?? 'tool-group'}
-                parts={part.parts}
-                onShowFull={onFullOutput}
-                onOpenDiff={() => {
-                  setRightTab('changes');
-                }}
-              />
-            ) : part.type === 'reasoning' ? (
-              <ReasoningPart
-                key={part.id}
-                text={part.text}
-                steps={planSteps}
-                running={isRunning}
-                startedAt={message.createdAt}
-              />
-            ) : (
-              <div className={part.type === 'text' ? 'message-answer' : undefined} key={part.id}>
+              return [];
+            if (part.type === 'tool_group')
+              return [
+                <ToolStepGroup
+                  key={part.parts[0]?.id ?? 'tool-group'}
+                  parts={part.parts}
+                  onShowFull={onFullOutput}
+                  onOpenDiff={() => {
+                    setRightTab('changes');
+                  }}
+                />,
+              ];
+            return [
+              <div key={part.id}>
                 <PartView
                   part={part}
                   sessionId={sessionId}
@@ -800,18 +828,38 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
                   onDiff={() => {
                     setRightTab('changes');
                   }}
-                  onReview={(runId) =>
-                    void navigate({
-                      to: '/s/$sessionId/review/$runId',
-                      params: { sessionId, runId },
-                    })
-                  }
+                  onReview={openReview}
                   onCancel={(id) => void client.delegation.cancel(id)}
                   onPickAnother={onPickModel}
                 />
-              </div>
-            );
+              </div>,
+            ];
           })}
+          {groupParts(message.parts).flatMap((part) => {
+            if (part.type !== 'text') return [];
+            return [
+              <div className="message-answer" key={part.id}>
+                <PartView
+                  part={part}
+                  sessionId={sessionId}
+                  canRetry={canRetry}
+                  isStreaming={part.id === streamPartId}
+                  onFull={onFullOutput}
+                  onDiff={() => {
+                    setRightTab('changes');
+                  }}
+                  onReview={openReview}
+                  onCancel={(id) => void client.delegation.cancel(id)}
+                  onPickAnother={onPickModel}
+                />
+              </div>,
+            ];
+          })}
+          {!hasMessageAnswer && streamingText === null && answerText && (
+            <div className="message-answer">
+              <MarkdownPart content={answerText} />
+            </div>
+          )}
           {streamingText !== null && !streamingPartIsInMessage && (
             <div className="message-answer whitespace-pre-wrap break-words">
               {streamingText}
@@ -1391,7 +1439,7 @@ export function SessionCanvas() {
                 sessionId={sessionId}
                 canRetry={data?.session.status === 'error'}
                 streamPartId={streamPartId}
-                isRunning={running}
+                isRunning={running && message.id === streamingMessageId}
                 onFullOutput={setFullOutput}
                 onPickModel={openModelPicker}
                 measureElement={virtualizer.measureElement}

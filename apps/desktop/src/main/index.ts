@@ -444,6 +444,12 @@ ipcMain.handle('ferry:open-help', (event, ...args: unknown[]) => {
   return openExternalSafely('https://github.com/sico-vibes/ferry#readme');
 });
 
+ipcMain.handle('ferry:app-info', (event, ...args: unknown[]) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  EmptyIpcArgsSchema.parse(args);
+  return { version: app.getVersion(), dataDir: app.getPath('userData') };
+});
+
 ipcMain.handle('ferry:reveal-data-folder', (event, rawPath: unknown) => {
   if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
   const path = OpenFolderResultSchema.parse(rawPath);

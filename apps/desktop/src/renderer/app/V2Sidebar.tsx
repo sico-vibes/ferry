@@ -17,6 +17,7 @@ import {
   Boxes,
   Trash2,
   Pencil,
+  X,
 } from 'lucide-react';
 import { FerryMark, UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
@@ -43,6 +44,7 @@ const {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DialogClose,
   Progress,
   Tooltip,
   TooltipContent,
@@ -71,6 +73,14 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
     queryFn: () => client.system.info(),
     enabled: aboutOpen,
   });
+  const { data: appInfo } = useQuery({
+    queryKey: ['host-app-info'],
+    queryFn: () => window.ferryHost?.getAppInfo() ?? Promise.resolve(null),
+    enabled: aboutOpen && typeof window.ferryHost?.getAppInfo === 'function',
+  });
+  const appVersion =
+    appInfo?.version ?? (systemInfo?.mock ? systemInfo.version : window.ferryHost?.versions.app);
+  const dataFolder = appInfo?.dataDir ?? (systemInfo?.mock ? systemInfo.dataDir : null);
   const orderedSessions = useMemo(() => {
     const pinned = sessions
       .filter((session) => session.pinned)
@@ -344,6 +354,9 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
         </div>
         <UiV2.Dialog open={aboutOpen} onOpenChange={setAboutOpen}>
           <UiV2.DialogContent className="v2-about-dialog">
+            <DialogClose aria-label="Close About dialog" autoFocus className="v2-about-close">
+              <X aria-hidden="true" />
+            </DialogClose>
             <UiV2.DialogHeader>
               <UiV2.DialogTitle>About Ferry</UiV2.DialogTitle>
               <UiV2.DialogDescription>
@@ -353,7 +366,7 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
             <dl className="v2-about-details">
               <div>
                 <dt>App version</dt>
-                <dd>{window.ferryHost?.versions.app ?? 'Unavailable'}</dd>
+                <dd>{appVersion ?? 'Unavailable'}</dd>
               </div>
               <div>
                 <dt>Channel</dt>
@@ -363,29 +376,31 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
                 <dt>Engine version</dt>
                 <dd>{systemInfo?.version ?? 'Unavailable'}</dd>
               </div>
-              <div className="v2-about-data-folder">
-                <dt>Data folder</dt>
-                <dd>{systemInfo?.dataDir ?? 'Unavailable'}</dd>
-                <UiV2.Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={!systemInfo?.dataDir || !window.ferryHost}
-                  onClick={() => {
-                    if (systemInfo?.dataDir)
-                      void window.ferryHost
-                        ?.revealDataFolder(systemInfo.dataDir)
-                        .catch((error: unknown) => {
-                          pushToast({
-                            kind: 'error',
-                            title: 'Data folder could not be revealed',
-                            body: error instanceof Error ? error.message : String(error),
+              {dataFolder && (
+                <div className="v2-about-data-folder">
+                  <dt>Data folder</dt>
+                  <dd>{dataFolder}</dd>
+                  {window.ferryHost && (
+                    <UiV2.Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        void window.ferryHost
+                          ?.revealDataFolder(dataFolder)
+                          .catch((error: unknown) => {
+                            pushToast({
+                              kind: 'error',
+                              title: 'Data folder could not be revealed',
+                              body: error instanceof Error ? error.message : String(error),
+                            });
                           });
-                        });
-                  }}
-                >
-                  Reveal
-                </UiV2.Button>
-              </div>
+                      }}
+                    >
+                      Reveal
+                    </UiV2.Button>
+                  )}
+                </div>
+              )}
               <div>
                 <dt>License</dt>
                 <dd>MIT</dd>

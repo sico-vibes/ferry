@@ -20,6 +20,7 @@ import type { UpdateSnapshot } from '../../main/update-state.js';
 import { initializeKeybindings } from '../state/keybindings';
 import { useKeybindings } from '../state/keybindings';
 import { matchesKeybinding } from '@ferry/config/keybindings';
+import { getTitlebarOverlayRightReserve } from './titlebarOverlay';
 
 export function AppFrame({ children }: { children: React.ReactNode }) {
   const client = useFerryClient();
@@ -33,6 +34,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     const overlay = (
       navigator as Navigator & {
         windowControlsOverlay?: {
+          visible: boolean;
           getTitlebarAreaRect: () => DOMRectReadOnly;
           addEventListener?: (type: 'geometrychange', listener: () => void) => void;
           removeEventListener?: (type: 'geometrychange', listener: () => void) => void;
@@ -42,9 +44,11 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     const syncTitlebarReserve = () => {
       if (overlay) {
         const area = overlay.getTitlebarAreaRect();
-        setTitlebarReserve(Math.max(0, window.innerWidth - (area.x + area.width)));
+        setTitlebarReserve(
+          getTitlebarOverlayRightReserve(overlay.visible, area, window.innerWidth),
+        );
       } else {
-        setTitlebarReserve(window.ferryHost?.platform === 'win32' ? 140 : 0);
+        setTitlebarReserve(0);
       }
     };
     syncTitlebarReserve();

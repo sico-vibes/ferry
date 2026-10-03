@@ -205,19 +205,30 @@ export function AgentTimeline({
   modelName,
   activity,
   startedAt,
+  isRunning,
+  runningToolTitle,
+  currentStep: currentStepOverride,
 }: {
   events: readonly AgentEvent[];
   onShowFull?: (handle: string) => void;
   modelName?: string;
   activity?: ReactNode;
   startedAt?: string;
+  isRunning?: boolean;
+  runningToolTitle?: string | null;
+  currentStep?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const lanes = buildTimelineLanes(events);
   const lastStatus = [...events].reverse().find((event) => event.type === 'status');
-  const running = lastStatus?.type === 'status' && lastStatus.status === 'running';
-  const activeTool = [...events].reverse().find((event) => event.type === 'tool_use');
+  const running = isRunning ?? (lastStatus?.type === 'status' && lastStatus.status === 'running');
+  const completedCalls = new Set(
+    events.filter((event) => event.type === 'tool_result').map((event) => event.callId),
+  );
+  const activeTool = [...events]
+    .reverse()
+    .find((event) => event.type === 'tool_use' && !completedCalls.has(event.callId));
   useEffect(() => {
     if (!running) return;
     const interval = window.setInterval(() => {
@@ -234,22 +245,49 @@ export function AgentTimeline({
   const durationMs =
     events.reduce((duration, event) => Math.max(duration, event.durationMs ?? 0), 0) ||
     Math.max(0, lastTime - firstTime);
-  const startedAtMs = startedAt ? Date.parse(startedAt) : firstTime;
+  const lastCompletedRunIndex = events.reduce(
+    (lastIndex, event, index) =>
+      event.type === 'status' && event.status !== 'running' ? index : lastIndex,
+    -1,
+  );
+  const currentRunStart = events
+    .slice(lastCompletedRunIndex + 1)
+    .find((event) => Number.isFinite(Date.parse(event.timestamp)));
+  const startedAtMs = currentRunStart
+    ? Date.parse(currentRunStart.timestamp)
+    : startedAt
+      ? Date.parse(startedAt)
+      : firstTime;
   const elapsedMs = running ? Math.max(0, now - startedAtMs) : durationMs;
-  const elapsed = `${String(Math.max(1, Math.round(elapsedMs / 1000)))}s`;
-  const currentStep =
+  const elapsed =
+    running && elapsedMs >= 3_600_000
+      ? '>1h'
+      : `${String(Math.max(1, Math.round(elapsedMs / 1000)))}s`;
+  const activeToolStep =
     activeTool?.type === 'tool_use' &&
     ['bash', 'run_command', 'shell', 'terminal'].includes(activeTool.tool.toLowerCase())
-      ? 'command'
+      ? (() => {
+          const input = activeTool.input;
+          const command =
+            input && typeof input === 'object' && 'command' in input ? String(input.command) : '';
+          const shortName = command.trim().split(/\s+/).find(Boolean) ?? 'command';
+          return `command: ${shortName}`;
+        })()
       : activeTool?.type === 'tool_use'
         ? prettyTool(activeTool.tool)
         : null;
+  const currentStep = activeTool ? (runningToolTitle ?? activeToolStep) : currentStepOverride;
   const unavailable = lanes.model.some(
     (event) => event.type === 'status' && event.reasoningAvailable === false,
   );
   return (
     <section aria-label="Agent activity" className="space-y-2">
       <button
+        aria-label={
+          running
+            ? `Working... ${elapsed}${currentStep ? ` - ${currentStep}` : ''}`
+            : `Worked for ${elapsed}`
+        }
         aria-expanded={open}
         className={cn(
           'flex w-full items-center gap-2 text-left text-label text-text-3',
@@ -272,7 +310,7 @@ export function AgentTimeline({
           <ChevronRight aria-hidden="true" size={14} />
         )}
         <span>{running ? `Working... ${elapsed}` : `Worked for ${elapsed}`}</span>
-        {running && currentStep && <span className="text-text-2">Running {currentStep}</span>}
+        {running && currentStep && <span className="text-text-2"> - {currentStep}</span>}
         {modelName && <span className="ml-auto text-meta text-text-3">{modelName}</span>}
       </button>
       {open && (

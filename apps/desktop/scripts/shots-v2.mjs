@@ -169,7 +169,7 @@ async function captureState(browser, state, theme, viewport) {
       if (state === 'session-approval-pending') {
         await page.getByRole('button', { name: 'Allow once', exact: true }).waitFor();
       } else {
-        const activity = page.getByRole('button', { name: /Worked for/ });
+        const activity = page.getByRole('button', { name: /Working|Worked for/ });
         await activity.waitFor();
         if (state === 'session-activity-expanded') await activity.click();
       }
@@ -226,11 +226,14 @@ async function captureState(browser, state, theme, viewport) {
       await page.getByRole('button', { name: 'Send', exact: true }).click();
       await page.getByRole('button', { name: 'Allow once', exact: true }).waitFor();
       await page.getByRole('button', { name: 'Allow once', exact: true }).click();
+      const activity = page.getByRole('button', { name: /Working|Worked for/ }).last();
+      await activity.waitFor();
+      if ((await activity.getAttribute('aria-expanded')) === 'false') await activity.click();
       await page
         .getByRole('button', { name: 'Review diff', exact: true })
         .waitFor({ timeout: 30_000 });
       await page.getByRole('button', { name: 'Review diff', exact: true }).click();
-      await page.getByRole('region', { name: 'Delegation review' }).waitFor();
+      await page.locator('.review-canvas').waitFor();
       await page.locator('.monaco-diff-editor').waitFor({ timeout: 30_000 });
     } else {
       const speed = state === 'session-streaming' ? 8 : 1;
@@ -241,6 +244,9 @@ async function captureState(browser, state, theme, viewport) {
       await page.getByRole('button', { name: 'Send' }).click();
       await page.waitForURL(/\/s\//);
       if (state === 'session-streaming') {
+        const activity = page.getByRole('button', { name: /Working|Worked for/ }).last();
+        await activity.waitFor();
+        if ((await activity.getAttribute('aria-expanded')) === 'false') await activity.click();
         await page.getByText('Bound retry delay and add jitter', { exact: true }).waitFor();
         const thinking = page.getByRole('button', { name: 'Thinking' });
         if (await thinking.count()) await thinking.click();

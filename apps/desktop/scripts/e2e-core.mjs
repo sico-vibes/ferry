@@ -35,6 +35,29 @@ try {
     const chatRow = page.locator('.v2-chat-open[data-session-id]').first();
     const title = await chatRow.innerText();
     await chatRow.click();
+    const chatHeader = page.locator('.v2-chat-header');
+    const headerLayout = await chatHeader.evaluate((header) => {
+      const title = header.querySelector('.v2-header-title');
+      const actions = header.querySelector('.v2-header-actions');
+      if (!title || !actions) throw new Error('Expected chat header title and actions');
+      const titleRect = title.getBoundingClientRect();
+      const actionsRect = actions.getBoundingClientRect();
+      const headerRect = header.getBoundingClientRect();
+      const overlay = navigator.windowControlsOverlay?.getTitlebarAreaRect();
+      const overlayRight = overlay ? Math.max(0, innerWidth - (overlay.x + overlay.width)) : 0;
+      return {
+        titleWidth: titleRect.width,
+        actionsWidth: actionsRect.width,
+        rightGap: headerRect.right - actionsRect.right,
+        allowedRightGap: 24 + overlayRight,
+      };
+    });
+    if (headerLayout.titleWidth <= headerLayout.actionsWidth)
+      throw new Error(`Expected title wider than header actions: ${JSON.stringify(headerLayout)}`);
+    if (headerLayout.rightGap > headerLayout.allowedRightGap + 1)
+      throw new Error(
+        `Expected header actions within right padding: ${JSON.stringify(headerLayout)}`,
+      );
     await expect(page.locator('.v2-chat-open[aria-current="page"][data-session-id]')).toHaveCount(
       1,
     );
