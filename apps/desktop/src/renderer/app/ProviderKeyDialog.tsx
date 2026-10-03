@@ -1,20 +1,24 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Provider } from '@ferry/shared';
 import { X } from 'lucide-react';
 import { UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
+import { useSettings } from '../data/queries';
 
 export function ProviderKeyDialog({
   provider,
   open,
   onOpenChange,
+  showRoutingControls = false,
 }: {
   provider: Provider | null;
+  showRoutingControls?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
   const client = useFerryClient();
+  const { data: settings } = useSettings();
   const cache = useQueryClient();
   const realProviders = window.ferryHybrid?.getRealDomains().includes('providers') ?? false;
   const [value, setValue] = useState('');
@@ -22,6 +26,14 @@ export function ProviderKeyDialog({
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [priority, setPriority] = useState('0');
+  const [weight, setWeight] = useState('1');
+  useEffect(() => {
+    setPriority(
+      String((provider ? settings?.routing.providerPriorities[provider.id] : undefined) ?? 0),
+    );
+    setWeight(String((provider ? settings?.routing.providerWeights[provider.id] : undefined) ?? 1));
+  }, [provider?.id, settings?.routing.providerPriorities, settings?.routing.providerWeights]);
   const {
     Button,
     Dialog,
@@ -32,6 +44,35 @@ export function ProviderKeyDialog({
     DialogTitle,
     Input,
   } = UiV2;
+  const saveRouting = async () => {
+    if (!provider || !settings) return;
+    const priorityValue = Number(priority);
+    const weightValue = Number(weight);
+    if (!Number.isInteger(priorityValue) || priorityValue < -100 || priorityValue > 100) {
+      setMessage('Priority must be a whole number from -100 to 100.');
+      return;
+    }
+    if (!Number.isFinite(weightValue) || weightValue < 0.01 || weightValue > 1000) {
+      setMessage('Weight must be between 0.01 and 1000.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const providerPriorities = { ...settings.routing.providerPriorities };
+      const providerWeights = { ...settings.routing.providerWeights };
+      providerPriorities[provider.id] = priorityValue;
+      providerWeights[provider.id] = weightValue;
+      await client.settings.update({
+        routing: { ...settings.routing, providerPriorities, providerWeights },
+      });
+      await cache.invalidateQueries({ queryKey: ['settings'] });
+      setMessage('Routing preference saved.');
+    } catch {
+      setMessage('Routing preference could not be saved.');
+    } finally {
+      setBusy(false);
+    }
+  };
   const save = async () => {
     if (provider?.id === 'cloudflare-workers-ai' && !accountId.trim()) {
       setMessage('Enter the Cloudflare account ID.');
@@ -119,11 +160,13 @@ export function ProviderKeyDialog({
         <DialogHeader>
           <div className="flex items-start gap-3">
             <div className="mr-auto grid gap-2">
-              <DialogTitle>Manage {provider?.name ?? 'provider'} key</DialogTitle>
+              <DialogTitle>Manage {provider?.name ?? 'provider'}</DialogTitle>
               <DialogDescription id="provider-key-description">
-                {realProviders
-                  ? 'Keys are stored securely in your operating system keyring.'
-                  : 'Keys are stored in this local demo client.'}
+                {showRoutingControls
+                  ? 'Set the provider routing tier and relative share, then manage its key.'
+                  : realProviders
+                    ? 'Keys are stored securely in your operating system keyring.'
+                    : 'Keys are stored in this local demo client.'}
               </DialogDescription>
             </div>
             <DialogClose aria-label="Close dialog">
@@ -132,6 +175,50 @@ export function ProviderKeyDialog({
           </div>
         </DialogHeader>
         <div className="grid gap-4">
+          {showRoutingControls && (
+            <section className="grid gap-3" aria-label="Provider routing">
+              <h3 className="text-ui-label">Routing</h3>
+              <p className="text-meta text-text-3">
+                Higher priority is tried first. Weight changes the share among near-equal providers
+                at that priority.
+              </p>
+              <label className="grid gap-2 text-ui-label">
+                Priority
+                <Input
+                  aria-label="Priority"
+                  type="number"
+                  min={-100}
+                  max={100}
+                  step={1}
+                  value={priority}
+                  onChange={(event) => {
+                    setPriority(event.target.value);
+                  }}
+                />
+              </label>
+              <label className="grid gap-2 text-ui-label">
+                Weight
+                <Input
+                  aria-label="Weight"
+                  type="number"
+                  min={0.01}
+                  max={1000}
+                  step={0.1}
+                  value={weight}
+                  onChange={(event) => {
+                    setWeight(event.target.value);
+                  }}
+                />
+              </label>
+              <Button
+                disabled={busy || !settings}
+                onClick={() => void saveRouting()}
+                variant="secondary"
+              >
+                Save routing
+              </Button>
+            </section>
+          )}
           {provider?.signupUrl && (
             <a
               className="text-label text-primary"

@@ -14,6 +14,8 @@ const RoutingSettingsFieldsSchema = z.object({
   stickyTtlMinutes: z.number().int().min(1).max(1440),
   rampStart: z.number().min(0.01).max(1),
   rampFloor: z.number().min(0).max(1),
+  providerPriorities: z.record(ProviderIdSchema, z.number().int().min(-100).max(100)),
+  providerWeights: z.record(ProviderIdSchema, z.number().min(0.01).max(1000)),
 });
 export const RoutingSettingsSchema = RoutingSettingsFieldsSchema.extend({
   stickySessions: z.boolean().default(true),
@@ -30,6 +32,8 @@ export const RoutingSettingsSchema = RoutingSettingsFieldsSchema.extend({
   stickyTtlMinutes: z.number().int().min(1).max(1440).default(30),
   rampStart: z.number().min(0.01).max(1).default(0.2),
   rampFloor: z.number().min(0).max(1).default(0.1),
+  providerPriorities: z.record(ProviderIdSchema, z.number().int().min(-100).max(100)).default({}),
+  providerWeights: z.record(ProviderIdSchema, z.number().min(0.01).max(1000)).default({}),
 });
 export const DEFAULT_ROUTING_SETTINGS = RoutingSettingsSchema.parse({});
 export type RoutingSettings = z.infer<typeof RoutingSettingsSchema>;

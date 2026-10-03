@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   StickySessionLedger,
+  preferStickyAffinity,
   canProbeCooldown,
   decayedBetaPosterior,
   headroomFactor,
@@ -18,6 +19,47 @@ describe('FreeLLMAPI-inspired routing techniques', () => {
     expect(ledger.get('session-a', now + 30 * 60_000)).toBeUndefined();
     // With the setting off, callers do not consult or update this ledger.
     expect(new StickySessionLedger().get('session-a', now)).toBeUndefined();
+  });
+
+  it('keeps provider key affinity and releases it when the route fails', () => {
+    const ledger = new StickySessionLedger();
+    ledger.set('session-a', 'groq/llama', 10, 60_000, {
+      providerId: 'groq',
+      providerKeyId: 'provider-key-1',
+    });
+    expect(ledger.getRoute('session-a', 11)).toEqual({
+      modelRef: 'groq/llama',
+      providerId: 'groq',
+      providerKeyId: 'provider-key-1',
+      expiresAt: 60_010,
+    });
+    const candidates = [
+      { ref: 'gemini/flash', providerId: 'gemini' },
+      { ref: 'groq/llama', providerId: 'groq' },
+    ];
+    expect(
+      preferStickyAffinity(candidates, ledger.getRoute('session-a', 11), 'soft', () => undefined)[0]
+        ?.ref,
+    ).toBe('groq/llama');
+    expect(
+      preferStickyAffinity(
+        candidates,
+        ledger.getRoute('session-a', 11),
+        'strict',
+        () => undefined,
+      ).map(({ ref }) => ref),
+    ).toEqual(['groq/llama']);
+    // AgentLoop clears the ledger in its provider-error path, which releases soft and strict affinity.
+    ledger.clear('session-a');
+    expect(ledger.getRoute('session-a', 11)).toBeUndefined();
+    expect(
+      preferStickyAffinity(
+        candidates,
+        ledger.getRoute('session-a', 11),
+        'strict',
+        () => undefined,
+      ).map(({ ref }) => ref),
+    ).toEqual(['gemini/flash', 'groq/llama']);
   });
 
   it('decays reliability over seven days with a two-day half-life and samples the Beta prior', () => {

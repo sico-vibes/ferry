@@ -408,7 +408,15 @@ export function register(host: CoreHost, services: FerryServices): void {
             .safeParse(services.settings.get('routing-reliability')).data ?? [];
         const stickyState =
           z
-            .record(z.string(), z.object({ modelRef: z.string(), expiresAt: z.number() }))
+            .record(
+              z.string(),
+              z.object({
+                modelRef: z.string(),
+                providerId: z.string().optional(),
+                providerKeyId: z.string().optional(),
+                expiresAt: z.number(),
+              }),
+            )
             .safeParse(services.settings.get('routing-sticky-sessions')).data ?? {};
         const routingInput = {
           models: availableModels,
@@ -687,11 +695,20 @@ export function register(host: CoreHost, services: FerryServices): void {
           routingNow: () => services.clock.now().getTime(),
           stickyState:
             z
-              .record(z.string(), z.object({ modelRef: z.string(), expiresAt: z.number() }))
+              .record(
+                z.string(),
+                z.object({
+                  modelRef: z.string(),
+                  providerId: z.string().optional(),
+                  providerKeyId: z.string().optional(),
+                  expiresAt: z.number(),
+                }),
+              )
               .safeParse(services.settings.get('routing-sticky-sessions')).data ?? {},
           onStickyState: (state) => {
             services.settings.put('routing-sticky-sessions', state);
           },
+          providerAffinityKey: (providerId) => services.providerKeys.get(providerId)?.id,
           toolRejectionState:
             z
               .array(z.object({ modelRef: z.string(), requestId: z.string(), at: z.number() }))

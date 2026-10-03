@@ -2,7 +2,28 @@ import type { RoutingSettings } from '@ferry/shared';
 
 export interface StickyRoute {
   modelRef: string;
+  providerId?: string | undefined;
+  providerKeyId?: string | undefined;
   expiresAt: number;
+}
+
+export function preferStickyAffinity<T extends { ref: string; providerId: string }>(
+  candidates: readonly T[],
+  route: StickyRoute | undefined,
+  mode: 'soft' | 'strict',
+  providerKeyId: (providerId: string) => string | undefined,
+): T[] {
+  if (!route) return [...candidates];
+  const provider = route.providerId ?? route.modelRef.slice(0, route.modelRef.indexOf('/'));
+  const matches = (candidate: T) =>
+    candidate.providerId === provider &&
+    (!route.providerKeyId || providerKeyId(candidate.providerId) === route.providerKeyId);
+  const eligible = mode === 'strict' ? candidates.filter(matches) : [...candidates];
+  return eligible.sort(
+    (a, b) =>
+      Number(!matches(a)) - Number(!matches(b)) ||
+      Number(b.ref === route.modelRef) - Number(a.ref === route.modelRef),
+  );
 }
 
 export class StickySessionLedger {
@@ -13,16 +34,31 @@ export class StickySessionLedger {
   }
 
   get(sessionId: string, now: number): string | undefined {
+    return this.getRoute(sessionId, now)?.modelRef;
+  }
+
+  getRoute(sessionId: string, now: number): StickyRoute | undefined {
     const route = this.routes.get(sessionId);
     if (!route || route.expiresAt <= now) {
       this.routes.delete(sessionId);
       return undefined;
     }
-    return route.modelRef;
+    return { ...route };
   }
 
-  set(sessionId: string, modelRef: string, now: number, ttlMs: number): void {
-    this.routes.set(sessionId, { modelRef, expiresAt: now + ttlMs });
+  set(
+    sessionId: string,
+    modelRef: string,
+    now: number,
+    ttlMs: number,
+    affinity?: { providerId: string; providerKeyId?: string },
+  ): void {
+    this.routes.set(sessionId, {
+      modelRef,
+      ...(affinity ? { providerId: affinity.providerId } : {}),
+      ...(affinity?.providerKeyId ? { providerKeyId: affinity.providerKeyId } : {}),
+      expiresAt: now + ttlMs,
+    });
   }
 
   clear(sessionId: string): void {

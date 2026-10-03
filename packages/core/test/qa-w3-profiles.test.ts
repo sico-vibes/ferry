@@ -8,6 +8,7 @@ function customProfile(overrides: Record<string, unknown> = {}): Profile {
     name: 'QA Custom',
     icon: 'sparkles',
     description: 'QA profile',
+    affinityMode: 'soft',
     builtin: false,
     pinned: false,
     allowedProviders: 'all',

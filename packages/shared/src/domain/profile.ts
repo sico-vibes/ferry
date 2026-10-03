@@ -26,6 +26,7 @@ export const ProfileSchema = z.object({
   name: z.string(),
   icon: z.string(),
   description: z.string(),
+  affinityMode: z.enum(['soft', 'strict']).default('soft'),
   builtin: z.boolean(),
   pinned: z.boolean(),
   allowedProviders: z.union([z.enum(['all_free', 'all']), z.array(ProviderIdSchema)]),

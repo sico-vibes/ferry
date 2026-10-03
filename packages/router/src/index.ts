@@ -23,6 +23,7 @@ export {
 export type { ChainDiagnostic, ChainSkipReason, ResolvedFallbackChain } from './auto-free-chain.js';
 export {
   StickySessionLedger,
+  preferStickyAffinity,
   decayedBetaPosterior,
   sampleBeta,
   headroomFactor,
@@ -138,6 +139,7 @@ function builtinProfile(
     name,
     icon: 'sparkles',
     description,
+    affinityMode: 'soft',
     builtin: true,
     pinned: false,
     allowedProviders,
@@ -345,7 +347,10 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
   const verifiedModelRefs = new Set(input.verifiedModelRefs ?? []);
   const scored: (ModelCandidate & {
     refKey: string;
+    providerId: string;
     coolingUntil: number;
+    priority: number;
+    weight: number;
   })[] = [];
   for (const model of input.models) {
     const provider = providerById.get(model.providerId);
@@ -480,22 +485,73 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       scoreBreakdown,
       selected: false,
       refKey: model.ref,
+      providerId: model.providerId,
       coolingUntil,
+      priority: input.routing?.providerPriorities[model.providerId] ?? 0,
+      weight: input.routing?.providerWeights[model.providerId] ?? 1,
     });
   }
   const hasReadyCandidate = scored.some((candidate) => candidate.coolingUntil <= nowMs);
-  scored.sort(
-    (a, b) =>
-      (hasReadyCandidate
-        ? Number(a.coolingUntil > nowMs) - Number(b.coolingUntil > nowMs)
-        : a.coolingUntil - b.coolingUntil) ||
+  scored.sort((a, b) => {
+    const cooldownOrder = hasReadyCandidate
+      ? Number(a.coolingUntil > nowMs) - Number(b.coolingUntil > nowMs)
+      : a.coolingUntil - b.coolingUntil;
+    return (
+      cooldownOrder ||
+      b.priority - a.priority ||
       b.score - a.score ||
-      a.refKey.localeCompare(b.refKey),
+      a.refKey.localeCompare(b.refKey)
+    );
+  });
+  if (scored.some((candidate) => candidate.weight !== 1)) {
+    const groups: (typeof scored)[] = [];
+    for (const candidate of scored) {
+      let group = groups.at(-1) ?? [];
+      const first = group[0];
+      if (
+        first?.priority === candidate.priority &&
+        first.coolingUntil === candidate.coolingUntil &&
+        first.score - candidate.score <= 1
+      )
+        group.push(candidate);
+      else {
+        group = [candidate];
+        groups.push(group);
+      }
+    }
+    for (const group of groups) {
+      if (group.length < 2 || !group.some((candidate) => candidate.weight !== 1)) continue;
+      const random = input.random ?? Math.random;
+      const providerKeys = new Map<string, number>();
+      for (const candidate of group) {
+        if (providerKeys.has(candidate.providerId)) continue;
+        const sample = Math.max(Number.EPSILON, Math.min(1, random()));
+        providerKeys.set(candidate.providerId, -Math.log(sample) / candidate.weight);
+      }
+      const providerOrder = [...providerKeys].sort((a, b) => a[1] - b[1]).map(([id]) => id);
+      const ordered = providerOrder.flatMap((providerId) =>
+        group.filter((candidate) => candidate.providerId === providerId),
+      );
+      group.splice(0, group.length, ...ordered);
+    }
+    scored.splice(0, scored.length, ...groups.flat());
+  }
+  return scored.map(
+    (
+      {
+        refKey: _refKey,
+        providerId: _providerId,
+        coolingUntil: _coolingUntil,
+        priority: _priority,
+        weight: _weight,
+        ...candidate
+      },
+      index,
+    ) => ({
+      ...candidate,
+      selected: index === 0,
+    }),
   );
-  return scored.map(({ refKey: _refKey, coolingUntil: _coolingUntil, ...candidate }, index) => ({
-    ...candidate,
-    selected: index === 0,
-  }));
 }
 
 function codingModelRank(model: ModelInfo): number {

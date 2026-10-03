@@ -29,7 +29,15 @@ describe('ProviderCard', () => {
     expect(screen.getByText('Key missing')).toBeTruthy();
     expect(screen.getByText('Free')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Test Gemini API' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Manage key' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Manage provider' })).toBeTruthy();
+  });
+
+  it('shows routing badges only for non-default preferences', () => {
+    render(<ProviderCard provider={provider} priority={2} weight={3} />);
+    expect(screen.getByText('Priority 2')).toBeTruthy();
+    expect(screen.getByText('Weight 3')).toBeTruthy();
+    expect(screen.queryByText('Priority 0')).toBeNull();
+    expect(screen.queryByText('Weight 1')).toBeNull();
   });
 
   it('describes providers without a daily step cap', () => {
