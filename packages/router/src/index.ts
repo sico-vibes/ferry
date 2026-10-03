@@ -228,6 +228,7 @@ export function resolveProfile(profile: Profile, overrides: ProfileOverrides = {
 export interface SpendUsage {
   inputTokens: number;
   outputTokens: number;
+  cachedTokens?: number;
 }
 export interface SpendState {
   sessionUsd: number;
@@ -245,13 +246,18 @@ export const UNKNOWN_PRICE_ESTIMATE_USD = 0.01;
 
 export function estimateSpend(
   usage: SpendUsage,
-  model: Pick<ModelInfo, 'priceInPerM' | 'priceOutPerM'>,
+  model: Pick<ModelInfo, 'priceInPerM' | 'priceOutPerM'> &
+    Partial<Pick<ModelInfo, 'priceCachedInPerM' | 'cachedInputRatio'>>,
 ): { amountUsd: number; estimated: boolean } {
   if (model.priceInPerM === null || model.priceOutPerM === null)
     return { amountUsd: UNKNOWN_PRICE_ESTIMATE_USD, estimated: true };
+  const cachedTokens = Math.min(usage.inputTokens, Math.max(0, usage.cachedTokens ?? 0));
   return {
     amountUsd:
-      (usage.inputTokens * model.priceInPerM) / 1_000_000 +
+      (Math.max(0, usage.inputTokens - cachedTokens) * model.priceInPerM +
+        cachedTokens *
+          (model.priceCachedInPerM ?? model.priceInPerM * (model.cachedInputRatio ?? 1))) /
+        1_000_000 +
       (usage.outputTokens * model.priceOutPerM) / 1_000_000,
     estimated: false,
   };
@@ -259,7 +265,8 @@ export function estimateSpend(
 
 export function calculateSpend(
   usage: SpendUsage,
-  model: Pick<ModelInfo, 'priceInPerM' | 'priceOutPerM'>,
+  model: Pick<ModelInfo, 'priceInPerM' | 'priceOutPerM'> &
+    Partial<Pick<ModelInfo, 'priceCachedInPerM' | 'cachedInputRatio'>>,
 ): number {
   return estimateSpend(usage, model).amountUsd;
 }

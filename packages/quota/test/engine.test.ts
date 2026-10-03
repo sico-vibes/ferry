@@ -372,6 +372,7 @@ describe('QuotaEngine', () => {
       free: false,
       priceInPerM: 2,
       priceOutPerM: 4,
+      priceCachedInPerM: 0.2,
     };
     const engine = new QuotaEngine({
       now: () => new Date('2026-06-01T10:00:00Z'),
@@ -388,7 +389,52 @@ describe('QuotaEngine', () => {
         headers: { offPeak: true },
       }),
     );
-    expect(engine.getWindows('opencode-go')[0]?.used).toBeCloseTo(1.55);
+    expect(engine.getWindows('opencode-go')[0]?.used).toBeCloseTo(1.505);
+    engine.dispose();
+  });
+
+  it('discounts cached tokens in token quota and remaining-step estimates', () => {
+    const tokenProvider = {
+      ...provider,
+      provider: 'opencode-go',
+      windows: [
+        {
+          scope: 'provider' as const,
+          metric: 'tokens' as const,
+          kind: 'fixed_daily' as const,
+          limit: 1_600_000,
+        },
+      ],
+    };
+    const pricedModel = {
+      ref: 'opencode-go/model' as ModelRef,
+      providerId: 'opencode-go' as UsageRecord['providerId'],
+      name: 'Model',
+      tier: 'T1' as const,
+      contextWindow: 8192,
+      maxOutput: 4096,
+      toolCalling: true,
+      reasoning: false,
+      free: false,
+      priceInPerM: 2,
+      priceOutPerM: 4,
+      priceCachedInPerM: 0.2,
+    };
+    const engine = new QuotaEngine({
+      now: () => new Date('2026-06-01T10:00:00Z'),
+      catalog: { providers: [tokenProvider], models: [pricedModel] },
+    });
+    engine.recordUsage(
+      usage('cached-token-window', '2026-06-01T09:00:00Z', {
+        providerId: 'opencode-go' as UsageRecord['providerId'],
+        modelRef: 'opencode-go/model',
+        inputTokens: 1_000_000,
+        cachedTokens: 500_000,
+        outputTokens: 250_000,
+      }),
+    );
+    expect(engine.getWindows('opencode-go')[0]?.used).toBe(800_000);
+    expect(engine.stepsLeft('opencode-go')).toBe(1);
     engine.dispose();
   });
 });

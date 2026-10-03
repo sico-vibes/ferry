@@ -8,7 +8,7 @@ In Ferry, open **Settings → Gateway**, enable the gateway, and create a named 
 
 The default listener is `127.0.0.1:11435`. If that port is busy, Ferry selects an available local port and shows the chosen URL. LAN binding is off by default. Enabling it binds all interfaces, so use it only on a trusted network. `/health` returns service status and never returns a key or provider data.
 
-Available profile aliases are `ferry/auto-free`, `ferry/best`, `ferry/fast`, and `ferry/long-context`. Enabled concrete model IDs use `provider/model`. `/v1/models` advertises the profile aliases even when no concrete model is currently available. A key can be limited to selected model IDs and requests per minute.
+Available profile aliases are `ferry/auto-free`, `ferry/best`, `ferry/fast`, and `ferry/long-context`. Enabled concrete model IDs use `provider/model`. `/v1/models` advertises the profile aliases even when no concrete model is currently available. Each key can be limited to selected model IDs, requests per minute, estimated tokens per minute, tokens per UTC day, and concurrent requests. Leave a limit blank in Settings to keep it unlimited.
 
 ## OpenCode
 
@@ -77,6 +77,12 @@ ferry serve --gateway
 Ferry routes through configured provider models, existing profile eligibility, quota-aware scoring, cooldown handling, avoid-training policy, and provider adapters. A request-level `x-ferry-session` or `x-session-id` header keeps a route sticky for 30 minutes; absent either header, Ferry uses a hash of the first message. Gateway calls do not run Ferry's planner/editor loop, since the connected coding client owns its tool loop. Per-key tool-result compression is enabled by default and uses inline notice text when it filters a result; recovery storage is disabled. The terse system instruction is off by default. Neither option rewrites code or tool arguments.
 
 Ferry may retry another eligible model only before any streamed text or tool call has been emitted. Once output starts, an error is returned as an OpenAI error chunk or Anthropic error event. A client may need to retry the whole operation. The gateway does not execute client tools; tool calls are passed back to the client.
+
+### Per-key budgets and counters
+
+Settings > Gateway shows the total request count and successful request count separately. Total requests include authenticated inference attempts after request-per-minute and concurrency admission; successful requests increment only when Ferry returns usage from a completed provider call. Counters are stored in Ferry's local settings database. Token usage windows survive restarts: tokens per minute uses a rolling 60-second window, and tokens per day rolls over at 00:00 UTC.
+
+Before a provider call, Ferry estimates input tokens from the request text and reserves the requested output allowance (`max_tokens`). If this estimate would exceed a token budget, Ferry returns HTTP 429 with `Retry-After`. OpenAI requests receive the standard `{ "error": ... }` shape; Anthropic Messages requests receive the standard `{ "type": "error", "error": ... }` shape. In-flight estimates also count toward concurrent reservations. Completed calls settle token counters from the provider's reported input and output usage. Budget errors do not call the provider.
 
 ## Security
 

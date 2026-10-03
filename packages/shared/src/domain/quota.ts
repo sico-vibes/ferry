@@ -144,6 +144,7 @@ export const UsageHistoryPointSchema = z.object({
   providerId: ProviderIdSchema,
   requests: z.number().nonnegative(),
   inputTokens: z.number().nonnegative(),
+  cachedTokens: z.number().nonnegative().optional(),
   outputTokens: z.number().nonnegative(),
   costUsd: z.number().nonnegative(),
 });

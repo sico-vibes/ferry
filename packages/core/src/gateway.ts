@@ -20,11 +20,50 @@ interface GatewaySettings {
 const defaultSettings: GatewaySettings = { enabled: false, port: 11435, allowLan: false };
 function keys(services: FerryServices): GatewayKey[] {
   const stored = services.settings.get('gateway-keys');
-  return Array.isArray(stored) ? (stored as GatewayKey[]) : [];
+  return Array.isArray(stored)
+    ? (stored as Partial<GatewayKey>[]).map(
+        (key) =>
+          ({
+            ...key,
+            tokenLimitPerMinute: key.tokenLimitPerMinute ?? null,
+            tokenLimitPerDay: key.tokenLimitPerDay ?? null,
+            concurrencyLimit: key.concurrencyLimit ?? null,
+          }) as GatewayKey,
+      )
+    : [];
 }
 function gatewaySettings(services: FerryServices): GatewaySettings {
   const stored = services.settings.get('gateway-settings');
   return stored && typeof stored === 'object' ? { ...defaultSettings, ...stored } : defaultSettings;
+}
+interface GatewayUsageState {
+  requests: number;
+  successfulRequests: number;
+  inputTokens: number;
+  outputTokens: number;
+  tokenEvents: { at: string; tokens: number }[];
+  requestEvents: string[];
+}
+function gatewayUsage(services: FerryServices, id: string): GatewayUsageState {
+  const value = services.settings.get(`gateway-usage:${id}`);
+  if (!value || typeof value !== 'object')
+    return {
+      requests: 0,
+      successfulRequests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      tokenEvents: [],
+      requestEvents: [],
+    };
+  const stored = value as Partial<GatewayUsageState> & { requests?: number };
+  return {
+    requests: stored.requests ?? 0,
+    successfulRequests: stored.successfulRequests ?? stored.requests ?? 0,
+    inputTokens: stored.inputTokens ?? 0,
+    outputTokens: stored.outputTokens ?? 0,
+    tokenEvents: Array.isArray(stored.tokenEvents) ? stored.tokenEvents : [],
+    requestEvents: Array.isArray(stored.requestEvents) ? stored.requestEvents : [],
+  };
 }
 export function toGatewayModelMessages(messages: GatewayMessage[]): ModelMessage[] {
   return messages.flatMap((message): ModelMessage[] => {
@@ -155,18 +194,53 @@ export function createGatewayController(services: FerryServices) {
           keys(services).map((entry) => (entry.id === id ? { ...entry, lastUsedAt: at } : entry)),
         );
       },
-      usage: (id) => {
-        const value = services.settings.get(`gateway-usage:${id}`);
-        return value && typeof value === 'object'
-          ? (value as { requests: number; inputTokens: number; outputTokens: number })
-          : { requests: 0, inputTokens: 0, outputTokens: 0 };
-      },
-      recordUsage: (id, inputTokens, outputTokens) => {
-        const current = runtime.store.usage(id);
+      recordRequest: (id, _at) => {
+        const current = gatewayUsage(services, id);
+        const requestEvents = current.requestEvents.filter(
+          (at) => Date.parse(_at) - Date.parse(at) < 86_400_000,
+        );
+        requestEvents.push(_at);
         services.settings.put(`gateway-usage:${id}`, {
+          ...current,
           requests: current.requests + 1,
+          requestEvents,
+        });
+      },
+      recentRequests: (id, now) =>
+        gatewayUsage(services, id).requestEvents.filter(
+          (at) => Date.parse(now) - Date.parse(at) < 60_000,
+        ).length,
+      usage: (id) => {
+        const { requests, successfulRequests, inputTokens, outputTokens } = gatewayUsage(
+          services,
+          id,
+        );
+        return { requests, successfulRequests, inputTokens, outputTokens };
+      },
+      tokenUsage: (id, now) => {
+        const state = gatewayUsage(services, id);
+        const timestamp = Date.parse(now);
+        const day = now.slice(0, 10);
+        const minuteTokens = state.tokenEvents
+          .filter((event) => timestamp - Date.parse(event.at) < 60_000)
+          .reduce((sum, event) => sum + event.tokens, 0);
+        const dayTokens = state.tokenEvents
+          .filter((event) => event.at.slice(0, 10) === day)
+          .reduce((sum, event) => sum + event.tokens, 0);
+        return { minuteTokens, dayTokens };
+      },
+      recordUsage: (id, inputTokens, outputTokens, at) => {
+        const current = gatewayUsage(services, id);
+        const tokenEvents = current.tokenEvents.filter(
+          (event) => Date.parse(at) - Date.parse(event.at) < 86_400_000,
+        );
+        tokenEvents.push({ at, tokens: inputTokens + outputTokens });
+        services.settings.put(`gateway-usage:${id}`, {
+          ...current,
+          successfulRequests: current.successfulRequests + 1,
           inputTokens: current.inputTokens + inputTokens,
           outputTokens: current.outputTokens + outputTokens,
+          tokenEvents,
         });
       },
     },
@@ -376,7 +450,14 @@ export function createGatewayController(services: FerryServices) {
       patch: Partial<
         Pick<
           GatewayKey,
-          'profile' | 'allowedModels' | 'rateLimit' | 'compressToolResults' | 'terseSystemPrompt'
+          | 'profile'
+          | 'allowedModels'
+          | 'rateLimit'
+          | 'tokenLimitPerMinute'
+          | 'tokenLimitPerDay'
+          | 'concurrencyLimit'
+          | 'compressToolResults'
+          | 'terseSystemPrompt'
         >
       >,
     ) {

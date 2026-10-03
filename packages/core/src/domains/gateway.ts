@@ -20,6 +20,9 @@ const updateSchema = z.object({
     profile: z.string().optional(),
     allowedModels: z.array(z.string()).optional(),
     rateLimit: z.number().int().positive().nullable().optional(),
+    tokenLimitPerMinute: z.number().int().positive().nullable().optional(),
+    tokenLimitPerDay: z.number().int().positive().nullable().optional(),
+    concurrencyLimit: z.number().int().positive().nullable().optional(),
     compressToolResults: z.boolean().optional(),
     terseSystemPrompt: z.boolean().optional(),
   }),
@@ -52,6 +55,15 @@ export function register(host: CoreHost, services: FerryServices): void {
           ? {}
           : { allowedModels: parsed.patch.allowedModels }),
         ...(parsed.patch.rateLimit === undefined ? {} : { rateLimit: parsed.patch.rateLimit }),
+        ...(parsed.patch.tokenLimitPerMinute === undefined
+          ? {}
+          : { tokenLimitPerMinute: parsed.patch.tokenLimitPerMinute }),
+        ...(parsed.patch.tokenLimitPerDay === undefined
+          ? {}
+          : { tokenLimitPerDay: parsed.patch.tokenLimitPerDay }),
+        ...(parsed.patch.concurrencyLimit === undefined
+          ? {}
+          : { concurrencyLimit: parsed.patch.concurrencyLimit }),
         ...(parsed.patch.compressToolResults === undefined
           ? {}
           : { compressToolResults: parsed.patch.compressToolResults }),

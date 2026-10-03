@@ -37,12 +37,20 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
     profile: string;
     allowedModels: string[];
     rateLimit: number | null;
+    tokenLimitPerMinute: number | null;
+    tokenLimitPerDay: number | null;
+    concurrencyLimit: number | null;
     compressToolResults: boolean;
     terseSystemPrompt: boolean;
     createdAt: string;
     lastUsedAt: string | null;
     revokedAt: string | null;
-    usage: { requests: number; inputTokens: number; outputTokens: number };
+    usage: {
+      requests: number;
+      successfulRequests: number;
+      inputTokens: number;
+      outputTokens: number;
+    };
   }[] = [];
   const client: FerryClient = {
     gateway: {
@@ -73,12 +81,15 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
           profile: input.profile,
           allowedModels: [],
           rateLimit: null,
+          tokenLimitPerMinute: null,
+          tokenLimitPerDay: null,
+          concurrencyLimit: null,
           compressToolResults: true,
           terseSystemPrompt: false,
           createdAt: new Date().toISOString(),
           lastUsedAt: null,
           revokedAt: null,
-          usage: { requests: 0, inputTokens: 0, outputTokens: 0 },
+          usage: { requests: 0, successfulRequests: 0, inputTokens: 0, outputTokens: 0 },
         };
         gatewayKeys.push(key);
         return Promise.resolve({
