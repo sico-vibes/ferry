@@ -1,0 +1,8 @@
+
+# N1 - Multiple keys per provider with per-key health, rotation, auto-disable (research ideas #1 and #7)
+1. **Storage/secrets.** Today one secret per provider id (`packages/storage/src/schema.ts` PK `id`, `packages/secrets`). Support N keys per provider: key entries `(providerId, keyId)` with label, order, enabled, status (`ok` / `rate_limited` until / `invalid` / `disabled`), last error, cooldown-until. Secrets stay in the OS keyring (one keyring entry per key id); migrate the existing single key into key #1 transparently (new numbered migration).
+2. **Selection.** Providers module picks a key per request: round-robin (default) or weighted; skip keys in cooldown/invalid/disabled; on 429 put only that key in cooldown and retry the same provider with the next key before handing off to another provider; provider is unavailable only when all keys are unavailable. Usage/quota is tracked per key and summed per provider (free-tier windows are per account).
+3. **Auto-disable/re-enable policy** (idea #7): per-provider toggle (default on) + rules: auth failures disable the key; repeated failures (configurable count/window) or status/keyword matches disable temporarily; hourly probe re-enables. Show reasons in the UI.
+4. **UI (v2, Models > Providers > Manage key):** list keys (label, status dot, usage today, last error), add / remove / reorder / enable toggle; never display a full key (last 4 chars only). Provider card shows "2 keys" when >1.
+5. Integrate with N4 affinity if present (session sticks to a key; release on rate limit).
+6. Tests: migration of single key, rotation order, per-key cooldown then same-provider retry, provider unavailable only when all keys down, auto-disable/re-enable, keyring read/write per key (mocked).
