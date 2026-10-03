@@ -40,7 +40,7 @@ const runtime: GatewayRuntime = {
       });
     },
   },
-  models: () => ['openai/gpt-test'],
+  models: () => ['openai/gpt-test', 'gpt-test-logical'],
   complete: (input) => {
     received.push(input);
     if (input.messages.some((message) => message.content === 'quota'))
@@ -169,6 +169,25 @@ describe('Ferry gateway', () => {
     expect(payload.choices[0]?.message.content).toBe('Hello');
     expect(payload.usage.total_tokens).toBe(6);
     expect(runtime.store.usage(created.key.id).requests).toBe(1);
+    expect(received.at(-1)?.model).toBe('@profile:auto-free');
+  }, 30_000);
+
+  it('passes logical names and concrete provider/model refs through the gateway contract', async () => {
+    const url = await server();
+    const headers = {
+      authorization: `Bearer ${created.secret}`,
+      'content-type': 'application/json',
+    };
+    for (const model of ['gpt-test-logical', 'openai/gpt-test']) {
+      const response = await fetch(`${url}/v1/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Hi' }] }),
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+    expect(received.map((input) => input.model)).toEqual(['gpt-test-logical', 'openai/gpt-test']);
   }, 30_000);
 
   it('streams OpenAI chunks, tools, usage, and Anthropic messages events', async () => {

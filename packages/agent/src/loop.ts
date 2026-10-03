@@ -6,6 +6,7 @@ import {
   type ModelMessage,
   type ToolSet,
 } from 'ai';
+import type { ProviderRequestOverrides } from '@ferry/shared';
 import { jsonrepair } from 'jsonrepair';
 import { z } from 'zod';
 import {
@@ -167,6 +168,7 @@ export interface AgentOptions {
   promptCaching?: (model: ModelInfo) => boolean;
   providerBaseUrls?: Readonly<Record<string, string>>;
   providerFetch?: typeof globalThis.fetch;
+  providerOverrides?: (model: ModelInfo) => ProviderRequestOverrides;
   toolSources?: readonly ToolSource[];
   promptSections?: readonly PromptSection[];
   filterOutput?: (
@@ -1869,10 +1871,12 @@ export function createStepGenerator(
     | 'onObservation'
     | 'askUser'
     | 'promptCaching'
-  >,
+  > &
+    Pick<AgentOptions, 'providerOverrides'>,
   model: ModelInfo,
   sessionId: string,
 ): StepGenerator {
+  const requestOverrides = options.providerOverrides?.(model);
   const observationFetch = createObservedFetch(
     (observation) => {
       options.onObservation?.(observation);
@@ -1880,6 +1884,7 @@ export function createStepGenerator(
     },
     { providerId: model.providerId, model: model.ref },
     options.providerFetch ?? globalThis.fetch,
+    requestOverrides,
   );
   return async ({
     system,

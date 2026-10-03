@@ -15,12 +15,84 @@ import {
   shouldSwitchBeforeStep,
   resolveFallbackChain,
   isStrictFallbackNameEligible,
+  resolveLogicalModelCandidates,
+  classifyProviderError,
   type CapacityView,
 } from '../src/index.js';
 
 const profileResult = BUILTIN_PROFILES.find((item) => item.name === 'Best Available');
 if (!profileResult) throw new Error('Best Available profile fixture is missing');
 const profile: Profile = profileResult;
+describe('logical model mapping', () => {
+  it('resolves configured upstream models and lets a user replace one provider mapping', () => {
+    const template: ModelInfo = {
+      ref: 'groq/base' as ModelInfo['ref'],
+      providerId: 'groq' as ModelInfo['providerId'],
+      name: 'test model',
+      tier: 'T2',
+      contextWindow: 32_000,
+      maxOutput: 4_000,
+      toolCalling: true,
+      reasoning: false,
+      free: true,
+      priceInPerM: 0,
+      priceOutPerM: 0,
+    };
+    const models: ModelInfo[] = [
+      {
+        ...template,
+        ref: 'groq/openai/gpt-oss-120b' as ModelInfo['ref'],
+        providerId: 'groq' as ModelInfo['providerId'],
+      },
+      {
+        ...template,
+        ref: 'cerebras/gpt-oss-120b' as ModelInfo['ref'],
+        providerId: 'cerebras' as ModelInfo['providerId'],
+      },
+      {
+        ...template,
+        ref: 'openrouter/openai/gpt-oss-120b:free' as ModelInfo['ref'],
+        providerId: 'openrouter' as ModelInfo['providerId'],
+      },
+    ];
+    const defaults = [
+      {
+        logicalName: 'gpt-oss-120b',
+        providerId: 'groq' as ModelInfo['providerId'],
+        upstreamId: 'openai/gpt-oss-120b',
+      },
+      {
+        logicalName: 'gpt-oss-120b',
+        providerId: 'cerebras' as ModelInfo['providerId'],
+        upstreamId: 'gpt-oss-120b',
+      },
+    ];
+    const user = [
+      {
+        logicalName: 'gpt-oss-120b',
+        providerId: 'groq' as ModelInfo['providerId'],
+        upstreamId: 'openai/gpt-oss-120b-preview',
+      },
+      {
+        logicalName: 'gpt-oss-120b',
+        providerId: 'openrouter' as ModelInfo['providerId'],
+        upstreamId: 'openai/gpt-oss-120b:free',
+      },
+    ];
+    expect(
+      resolveLogicalModelCandidates('gpt-oss-120b', models, defaults, user).map(
+        (model) => model.ref,
+      ),
+    ).toEqual(['cerebras/gpt-oss-120b', 'openrouter/openai/gpt-oss-120b:free']);
+  });
+  it('classifies a remapped quota response as a retryable key handoff', () => {
+    expect(classifyProviderError({ statusCode: 429, message: 'quota exceeded' })).toMatchObject({
+      family: 'quota_exhausted',
+      scope: 'key',
+      retryable: true,
+    });
+  });
+});
 const provider: Provider = {
   id: 'groq' as Provider['id'],
   name: 'Groq',

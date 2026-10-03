@@ -1,0 +1,11 @@
+{
+  "openrouter": {
+    "stripParams": [],
+    "forceParams": {},
+    "headers": {
+      "HTTP-Referer": "https://ferry.dev",
+      "X-Title": "Ferry"
+    },
+    "statusRemaps": []
+  }
+}

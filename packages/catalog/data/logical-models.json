@@ -1,0 +1,5 @@
+[
+  { "logicalName": "gpt-oss-120b", "providerId": "groq", "upstreamId": "openai/gpt-oss-120b" },
+  { "logicalName": "gpt-oss-120b", "providerId": "cerebras", "upstreamId": "gpt-oss-120b" },
+  { "logicalName": "gpt-oss-120b", "providerId": "openrouter", "upstreamId": "openai/gpt-oss-120b:free" }
+]

@@ -1,7 +1,12 @@
-import { streamProviderChat } from '@ferry/providers';
+import { resolveProviderRequestOverrides, streamProviderChat } from '@ferry/providers';
 import type { ModelMessage } from '@ferry/providers';
 import { genericFilter, terseSystemText } from '@ferry/optimizer';
-import { BUILTIN_PROFILES, classifyProviderError } from '@ferry/router';
+import {
+  BUILTIN_PROFILES,
+  classifyProviderError,
+  resolveLogicalModelCandidates,
+} from '@ferry/router';
+import { RoutingSettingsSchema } from '@ferry/shared';
 import {
   type GatewayRuntime,
   startGateway,
@@ -97,6 +102,13 @@ function profileId(raw: string): string {
   return raw;
 }
 
+function routingSettings(services: FerryServices) {
+  const global = services.settings.get('global');
+  const routing =
+    global && typeof global === 'object' ? (global as { routing?: unknown }).routing : {};
+  return RoutingSettingsSchema.parse(routing ?? {});
+}
+
 export function createGatewayController(services: FerryServices) {
   let handle: GatewayHandle | undefined;
   const stickyRoutes = new Map<string, { modelRef: string; expiresAt: number }>();
@@ -129,7 +141,9 @@ export function createGatewayController(services: FerryServices) {
     const runtimeDeps = await import('./session-deps.js');
     const requestDeps = runtimeDeps.createSessionDependencies(services, () => undefined);
     const eligible = requestDeps.gateway.resolveCandidates(selected, 'plan', inputTokens);
-    const allowedConcrete = key.allowedModels.filter((ref) => !ref.startsWith('ferry/'));
+    const allowedConcrete = key.allowedModels.filter(
+      (ref) => ref.includes('/') && !ref.startsWith('ferry/'),
+    );
     return allowedConcrete.length
       ? eligible.filter((model) => allowedConcrete.includes(model.ref))
       : eligible;
@@ -171,7 +185,33 @@ export function createGatewayController(services: FerryServices) {
       },
     },
     async models(key, profileName = key.profile) {
-      return (await routeableCandidates(key, profileName)).map((model) => model.ref);
+      const eligible = await routeableCandidates(key, profileName);
+      const concreteAllowlist = key.allowedModels.filter(
+        (model) => model.includes('/') && !model.startsWith('ferry/'),
+      );
+      const hasLogicalAllowlist = key.allowedModels.some(
+        (model) => !model.includes('/') && !model.startsWith('ferry/'),
+      );
+      const concreteModels = eligible.filter((model) =>
+        !concreteAllowlist.length && !hasLogicalAllowlist
+          ? true
+          : concreteAllowlist.includes(model.ref),
+      );
+      const settings = routingSettings(services);
+      const catalogMappings = services.catalog.logicalModels ?? [];
+      const mappings = [...catalogMappings, ...settings.logicalModelMappings];
+      const logicalNames = [...new Set(mappings.map((mapping) => mapping.logicalName))];
+      const availableLogical = logicalNames.filter((name) => {
+        if (key.allowedModels.length && !key.allowedModels.includes(name)) return false;
+        const resolved = resolveLogicalModelCandidates(
+          name,
+          eligible,
+          catalogMappings,
+          settings.logicalModelMappings,
+        );
+        return resolved.length > 0;
+      });
+      return [...concreteModels.map((model) => model.ref), ...availableLogical];
     },
     async complete(input) {
       const selectedProfile = input.model.startsWith('@profile:')
@@ -189,13 +229,30 @@ export function createGatewayController(services: FerryServices) {
         selectedProfile,
         Math.max(1, JSON.stringify(input.messages).length / 4),
       );
-      const explicit = input.model.startsWith('@profile:') ? undefined : input.model;
-      let ordered = explicit
-        ? [
-            candidates.find((item) => item.ref === explicit),
-            ...routed.filter((item) => item.ref !== explicit),
-          ].filter((item): item is (typeof candidates)[number] => Boolean(item))
-        : routed;
+      const isProfile = input.model.startsWith('@profile:');
+      const logicalMappings = resolveLogicalModelCandidates(
+        input.model,
+        candidates,
+        services.catalog.logicalModels ?? [],
+        routingSettings(services).logicalModelMappings,
+      );
+      const isConfiguredLogical = [
+        ...(services.catalog.logicalModels ?? []),
+        ...routingSettings(services).logicalModelMappings,
+      ].some((mapping) => mapping.logicalName === input.model);
+      const logicalRefs = new Set(logicalMappings.map((model) => model.ref));
+      const isLogical = !isProfile && isConfiguredLogical;
+      if (isLogical && logicalRefs.size === 0)
+        throw new Error(`No eligible model is configured for logical name ${input.model}`);
+      const explicit = isProfile || isLogical ? undefined : input.model;
+      let ordered = isLogical
+        ? routed.filter((item) => logicalRefs.has(item.ref))
+        : explicit
+          ? [
+              candidates.find((item) => item.ref === explicit),
+              ...routed.filter((item) => item.ref !== explicit),
+            ].filter((item): item is (typeof candidates)[number] => Boolean(item))
+          : routed;
       const sticky = stickyRoutes.get(input.sessionHint);
       if (sticky && sticky.expiresAt > services.clock.now().getTime())
         ordered = [
@@ -271,6 +328,10 @@ export function createGatewayController(services: FerryServices) {
                 ? { toolChoice: { name: input.toolChoice.function.name } }
                 : {}),
             ...(services.env[envName] ? { baseUrl: services.env[envName] } : {}),
+            overrides: resolveProviderRequestOverrides(
+              providerId,
+              routingSettings(services).providerOverrides[providerId],
+            ),
             fetch: requestDeps.providerFetch,
             onObservation: requestDeps.observe,
             signal: input.signal,

@@ -8,7 +8,9 @@ In Ferry, open **Settings → Gateway**, enable the gateway, and create a named 
 
 The default listener is `127.0.0.1:11435`. If that port is busy, Ferry selects an available local port and shows the chosen URL. LAN binding is off by default. Enabling it binds all interfaces, so use it only on a trusted network. `/health` returns service status and never returns a key or provider data.
 
-Available profile aliases are `ferry/auto-free`, `ferry/best`, `ferry/fast`, and `ferry/long-context`. Enabled concrete model IDs use `provider/model`. `/v1/models` advertises the profile aliases even when no concrete model is currently available. A key can be limited to selected model IDs and requests per minute.
+Available profile aliases are `ferry/auto-free`, `ferry/best`, `ferry/fast`, and `ferry/long-context`; these reserved aliases take precedence over user mappings. Logical model names such as `gpt-oss-120b` map to one or more provider-specific upstream IDs and are resolved through the selected profile's normal eligibility, free-first scoring, quota checks, and handoff rules. Enabled concrete model IDs keep the `provider/model` form and pass through unchanged. `/v1/models` advertises profile aliases and logical names only when an eligible mapped model is available. A key can be limited to selected model IDs and requests per minute.
+
+Add custom logical mappings in **Settings > Routing > Logical model mappings**. Each row contains a slash-free logical name, provider ID, and upstream model ID. For example, a logical name may map to `groq` / `openai/gpt-oss-120b`, `cerebras` / `gpt-oss-120b`, and `openrouter` / `openai/gpt-oss-120b:free`. User entries replace the catalog mapping for the same logical name and provider; entries for other providers stay in the pool.
 
 ## OpenCode
 
@@ -75,6 +77,8 @@ ferry serve --gateway
 ## Routing and limits
 
 Ferry routes through configured provider models, existing profile eligibility, quota-aware scoring, cooldown handling, avoid-training policy, and provider adapters. A request-level `x-ferry-session` or `x-session-id` header keeps a route sticky for 30 minutes; absent either header, Ferry uses a hash of the first message. Gateway calls do not run Ferry's planner/editor loop, since the connected coding client owns its tool loop. Per-key tool-result compression is enabled by default and uses inline notice text when it filters a result; recovery storage is disabled. The terse system instruction is off by default. Neither option rewrites code or tool arguments.
+
+Gateway requests use provider request overrides from the catalog, layered with **Settings > Routing > Provider request overrides**. A user value replaces the catalog value for that provider. Overrides strip or force JSON request parameters, add request headers, and optionally remap a response status when its body contains a configured phrase. Mapped statuses are used for quota and fallback classification.
 
 Ferry may retry another eligible model only before any streamed text or tool call has been emitted. Once output starts, an error is returned as an OpenAI error chunk or Anthropic error event. A client may need to retry the whole operation. The gateway does not execute client tools; tool calls are passed back to the client.
 

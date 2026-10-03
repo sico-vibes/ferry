@@ -36,3 +36,22 @@ OpenRouter PKCE is an official OAuth flow. It returns a user-owned OpenRouter AP
 Ferry does not scrape consumer chat websites, replay browser cookies, share/rotate accounts to evade quotas, or present one person's subscription as a pooled API. These practices can violate provider terms, expose account sessions, undermine quota controls, and put accounts at risk. Use documented APIs and your own credentials.
 
 Provider categories describe the access route, not the quality or practical capacity. Requests/day is often more informative than token totals for interactive agents. Read the detailed [free-provider research](research/free-providers.md) and [community evidence](research/community-free-llm.md) for caveats and sources.
+
+## Logical models and request overrides
+
+The catalog defines portable logical model names in `packages/catalog/data/logical-models.json`. Each entry has `logicalName`, `providerId`, and `upstreamId`. One name may have multiple provider entries; Ferry filters these against enabled and eligible models, then uses normal profile scoring and fallback. Users can add or replace entries per provider in **Settings > Routing > Logical model mappings**. `provider/model` references continue to address one concrete upstream model, and the reserved `ferry/*` profile aliases keep their profile behavior.
+
+Provider request defaults live in `packages/catalog/data/provider-overrides.json`, keyed by provider ID. Settings can add request overrides for a provider. The supported object shape is:
+
+```json
+{
+  "stripParams": ["temperature"],
+  "forceParams": { "parallel_tool_calls": false },
+  "headers": { "X-Client-Mode": "ferry" },
+  "statusRemaps": [
+    { "from": 400, "to": 429, "messageIncludes": "quota exceeded" }
+  ]
+}
+```
+
+Parameter names in `stripParams` are removed from JSON requests. `forceParams` is applied after stripping, so a forced value is retained if a name appears in both lists. Additional headers are applied case-insensitively. Status remaps require the original status and, when present, a case-insensitive response-body phrase to match. Ferry classifies the remapped status for quota and fallback decisions. User headers and forced parameters replace catalog values with the same key; user status remaps are checked before catalog remaps. Catalog defaults currently move OpenRouter's attribution headers into data rather than provider-specific request code.
