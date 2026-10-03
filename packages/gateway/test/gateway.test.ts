@@ -565,7 +565,7 @@ describe('Ferry gateway', () => {
     expect(second.status).toBe(429);
     expect(second.headers.get('retry-after')).toBe('1');
     finish?.();
-    expect((await first).status).toBe(500);
+    expect((await first).status).toBe(502);
     expect(runtime.store.usage(created.key.id)).toMatchObject({
       requests: 1,
       successfulRequests: 0,

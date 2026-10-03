@@ -98,9 +98,15 @@ export async function startHarness(options: HarnessOptions = {}): Promise<CoreHa
     server,
     async close() {
       rpc.close();
-      await host.stop();
-      await server.stop();
-      await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+      try {
+        await server.stop();
+      } finally {
+        try {
+          await host.stop();
+        } finally {
+          await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+        }
+      }
     },
   };
 }

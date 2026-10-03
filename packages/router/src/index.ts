@@ -551,7 +551,8 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       }
     }
     for (const group of groups) {
-      if (group.length < 2 || !group.some((candidate) => candidate.weight !== 1)) continue;
+      if (group.length < 2 || new Set(group.map((candidate) => candidate.weight)).size < 2)
+        continue;
       const random = input.random ?? Math.random;
       const providerKeys = new Map<string, number>();
       for (const candidate of group) {

@@ -263,10 +263,28 @@ export function createLogger({
   const transport = pino.transport({ targets });
   const logger = pino(options, transport);
   return Object.assign(logger, {
-    close: () => {
-      transport.end();
-      return Promise.resolve();
-    },
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        const onError = (error: Error) => {
+          transport.off('close', onClose);
+          reject(error);
+        };
+        const onClose = () => {
+          transport.off('error', onError);
+          resolve();
+        };
+        transport.once('error', onError);
+        transport.once('close', onClose);
+        logger.flush((flushError) => {
+          if (flushError) {
+            transport.off('error', onError);
+            transport.off('close', onClose);
+            reject(flushError);
+            return;
+          }
+          transport.end();
+        });
+      }),
   });
 }
 export function redactSecretText(text: string): string {

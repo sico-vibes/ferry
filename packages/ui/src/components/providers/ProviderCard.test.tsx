@@ -29,7 +29,8 @@ describe('ProviderCard', () => {
     expect(screen.getByText('Key missing')).toBeTruthy();
     expect(screen.getByText('Free')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Test Gemini API' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Manage provider' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Manage key' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Manage provider' })).toBeNull();
   });
 
   it('shows routing badges only for non-default preferences', () => {

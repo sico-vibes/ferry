@@ -197,8 +197,8 @@ export function ProviderCard({
               {probing ? <LatticeLoader label="Testing" /> : null}
               {probing ? 'Testing\u2026' : 'Test'}
             </Button>
-            <Button aria-label="Manage provider" onClick={onManageKey} size="sm" variant="ghost">
-              Manage
+            <Button aria-label="Manage key" onClick={onManageKey} size="sm" variant="ghost">
+              Manage key
             </Button>
           </div>
         </footer>

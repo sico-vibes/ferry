@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FerryClient, ModelListQuery } from '@ferry/client';
+import { DEFAULT_ROUTING_SETTINGS } from '@ferry/shared';
 import type { ModelInfo, Provider } from '@ferry/shared';
 import { FerryProvider } from '../../data/client';
 import { ModelsCanvas } from './Explore';
@@ -160,10 +161,12 @@ beforeEach(() => {
     },
     settings: {
       get: vi.fn().mockResolvedValue({
+        routing: DEFAULT_ROUTING_SETTINGS,
         subscriptionOAuthAcknowledged: [],
         allowSubscriptionOAuthRouting: false,
       }),
       update: vi.fn().mockResolvedValue({
+        routing: DEFAULT_ROUTING_SETTINGS,
         subscriptionOAuthAcknowledged: ['anthropic'],
         allowSubscriptionOAuthRouting: false,
       }),
@@ -249,6 +252,16 @@ describe('Models providers and catalog', () => {
     expect(screen.getByRole('button', { name: 'Show more providers (2)' })).toBeTruthy();
   });
 
+  it('opens the provider key dialog from Add provider', async () => {
+    const user = userEvent.setup();
+    setup();
+    await user.click(await screen.findByRole('button', { name: 'Add provider' }));
+    await user.click(screen.getByRole('button', { name: /^OpenAI/ }));
+    expect(await screen.findByRole('dialog', { name: 'Manage OpenAI key' })).toBeTruthy();
+    expect(screen.getByLabelText('API key')).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Provider routing' })).toBeTruthy();
+  });
+
   it('saves and removes a provider key with validation', async () => {
     const user = userEvent.setup();
     providerListSpy.mockResolvedValue([provider()]);
@@ -256,6 +269,12 @@ describe('Models providers and catalog', () => {
     const manageButton = (await screen.findAllByRole('button', { name: 'Manage key' })).at(0);
     if (!manageButton) throw new Error('The provider key action is missing.');
     await user.click(manageButton);
+    const keyDialog = await screen.findByRole('dialog', { name: 'Manage Mistral key' });
+    const keySection = within(keyDialog).getByRole('region', { name: 'Provider key' });
+    const routingSection = within(keyDialog).getByRole('region', { name: 'Provider routing' });
+    expect(
+      keySection.compareDocumentPosition(routingSection) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Save key' }));
     expect((await screen.findByRole('alert')).textContent).toContain('Enter an API key');
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'demo-mistral-key' } });

@@ -541,7 +541,7 @@ export function ModelsCanvas() {
                           className="max-w-56 truncate px-3 font-medium text-foreground"
                           title={model.name}
                         >
-                          {model.name}
+                          <span>{model.name}</span>
                           {providers.find((provider) => provider.id === model.providerId)?.tag ===
                             'promo' && (
                             <span

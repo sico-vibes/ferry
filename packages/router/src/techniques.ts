@@ -15,9 +15,12 @@ export function preferStickyAffinity<T extends { ref: string; providerId: string
 ): T[] {
   if (!route) return [...candidates];
   const provider = route.providerId ?? route.modelRef.slice(0, route.modelRef.indexOf('/'));
-  const matches = (candidate: T) =>
-    candidate.providerId === provider &&
-    (!route.providerKeyId || providerKeyId(candidate.providerId) === route.providerKeyId);
+  const matches = (candidate: T) => {
+    if (candidate.providerId !== provider) return false;
+    if (!route.providerKeyId) return true;
+    const candidateKeyId = providerKeyId(candidate.providerId);
+    return candidateKeyId === undefined || candidateKeyId === route.providerKeyId;
+  };
   const eligible = mode === 'strict' ? candidates.filter(matches) : [...candidates];
   return eligible.sort(
     (a, b) =>
