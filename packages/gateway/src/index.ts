@@ -2,6 +2,14 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { mapProviderError } from '@ferry/providers';
 import { classifyProviderError } from '@ferry/router';
+import {
+  canonicalToGatewayMessages,
+  anthropicToCanonical,
+  finalizeCanonicalStream,
+  geminiToCanonical,
+  openAiChatToCanonical,
+  openAiResponsesToCanonical,
+} from './canonical.js';
 
 export type GatewayProfile = string;
 export interface GatewayKey {
@@ -62,7 +70,34 @@ export interface GatewayCompletion {
   inputTokens: number;
   outputTokens: number;
   finishReason: string;
+  reasoning?: string;
 }
+
+export {
+  anthropicToCanonical,
+  canonicalStreamEventsToAnthropic,
+  canonicalStreamEventsToGemini,
+  canonicalStreamEventsToOpenAiChat,
+  canonicalStreamEventsToResponses,
+  canonicalToAnthropicMessage,
+  canonicalToGemini,
+  canonicalToGatewayMessages,
+  canonicalToOpenAiChat,
+  canonicalToResponses,
+  finalizeCanonicalStream,
+  geminiToCanonical,
+  openAiChatToCanonical,
+  openAiResponsesToCanonical,
+} from './canonical.js';
+export type {
+  CanonicalMessage,
+  CanonicalPart,
+  CanonicalRequest,
+  CanonicalResponse,
+  CanonicalStreamEvent,
+  CanonicalUsage,
+  CanonicalToolCall,
+} from './canonical.js';
 export interface GatewayRuntime {
   store: GatewayStore;
   models(key: GatewayKey, profile?: string): string[] | Promise<string[]>;
@@ -258,20 +293,10 @@ function textContent(value: unknown, field: string): string {
     .join('');
 }
 function normalizeMessages(raw: unknown[]): { messages: GatewayMessage[]; instructions: string } {
-  const messages: GatewayMessage[] = [];
-  const instructions: string[] = [];
-  for (const entry of raw) {
-    if (!entry || typeof entry !== 'object') throw new GatewayRequestError('Invalid message');
-    const message = entry as GatewayMessage;
-    if (typeof message.role !== 'string') throw new GatewayRequestError('Message role is required');
-    const content = textContent(message.content, `${message.role} message`);
-    if (message.role === 'system' || message.role === 'developer') {
-      if (content) instructions.push(content);
-      continue;
-    }
-    messages.push({ ...message, content });
-  }
-  return { messages, instructions: instructions.join('\n\n') };
+  const canonical = openAiChatToCanonical({ model: '', messages: raw });
+  if (canonical.messages.length !== raw.length)
+    throw new GatewayRequestError('Invalid message role or shape');
+  return canonicalToGatewayMessages(canonical.messages);
 }
 async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Uint8Array[] = [];
@@ -294,53 +319,8 @@ function bearer(req: IncomingMessage): string | undefined {
   return match?.[1] ?? (typeof key === 'string' ? key : undefined);
 }
 function anthropicMessages(raw: unknown[]): GatewayMessage[] {
-  return raw.flatMap((entry): GatewayMessage[] => {
-    if (!entry || typeof entry !== 'object') return [];
-    const message = entry as Record<string, unknown>;
-    if (typeof message.role !== 'string') return [];
-    if (!Array.isArray(message.content)) return [{ role: message.role, content: message.content }];
-    const text = textContent(message.content, `${message.role} message`);
-    const toolCalls = message.content.flatMap((part) => {
-      if (!part || typeof part !== 'object') return [];
-      const value = part as Record<string, unknown>;
-      return value.type === 'tool_use' &&
-        typeof value.id === 'string' &&
-        typeof value.name === 'string'
-        ? [
-            {
-              id: value.id,
-              type: 'function',
-              function: { name: value.name, arguments: JSON.stringify(value.input ?? {}) },
-            },
-          ]
-        : [];
-    });
-    const toolResults = message.content.flatMap((part): GatewayMessage[] => {
-      if (!part || typeof part !== 'object') return [];
-      const value = part as Record<string, unknown>;
-      return value.type === 'tool_result' && typeof value.tool_use_id === 'string'
-        ? [
-            {
-              role: 'tool',
-              tool_call_id: value.tool_use_id,
-              content: textContent(value.content, 'tool result'),
-            },
-          ]
-        : [];
-    });
-    return [
-      ...toolResults,
-      ...(toolCalls.length || text
-        ? [
-            {
-              role: message.role,
-              content: text,
-              ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
-            },
-          ]
-        : []),
-    ];
-  });
+  const converted = anthropicToCanonical({ model: '', messages: raw }).messages;
+  return canonicalToGatewayMessages(converted).messages;
 }
 function anthropicTools(raw: unknown): unknown[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -785,6 +765,430 @@ async function handleAnthropic(
   }
 }
 
+type Protocol = 'responses' | 'gemini';
+
+function protocolError(
+  res: ServerResponse,
+  protocol: Protocol,
+  status: number,
+  message: string,
+): void {
+  json(
+    res,
+    status,
+    protocol === 'responses'
+      ? errorBody(message)
+      : {
+          error: { code: status, status: status >= 500 ? 'INTERNAL' : 'INVALID_ARGUMENT', message },
+        },
+  );
+}
+
+async function handleCanonicalProtocol(
+  req: IncomingMessage,
+  res: ServerResponse,
+  runtime: GatewayRuntime,
+  key: GatewayKey,
+  protocol: Protocol,
+  routeModel?: string,
+  forceStream = false,
+  reserve?: (key: GatewayKey, tokens: number) => { retryAfter: number | null; release(): void },
+): Promise<void> {
+  let payload: Record<string, unknown>;
+  try {
+    payload = await body(req);
+  } catch (error) {
+    protocolError(res, protocol, 400, error instanceof Error ? error.message : 'Invalid JSON');
+    return;
+  }
+
+  let canonical;
+  try {
+    canonical =
+      protocol === 'responses'
+        ? openAiResponsesToCanonical(payload)
+        : geminiToCanonical(payload, routeModel ?? '');
+  } catch (error) {
+    protocolError(res, protocol, 400, error instanceof Error ? error.message : 'Invalid request');
+    return;
+  }
+  const originalModel =
+    protocol === 'responses' ? canonical.model : (routeModel ?? canonical.model);
+  let model: string;
+  try {
+    model = modelFor(originalModel, key);
+  } catch {
+    protocolError(res, protocol, 404, `Unknown model: ${originalModel}`);
+    return;
+  }
+  const requestedProfile = aliases[originalModel];
+  if (
+    (requestedProfile && (await runtime.models(key, requestedProfile)).length === 0) ||
+    (!requestedProfile &&
+      !model.startsWith('@profile:') &&
+      !(await runtime.models(key)).includes(model))
+  ) {
+    protocolError(res, protocol, 404, `Unknown model: ${originalModel}`);
+    return;
+  }
+  const estimate =
+    Math.ceil(JSON.stringify(payload).length / 4) + Math.max(0, canonical.maxTokens ?? 0);
+  const reservation = reserve?.(key, estimate);
+  if (reservation?.retryAfter !== null && reservation) {
+    res.setHeader('retry-after', String(reservation.retryAfter));
+    protocolError(res, protocol, 429, 'Ferry gateway key token budget exceeded');
+    return;
+  }
+  const converted = canonicalToGatewayMessages(canonical.messages);
+  const tools = canonical.tools?.map((tool) => ({
+    type: 'function',
+    function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+  }));
+  const responseId = protocol === 'responses' ? `resp_${randomBytes(12).toString('hex')}` : '';
+  const stream = forceStream || canonical.stream;
+  const controller = new AbortController();
+  res.on('close', () => {
+    if (!res.writableEnded) controller.abort();
+  });
+  const sessionHint = String(
+    req.headers['x-ferry-session'] ??
+      req.headers['x-session-id'] ??
+      createHash('sha256')
+        .update(JSON.stringify(payload.input ?? payload.contents ?? {}))
+        .digest('hex'),
+  );
+  const deltas: { type: 'text_delta'; text: string }[] = [];
+  const calls: NonNullable<GatewayCompletion['toolCalls']> = [];
+  const streamedCallIds = new Set<string>();
+  const responseSend = (event: string, data: unknown) =>
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  let responseMessageStarted = false;
+  if (stream) {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    if (protocol === 'responses') {
+      const started = {
+        id: responseId,
+        object: 'response',
+        status: 'in_progress',
+        model: originalModel,
+        output: [],
+        output_text: '',
+      };
+      responseSend('response.created', { type: 'response.created', response: started });
+      responseSend('response.in_progress', { type: 'response.in_progress', response: started });
+    }
+  }
+  try {
+    const result = await runtime.complete({
+      key,
+      model,
+      messages: converted.messages,
+      ...(converted.instructions ? { instructions: converted.instructions } : {}),
+      ...(tools ? { tools } : {}),
+      ...(canonical.toolChoice !== undefined ? { toolChoice: canonical.toolChoice } : {}),
+      ...(canonical.maxTokens ? { maxTokens: canonical.maxTokens } : {}),
+      ...(canonical.temperature !== undefined ? { temperature: canonical.temperature } : {}),
+      sessionHint,
+      signal: controller.signal,
+      ...(stream
+        ? {
+            onText: (text: string) => {
+              deltas.push({ type: 'text_delta', text });
+              if (protocol === 'responses') {
+                if (!responseMessageStarted) {
+                  responseMessageStarted = true;
+                  responseSend('response.output_item.added', {
+                    type: 'response.output_item.added',
+                    output_index: 0,
+                    item: {
+                      type: 'message',
+                      id: `${responseId}_message`,
+                      role: 'assistant',
+                      status: 'in_progress',
+                      content: [],
+                    },
+                  });
+                  responseSend('response.content_part.added', {
+                    type: 'response.content_part.added',
+                    item_id: `${responseId}_message`,
+                    output_index: 0,
+                    content_index: 0,
+                    part: { type: 'output_text', text: '', annotations: [] },
+                  });
+                }
+                responseSend('response.output_text.delta', {
+                  type: 'response.output_text.delta',
+                  item_id: `${responseId}_message`,
+                  output_index: 0,
+                  content_index: 0,
+                  delta: text,
+                });
+              } else {
+                res.write(
+                  `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text }] }, index: 0 }] })}\n\n`,
+                );
+              }
+            },
+            onToolCall: (call: NonNullable<GatewayCompletion['toolCalls']>[number]) => {
+              calls.push(call);
+              streamedCallIds.add(call.id);
+              if (protocol === 'responses') {
+                const outputIndex = (responseMessageStarted ? 1 : 0) + calls.length - 1;
+                responseSend('response.output_item.added', {
+                  type: 'response.output_item.added',
+                  output_index: outputIndex,
+                  item: {
+                    type: 'function_call',
+                    id: call.id,
+                    call_id: call.id,
+                    name: call.name,
+                    arguments: '',
+                    status: 'in_progress',
+                  },
+                });
+                responseSend('response.function_call_arguments.delta', {
+                  type: 'response.function_call_arguments.delta',
+                  item_id: call.id,
+                  output_index: outputIndex,
+                  delta: call.arguments,
+                });
+              } else {
+                res.write(
+                  `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ functionCall: { id: call.id, name: call.name, args: parseArguments(call.arguments) } }] }, index: 0 }] })}\n\n`,
+                );
+              }
+            },
+          }
+        : {}),
+    });
+    reservation?.release();
+    runtime.store.recordUsage(
+      key.id,
+      result.inputTokens,
+      result.outputTokens,
+      new Date().toISOString(),
+    );
+    const allCalls = result.toolCalls?.length ? result.toolCalls : calls;
+    if (protocol === 'responses') {
+      const output = [
+        ...(result.reasoning
+          ? [
+              {
+                type: 'reasoning',
+                id: `${responseId}_reasoning`,
+                summary: [{ type: 'summary_text', text: result.reasoning }],
+              },
+            ]
+          : []),
+        ...(result.text
+          ? [
+              {
+                type: 'message',
+                id: `${responseId}_message`,
+                role: 'assistant',
+                status: 'completed',
+                content: [{ type: 'output_text', text: result.text, annotations: [] }],
+              },
+            ]
+          : []),
+        ...allCalls.map((call) => ({
+          type: 'function_call',
+          id: call.id,
+          call_id: call.id,
+          name: call.name,
+          arguments: call.arguments,
+          status: 'completed',
+        })),
+      ];
+      const responseBody = {
+        id: responseId,
+        object: 'response',
+        created_at: Math.floor(Date.now() / 1000),
+        status: 'completed',
+        error: null,
+        incomplete_details: null,
+        model: originalModel,
+        output,
+        output_text: result.text,
+        parallel_tool_calls: true,
+        usage: {
+          input_tokens: result.inputTokens,
+          output_tokens: result.outputTokens,
+          total_tokens: result.inputTokens + result.outputTokens,
+        },
+      };
+      if (!stream) {
+        json(res, 200, responseBody);
+        return;
+      }
+      if (!deltas.length && result.text) {
+        responseMessageStarted = true;
+        responseSend('response.output_item.added', {
+          type: 'response.output_item.added',
+          output_index: 0,
+          item: {
+            type: 'message',
+            id: `${responseId}_message`,
+            role: 'assistant',
+            status: 'in_progress',
+            content: [],
+          },
+        });
+        responseSend('response.content_part.added', {
+          type: 'response.content_part.added',
+          item_id: `${responseId}_message`,
+          output_index: 0,
+          content_index: 0,
+          part: { type: 'output_text', text: '', annotations: [] },
+        });
+        responseSend('response.output_text.delta', {
+          type: 'response.output_text.delta',
+          item_id: `${responseId}_message`,
+          output_index: 0,
+          content_index: 0,
+          delta: result.text,
+        });
+      }
+      allCalls.forEach((call, index) => {
+        if (streamedCallIds.has(call.id)) return;
+        const outputIndex = (responseMessageStarted ? 1 : 0) + index;
+        responseSend('response.output_item.added', {
+          type: 'response.output_item.added',
+          output_index: outputIndex,
+          item: {
+            type: 'function_call',
+            id: call.id,
+            call_id: call.id,
+            name: call.name,
+            arguments: '',
+            status: 'in_progress',
+          },
+        });
+        responseSend('response.function_call_arguments.delta', {
+          type: 'response.function_call_arguments.delta',
+          item_id: call.id,
+          output_index: outputIndex,
+          delta: call.arguments,
+        });
+      });
+      const messageOutputIndex = result.reasoning ? 1 : 0;
+      if (result.text) {
+        responseSend('response.output_text.done', {
+          type: 'response.output_text.done',
+          item_id: `${responseId}_message`,
+          output_index: messageOutputIndex,
+          content_index: 0,
+          text: result.text,
+        });
+        responseSend('response.content_part.done', {
+          type: 'response.content_part.done',
+          item_id: `${responseId}_message`,
+          output_index: messageOutputIndex,
+          content_index: 0,
+          part: { type: 'output_text', text: result.text, annotations: [] },
+        });
+        responseSend('response.output_item.done', {
+          type: 'response.output_item.done',
+          output_index: messageOutputIndex,
+          item: output[messageOutputIndex],
+        });
+      }
+      allCalls.forEach((call, index) => {
+        const outputIndex = (result.reasoning ? 1 : 0) + (result.text ? 1 : 0) + index;
+        responseSend('response.function_call_arguments.done', {
+          type: 'response.function_call_arguments.done',
+          item_id: call.id,
+          output_index: outputIndex,
+          arguments: call.arguments,
+        });
+        responseSend('response.output_item.done', {
+          type: 'response.output_item.done',
+          output_index: outputIndex,
+          item: output[outputIndex],
+        });
+      });
+      if (result.reasoning)
+        responseSend('response.reasoning_summary_text.delta', {
+          type: 'response.reasoning_summary_text.delta',
+          item_id: `${responseId}_reasoning`,
+          output_index: 0,
+          summary_index: 0,
+          delta: result.reasoning,
+        });
+      const final = finalizeCanonicalStream([], result.finishReason, {
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+      });
+      responseSend('response.completed', {
+        type: 'response.completed',
+        response: { ...responseBody, status: 'completed', finish_reason: final.finishReason },
+      });
+      res.end();
+      return;
+    }
+    const candidate = {
+      content: {
+        role: 'model',
+        parts: [
+          ...(result.text ? [{ text: result.text }] : []),
+          ...allCalls.map((call) => ({
+            functionCall: { id: call.id, name: call.name, args: parseArguments(call.arguments) },
+          })),
+        ],
+      },
+      finishReason: allCalls.length ? 'STOP' : 'STOP',
+      index: 0,
+    };
+    const usageMetadata = {
+      promptTokenCount: result.inputTokens,
+      candidatesTokenCount: result.outputTokens,
+      totalTokenCount: result.inputTokens + result.outputTokens,
+    };
+    if (!stream) {
+      json(res, 200, { candidates: [candidate], usageMetadata, modelVersion: originalModel });
+      return;
+    }
+    if (!deltas.length && result.text)
+      res.write(
+        `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: result.text }] }, index: 0 }] })}\n\n`,
+      );
+    const final = finalizeCanonicalStream(deltas, result.finishReason, {
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+    });
+    res.write(
+      `data: ${JSON.stringify({ candidates: [{ finishReason: 'STOP', index: 0 }], usageMetadata, modelVersion: originalModel, finishReason: final.finishReason })}\n\n`,
+    );
+    res.end();
+  } catch (error) {
+    reservation?.release();
+    const mapped = mappedFailure(error);
+    if (res.headersSent) {
+      if (protocol === 'responses')
+        res.write(
+          `event: error\ndata: ${JSON.stringify({ type: 'error', error: { message: mapped.message, type: mapped.type, code: mapped.code } })}\n\n`,
+        );
+      else
+        res.write(
+          `data: ${JSON.stringify({ error: { code: mapped.status, status: mapped.type, message: mapped.message } })}\n\n`,
+        );
+      res.end();
+    } else protocolError(res, protocol, mapped.status, mapped.message);
+  }
+}
+
+function parseArguments(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return {};
+  }
+}
+
 export async function startGateway(options: GatewayOptions): Promise<GatewayHandle> {
   if (options.allowLan && !options.allowLanConfirmed)
     throw new Error('LAN gateway binding requires explicit confirmation');
@@ -830,22 +1234,26 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
     json(res, 403, errorBody('Browser origins are not allowed by the Ferry gateway', 'forbidden'));
     return true;
   };
-  const badAuthentication = (req: IncomingMessage, res: ServerResponse) => {
+  const badAuthentication = (req: IncomingMessage, res: ServerResponse, protocol?: Protocol) => {
     const address = req.socket.remoteAddress ?? 'unknown';
     const now = Date.now();
     const recent = (failedAuth.get(address) ?? []).filter((at) => now - at < 60_000);
     if (recent.length >= 5) {
       res.setHeader('retry-after', '60');
-      json(
-        res,
-        429,
-        errorBody('Too many failed gateway authentication attempts', 'rate_limit_error'),
-      );
+      if (protocol)
+        protocolError(res, protocol, 429, 'Too many failed gateway authentication attempts');
+      else
+        json(
+          res,
+          429,
+          errorBody('Too many failed gateway authentication attempts', 'rate_limit_error'),
+        );
       return;
     }
     recent.push(now);
     failedAuth.set(address, recent);
-    json(res, 401, errorBody('Invalid or revoked Ferry gateway key', 'authentication_error'));
+    if (protocol) protocolError(res, protocol, 401, 'Invalid or revoked Ferry gateway key');
+    else json(res, 401, errorBody('Invalid or revoked Ferry gateway key', 'authentication_error'));
   };
   const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const now = Date.now();
@@ -887,11 +1295,19 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
       });
       return;
     }
-    if (req.method === 'POST' && (path === '/v1/chat/completions' || path === '/v1/messages')) {
+    const geminiRoute = /^\/v1beta\/models\/([^/:]+):(generateContent|streamGenerateContent)$/.exec(
+      path,
+    );
+    const protocol: Protocol | undefined =
+      path === '/v1/responses' ? 'responses' : geminiRoute ? 'gemini' : undefined;
+    if (
+      req.method === 'POST' &&
+      (path === '/v1/chat/completions' || path === '/v1/messages' || protocol !== undefined)
+    ) {
       const token = bearer(req);
       const key = token ? authenticateGatewayKey(token, options.runtime.store.list()) : undefined;
       if (!key) {
-        badAuthentication(req, res);
+        badAuthentication(req, res, protocol);
         return;
       }
       failedAuth.delete(req.socket.remoteAddress ?? 'unknown');
@@ -905,7 +1321,17 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
             429,
             path === '/v1/messages'
               ? anthropicError('Ferry gateway key rate limit exceeded', 'rate_limit_error')
-              : errorBody('Ferry gateway key rate limit exceeded', 'rate_limit_error'),
+              : protocol === 'responses'
+                ? errorBody('Ferry gateway key rate limit exceeded', 'rate_limit_error')
+                : protocol === 'gemini'
+                  ? {
+                      error: {
+                        code: 429,
+                        status: 'RESOURCE_EXHAUSTED',
+                        message: 'Ferry gateway key rate limit exceeded',
+                      },
+                    }
+                  : errorBody('Ferry gateway key rate limit exceeded', 'rate_limit_error'),
           );
           return;
         }
@@ -920,7 +1346,15 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
           429,
           path === '/v1/messages'
             ? anthropicError('Ferry gateway key concurrency limit exceeded', 'rate_limit_error')
-            : errorBody('Ferry gateway key concurrency limit exceeded', 'rate_limit_error'),
+            : protocol === 'gemini'
+              ? {
+                  error: {
+                    code: 429,
+                    status: 'RESOURCE_EXHAUSTED',
+                    message: 'Ferry gateway key concurrency limit exceeded',
+                  },
+                }
+              : errorBody('Ferry gateway key concurrency limit exceeded', 'rate_limit_error'),
         );
         return;
       }
@@ -929,7 +1363,19 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
       activeRequests.set(key.id, (activeRequests.get(key.id) ?? 0) + 1);
       options.runtime.store.touch(key.id, new Date().toISOString());
       try {
-        if (path === '/v1/messages')
+        if (protocol)
+          await handleCanonicalProtocol(
+            req,
+            res,
+            options.runtime,
+            key,
+            protocol,
+            protocol === 'gemini' ? decodeURIComponent(geminiRoute?.[1] ?? '') : undefined,
+            geminiRoute?.[2] === 'streamGenerateContent' ||
+              new URL(req.url ?? '/', 'http://localhost').searchParams.get('alt') === 'sse',
+            reserveTokens,
+          );
+        else if (path === '/v1/messages')
           await handleAnthropic(req, res, options.runtime, key, reserveTokens);
         else await handleChat(req, res, options.runtime, key, reserveTokens);
       } finally {

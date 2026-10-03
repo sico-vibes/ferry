@@ -1,0 +1,43 @@
+{
+  "chat": {
+    "model": "ferry/auto-free",
+    "messages": [{ "role": "user", "content": "hello" }],
+    "tools": [
+      { "type": "function", "function": { "name": "lookup", "parameters": { "type": "object" } } }
+    ]
+  },
+  "anthropic": {
+    "model": "ferry/auto-free",
+    "system": "Be concise",
+    "messages": [
+      {
+        "role": "assistant",
+        "content": [{ "type": "tool_use", "id": "call_1", "name": "lookup", "input": { "q": "x" } }]
+      }
+    ]
+  },
+  "responses": {
+    "model": "ferry/auto-free",
+    "input": [{ "role": "user", "content": [{ "type": "input_text", "text": "hello" }] }],
+    "tools": [{ "type": "function", "name": "lookup", "parameters": { "type": "object" } }]
+  },
+  "gemini": {
+    "model": "ferry/auto-free",
+    "contents": [{ "role": "user", "parts": [{ "text": "hello" }] }],
+    "tools": [
+      { "functionDeclarations": [{ "name": "lookup", "parameters": { "type": "object" } }] }
+    ]
+  },
+  "responseStream": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_text.delta",
+    "response.output_text.done",
+    "response.completed"
+  ],
+  "geminiStream": [
+    { "candidates": [{ "content": { "role": "model", "parts": [{ "text": "hello" }] } }] },
+    { "usageMetadata": { "promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 3 } }
+  ]
+}

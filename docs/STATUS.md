@@ -58,6 +58,6 @@ indexes) and must ship in all build targets.
 - grep and checkpoint snapshots on a 50k-file repo are slow on this laptop with Defender real-time
   scanning (see `docs/PERFORMANCE.md`).
 - Gemini is not signed in on the dev machine, so ACP Gemini delegation is untested live.
-- Codex `/v1/responses` is not implemented by the Gateway.
+- Gateway protocol coverage now includes OpenAI Responses and native Gemini generateContent; Responses state chaining via `previous_response_id` remains unsupported.
 - Provider availability, free limits and model pricing change outside Ferry's control.
 - Code signing is deferred (the unsigned beta is a documented, accepted risk in `docs/SECURITY.md`).

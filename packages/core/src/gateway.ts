@@ -335,6 +335,20 @@ export function createGatewayController(services: FerryServices) {
               ...routed.filter((item) => item.ref !== explicit),
             ].filter((item): item is (typeof candidates)[number] => Boolean(item))
           : routed;
+      const containsImage = input.messages.some(
+        (message) =>
+          Array.isArray(message.content) &&
+          message.content.some((part) =>
+            Boolean(part && typeof part === 'object' && ('image' in part || 'image_url' in part)),
+          ),
+      );
+      if (containsImage) {
+        ordered = ordered.filter((candidate) => candidate.capability?.vision === true);
+        if (!ordered.length)
+          throw Object.assign(new Error('No eligible upstream model supports image input'), {
+            name: 'AI_InvalidPromptError',
+          });
+      }
       const sticky = stickyRoutes.get(input.sessionHint);
       const profileValues = services.settings.get('profiles');
       const selectedProfileRecord = [

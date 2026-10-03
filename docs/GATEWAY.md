@@ -60,7 +60,31 @@ $env:ANTHROPIC_AUTH_TOKEN = 'YOUR_FERRY_GATEWAY_KEY'
 claude
 ```
 
-Both bearer authorization and `x-api-key` are accepted. OpenAI chat requests support non-streaming and SSE responses, function tools, parallel tool calls, JSON mode, and final-chunk usage. Anthropic Messages supports streaming, text blocks, `tool_use`, and `tool_result`. The Codex `/v1/responses` API is not implemented; point clients that require Responses elsewhere.
+Both bearer authorization and `x-api-key` are accepted. OpenAI chat requests support non-streaming and SSE responses, function tools, parallel tool calls, JSON mode, and final-chunk usage. Anthropic Messages supports streaming, text blocks, `tool_use`, and `tool_result`. Ferry also accepts OpenAI Responses requests at `/v1/responses`, including tool calls, reasoning summaries, streaming, and usage. `previous_response_id` is not supported; send the conversation input on each request.
+
+### Codex CLI
+
+Add a custom provider to `~/.codex/config.toml` (replace the example URL and model with values shown by Ferry):
+
+```toml
+model_provider = "ferry"
+model = "ferry/auto-free"
+model_reasoning_effort = "medium"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[model_providers.ferry]
+name = "Ferry Gateway"
+base_url = "http://127.0.0.1:11435/v1"
+env_key = "FERRY_GATEWAY_KEY"
+wire_api = "responses"
+```
+
+Set `FERRY_GATEWAY_KEY` to the key shown once when created in **Settings > Gateway**, then start Codex CLI. Ferry authenticates the key and applies its model allowlist, request/token limits, and normal free-first provider routing. Select a Ferry profile alias such as `ferry/auto-free` for routing across eligible free models. Codex tools remain client-side and are returned as function calls.
+
+### Gemini clients
+
+Native Gemini clients can use `POST /v1beta/models/{model}:generateContent` for a single response and `POST /v1beta/models/{model}:streamGenerateContent?alt=sse` for SSE. Use a Ferry profile alias or enabled `provider/model` ID as `{model}`; URL-encode its slash (for example, `ferry%2Fauto-free`). Authenticate with `x-api-key` or bearer authorization. Ferry maps Gemini contents, function declarations/calls, and usage through the same Gateway routing path.
 
 ## CLI
 
@@ -79,6 +103,8 @@ ferry serve --gateway
 ## Routing and limits
 
 Ferry routes through configured provider models, existing profile eligibility, quota-aware scoring, cooldown handling, avoid-training policy, and provider adapters. A request-level `x-ferry-session` or `x-session-id` header keeps a route sticky for 30 minutes; absent either header, Ferry uses a hash of the first message. Gateway calls do not run Ferry's planner/editor loop, since the connected coding client owns its tool loop. Per-key tool-result compression is enabled by default and uses inline notice text when it filters a result; recovery storage is disabled. The terse system instruction is off by default. Neither option rewrites code or tool arguments.
+
+Image parts are forwarded only to eligible model candidates whose catalog capability declares vision support. If no such candidate is available, Ferry returns HTTP 400. Text-only requests remain the default; audio, video, and file blocks are not supported.
 
 Gateway requests use provider request overrides from the catalog, layered with **Settings > Routing > Provider request overrides**. A user value replaces the catalog value for that provider. Overrides strip or force JSON request parameters, add request headers, and optionally remap a response status when its body contains a configured phrase. Mapped statuses are used for quota and fallback classification.
 

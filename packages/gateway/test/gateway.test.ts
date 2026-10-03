@@ -233,6 +233,102 @@ describe('Ferry gateway', () => {
     expect(received.at(-1)?.model).toBe('@profile:auto-free');
   }, 30_000);
 
+  it('serves Responses and native Gemini requests, including their SSE forms', async () => {
+    const url = await server();
+    const headers = {
+      authorization: `Bearer ${created.secret}`,
+      'content-type': 'application/json',
+    };
+    const responses = await fetch(`${url}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model: 'ferry/auto-free', input: 'hello' }),
+    });
+    expect(responses.status).toBe(200);
+    expect(await responses.json()).toMatchObject({
+      object: 'response',
+      status: 'completed',
+      output_text: 'Hello',
+      usage: { input_tokens: 4, output_tokens: 2 },
+    });
+
+    const responsesTool = await fetch(`${url}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        input: 'look this up',
+        tools: [{ type: 'function', name: 'lookup', parameters: { type: 'object' } }],
+      }),
+    });
+    expect(await responsesTool.json()).toMatchObject({
+      output: [
+        { type: 'message' },
+        { type: 'function_call', name: 'lookup', arguments: '{"q":"x"}' },
+      ],
+    });
+
+    const unsupportedContinuation = await fetch(`${url}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        previous_response_id: 'resp_old',
+        input: 'continue',
+      }),
+    });
+    expect(unsupportedContinuation.status).toBe(400);
+    expect(await unsupportedContinuation.json()).toMatchObject({
+      error: {
+        type: 'invalid_request_error',
+        message: 'previous_response_id is not supported by Ferry Gateway',
+      },
+    });
+
+    const responsesStream = await fetch(`${url}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model: 'ferry/auto-free', input: 'hello', stream: true }),
+    });
+    expect(await responsesStream.text()).toContain('event: response.completed');
+
+    const gemini = await fetch(`${url}/v1beta/models/ferry%2Fauto-free:generateContent`, {
+      method: 'POST',
+      headers: { ...headers, 'x-api-key': created.secret },
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'hello' }] }] }),
+    });
+    expect(gemini.status).toBe(200);
+    expect(await gemini.json()).toMatchObject({
+      candidates: [{ content: { role: 'model', parts: [{ text: 'Hello' }] } }],
+      usageMetadata: { totalTokenCount: 6 },
+    });
+
+    const geminiTool = await fetch(`${url}/v1beta/models/ferry%2Fauto-free:generateContent`, {
+      method: 'POST',
+      headers: { ...headers, 'x-api-key': created.secret },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: 'look this up' }] }],
+        tools: [{ functionDeclarations: [{ name: 'lookup', parameters: { type: 'object' } }] }],
+      }),
+    });
+    expect(await geminiTool.json()).toMatchObject({
+      candidates: [
+        { content: { parts: [{ functionCall: { name: 'lookup', args: { q: 'x' } } }] } },
+      ],
+    });
+
+    const geminiStream = await fetch(
+      `${url}/v1beta/models/ferry%2Fauto-free:streamGenerateContent?alt=sse`,
+      {
+        method: 'POST',
+        headers: { ...headers, 'x-api-key': created.secret },
+        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'hello' }] }] }),
+      },
+    );
+    expect(geminiStream.headers.get('content-type')).toContain('text/event-stream');
+    expect(await geminiStream.text()).toContain('usageMetadata');
+  }, 30_000);
+
   it('passes logical names and concrete provider/model refs through the gateway contract', async () => {
     const url = await server();
     const headers = {
