@@ -10,6 +10,7 @@ import {
 } from '../src/rpc.js';
 import { runFerryClientContract } from '../src/testing/contract.js';
 import { createFakeClock } from '../src/mock/clock.js';
+import { WorkspaceIdSchema } from '@ferry/shared';
 
 function fakeTransport(): {
   transport: RpcTransport;
@@ -83,6 +84,31 @@ describe('RPC client', () => {
       params: { sessionId: 's1', messageId: 'm1', partId: 'p1', textDelta: 'hi' },
     });
     expect(value).toBe('hi');
+    client.close();
+  });
+
+  it('de-duplicates concurrent identical RPC requests without retaining settled results', async () => {
+    const fake = fakeTransport();
+    const client = createRpcFerryClient(fake.transport);
+    const hello = fake.requests[0] as { id: number };
+    fake.receive({
+      jsonrpc: '2.0',
+      id: hello.id,
+      result: { protocol: 'ferry/1', capabilities: [], realDomains: [], implementedMethods: [] },
+    });
+    await client.hello;
+    const workspaceId = WorkspaceIdSchema.parse('w1');
+    const first = client.sessions.list({ workspaceId });
+    const second = client.sessions.list({ workspaceId });
+    expect(fake.requests).toHaveLength(2);
+    const request = fake.requests[1] as { id: number };
+    fake.receive({ jsonrpc: '2.0', id: request.id, result: [{ id: 's1' }] });
+    await expect(Promise.all([first, second])).resolves.toEqual([[{ id: 's1' }], [{ id: 's1' }]]);
+
+    const next = client.sessions.list({ workspaceId });
+    expect(fake.requests).toHaveLength(3);
+    fake.receive({ jsonrpc: '2.0', id: (fake.requests[2] as { id: number }).id, result: [] });
+    await next;
     client.close();
   });
 

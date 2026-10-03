@@ -336,6 +336,32 @@ export function modelSupportsTools(model: ModelInfo, textToolFallbackEnabled = f
 
 /** Remove models that cannot safely execute this step, then rank the remaining models. */
 export function scoreModels(input: ScoreInput): ModelCandidate[] {
+  if (input.random || input.routing?.smartReliability) return computeScoreModels(input);
+  const key = JSON.stringify(input);
+  const now = Date.now();
+  const cached = scoreCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    scoreCache.delete(key);
+    scoreCache.set(key, cached);
+    return cached.value.map((candidate) => structuredClone(candidate));
+  }
+  if (cached) scoreCache.delete(key);
+  const result = computeScoreModels(input);
+  if (result.length > 0) {
+    scoreCache.set(key, { value: structuredClone(result), expiresAt: now + scoreCacheTtlMs });
+    if (scoreCache.size > scoreCacheLimit) {
+      const oldest = scoreCache.keys().next().value;
+      if (oldest !== undefined) scoreCache.delete(oldest);
+    }
+  }
+  return result;
+}
+
+const scoreCacheTtlMs = 1_000;
+const scoreCacheLimit = 128;
+const scoreCache = new Map<string, { value: ModelCandidate[]; expiresAt: number }>();
+
+function computeScoreModels(input: ScoreInput): ModelCandidate[] {
   const providers = input.providers ?? input.capacity.providers;
   const parsedNow = Date.parse(input.capacity.now ?? new Date(0).toISOString());
   const nowMs = Number.isFinite(parsedNow) ? parsedNow : 0;

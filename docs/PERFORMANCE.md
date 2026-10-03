@@ -61,6 +61,22 @@ Follow-up gate attempt on 2026-09-30: desktop and workspace typechecks passed. F
 
 ## Changes and follow-ups
 
+### P3/P6 measurement follow-up (2026-09-30)
+
+P3/P6 implementation is in this checkout. Before/after timings could not be captured in this sandbox:
+the existing Vitest/Vite and Electron probes fail to spawn child processes with `spawn EPERM`.
+Run these commands in the orchestrator environment and append the JSON summaries here:
+Retention reads the `retention-days` settings key or `FERRY_RETENTION_DAYS` (integer 1–3650,
+default 90) and cleans rotated logs, old request rows (after daily aggregation), optimizer events,
+and optimizer blobs. The migration 0004 message query plan changed from `SCAN messages` plus
+`USE TEMP B-TREE FOR ORDER BY` to `SEARCH messages USING INDEX messages_session_created_idx`
+in a local SQLite fixture. Timing benchmarks remain pending.
+
+- `pnpm --filter @ferry/desktop perf:start`, `perf:long`, and `perf:workspace`
+- `pnpm --filter @ferry/desktop test:e2e`
+- Compare indexed storage queries with `EXPLAIN QUERY PLAN` for `messages_session_created_idx`,
+  `sessions_updated_idx`, and `requests_ts_idx`.
+
 - Capped the process-wide repo-map parse cache at 5,000 entries so opening many workspaces cannot retain every parsed source file indefinitely. Repo-map newest-file calculation no longer spreads a potentially large array into `Math.max`; glob now sorts the filtered results once.
 - Session cache events now patch session metadata, appended messages, and task records instead of refetching and cloning the full transcript. Appending no longer triggers a second full-session invalidation, and the transcript's latest assistant message lookup no longer copies/reverses all 10k messages.
 - Successful and failed agent tool calls now emit their final `session.part` after storage replacement. Before this, core emitted only the initial `running` part; the file edit and task record persisted, but the renderer never received changed paths for its Changes cache.

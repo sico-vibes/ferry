@@ -1,7 +1,8 @@
-import { mkdir, readFile, unlink } from 'node:fs/promises';
+import { mkdir, readFile, readdir, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
+import type { Statement } from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type {
   Checkpoint,
@@ -18,19 +19,26 @@ import * as schema from './schema.js';
 import { redactKnownSecretText } from '@ferry/shared';
 
 export { schema };
-const migrationPath = join(
-  dirname(fileURLToPath(import.meta.url)),
-  'migrations',
-  '0001_initial.sql',
-);
-const recoveryMigrationPath = join(
-  dirname(fileURLToPath(import.meta.url)),
-  'migrations',
-  '0002_interrupted_sessions.sql',
-);
+const migrationDirectory = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+const migrationPattern = /^(\d{4})_.+\.sql$/;
+const preparedStatements = new WeakMap<Database.Database, Map<string, Statement>>();
+function prepare(client: Database.Database, sql: string): Statement {
+  let statements = preparedStatements.get(client);
+  if (!statements) {
+    statements = new Map();
+    preparedStatements.set(client, statements);
+  }
+  let statement = statements.get(sql);
+  if (!statement) {
+    statement = client.prepare(sql);
+    statements.set(sql, statement);
+  }
+  return statement;
+}
 export interface DatabaseConnection {
   client: Database.Database;
   orm: BetterSQLite3Database<typeof schema>;
+  checkpoint(): void;
   close(): void;
 }
 
@@ -42,20 +50,23 @@ export async function openDatabase(path: string): Promise<DatabaseConnection> {
     client.pragma('busy_timeout = 5000');
     client.pragma('foreign_keys = ON');
     const current = Number(client.pragma('user_version', { simple: true }));
-    if (current < 1) {
-      const sql = await readFile(migrationPath, 'utf8');
-      const migrate = client.transaction(() => {
-        client.exec(sql);
-        client.pragma('user_version = 1');
-      });
-      migrate();
+    const migrationFiles = (await readdir(migrationDirectory))
+      .map((file) => ({ file, match: migrationPattern.exec(file) }))
+      .filter((entry): entry is { file: string; match: RegExpExecArray } => entry.match !== null)
+      .map(({ file, match }) => ({ file, version: Number(match[1]) }))
+      .sort((left, right) => left.version - right.version);
+    for (let index = 1; index < migrationFiles.length; index += 1) {
+      if (migrationFiles[index - 1]?.version === migrationFiles[index]?.version)
+        throw new Error(
+          `Duplicate storage migration version: ${String(migrationFiles[index]?.version)}`,
+        );
     }
-    const migrated = Number(client.pragma('user_version', { simple: true }));
-    if (migrated < 2) {
-      const sql = await readFile(recoveryMigrationPath, 'utf8');
+    for (const migration of migrationFiles) {
+      if (migration.version <= current) continue;
+      const sql = await readFile(join(migrationDirectory, migration.file), 'utf8');
       const migrate = client.transaction(() => {
         client.exec(sql);
-        client.pragma('user_version = 2');
+        client.pragma(`user_version = ${String(migration.version)}`);
       });
       migrate();
     }
@@ -63,7 +74,33 @@ export async function openDatabase(path: string): Promise<DatabaseConnection> {
     client.close();
     throw error;
   }
-  return { client, orm: drizzle(client, { schema }), close: () => client.close() };
+  const checkpointTimer = setInterval(
+    () => {
+      try {
+        client.pragma('wal_checkpoint(PASSIVE)');
+      } catch {
+        // Shutdown can race with the timer while the database is closing.
+      }
+    },
+    5 * 60 * 1000,
+  );
+  checkpointTimer.unref();
+  return {
+    client,
+    orm: drizzle(client, { schema }),
+    checkpoint() {
+      client.pragma('wal_checkpoint(PASSIVE)');
+    },
+    close() {
+      clearInterval(checkpointTimer);
+      try {
+        client.pragma('wal_checkpoint(PASSIVE)');
+      } finally {
+        client.close();
+        preparedStatements.delete(client);
+      }
+    },
+  };
 }
 
 const salvageTables = [
@@ -157,30 +194,30 @@ type AggregateTable =
   | 'optimizer_blobs';
 export class JsonRepository<T extends { id: string }> {
   constructor(
-    private readonly client: Database.Database,
+    protected readonly client: Database.Database,
     private readonly table: AggregateTable,
   ) {}
   put(value: T): void {
-    this.client
-      .prepare(
-        `INSERT INTO ${this.table} (id, data_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at`,
-      )
-      .run(value.id, JSON.stringify(value), new Date().toISOString());
+    prepare(
+      this.client,
+      `INSERT INTO ${this.table} (id, data_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at`,
+    ).run(value.id, JSON.stringify(value), new Date().toISOString());
   }
   get(id: string): T | undefined {
-    const row = this.client
-      .prepare(`SELECT id, data_json FROM ${this.table} WHERE id = ?`)
-      .get(id) as AggregateRow | undefined;
+    const row = prepare(this.client, `SELECT id, data_json FROM ${this.table} WHERE id = ?`).get(
+      id,
+    ) as AggregateRow | undefined;
     return row ? (JSON.parse(row.data_json) as T) : undefined;
   }
   list(): T[] {
-    const rows = this.client
-      .prepare(`SELECT id, data_json FROM ${this.table} ORDER BY id`)
-      .all() as AggregateRow[];
+    const rows = prepare(
+      this.client,
+      `SELECT id, data_json FROM ${this.table} ORDER BY id`,
+    ).all() as AggregateRow[];
     return rows.map((row) => JSON.parse(row.data_json) as T);
   }
   delete(id: string): boolean {
-    return this.client.prepare(`DELETE FROM ${this.table} WHERE id = ?`).run(id).changes > 0;
+    return prepare(this.client, `DELETE FROM ${this.table} WHERE id = ?`).run(id).changes > 0;
   }
 }
 
@@ -198,10 +235,63 @@ export class SessionRepository extends JsonRepository<Session> {
   constructor(client: Database.Database) {
     super(client, 'sessions');
   }
+  override put(value: Session): void {
+    prepare(
+      this.client,
+      `INSERT INTO sessions (id,data_json,updated_at,workspace_id) VALUES (?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json,updated_at=excluded.updated_at,workspace_id=excluded.workspace_id`,
+    ).run(value.id, JSON.stringify(value), value.updatedAt, value.workspaceId);
+  }
+  listByWorkspace(workspaceId: string): Session[] {
+    const rows = prepare(
+      this.client,
+      'SELECT data_json FROM sessions WHERE workspace_id=? ORDER BY updated_at DESC',
+    ).all(workspaceId) as { data_json: string }[];
+    return rows.map((row) => JSON.parse(row.data_json) as Session);
+  }
+  listRecent(): Session[] {
+    const rows = prepare(
+      this.client,
+      'SELECT data_json FROM sessions ORDER BY updated_at DESC',
+    ).all() as {
+      data_json: string;
+    }[];
+    return rows.map((row) => JSON.parse(row.data_json) as Session);
+  }
 }
 export class MessageRepository extends JsonRepository<Message> {
   constructor(client: Database.Database) {
     super(client, 'messages');
+  }
+  override put(value: Message): void {
+    prepare(
+      this.client,
+      `INSERT INTO messages (id,data_json,updated_at,session_id,created_at) VALUES (?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json,updated_at=excluded.updated_at,session_id=excluded.session_id,created_at=excluded.created_at`,
+    ).run(value.id, JSON.stringify(value), value.createdAt, value.sessionId, value.createdAt);
+  }
+  listBySession(sessionId: string, limit?: number): Message[] {
+    const rows = (
+      limit === undefined
+        ? prepare(
+            this.client,
+            'SELECT data_json FROM messages WHERE session_id=? ORDER BY created_at,id',
+          ).all(sessionId)
+        : prepare(
+            this.client,
+            'SELECT data_json FROM messages WHERE session_id=? ORDER BY created_at DESC,id DESC LIMIT ?',
+          )
+            .all(sessionId, limit)
+            .reverse()
+    ) as { data_json: string }[];
+    return rows.map((row) => JSON.parse(row.data_json) as Message);
+  }
+  latestBySession(sessionId: string): Message | undefined {
+    const row = prepare(
+      this.client,
+      'SELECT data_json FROM messages WHERE session_id=? ORDER BY created_at DESC,id DESC LIMIT 1',
+    ).get(sessionId) as { data_json: string } | undefined;
+    return row ? (JSON.parse(row.data_json) as Message) : undefined;
   }
 }
 export class TaskRepository {
@@ -270,22 +360,22 @@ export class ModelCacheRepository {
   constructor(private readonly client: Database.Database) {}
   replace(providerId: string, models: ModelInfo[], fetchedAt = new Date().toISOString()): void {
     this.client.transaction(() => {
-      this.client.prepare('DELETE FROM models_cache WHERE provider_id=?').run(providerId);
+      prepare(this.client, 'DELETE FROM models_cache WHERE provider_id=?').run(providerId);
       for (const model of models) this.put(providerId, model, fetchedAt);
     })();
   }
   put(providerId: string, model: ModelInfo, fetchedAt = new Date().toISOString()): void {
-    this.client
-      .prepare(
-        'INSERT INTO models_cache (id,provider_id,data_json,fetched_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,data_json=excluded.data_json,fetched_at=excluded.fetched_at',
-      )
-      .run(model.ref, providerId, JSON.stringify(model), fetchedAt);
+    prepare(
+      this.client,
+      'INSERT INTO models_cache (id,provider_id,data_json,fetched_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,data_json=excluded.data_json,fetched_at=excluded.fetched_at',
+    ).run(model.ref, providerId, JSON.stringify(model), fetchedAt);
   }
   list(providerId: string): ModelInfo[] {
     return (
-      this.client
-        .prepare('SELECT data_json FROM models_cache WHERE provider_id=? ORDER BY id')
-        .all(providerId) as { data_json: string }[]
+      prepare(
+        this.client,
+        'SELECT data_json FROM models_cache WHERE provider_id=? ORDER BY id',
+      ).all(providerId) as { data_json: string }[]
     ).map((row) => JSON.parse(row.data_json) as ModelInfo);
   }
 }
@@ -457,29 +547,28 @@ export function redactHeaders(headers: unknown): string | null {
 export class RequestRepository {
   constructor(private readonly client: Database.Database) {}
   list(): RequestRecord[] {
-    return this.client.prepare('SELECT * FROM requests ORDER BY ts').all() as RequestRecord[];
+    return prepare(this.client, 'SELECT * FROM requests ORDER BY ts').all() as RequestRecord[];
   }
   put(record: RequestRecord): void {
-    this.client
-      .prepare(
-        `INSERT OR REPLACE INTO requests (id,ts,provider,model,session_id,task_id,step_id,step_kind,input_tokens,output_tokens,cached_tokens,reasoning_tokens,cost_usd,plan_units,status,error_kind,latency_ms,headers_json) VALUES (@id,@ts,@provider,@model,@session_id,@task_id,@step_id,@step_kind,@input_tokens,@output_tokens,@cached_tokens,@reasoning_tokens,@cost_usd,@plan_units,@status,@error_kind,@latency_ms,@headers_json)`,
-      )
-      .run({
-        ...record,
-        session_id: record.session_id ?? null,
-        task_id: record.task_id ?? null,
-        step_id: record.step_id ?? null,
-        step_kind: record.step_kind ?? null,
-        input_tokens: record.input_tokens ?? null,
-        output_tokens: record.output_tokens ?? null,
-        cached_tokens: record.cached_tokens ?? null,
-        reasoning_tokens: record.reasoning_tokens ?? null,
-        cost_usd: record.cost_usd ?? null,
-        plan_units: record.plan_units ?? null,
-        error_kind: record.error_kind ?? null,
-        latency_ms: record.latency_ms ?? null,
-        headers_json: redactHeaders(record.headers),
-      });
+    prepare(
+      this.client,
+      `INSERT OR REPLACE INTO requests (id,ts,provider,model,session_id,task_id,step_id,step_kind,input_tokens,output_tokens,cached_tokens,reasoning_tokens,cost_usd,plan_units,status,error_kind,latency_ms,headers_json) VALUES (@id,@ts,@provider,@model,@session_id,@task_id,@step_id,@step_kind,@input_tokens,@output_tokens,@cached_tokens,@reasoning_tokens,@cost_usd,@plan_units,@status,@error_kind,@latency_ms,@headers_json)`,
+    ).run({
+      ...record,
+      session_id: record.session_id ?? null,
+      task_id: record.task_id ?? null,
+      step_id: record.step_id ?? null,
+      step_kind: record.step_kind ?? null,
+      input_tokens: record.input_tokens ?? null,
+      output_tokens: record.output_tokens ?? null,
+      cached_tokens: record.cached_tokens ?? null,
+      reasoning_tokens: record.reasoning_tokens ?? null,
+      cost_usd: record.cost_usd ?? null,
+      plan_units: record.plan_units ?? null,
+      error_kind: record.error_kind ?? null,
+      latency_ms: record.latency_ms ?? null,
+      headers_json: redactHeaders(record.headers),
+    });
   }
 }
 
@@ -496,7 +585,10 @@ export function runRetention(
       GROUP BY substr(ts,1,10),provider,model ON CONFLICT(day,provider,model) DO UPDATE SET requests=requests+excluded.requests,input_tokens=input_tokens+excluded.input_tokens,output_tokens=output_tokens+excluded.output_tokens,cost_usd=cost_usd+excluded.cost_usd`,
       )
       .run(cutoff);
-    return client.prepare('DELETE FROM requests WHERE ts < ?').run(cutoff).changes;
+    const requestsDeleted = client.prepare('DELETE FROM requests WHERE ts < ?').run(cutoff).changes;
+    client.prepare('DELETE FROM optimizer_events WHERE updated_at < ?').run(cutoff);
+    client.prepare('DELETE FROM optimizer_blobs WHERE updated_at < ?').run(cutoff);
+    return requestsDeleted;
   });
   return retain();
 }

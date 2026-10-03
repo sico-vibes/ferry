@@ -7,19 +7,36 @@ import {
 import { z } from 'zod';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
+import { TtlCache } from '../cache.js';
 
 const DaysSchema = z.number().int().min(1).max(365);
 
 export function register(host: CoreHost, services: FerryServices): void {
-  const emitUpdate = () => {
-    host.emit('quota.updated', CapacitySummarySchema.parse(services.quota.capacitySummary()));
+  const capacityCache = new TtlCache<ReturnType<typeof services.quota.capacitySummary>>(() =>
+    services.clock.now().getTime(),
+  );
+  const getCapacity = () =>
+    capacityCache.getOrLoad(
+      'capacity',
+      5_000,
+      () => CapacitySummarySchema.parse(services.quota.capacitySummary()),
+      (summary) => summary.perProvider.length > 0,
+    );
+  const emitUpdate = (): void => {
+    capacityCache.invalidate('capacity');
+    void getCapacity().then((summary) => {
+      host.emit('quota.updated', summary);
+    });
   };
   services.quota.subscribe(() => {
     emitUpdate();
   });
+  host.onEvent((event) => {
+    if (event === 'provider.updated') capacityCache.invalidate('capacity');
+  });
   host.registerDomain('quota', {
     capacity() {
-      return Promise.resolve(CapacitySummarySchema.parse(services.quota.capacitySummary()));
+      return getCapacity();
     },
     history(rawDays: unknown) {
       return Promise.resolve()

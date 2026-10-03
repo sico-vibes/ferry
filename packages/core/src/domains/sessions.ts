@@ -146,10 +146,7 @@ export function register(host: CoreHost, services: FerryServices): void {
     return updated;
   };
   const deleteSession = (id: SessionId) => {
-    services.messages
-      .list()
-      .filter((message) => message.sessionId === id)
-      .forEach((message) => services.messages.delete(message.id));
+    services.messages.listBySession(id).forEach((message) => services.messages.delete(message.id));
     services.tasks.delete(id);
     services.sessions.delete(id);
   };
@@ -158,9 +155,7 @@ export function register(host: CoreHost, services: FerryServices): void {
     shuttingDown = true;
     const interruptedSessionIds = [...controllers.keys()];
     for (const sessionId of controllers.keys()) {
-      for (const message of services.messages
-        .list()
-        .filter((item) => item.sessionId === sessionId)) {
+      for (const message of services.messages.listBySession(sessionId)) {
         for (const part of message.parts) {
           if (part.type !== 'approval_request' || part.state !== 'pending') continue;
           const denied = { ...part, state: 'denied' as const };
@@ -193,15 +188,16 @@ export function register(host: CoreHost, services: FerryServices): void {
       .object({ workspaceId: z.string().optional(), query: z.string().optional() })
       .parse(rawQuery ?? {});
     const needle = query.query?.toLocaleLowerCase();
-    return services.sessions
-      .list()
+    const sessions = query.workspaceId
+      ? services.sessions.listByWorkspace(query.workspaceId)
+      : services.sessions.listRecent();
+    return sessions
       .filter(
         (session) =>
           (!query.workspaceId || session.workspaceId === query.workspaceId) &&
           (!needle || `${session.title} ${session.preview}`.toLocaleLowerCase().includes(needle)),
       )
-      .map((session) => SessionSchema.parse(session))
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      .map((session) => SessionSchema.parse(session));
   };
 
   // The provider stream is process-local. A durable run marker survives status writes made by

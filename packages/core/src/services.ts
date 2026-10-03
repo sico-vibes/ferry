@@ -1,5 +1,5 @@
-import { mkdir, rename } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, readdir, rename, stat, unlink } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { createLogger, getDataPaths, type DataPaths } from '@ferry/config';
 import { KeyringSecretStore, MemorySecretStore, type SecretStore } from '@ferry/secrets';
 import { loadCatalog, type Catalog } from '@ferry/catalog';
@@ -7,6 +7,25 @@ import { QuotaEngine } from '@ferry/quota';
 import { parseOpenRouterKey } from '@ferry/providers';
 import { QuotaObservationSchema, newId } from '@ferry/shared';
 import { canonicalizePath } from '@ferry/shared/node-paths';
+import { TtlCache } from './cache.js';
+
+const catalogCache = new TtlCache<Awaited<ReturnType<typeof loadCatalog>>>();
+
+export async function cleanupRotatedLogs(logsDir: string, before: Date): Promise<number> {
+  const entries = await readdir(logsDir, { withFileTypes: true }).catch(() => []);
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.startsWith('ferry.log.') || entry.name === 'ferry.log')
+      continue;
+    const file = join(logsDir, entry.name);
+    const details = await stat(file).catch(() => undefined);
+    if (!details || details.mtime.getTime() >= before.getTime()) continue;
+    await unlink(file)
+      .then(() => removed++)
+      .catch(() => undefined);
+  }
+  return removed;
+}
 import {
   CheckpointRepository,
   ProviderRepository,
@@ -25,6 +44,7 @@ import {
   WorkspaceRepository,
   openDatabase,
   salvageReadableTables,
+  runRetention,
   type DatabaseConnection,
 } from '@ferry/storage';
 
@@ -104,7 +124,14 @@ export async function createServices({
       : `Ferry found a corrupt database and started a fresh one. The damaged file was moved to ${backupPath}.`;
     logger.error({ err: error, backupPath, salvagedTables }, 'Database recovery completed');
   }
-  const catalog = await loadCatalog({ now: clock?.now() ?? new Date() });
+  const catalogDay = (clock?.now() ?? new Date()).toISOString().slice(0, 10);
+  const catalog = await catalogCache.getOrLoad(
+    catalogDay,
+    60 * 60 * 1000,
+    () => loadCatalog({ now: clock?.now() ?? new Date() }),
+    (loaded) => loaded.models.length > 0 && loaded.providers.length > 0,
+  );
+  const settings = new SettingsRepository(db.client);
   const messages = new MessageRepository(db.client);
   const tasks = new TaskRepository(db.client);
   const checkpoints = new CheckpointRepository(db.client);
@@ -183,13 +210,33 @@ export async function createServices({
     () => Boolean(providerKeys.get('openrouter')),
   );
   let disposed = false;
+  const cleanupOldData = () => {
+    const configured = settings.get('retention-days') ?? Number(env.FERRY_RETENTION_DAYS);
+    const days =
+      typeof configured === 'number' &&
+      Number.isInteger(configured) &&
+      configured >= 1 &&
+      configured <= 3650
+        ? configured
+        : 90;
+    const cutoff = new Date((clock?.now() ?? new Date()).getTime() - days * 86_400_000);
+    try {
+      runRetention(db.client, cutoff);
+    } catch (error) {
+      logger.warn({ err: error }, 'Ferry data retention cleanup failed');
+    }
+    void cleanupRotatedLogs(paths.logs, cutoff);
+  };
+  cleanupOldData();
+  const retentionTimer = setInterval(cleanupOldData, 24 * 60 * 60 * 1000);
+  retentionTimer.unref();
   return {
     dataDir: home,
     paths,
     clock: clock ?? { now: () => new Date() },
     env,
     db,
-    settings: new SettingsRepository(db.client),
+    settings,
     workspaces: new WorkspaceRepository(db.client),
     sessions: new SessionRepository(db.client),
     checkpoints,
@@ -211,6 +258,7 @@ export async function createServices({
     async dispose() {
       if (disposed) return;
       disposed = true;
+      clearInterval(retentionTimer);
       await stopOpenRouterPolling();
       if (secretStore instanceof MemorySecretStore) secretStore.clear();
       await logger.close();

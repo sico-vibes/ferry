@@ -64,6 +64,29 @@ const task: TaskRecord = {
 };
 
 describe('step classification and routing', () => {
+  it('memoizes non-empty router rankings without sharing mutable results', () => {
+    const input = {
+      models: [model],
+      providers: [provider],
+      capacity,
+      profile,
+      step: 'plan' as const,
+      estimate: { inputTokens: 1, requiresTools: true },
+    };
+    const first = scoreModels(input);
+    const firstCandidate = first[0];
+    if (!firstCandidate) throw new Error('Expected a routable model');
+    firstCandidate.score = -1;
+    if (firstCandidate.scoreBreakdown) firstCandidate.scoreBreakdown.tierFit = -1;
+
+    const second = scoreModels(input);
+    expect(second[0]?.score).toBeGreaterThan(0);
+    expect(second[0]?.scoreBreakdown?.tierFit).toBeGreaterThan(0);
+    expect(
+      scoreModels({ ...input, estimate: { inputTokens: 2, requiresTools: true } })[0]?.score,
+    ).toBeGreaterThan(0);
+  });
+
   it('only routes Kilo models labeled free or priced at zero through Auto-Free', () => {
     const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
     if (!autoFree) throw new Error('Auto-Free profile fixture is missing');

@@ -6,6 +6,7 @@ import { useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Terminal, X } from 'lucide-react';
 import { useFerryClient } from '../data/client';
+import { keys } from '../data/queries';
 import { useUI } from '../state/ui';
 
 export function mockShellOutput(command: string): string {
@@ -27,6 +28,7 @@ function TerminalView() {
     const styles = getComputedStyle(document.documentElement);
     const term = new XTerm({
       cursorBlink: true,
+      scrollback: 5_000,
       fontFamily: 'Cascadia Code, Consolas, monospace',
       fontSize: 12,
       theme: {
@@ -77,10 +79,9 @@ export function BottomPanel() {
   const path = useRouterState({ select: (state) => state.location.pathname });
   const sessionId = path.startsWith('/s/') ? path.slice(3) : null;
   const { data } = useQuery({
-    queryKey: ['session', sessionId, 'agent-log'],
+    queryKey: sessionId ? keys.session(sessionId) : ['session', null],
     queryFn: () => (sessionId ? client.sessions.get(sessionId as never) : Promise.resolve(null)),
     enabled: Boolean(sessionId),
-    refetchInterval: 1500,
   });
   const bottomTab = useUI((s) => s.bottomTab);
   const bottomHeight = useUI((s) => s.bottomHeight);

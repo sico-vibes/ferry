@@ -1264,7 +1264,11 @@ function orderProbeCandidates(models: ModelInfo[], preferred: string[]): string[
 export async function discoverProviderModels(
   providerId: string,
   key: string,
-  options: Pick<ProbeOptions, 'baseUrl' | 'fetch' | 'signal'> = {},
+  options: Pick<ProbeOptions, 'baseUrl' | 'fetch' | 'signal'> & {
+    conditionalHeaders?: Readonly<Record<string, string>>;
+    cachedModels?: ReturnType<typeof ModelInfoSchema.parse>[];
+    onResponse?: (response: Response) => void;
+  } = {},
 ): Promise<ReturnType<typeof ModelInfoSchema.parse>[]> {
   let baseURL: string | undefined;
   if (providerId === 'openai') baseURL = options.baseUrl ?? 'https://api.openai.com/v1';
@@ -1273,13 +1277,17 @@ export async function discoverProviderModels(
     baseURL = options.baseUrl ?? compatibleDefaults[providerId];
   else if (options.baseUrl) baseURL = options.baseUrl;
   if (!baseURL) return [];
+  const headers: Record<string, string> = { ...options.conditionalHeaders };
+  if (key) headers.Authorization = `Bearer ${key}`;
   const response = await (options.fetch ?? globalThis.fetch)(
     `${baseURL.replace(/\/$/, '')}/models`,
     {
-      headers: key ? { Authorization: `Bearer ${key}` } : {},
+      headers,
       ...(options.signal ? { signal: options.signal } : {}),
     },
   );
+  options.onResponse?.(response);
+  if (response.status === 304 && options.cachedModels?.length) return options.cachedModels;
   if (!response.ok) throw new Error(`Model discovery failed with HTTP ${String(response.status)}`);
   const payload: unknown = await response.json().catch(() => ({}));
   if (!payload || typeof payload !== 'object') return [];

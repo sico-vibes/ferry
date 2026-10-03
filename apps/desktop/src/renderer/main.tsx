@@ -12,13 +12,15 @@ import {
 import type { FerryClient } from '@ferry/client';
 import { FERRY_DOMAINS } from '@ferry/shared';
 import { FerryProvider } from './data/client';
+import { configureQueryPolicies, queryDefaults } from './data/query-policy';
 import { AppRouter } from './router';
 import { isExpectedCorePortOrigin } from '../shared/core-port-origin';
 import './styles.css';
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 20_000, refetchOnWindowFocus: false } },
+  defaultOptions: { queries: queryDefaults },
 });
+configureQueryPolicies(queryClient);
 const refreshSessionQueries = () => {
   void queryClient.invalidateQueries({ queryKey: ['sessions'] });
   void queryClient.invalidateQueries({ queryKey: ['session'] });

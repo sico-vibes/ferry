@@ -680,7 +680,6 @@ function DelegationRunView({
   const { data: runs = [] } = useQuery({
     queryKey: ['delegation', sessionId],
     queryFn: () => client.delegation.runs(sessionId),
-    refetchInterval: 1000,
   });
   const run = runs.find((item) => item.id === runId);
   if (!run) return <div className="text-label text-text-3">Loading delegated work…</div>;

@@ -1,12 +1,32 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { MessagePart, SessionDetail } from '@ferry/shared';
+import type { CapacitySummary, MessagePart, Session, SessionDetail } from '@ferry/shared';
 import { keys } from './queries';
 import { useFerryClient } from './client';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
 
 type SessionFileChange = Extract<MessagePart, { type: 'tool_call' }>['changes'][number];
+
+function shallowEqual<T extends object>(left: T, right: T): boolean {
+  if (left === right) return true;
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const keys = Object.keys(leftRecord);
+  return (
+    keys.length === Object.keys(rightRecord).length &&
+    keys.every((key) => leftRecord[key] === rightRecord[key])
+  );
+}
+
+function capacityChangedRanking(previous: CapacitySummary, next: CapacitySummary): boolean {
+  const previousExhaustion = new Map(
+    previous.perProvider.map((provider) => [provider.providerId, provider.stepsLeft === 0]),
+  );
+  return next.perProvider.some(
+    (provider) => previousExhaustion.get(provider.providerId) !== (provider.stepsLeft === 0),
+  );
+}
 
 function patchSessionChanges(
   cache: ReturnType<typeof useQueryClient>,
@@ -28,12 +48,51 @@ export function useFerryEvents(): void {
   const pushToast = useToasts((state) => state.push);
   useEffect(() => {
     const off = [
-      client.on('quota.updated', (capacity) => cache.setQueryData(keys.capacity, capacity)),
+      client.on('quota.updated', (capacity) => {
+        const previous = cache.getQueryData<CapacitySummary>(keys.capacity);
+        if (previous && JSON.stringify(previous) === JSON.stringify(capacity)) return;
+
+        cache.setQueryData(keys.capacity, capacity);
+        void cache.invalidateQueries({ queryKey: ['usage', 'capacity'] });
+        if (!previous || capacityChangedRanking(previous, capacity)) {
+          void cache.invalidateQueries({
+            predicate: (query) => query.queryKey[0] === 'model-candidates',
+            refetchType: 'none',
+          });
+        }
+      }),
+      client.on('settings.updated', () => {
+        void cache.invalidateQueries({ queryKey: keys.settings });
+        void cache.invalidateQueries({ queryKey: keys.profiles });
+      }),
       client.on('session.updated', (session) => {
         void cache.invalidateQueries({ queryKey: keys.sessions });
         const key = keys.session(session.id);
         const current = cache.getQueryData<SessionDetail>(key);
         if (current) cache.setQueryData(key, { ...current, session });
+        else void cache.invalidateQueries({ queryKey: key });
+      }),
+      client.on('session.status', (session) => {
+        const listChanged = cache
+          .getQueriesData<Session[]>({ queryKey: keys.sessions })
+          .some(([, current]) =>
+            current?.some((item) => item.id === session.id && !shallowEqual(item, session)),
+          );
+        if (listChanged) {
+          cache.setQueriesData<Session[]>({ queryKey: keys.sessions }, (current) => {
+            if (!current) return current;
+            if (!current.some((item) => item.id === session.id && !shallowEqual(item, session))) {
+              return current;
+            }
+            return current.map((item) => (item.id === session.id ? session : item));
+          });
+        }
+        const key = keys.session(session.id);
+        const current = cache.getQueryData<SessionDetail>(key);
+        if (!current) void cache.invalidateQueries({ queryKey: key });
+        else if (!shallowEqual(current.session, session)) {
+          cache.setQueryData(key, { ...current, session });
+        }
       }),
       client.on('session.message', ({ sessionId, message }) => {
         patchSessionChanges(
@@ -47,8 +106,17 @@ export function useFerryEvents(): void {
           void cache.invalidateQueries({ queryKey: key });
           return;
         }
-        if (current.messages.some((item) => item.id === message.id)) return;
-        cache.setQueryData(key, { ...current, messages: [...current.messages, message] });
+        const messageIndex = current.messages.findIndex((item) => item.id === message.id);
+        if (
+          messageIndex >= 0 &&
+          JSON.stringify(current.messages[messageIndex]) === JSON.stringify(message)
+        ) {
+          return;
+        }
+        const messages = current.messages.slice();
+        if (messageIndex < 0) messages.push(message);
+        else messages[messageIndex] = message;
+        cache.setQueryData(key, { ...current, messages });
       }),
       client.on('session.part', ({ sessionId, messageId, part }) => {
         if (part.type === 'tool_call') patchSessionChanges(cache, sessionId, part.changes);

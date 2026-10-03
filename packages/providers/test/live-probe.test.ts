@@ -28,6 +28,39 @@ describe('live probe runner', () => {
     expect(discovered.find((model) => model.ref === 'groq/whisper-large-v3')).toBeUndefined();
   });
 
+  it('sends conditional model-list validators and reuses the verified list on 304', async () => {
+    let requestHeaders: Headers | undefined;
+    let validator: string | null = null;
+    const options = {
+      baseUrl: 'https://example.invalid/v1',
+      fetch: (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        requestHeaders = new Headers(init?.headers);
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [{ id: 'openai/gpt-oss-20b' }] }), {
+            status: 200,
+            headers: { etag: 'models-v1', 'content-type': 'application/json' },
+          }),
+        );
+      },
+      onResponse: (response: Response) => {
+        validator = response.headers.get('etag');
+      },
+    };
+    const models = await discoverProviderModels('groq', 'fixture-key', options);
+    const refreshed = await discoverProviderModels('groq', 'fixture-key', {
+      baseUrl: options.baseUrl,
+      cachedModels: models,
+      conditionalHeaders: { 'If-None-Match': 'models-v1' },
+      fetch: (_input, init) => {
+        requestHeaders = new Headers(init?.headers);
+        return Promise.resolve(new Response(null, { status: 304 }));
+      },
+    });
+    expect(validator).toBe('models-v1');
+    expect(requestHeaders?.get('if-none-match')).toBe('models-v1');
+    expect(refreshed).toEqual(models);
+  });
+
   it('uses explicit tool metadata and defaults unknown capability metadata to routable', async () => {
     const discovered = await discoverProviderModels('openrouter', 'fixture-key', {
       baseUrl: 'https://example.invalid/api/v1',

@@ -66,6 +66,7 @@ export function createRpcFerryClient(
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  const inFlightRequests = new Map<string, Promise<unknown>>();
   const listeners = new Map<keyof FerryEvents, Set<(payload: never) => void>>();
   const implementedMethods = new Set<string>();
 
@@ -135,8 +136,11 @@ export function createRpcFerryClient(
 
   async function request(method: string, params: unknown[] = []): Promise<unknown> {
     if (closed) throw new RpcError('RPC client is closed', -32000, 'unavailable');
+    const key = JSON.stringify([method, params]);
+    const existing = inFlightRequests.get(key);
+    if (existing) return existing;
     const id = ++nextId;
-    return await new Promise((resolve, reject) => {
+    const operation = new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
         reject(new RpcError(`RPC request timed out: ${method}`, -32001, 'timeout'));
@@ -144,6 +148,12 @@ export function createRpcFerryClient(
       pending.set(id, { resolve, reject, timer });
       transport.send({ jsonrpc: '2.0', id, method, params });
     });
+    inFlightRequests.set(key, operation);
+    try {
+      return await operation;
+    } finally {
+      if (inFlightRequests.get(key) === operation) inFlightRequests.delete(key);
+    }
   }
 
   const hello = request('system.hello', [

@@ -175,6 +175,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const key = KeyInput.parse(rawKey);
       const current = providerRecord(services, id);
       await services.secrets.set(id, key);
+      modelDiscovery.invalidate(id);
       services.providerKeys.put({
         id,
         providerId: id,
@@ -202,6 +203,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const id = ProviderIdInput.parse(rawId);
       const current = providerRecord(services, id);
       await services.secrets.delete(id);
+      modelDiscovery.invalidate(id);
       services.providerKeys.delete(id);
       invalidateSessionProviderKeyCache(services, id);
       services.cooldowns.delete(id);
@@ -277,11 +279,12 @@ export function register(host: CoreHost, services: FerryServices): void {
       const availableModels = (
         discoverySucceeded && discovered.length ? discovered : knownProbeModels
       ).filter((model) => !unavailableIds.has(model.ref.slice(id.length + 1)));
-      const persistedModels = result.ok
-        ? availableModels
-        : (current.availableModels ?? []).filter(
-            (model) => !unavailableIds.has(model.ref.slice(id.length + 1)),
-          );
+      const persistedModels =
+        availableModels.length > 0
+          ? availableModels
+          : (current.availableModels ?? []).filter(
+              (model) => !unavailableIds.has(model.ref.slice(id.length + 1)),
+            );
       const excludedModelRefs = new Set([
         ...(current.excludedModelRefs ?? []),
         ...(result.skippedModels ?? []).flatMap((item) => {
@@ -379,7 +382,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         verifiedAt: result.ok
           ? services.clock.now().toISOString().slice(0, 10)
           : current.verifiedAt,
-        ...(result.ok || result.skippedModels?.length
+        ...(persistedModels.length > 0 && (result.ok || result.skippedModels?.length)
           ? {
               availableModels: persistedModels,
               modelsVerifiedAt: result.ok
@@ -389,7 +392,8 @@ export function register(host: CoreHost, services: FerryServices): void {
             }
           : {}),
       });
-      if (result.ok) services.models.replace(id, persistedModels, now);
+      if (result.ok && availableModels.length > 0)
+        services.models.replace(id, persistedModels, now);
       host.emit('provider.updated', provider);
       return result;
     },

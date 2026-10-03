@@ -1,4 +1,4 @@
-import { integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 const aggregate = (name: string) =>
   sqliteTable(name, {
@@ -19,32 +19,58 @@ export const modelsCache = sqliteTable('models_cache', {
   dataJson: text('data_json').notNull(),
   fetchedAt: text('fetched_at').notNull(),
 });
-export const requests = sqliteTable('requests', {
-  id: text('id').primaryKey(),
-  ts: text('ts').notNull(),
-  provider: text('provider').notNull(),
-  model: text('model').notNull(),
-  sessionId: text('session_id'),
-  taskId: text('task_id'),
-  stepId: text('step_id'),
-  stepKind: text('step_kind'),
-  inputTokens: integer('input_tokens'),
-  outputTokens: integer('output_tokens'),
-  cachedTokens: integer('cached_tokens'),
-  reasoningTokens: integer('reasoning_tokens'),
-  costUsd: real('cost_usd'),
-  planUnits: real('plan_units'),
-  status: text('status').notNull(),
-  errorKind: text('error_kind'),
-  latencyMs: integer('latency_ms'),
-  headersJson: text('headers_json'),
-});
+export const requests = sqliteTable(
+  'requests',
+  {
+    id: text('id').primaryKey(),
+    ts: text('ts').notNull(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    sessionId: text('session_id'),
+    taskId: text('task_id'),
+    stepId: text('step_id'),
+    stepKind: text('step_kind'),
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    cachedTokens: integer('cached_tokens'),
+    reasoningTokens: integer('reasoning_tokens'),
+    costUsd: real('cost_usd'),
+    planUnits: real('plan_units'),
+    status: text('status').notNull(),
+    errorKind: text('error_kind'),
+    latencyMs: integer('latency_ms'),
+    headersJson: text('headers_json'),
+  },
+  (table) => [index('requests_session_ts_idx').on(table.sessionId, table.ts)],
+);
 export const quotaWindows = aggregate('quota_windows');
 export const quotaObservations = aggregate('quota_observations');
 export const cooldowns = aggregate('cooldowns');
 export const workspaces = aggregate('workspaces');
-export const sessions = aggregate('sessions');
-export const messages = aggregate('messages');
+export const sessions = sqliteTable(
+  'sessions',
+  {
+    id: text('id').primaryKey(),
+    dataJson: text('data_json').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    workspaceId: text('workspace_id'),
+  },
+  (table) => [
+    index('sessions_workspace_updated_idx').on(table.workspaceId, table.updatedAt),
+    index('sessions_updated_idx').on(table.updatedAt),
+  ],
+);
+export const messages = sqliteTable(
+  'messages',
+  {
+    id: text('id').primaryKey(),
+    dataJson: text('data_json').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    sessionId: text('session_id'),
+    createdAt: text('created_at'),
+  },
+  (table) => [index('messages_session_created_idx').on(table.sessionId, table.createdAt, table.id)],
+);
 export const tasks = aggregate('tasks');
 export const taskSteps = aggregate('task_steps');
 export const decisions = aggregate('decisions');

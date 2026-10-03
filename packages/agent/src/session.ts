@@ -73,20 +73,14 @@ export class SessionStore {
   ): { session: Session; messages: Message[]; taskRecord: TaskRecord } | undefined {
     const session = this.repositories.sessions.get(sessionId);
     if (!session) return undefined;
-    const messages = this.repositories.messages
-      .list()
-      .filter((message) => message.sessionId === sessionId)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    const messages = this.repositories.messages.listBySession(sessionId, 10_000);
     const taskRecord = this.repositories.tasks.get(sessionId);
     if (!taskRecord) throw new Error(`Session ${sessionId} has no task record`);
     return { session, messages, taskRecord };
   }
 
   list(workspaceId: WorkspaceId): Session[] {
-    return this.repositories.sessions
-      .list()
-      .filter((session) => session.workspaceId === workspaceId)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return this.repositories.sessions.listByWorkspace(workspaceId);
   }
 
   appendMessage(
@@ -97,11 +91,8 @@ export class SessionStore {
     now = new Date(),
     agentRole?: Message['agentRole'],
   ): Message {
-    const previousTime = this.repositories.messages
-      .list()
-      .filter((entry) => entry.sessionId === sessionId)
-      .map((entry) => Date.parse(entry.createdAt))
-      .reduce((latest, value) => Math.max(latest, value), 0);
+    const latestMessage = this.repositories.messages.latestBySession(sessionId);
+    const previousTime = latestMessage ? Date.parse(latestMessage.createdAt) : 0;
     const at = Math.max(now.getTime(), previousTime + (previousTime ? 1 : 0));
     const message = MessageSchema.parse({
       id: newId('message'),
@@ -143,7 +134,7 @@ export class SessionStore {
 
   replacePart(sessionId: string, part: Message['parts'][number]): Message | undefined {
     const message = this.repositories.messages
-      .list()
+      .listBySession(sessionId)
       .find(
         (entry) =>
           entry.sessionId === sessionId &&

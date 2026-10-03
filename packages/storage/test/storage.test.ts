@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProfileIdSchema, SessionIdSchema, WorkspaceIdSchema } from '@ferry/shared';
 import { openDatabase, runRetention, RequestRepository, SessionRepository } from '../src/index.js';
+import { latestMigrationVersion } from './migration-version.js';
 
 const dirs: string[] = [];
 vi.setConfig({ testTimeout: 30_000 });
@@ -17,7 +18,9 @@ describe('@ferry/storage', () => {
     dirs.push(dir);
     const db = await openDatabase(join(dir, 'ferry.sqlite'));
     try {
-      expect(db.client.pragma('user_version', { simple: true })).toBe(2);
+      expect(db.client.pragma('user_version', { simple: true })).toBe(
+        await latestMigrationVersion(),
+      );
       const repo = new SessionRepository(db.client);
       const session = {
         id: 's1',

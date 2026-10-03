@@ -23,6 +23,7 @@ function isLoopbackUrl(value: string | undefined): boolean {
 export interface ModelDiscovery {
   refresh(id: string): Promise<void>;
   refreshIfStale(id: string): Promise<void>;
+  invalidate(id: string): void;
   dispose(): Promise<void>;
 }
 
@@ -34,6 +35,7 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
 
   const inFlight = new Map<string, Promise<void>>();
   const controllers = new Map<string, AbortController>();
+  const validators = new Map<string, { etag?: string; lastModified?: string }>();
 
   const refresh = (id: string): Promise<void> => {
     const active = inFlight.get(id);
@@ -57,10 +59,28 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
 
       try {
         const providerId = ProviderIdSchema.parse(id);
+        const previousModels = services.models.list(id);
+        const validator = validators.get(id);
+        const conditionalHeaders: Record<string, string> = {};
+        if (validator?.etag) conditionalHeaders['If-None-Match'] = validator.etag;
+        if (validator?.lastModified)
+          conditionalHeaders['If-Modified-Since'] = validator.lastModified;
         const models = await discoverProviderModels(providerId, key, {
           ...(baseUrl ? { baseUrl } : {}),
           signal: controller.signal,
+          ...(previousModels.length ? { cachedModels: previousModels } : {}),
+          ...(Object.keys(conditionalHeaders).length ? { conditionalHeaders } : {}),
+          onResponse(response) {
+            const etag = response.headers.get('etag') ?? validator?.etag;
+            const lastModified = response.headers.get('last-modified') ?? validator?.lastModified;
+            if (etag || lastModified)
+              validators.set(id, {
+                ...(etag ? { etag } : {}),
+                ...(lastModified ? { lastModified } : {}),
+              });
+          },
         });
+        if (!models.length) return;
         const fetchedAt = services.clock.now().toISOString();
         services.models.replace(id, models, fetchedAt);
         const saved = services.providers.get(id);
@@ -105,6 +125,9 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
   const discovery: ModelDiscovery = {
     refresh,
     refreshIfStale,
+    invalidate(id) {
+      validators.delete(id);
+    },
     async dispose() {
       for (const controller of controllers.values()) controller.abort();
       await Promise.allSettled(inFlight.values());

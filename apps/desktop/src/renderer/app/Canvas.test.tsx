@@ -65,6 +65,28 @@ describe('Home and session canvases', () => {
     expect(getSession).not.toHaveBeenCalled();
   });
 
+  it('patches cached session detail on live session updates without refetching', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const { queries } = mount(<div />, client);
+    const session = (await client.sessions.list())[0];
+    if (!session) throw new Error('Expected a fixture session');
+    const detail = await client.sessions.get(session.id);
+    queries.setQueryData(keys.session(session.id), detail);
+
+    const selectedModel = (await client.models.list())[0];
+    if (!selectedModel) throw new Error('Expected a fixture model');
+    const getSession = vi.spyOn(client.sessions, 'get');
+
+    await client.models.select(session.id, selectedModel.ref);
+
+    await waitFor(() => {
+      expect(queries.getQueryData<SessionDetail>(keys.session(session.id))?.session.modelRef).toBe(
+        selectedModel.ref,
+      );
+    });
+    expect(getSession).not.toHaveBeenCalled();
+  });
+
   it('creates, sends, opens a tab, and navigates from the Home composer', async () => {
     const client = createMockFerryClient({ behavior: 'test' });
     mount(<HomeCanvas />, client);

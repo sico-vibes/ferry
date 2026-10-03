@@ -13,6 +13,15 @@ import { CoreHost, createCoreHost, createMemoryTransportPair } from '../src/inde
 import { modelHintsFromRegistry } from '../src/session-deps.js';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'ferry-qa-domains-'));
+const migrationDirectory = new URL('../../storage/src/migrations/', import.meta.url);
+async function latestStorageMigrationVersion(): Promise<number> {
+  const versions = (await readdir(migrationDirectory))
+    .map((file) => /^(\d{4})_.+\.sql$/.exec(file)?.[1])
+    .filter((version): version is string => version !== undefined)
+    .map(Number);
+  if (versions.length === 0) throw new Error('No storage migrations were found');
+  return Math.max(...versions);
+}
 vi.setConfig({ testTimeout: 30_000 });
 afterAll(async () => {
   await rm(dataDir, { recursive: true, force: true });
@@ -157,12 +166,13 @@ describe('QA settings domain', () => {
   it('runs migrations idempotently when the database is reopened', async () => {
     const dir = join(dataDir, 'settings-migrations');
     const first = await openDatabase(join(dir, 'db', 'ferry.sqlite'));
+    const latestVersion = await latestStorageMigrationVersion();
     const version = first.client.pragma('user_version', { simple: true });
     first.close();
     const second = await openDatabase(join(dir, 'db', 'ferry.sqlite'));
     try {
-      expect(Number(version)).toBe(2);
-      expect(Number(second.client.pragma('user_version', { simple: true }))).toBe(2);
+      expect(Number(version)).toBe(latestVersion);
+      expect(Number(second.client.pragma('user_version', { simple: true }))).toBe(latestVersion);
     } finally {
       second.close();
     }

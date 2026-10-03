@@ -14,6 +14,7 @@ import {
   SettingsRepository,
   UsageDailyRepository,
 } from '../src/index.js';
+import { latestMigrationVersion } from './migration-version.js';
 
 const dirs: string[] = [];
 vi.setConfig({ testTimeout: 30_000 });
@@ -31,10 +32,11 @@ describe('QA storage: migrations and corruption', () => {
     const dir = await tempDir();
     const file = join(dir, 'nested', 'ferry.sqlite');
     const first = await openDatabase(file);
-    expect(first.client.pragma('user_version', { simple: true })).toBe(2);
+    const latestVersion = await latestMigrationVersion();
+    expect(first.client.pragma('user_version', { simple: true })).toBe(latestVersion);
     first.close();
     const second = await openDatabase(file);
-    expect(second.client.pragma('user_version', { simple: true })).toBe(2);
+    expect(second.client.pragma('user_version', { simple: true })).toBe(latestVersion);
     second.close();
   });
 
@@ -93,6 +95,45 @@ describe('QA storage: migrations and corruption', () => {
 });
 
 describe('QA storage: repositories', () => {
+  it('indexes session message lookups and uses the composite index in the query plan', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      db.client.exec('DROP INDEX messages_session_created_idx');
+      const before = db.client
+        .prepare(
+          'EXPLAIN QUERY PLAN SELECT data_json FROM messages WHERE session_id=? ORDER BY created_at,id',
+        )
+        .all('s1') as { detail: string }[];
+      db.client.exec(
+        'CREATE INDEX messages_session_created_idx ON messages(session_id,created_at,id)',
+      );
+      const after = db.client
+        .prepare(
+          'EXPLAIN QUERY PLAN SELECT data_json FROM messages WHERE session_id=? ORDER BY created_at,id',
+        )
+        .all('s1') as { detail: string }[];
+      expect(before.some((row) => row.detail.includes('SCAN messages'))).toBe(true);
+      expect(after.some((row) => row.detail.includes('messages_session_created_idx'))).toBe(true);
+      expect(db.client.pragma('index_list(messages)')).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: 'messages_session_created_idx' })]),
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it('uses the updated-time index for session listing', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const plan = db.client
+        .prepare('EXPLAIN QUERY PLAN SELECT data_json FROM sessions ORDER BY updated_at DESC')
+        .all() as { detail: string }[];
+      expect(plan.some((row) => row.detail.includes('sessions_updated_idx'))).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
   it('round-trips JSON aggregates and reports deletes', async () => {
     const dir = await tempDir();
     const db = await openDatabase(join(dir, 'repo.sqlite'));
@@ -162,6 +203,19 @@ describe('QA storage: repositories', () => {
       const daily = new UsageDailyRepository(db.client).list();
       expect(daily).toHaveLength(1);
       expect(daily[0]).toMatchObject({ requests: 5, input_tokens: 50, output_tokens: 20 });
+      db.client
+        .prepare('INSERT INTO optimizer_blobs VALUES (?,?,?)')
+        .run('old-blob', '{}', '2019-01-01');
+      db.client
+        .prepare('INSERT INTO optimizer_events VALUES (?,?,?)')
+        .run('old-event', '{}', '2019-01-01');
+      runRetention(db.client, cutoff);
+      expect(db.client.prepare('SELECT count(*) AS n FROM optimizer_blobs').get()).toMatchObject({
+        n: 0,
+      });
+      expect(db.client.prepare('SELECT count(*) AS n FROM optimizer_events').get()).toMatchObject({
+        n: 0,
+      });
     } finally {
       db.close();
     }
