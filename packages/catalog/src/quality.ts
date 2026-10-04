@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { normalizeModelId } from './registry.js';
+import { isModelFreeForPlan, ModelRefSchema, ProviderIdSchema } from '@ferry/shared';
 
 export const QUALITY_MODEL_ALIASES: Record<string, string> = {
   'gpt-oss-120b': 'openai/gpt-oss-120b',
@@ -481,12 +482,20 @@ export async function loadFreeCodingRanking(
         !liveRefs.has(`${dataProvider}/${id}`.toLowerCase())
       )
         continue;
-      if (
-        providerId === 'kilo' &&
-        !(model.cost?.input === 0 && model.cost.output === 0) &&
-        !/:free(?:$|:)/i.test(id)
-      )
-        continue;
+      const free = isModelFreeForPlan(
+        {
+          id: ProviderIdSchema.parse(providerId),
+          tag: providerId === 'kilo' ? 'promo' : 'legit',
+        },
+        {
+          ref: ModelRefSchema.parse(`${providerId}/${id}`),
+          providerId: ProviderIdSchema.parse(providerId),
+          free: model.cost?.input === 0 && model.cost.output === 0,
+          priceInPerM: model.cost?.input ?? null,
+          priceOutPerM: model.cost?.output ?? null,
+        },
+      );
+      if (providerId === 'kilo' && !free) continue;
       const toolCall = capabilities[`${dataProvider}/${id}`]?.toolCall;
       candidates.push({
         providerId,
@@ -506,9 +515,18 @@ export async function loadFreeCodingRanking(
   };
   for (const model of openRouter.data ?? []) {
     if (!liveRefs.has(`openrouter/${model.id}`.toLowerCase())) continue;
-    const free =
-      model.id.endsWith(':free') ||
-      (Number(model.pricing?.prompt) === 0 && Number(model.pricing?.completion) === 0);
+    const priceInPerM = Number(model.pricing?.prompt) * 1_000_000;
+    const priceOutPerM = Number(model.pricing?.completion) * 1_000_000;
+    const free = isModelFreeForPlan(
+      { id: ProviderIdSchema.parse('openrouter'), tag: 'legit' },
+      {
+        ref: ModelRefSchema.parse(`openrouter/${model.id}`),
+        providerId: ProviderIdSchema.parse('openrouter'),
+        free: /:free(?:$|:)/i.test(model.id) || (priceInPerM === 0 && priceOutPerM === 0),
+        priceInPerM: Number.isFinite(priceInPerM) ? priceInPerM : null,
+        priceOutPerM: Number.isFinite(priceOutPerM) ? priceOutPerM : null,
+      },
+    );
     if (!free) continue;
     const toolCall = capabilities[`openrouter/${model.id}`]?.toolCall;
     candidates.push({

@@ -18,6 +18,7 @@ export type { ModelMessage } from 'ai';
 import {
   ProviderIdSchema,
   ModelInfoSchema,
+  isModelFreeForPlan,
   RawCallObservationSchema,
   UsageRecordSchema,
   type ModelRef,
@@ -1365,6 +1366,7 @@ export async function discoverProviderModels(
     const known = catalog.models.find(
       (model) => model.providerId === providerId && model.ref.endsWith(`/${normalizedId}`),
     );
+    const catalogProvider = catalog.providers.find((provider) => provider.provider === providerId);
     const supportedParameters = (item as Record<string, unknown>).supported_parameters;
     const rawPricing = (item as Record<string, unknown>).pricing;
     const pricing =
@@ -1391,13 +1393,33 @@ export async function discoverProviderModels(
     const toolCall = Array.isArray(supportedParameters)
       ? metadataSupportsTools
       : (registrySupportsTools ?? (isPreferredToolModel(providerId, normalizedId) ? true : null));
-    const free =
-      providerId === 'openrouter'
-        ? /:free(?:$|:)/i.test(normalizedId)
-        : providerId === 'kilo'
-          ? /:free(?:$|:)/i.test(normalizedId) ||
-            (known?.priceInPerM === 0 && known.priceOutPerM === 0)
-          : (known?.free ?? false);
+    const priceInPerM = explicitInputPrice ?? known?.priceInPerM ?? null;
+    const priceOutPerM = explicitOutputPrice ?? known?.priceOutPerM ?? null;
+    const tag = catalogProvider?.tag ?? (providerId === 'kilo' ? 'promo' : 'legit');
+    const free = isModelFreeForPlan(
+      {
+        id: ProviderIdSchema.parse(providerId),
+        tag,
+        ...(catalogProvider?.free_plan === undefined
+          ? {}
+          : {
+              freePlan: {
+                sourceUrl: catalogProvider.free_plan.source_url,
+                models: catalogProvider.free_plan.models,
+                ...(catalogProvider.free_plan.excluded_models === undefined
+                  ? {}
+                  : { excludedModels: catalogProvider.free_plan.excluded_models }),
+              },
+            }),
+      },
+      {
+        ref: `${providerId}/${normalizedId}` as ModelInfo['ref'],
+        providerId: ProviderIdSchema.parse(providerId),
+        free: known?.free ?? /:free(?:$|:)/i.test(normalizedId),
+        priceInPerM,
+        priceOutPerM,
+      },
+    );
     const contextWindow = known?.contextWindow ?? 8192;
     const model = ModelInfoSchema.safeParse({
       ref: `${providerId}/${normalizedId}`,
@@ -1422,8 +1444,8 @@ export async function discoverProviderModels(
       ...(known?.qualityDate ? { qualityDate: known.qualityDate } : {}),
       reasoning: known?.reasoning ?? false,
       free,
-      priceInPerM: free ? 0 : (explicitInputPrice ?? known?.priceInPerM ?? null),
-      priceOutPerM: free ? 0 : (explicitOutputPrice ?? known?.priceOutPerM ?? null),
+      priceInPerM,
+      priceOutPerM,
     });
     return model.success ? [model.data] : [];
   });

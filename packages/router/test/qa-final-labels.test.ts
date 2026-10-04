@@ -15,6 +15,7 @@ import {
   mayUsePromptsForTraining,
   resolveFallbackChain,
   scoreModels,
+  explainModelRouting,
   type CapacityView,
 } from '../src/index.js';
 
@@ -165,21 +166,25 @@ describe('QA final: provider labels and free routing', () => {
     ).toHaveLength(1);
   });
 
-  it('keeps a promo provider routable for Auto-Free even when models.dev marks it paid', () => {
+  it('rejects a paid model from a promo-tagged provider without sourced model coverage', () => {
+    // Round 3 policy: the promo tag alone no longer grants free routing.
     const promo = provider('novita', { tag: 'promo' });
-    const candidates = score(
-      autoFree,
-      [
-        model('novita/llama-3.3-70b-instruct', {
-          free: false,
-          priceInPerM: 0.2,
-          priceOutPerM: 0.4,
-        }),
-      ],
-      [promo],
-    );
-    expect(candidates.map((candidate) => candidate.ref)).toEqual(['novita/llama-3.3-70b-instruct']);
-    expect(candidates[0]?.scoreBreakdown?.cost).toBe(6);
+    const paid = model('novita/llama-3.3-70b-instruct', {
+      free: false,
+      priceInPerM: 0.2,
+      priceOutPerM: 0.4,
+    });
+    const candidates = score(autoFree, [paid], [promo]);
+    expect(candidates).toHaveLength(0);
+    const excluded = explainModelRouting({
+      models: [paid],
+      providers: [promo],
+      capacity: { providers: [promo], now },
+      profile: autoFree,
+      step: 'plan',
+      estimate: { inputTokens: 100, requiresTools: true },
+    });
+    expect(excluded[0]?.reasons).toContain('model not marked free for this provider plan');
   });
 
   it('built-in profile roles default to on only for Auto-Free and Best Available', () => {

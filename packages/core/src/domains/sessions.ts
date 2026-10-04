@@ -384,6 +384,8 @@ export function register(host: CoreHost, services: FerryServices): void {
             ...configuredOauth,
           ],
           services.catalog.models,
+          (id) => services.providers.get(id),
+          (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
         );
         const preflightCapacity = preflight.capacity();
         const verifiedModelRefs = preflightCapacity.providers.flatMap((provider) =>
@@ -592,7 +594,12 @@ export function register(host: CoreHost, services: FerryServices): void {
         ];
         const sessionCatalog = {
           ...services.catalog,
-          models: preserveCatalogBillingMetadata(sessionCatalogModels, services.catalog.models),
+          models: preserveCatalogBillingMetadata(
+            sessionCatalogModels,
+            services.catalog.models,
+            (id) => services.providers.get(id),
+            (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
+          ),
         };
         const rawProjectConfig = await readFile(join(workspace.path, '.ferry', 'config.json'))
           .then((bytes) => {
@@ -841,6 +848,7 @@ export function register(host: CoreHost, services: FerryServices): void {
                       cachedTokens: row.cachedTokens ?? 0,
                     },
                     model,
+                    services.providers.get(model.providerId),
                   ).amountUsd
                 );
               }, 0);
@@ -892,7 +900,11 @@ export function register(host: CoreHost, services: FerryServices): void {
               ? storedCaps.data
               : { sessionUsd: null, dailyUsd: null, monthlyUsd: null };
             const estimateSpendResult = monetaryPaid
-              ? estimateSpend(estimate, candidate)
+              ? estimateSpend(
+                  estimate,
+                  candidate,
+                  preflightCapacity.providers.find((item) => item.id === candidate.providerId),
+                )
               : { amountUsd: 0, estimated: false };
             const amountUsd = estimateSpendResult.amountUsd;
             const profileState: SpendState = {
@@ -1067,6 +1079,7 @@ export function register(host: CoreHost, services: FerryServices): void {
                         cachedTokens: record.cachedTokens ?? 0,
                       },
                       model,
+                      usageProvider,
                     )
                   : { amountUsd: 0.01, estimated: true };
             const priced =

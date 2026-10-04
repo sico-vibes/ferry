@@ -65,6 +65,8 @@ export function register(host: CoreHost, services: FerryServices): void {
       return preserveCatalogBillingMetadata(
         [...cachedModels, ...oauthModels].map((model) => ModelInfoSchema.parse(model)),
         services.catalog.models,
+        (id) => services.providers.get(id),
+        (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
       );
     },
     async page(rawQuery?: unknown) {
@@ -85,6 +87,8 @@ export function register(host: CoreHost, services: FerryServices): void {
       const listedModels = preserveCatalogBillingMetadata(
         [...cachedModels, ...oauthModels].map((model) => ModelInfoSchema.parse(model)),
         services.catalog.models,
+        (id) => services.providers.get(id),
+        (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
       );
       const filtered = listedModels
         .filter((model) => providerId === undefined || model.providerId === providerId)
@@ -120,7 +124,12 @@ export function register(host: CoreHost, services: FerryServices): void {
           ? services.models.list(provider)
           : [];
       });
-      const models = preserveCatalogBillingMetadata(cachedModels, services.catalog.models);
+      const models = preserveCatalogBillingMetadata(
+        cachedModels,
+        services.catalog.models,
+        (id) => services.providers.get(id),
+        (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
+      );
       const enabled = models.filter((model) => modelSupportsTools(model));
       const oauthModels = oauthModelCatalog
         .filter((model) => services.providers.get(model.providerId)?.enabled)

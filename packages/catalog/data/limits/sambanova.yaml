@@ -1,6 +1,9 @@
 provider: sambanova
 name: SambaNova Cloud Free Tier
 tag: legit
+free_plan:
+  source_url: https://docs.sambanova.ai/docs/en/models/rate-limits
+  models: ['*']
 signup_url: https://cloud.sambanova.ai/
 docs_url: https://docs.sambanova.ai/docs/en/models/rate-limits
 terms_note: >-

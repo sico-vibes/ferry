@@ -1,0 +1,14 @@
+# Free consistency round 3: the rule removes Ferry's core free tiers (no commit)
+
+Thanks for the impact report; it caught a regression that can't ship. Your rule drops free routing for the providers Ferry is built on:
+`cloudflare-workers-ai 27 -> 0`, `gemini 39 -> 2`, `groq 16 -> 1`, `nvidia 105 -> 101`, `ovhcloud 14 -> 2`, `mistral 3 -> 1`, `zenmux 10 -> 6` (free before -> after).
+
+Cause: these providers have a **free tier on the account** (Gemini API free tier, Groq free tier, Cloudflare's daily neuron allowance, NVIDIA NIM trial credits/free endpoints, Mistral Experiment, OVHcloud anonymous). The catalog's per-model prices are the *paid-tier list prices*, but a request on a free-tier account costs $0 within the tier's rate/daily limits. Main modelled this through provider plans (the "legit"/"promo"-style plan data in `packages/catalog/data/limits/*.yaml`), and that was correct for these. The bug you were sent to fix is narrower: flags vs router disagreeing, plus unpriced or priced models being treated as free **without** any sourced plan.
+
+Required rule (one shared function):
+- **Free-tier plan:** a model is free for routing when its provider has a sourced free-tier plan in the catalog, the model is covered by that plan (all models, or an explicit list or pattern in the plan data), **and** the user's billing setting for that provider is the free tier (not "billing enabled / paid"). List prices don't matter here; the tier's limits are enforced by quota/limits as today.
+- **$0 models:** known $0/$0 prices make a model free (e.g. OpenRouter `:free`, the OpenRouter promos), except on providers where the user's account is paid/credit-billed, where only provider-defined free variants (OpenRouter `:free` and $0 routes) qualify. Keep round 2's paid-account rule.
+- **Otherwise billable**, including unknown prices on providers without a sourced free plan (keep round 2's tightening there: the old provider-wide `promo`/`legit`/`keyRequired:false` shortcuts are gone unless backed by a sourced plan entry).
+- If a provider's plan data doesn't describe which models the free tier covers, add that data from the provider's documented free-tier terms (cite the source in the YAML), rather than guessing in code.
+
+Acceptance: regenerate `.dev/runs/free-impact.md`. Gemini, Groq, Cloudflare Workers AI, NVIDIA, OVHcloud, Mistral and Zenmux must match main's free counts **unless** a specific model is excluded by the provider's documented free-tier coverage, and each such exclusion is listed with its source. OpenRouter's +4 stays. Every remaining removal is listed individually with its reason. Tests: free-tier provider with list prices -> free on the free-tier billing setting and billable when billing is enabled; unpriced model without plan -> billable; the paid-account $0 case. Typecheck, lint and prettier; no commit.

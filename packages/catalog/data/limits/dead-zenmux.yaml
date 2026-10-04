@@ -10,5 +10,9 @@ terms_note: >-
 data_use: unknown
 verified_at: '2026-09-25'
 source_url: https://zenmux.ai/docs/guide/subscription.html
+free_plan:
+  source_url: https://zenmux.ai/docs/guide/subscription.html
+  models: []
+  excluded_models: ['*']
 dead: true
 windows: []

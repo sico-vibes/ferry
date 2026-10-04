@@ -57,6 +57,17 @@ function providerRecord(services: FerryServices, id: string): Provider {
     name: limits.name,
     tag: limits.tag,
     keyRequired: limits.key_required ?? true,
+    ...(limits.free_plan === undefined
+      ? {}
+      : {
+          freePlan: {
+            sourceUrl: limits.free_plan.source_url,
+            models: limits.free_plan.models,
+            ...(limits.free_plan.excluded_models === undefined
+              ? {}
+              : { excludedModels: limits.free_plan.excluded_models }),
+          },
+        }),
     billingEnabled: saved?.billingEnabled ?? false,
     kind: limits.tag === 'subscription_cli' ? 'cli' : 'api',
     brand: null,

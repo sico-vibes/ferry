@@ -3,10 +3,20 @@ name: GroqCloud
 tag: legit
 signup_url: https://console.groq.com/keys
 docs_url: https://console.groq.com/docs/rate-limits
-terms_note: Free limits vary by model. Headers expose RPD request and TPM token limits.
+terms_note: Free-plan model coverage and model-specific rate limits follow the official free-plan table.
 data_use: Subject to Groq terms.
 verified_at: '2026-09-23'
 source_url: https://console.groq.com/docs/rate-limits
+free_plan:
+  source_url: https://console.groq.com/docs/rate-limits
+  models:
+    - canopylabs/orpheus-*
+    - meta-llama/llama-prompt-guard-2-*
+    - openai/gpt-oss-120b
+    - openai/gpt-oss-20b
+    - openai/gpt-oss-safeguard-20b
+    - qwen/qwen3.8-27b
+    - whisper-large-v3*
 parser: groq_rate_limit_headers
 probe_models:
   - qwen/qwen3.8-27b

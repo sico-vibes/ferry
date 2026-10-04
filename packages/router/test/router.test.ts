@@ -136,10 +136,24 @@ const task: TaskRecord = {
 };
 
 describe('step classification and routing', () => {
-  it('only routes Kilo models labeled free or priced at zero through Auto-Free', () => {
+  it('only routes Kilo models covered by its sourced plan or priced at zero through Auto-Free', () => {
     const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
     if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
-    const kilo: Provider = { ...provider, id: 'kilo' as Provider['id'] };
+    // Kilo coverage is the exact sourced variant list; a different :free model is not implied.
+    const kilo: Provider = {
+      ...provider,
+      id: 'kilo' as Provider['id'],
+      freePlan: {
+        sourceUrl: 'https://kilo.ai/docs/gateway/usage-and-billing',
+        models: [
+          'stepfun/step-3.7-flash:free',
+          'poolside/laguna-s-2.1:free',
+          'nvidia/nemotron-3-ultra-550b-a55b:free',
+          'tencent/hy3:free',
+          'openrouter/free',
+        ],
+      },
+    };
     const models: ModelInfo[] = [
       {
         ...model,
@@ -159,7 +173,7 @@ describe('step classification and routing', () => {
       },
       {
         ...model,
-        ref: 'kilo/deepseek/deepseek-v4-flash:free' as ModelInfo['ref'],
+        ref: 'kilo/nvidia/nemotron-3-ultra-550b-a55b:free' as ModelInfo['ref'],
         providerId: kilo.id,
         free: false,
         priceInPerM: null,
@@ -182,10 +196,10 @@ describe('step classification and routing', () => {
       step: 'edit',
       estimate: { inputTokens: 100, requiresTools: true },
     });
-    expect(candidates.map(({ ref }) => ref)).toEqual([
-      'kilo/deepseek/deepseek-v4-flash:free',
-      'kilo/local-zero',
-    ]);
+    expect(candidates.map(({ ref }) => ref)).toEqual(
+      expect.arrayContaining(['kilo/nvidia/nemotron-3-ultra-550b-a55b:free', 'kilo/local-zero']),
+    );
+    expect(candidates).toHaveLength(2);
   });
 
   it('keeps missing quality neutral and keeps quality weight independent of reliability', () => {
@@ -283,9 +297,10 @@ describe('step classification and routing', () => {
     expect(candidates.map((candidate) => candidate.ref)).toEqual([unknownModel.ref]);
   });
 
-  it('allows discovered unknown-price models through Auto-Free and explains hard exclusions', () => {
+  it('excludes unpriced models outside a sourced free plan and explains the exclusion', () => {
     const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
     if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
+    // Round 3 policy: unknown prices require model coverage from a sourced provider plan.
     const discovered = { ...model, free: false, priceInPerM: null, priceOutPerM: null };
     const input = {
       models: [discovered],
@@ -295,8 +310,10 @@ describe('step classification and routing', () => {
       step: 'plan' as const,
       estimate: { inputTokens: 1, requiresTools: true },
     };
-    expect(scoreModels(input)).toHaveLength(1);
-    expect(explainModelRouting(input)).toEqual([]);
+    expect(scoreModels(input)).toHaveLength(0);
+    expect(explainModelRouting(input)[0]?.reasons).toContain(
+      'unknown pricing is not allowed for this provider plan',
+    );
 
     const paidProvider = { ...provider, tag: 'paid' as const };
     expect(
@@ -570,7 +587,16 @@ describe('step classification and routing', () => {
       priceInPerM: 0.1,
       priceOutPerM: 0.4,
     };
-    const freeGemini = { ...provider, id: 'gemini' as Provider['id'], tag: 'legit' as const };
+    // The fixture mirrors the catalog's per-model free-plan coverage, not a provider-wide tag.
+    const freeGemini = {
+      ...provider,
+      id: 'gemini' as Provider['id'],
+      tag: 'legit' as const,
+      freePlan: {
+        sourceUrl: 'https://ai.google.dev/gemini-api/docs/pricing',
+        models: ['gemini-3.8-flash'],
+      },
+    };
     const chain = autoFree.fallbackChain ?? [];
     const result = resolveFallbackChain({
       chain,
@@ -617,14 +643,19 @@ describe('step classification and routing', () => {
     ).toHaveLength(0);
   });
 
-  it('allows no-key free providers and excludes strict names from fallback scoring with reasons', () => {
+  it('uses sourced free-plan coverage for keyless providers and explains strict-name exclusions', () => {
     const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
     if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
+    // Keyless access is not a free-tier rule; Gemini still needs sourced model coverage.
     const keyless = {
       ...provider,
       id: 'gemini' as Provider['id'],
       keyStatus: 'missing' as const,
       keyRequired: false,
+      freePlan: {
+        sourceUrl: 'https://ai.google.dev/gemini-api/docs/pricing',
+        models: ['gemini-3.8-flash'],
+      },
     };
     const eligible = {
       ...model,

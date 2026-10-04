@@ -13,6 +13,12 @@ export const ProviderTagSchema = z.enum([
   'caution',
 ]);
 export type ProviderTag = z.infer<typeof ProviderTagSchema>;
+export const ProviderFreePlanSchema = z.object({
+  sourceUrl: z.url(),
+  models: z.array(z.string().min(1)),
+  excludedModels: z.array(z.string().min(1)).optional(),
+});
+export type ProviderFreePlan = z.infer<typeof ProviderFreePlanSchema>;
 export const ProviderKeySchema = z.object({
   id: z.string(),
   providerId: ProviderIdSchema,
@@ -49,6 +55,8 @@ export const ProviderSchema = z.object({
   tag: ProviderTagSchema,
   /** False when the provider endpoint is free without a user key. */
   keyRequired: z.boolean().optional(),
+  /** Sourced free-tier coverage and any explicitly excluded model patterns. */
+  freePlan: ProviderFreePlanSchema.optional(),
   /** User override: this key is billed, even when the provider advertises a free tier. */
   billingEnabled: z.boolean().optional(),
   kind: z.enum(['api', 'cli']),

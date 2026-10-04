@@ -1,0 +1,10 @@
+# Free consistency round 2: impact evidence + two policy corrections (no commit)
+
+Good centralisation, and the OpenRouter finding (4 $0/$0 models the router rejected) is exactly the bug. Two of the rule changes are policy decisions with user-visible blast radius, and the report has no impact numbers. Fix both and prove the impact.
+
+1. **Impact table (required):** write `.dev/runs/free-impact.md` (and summarise it in your report): for every provider in the catalog snapshots, the number of models that are free-for-routing **before** (main's logic) and **after** (yours), and the list of models whose status flipped, with the reason. Generate it with a small script against the snapshot catalog (keep the script under `scripts/` if useful for `catalog:check`).
+2. **Keyless and free-plan providers must not lose their free models.** LLM7, OVHcloud and other providers whose *whole plan* is documented as free (the catalog's provider-level plan/source data) are evidence of $0 even when per-model prices are missing. Rule: a model is free if (a) its catalog prices are both known and zero, **or** (b) its provider's plan is declared free in the catalog with a source, and the model isn't individually priced non-zero. Unknown price on a provider without a free plan stays billable. Make sure the impact table shows no free provider losing its models unless the catalog says it's priced.
+3. **Paid / credit-billed provider accounts: keep the blanket Auto-Free rejection** that main had, except for explicit free variants the provider defines as such (OpenRouter `:free` and the $0/$0 OpenRouter promos, since OpenRouter's free models don't bill credits). A stale $0 in our catalog must never let Auto-Free spend on a billing account. Paid profiles are unaffected.
+4. Keep the guardrail invariant: anything priced or unknown (outside rule 2b) requires paid confirmation. Add table-driven tests for 2 and 3, including LLM7/OVHcloud-style entries without prices and a paid-account provider with a $0 catalog entry.
+
+Typecheck, lint and prettier; no commit.

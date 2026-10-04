@@ -30,16 +30,93 @@ const limits = await Promise.all(
     .map(async (file) => parse(await readFile(join(dataDir, 'limits', file), 'utf8'))),
 );
 const snapshot = JSON.parse(await readFile(join(dataDir, 'models.snapshot.json'), 'utf8'));
+const openRouterSnapshot = JSON.parse(
+  await readFile(join(dataDir, 'vendor', 'openrouter-models.json'), 'utf8'),
+);
 const chain = parse(
   await readFile(join(root, 'packages', 'router', 'data', 'auto-free-chain.yaml'), 'utf8'),
 );
 const snapshotByProvider = new Map();
+let invalidFreeMetadata = false;
+for (const provider of limits) {
+  if (
+    provider.free_plan &&
+    (typeof provider.free_plan.source_url !== 'string' ||
+      !/^https?:\/\//i.test(provider.free_plan.source_url) ||
+      !Array.isArray(provider.free_plan.models) ||
+      provider.free_plan.models.some((pattern) => typeof pattern !== 'string' || !pattern.trim()))
+  ) {
+    invalidFreeMetadata = true;
+    console.error(
+      `ERROR: ${provider.provider} free_plan must have a source_url and model coverage.`,
+    );
+  }
+}
+const patternMatches = (pattern, modelId) => {
+  const escaped = [...pattern]
+    .map((character) => {
+      if (character === '*') return '.*';
+      if (character === '?') return '.';
+      return '\\^$.*+()[]{}|'.includes(character) ? `\\${character}` : character;
+    })
+    .join('');
+  return new RegExp(`^${escaped}$`, 'i').test(modelId);
+};
+const freePlanCovers = (provider, modelId) => {
+  if (!provider?.free_plan) return false;
+  return (
+    provider.free_plan.models.some((pattern) => patternMatches(pattern, modelId)) &&
+    !(provider.free_plan.excluded_models ?? []).some((pattern) => patternMatches(pattern, modelId))
+  );
+};
 for (const [provider, entry] of Object.entries(snapshot)) {
   const providerId = provider === 'google' ? 'gemini' : provider;
+  const providerPlan = limits.find((candidate) => candidate.provider === providerId);
+  for (const [id, model] of Object.entries(entry.models ?? {})) {
+    const zeroPriced = model.cost?.input === 0 && model.cost?.output === 0;
+    const explicitOpenRouterFree = /:free(?:$|:)/i.test(id);
+    if (providerId === 'openrouter' && explicitOpenRouterFree && !zeroPriced) {
+      invalidFreeMetadata = true;
+      console.error(
+        `ERROR: openrouter/${id} is a :free variant with nonzero or unknown catalog pricing.`,
+      );
+    }
+    const modelId = `${providerId}/${id}`.slice(providerId.length + 1);
+    const expectedFree =
+      providerId === 'openrouter'
+        ? explicitOpenRouterFree || zeroPriced
+        : ['paid', 'credits'].includes(providerPlan?.tag) || providerId === 'opencode'
+          ? false
+          : providerPlan?.tag === 'trial'
+            ? zeroPriced
+            : freePlanCovers(providerPlan, modelId)
+              ? true
+              : zeroPriced;
+    if (typeof model.free === 'boolean' && model.free !== expectedFree) {
+      invalidFreeMetadata = true;
+      console.error(`ERROR: ${providerId}/${id} free flag contradicts pricing or provider plan.`);
+    }
+  }
   snapshotByProvider.set(
     providerId,
     Object.keys(entry.models ?? {}).map((id) => id.toLowerCase()),
   );
+}
+for (const model of openRouterSnapshot.data ?? []) {
+  const zeroPriced = Number(model.pricing?.prompt) === 0 && Number(model.pricing?.completion) === 0;
+  const explicitOpenRouterFree = /:free(?:$|:)/i.test(model.id);
+  if (explicitOpenRouterFree && !zeroPriced) {
+    invalidFreeMetadata = true;
+    console.error(
+      `ERROR: openrouter/${model.id} is a :free variant with nonzero or unknown catalog pricing.`,
+    );
+  }
+  if (typeof model.free === 'boolean' && model.free !== (explicitOpenRouterFree || zeroPriced)) {
+    invalidFreeMetadata = true;
+    console.error(
+      `ERROR: openrouter/${model.id} free flag contradicts pricing or the OpenRouter rule.`,
+    );
+  }
 }
 const toRegex = (glob) => {
   const pattern = [...glob]
@@ -151,4 +228,4 @@ if (removedAutoFree)
 console.log(
   `Catalog check complete: ${changes} live model changes; data stale=${dataAge > staleDays}.`,
 );
-if (removedAutoFree) process.exitCode = 1;
+if (removedAutoFree || invalidFreeMetadata) process.exitCode = 1;

@@ -1,0 +1,12 @@
+# Free consistency round 4: gates red (no commit)
+
+Round 3's rule and impact report are accepted. Gates: prettier and text pass; `check` 62/64; e2e **core flows FAILS** (`expect(locator).toBeVisible()` element not found; the other 4 phases pass). Logs: `.dev/runs/free-check.log`, `.dev/runs/free-e2e.log`.
+
+Failing tests:
+- router `treats paid API list prices as zero cost on free provider plans and honors paid overrides` (`expected [] to deeply equal ['gemini/gemini-3.8-flash']`). **This is the round-3 behaviour itself.** Either the test fixture's plan lacks the new coverage data (then the fixture must express coverage the way real catalog data does) or the classifier is wrong. It must pass with real semantics.
+- router `allows discovered unknown-price models through Auto-Free and explains hard exclusions`, `allows no-key free providers and excludes strict names from fallback scoring with reasons` (`expected [] to deeply equal ['novita/llama-3.3-70b-instruct']`), `only routes Kilo models labeled free or priced at zero through Auto-Free` (`expected ['kilo/local-zero'] to deeply equal [...2]`), `qa-final-labels > keeps a promo provider routable for Auto-Free even when models.dev marks it paid`.
+- core `paid-guardrails > requires confirmation before the first request for a pinned non-free OpenRouter model` and `> requires paid approval when model pricing is unknown` (`waitFor timed out`).
+
+For each one decide: (a) **intended policy change** from rounds 2-3 (for example unknown prices without a sourced plan are now billable, or promo shortcuts now need a sourced plan): update the test to assert the new policy, keeping its intent of explaining exclusions, and name the policy in a comment; or (b) **regression**: fix the code. The two paid-guardrail tests are safety invariants; they must keep asserting that confirmation is required. A timeout there means the run may never reach the approval prompt (for example the model is now excluded before routing, or flagged free). Find out which, and make sure a priced or unknown pinned model still produces the confirmation, never a silent block or a hang. For the e2e failure, find the missing element in the core-flows phase (likely a model or provider the flow expects to be free in Auto-Free) and decide the same way; seeded mock/e2e catalogs must express plan coverage like the real data.
+
+Report a table: test -> (a) or (b) -> what changed. Typecheck, lint and prettier; no commit.

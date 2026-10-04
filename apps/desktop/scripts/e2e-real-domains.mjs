@@ -575,7 +575,9 @@ try {
     models: [
       { id: 'cohere/north-mini-code:free', supported_parameters: ['tools'] },
       {
-        id: 'bytedance-seed/seed-2.0-mini',
+        // Groq's sourced free-plan coverage includes GPT-OSS-120B, so this mock
+        // can exercise the real Auto-Free rate-limit fallback policy.
+        id: 'openai/gpt-oss-120b',
         supported_parameters: ['tools'],
         pricing: { prompt: '0.0000005', completion: '0.000001' },
       },
