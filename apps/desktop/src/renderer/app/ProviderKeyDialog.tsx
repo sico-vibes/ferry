@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Provider } from '@ferry/shared';
-import { X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Trash2, X } from 'lucide-react';
 import { UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { useSettings } from '../data/queries';
+import { ProviderStatusBadge } from './ProviderStatusBadge';
+
+const numberFormat = new Intl.NumberFormat();
 
 export function ProviderKeyDialog({
   provider,
@@ -32,6 +35,7 @@ export function ProviderKeyDialog({
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirmRemoveKeyId, setConfirmRemoveKeyId] = useState<string | null>(null);
   const [priority, setPriority] = useState('0');
   const [weight, setWeight] = useState('1');
   const [autoDisableEnabled, setAutoDisableEnabled] = useState(true);
@@ -250,13 +254,36 @@ export function ProviderKeyDialog({
     await client.providers.reorderKeys(provider.id, ids);
     await cache.invalidateQueries({ queryKey: ['provider-keys', provider.id] });
   };
+  const moveKeyDown = async (index: number) => {
+    if (!provider || index >= providerKeys.length - 1) return;
+    const ids = providerKeys.map((entry) => entry.id);
+    const current = ids[index];
+    const next = ids[index + 1];
+    if (current === undefined || next === undefined) return;
+    ids[index] = next;
+    ids[index + 1] = current;
+    await client.providers.reorderKeys(provider.id, ids);
+    await cache.invalidateQueries({ queryKey: ['provider-keys', provider.id] });
+  };
   const removeKeyEntry = async (keyId: string) => {
     if (!provider) return;
-    await client.providers.removeKeyEntry(provider.id, keyId);
-    await Promise.all([
-      cache.invalidateQueries({ queryKey: ['provider-keys', provider.id] }),
-      cache.invalidateQueries({ queryKey: ['providers'] }),
-    ]);
+    setBusy(true);
+    try {
+      await client.providers.removeKeyEntry(provider.id, keyId);
+      setConfirmRemoveKeyId(null);
+      await Promise.all([
+        cache.invalidateQueries({ queryKey: ['provider-keys', provider.id] }),
+        cache.invalidateQueries({ queryKey: ['providers'] }),
+      ]);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? `Key could not be removed: ${error.message}`
+          : 'Key could not be removed. Try again.',
+      );
+    } finally {
+      setBusy(false);
+    }
   };
   return (
     <Dialog
@@ -268,13 +295,14 @@ export function ProviderKeyDialog({
           setKeyLabel('');
           setMessage('');
           setConfirmRemove(false);
+          setConfirmRemoveKeyId(null);
         }
         onOpenChange(nextOpen);
       }}
     >
       <DialogContent
         aria-describedby="provider-key-description"
-        className="h-[min(90dvh,48rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+        className="h-[min(90dvh,48rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
       >
         <DialogHeader>
           <div className="flex items-start gap-3">
@@ -282,7 +310,7 @@ export function ProviderKeyDialog({
               <DialogTitle>Manage {provider?.name ?? 'provider'} key</DialogTitle>
               <DialogDescription id="provider-key-description">
                 {showRoutingControls
-                  ? 'Set the provider routing tier and relative share, then manage its key.'
+                  ? `Manage ${provider?.name ?? 'provider'} keys. Ferry rotates through enabled keys in this order.`
                   : realProviders
                     ? 'Keys are stored securely in your operating system keyring.'
                     : 'Keys are stored in this local demo client.'}
@@ -295,62 +323,124 @@ export function ProviderKeyDialog({
         </DialogHeader>
         <div className="min-h-0 overflow-y-auto pr-2">
           <div className="grid gap-4">
+            <p className="text-meta text-text-3">
+              Use keys you own under one provider account, such as separate project keys. Pooling
+              accounts to multiply free tiers may violate provider terms; Ferry does not support it.
+            </p>
             {providerKeys.length > 0 && (
               <section className="grid gap-2" aria-label="Saved provider keys">
                 <h3 className="text-ui-label">Saved keys</h3>
                 {providerKeys.map((item, index) => (
                   <div
-                    className="flex items-center gap-2 rounded-lg border border-border p-3"
+                    className="grid gap-2 border-b border-border py-3 last:border-b-0"
                     key={item.id}
                   >
-                    <span
-                      aria-hidden="true"
-                      className={`h-2 w-2 rounded-full ${item.status === 'ok' ? 'bg-success' : item.status === 'rate_limited' ? 'bg-warning' : item.status === 'invalid' ? 'bg-destructive' : 'bg-muted-foreground'}`}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-ui-label">
-                        {item.label} (ending {item.lastFour})
-                      </span>
-                      <span className="text-meta text-text-3">
-                        {item.status.replace('_', ' ')}
-                        <span className="block">
-                          {String(item.usageToday.requests)} requests /{' '}
-                          {String(item.usageToday.tokens)} tokens today
-                        </span>
-                        {item.lastError && <span className="block">{item.lastError}</span>}
-                      </span>
-                    </span>
-                    <Button
-                      aria-label={`${item.enabled ? 'Disable' : 'Enable'} ${item.label}`}
-                      onClick={() => {
-                        void changeKeyEnabled(item.id, !item.enabled);
-                      }}
-                      size="sm"
-                      variant="secondary"
-                    >
-                      {item.enabled ? 'On' : 'Off'}
-                    </Button>
-                    <Button
-                      aria-label={`Move ${item.label} up`}
-                      disabled={index === 0}
-                      onClick={() => {
-                        void moveKeyUp(index);
-                      }}
-                      size="sm"
-                      variant="ghost"
-                    >
-                      Up
-                    </Button>
-                    <Button
-                      aria-label={`Remove ${item.label}`}
-                      onClick={() => {
-                        void removeKeyEntry(item.id);
-                      }}
-                      size="sm"
-                      variant="ghost"
-                    >
-                      Remove
-                    </Button>
+                    <div className="flex min-w-0 flex-wrap items-center gap-3">
+                      <div className="grid min-w-0 flex-1 gap-1">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <span className="text-ui-label">
+                            {item.label} (ending {item.lastFour})
+                          </span>
+                          <ProviderStatusBadge
+                            status={item.status}
+                            cooldownUntil={item.cooldownUntil}
+                            enabled={item.enabled}
+                          />
+                        </div>
+                        <p className="text-meta text-text-3">
+                          {numberFormat.format(item.usageToday.requests)} requests /{' '}
+                          {numberFormat.format(item.usageToday.tokens)} tokens today
+                        </p>
+                        {item.lastError && (
+                          <p className="text-meta text-text-3">{item.lastError}</p>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="text-ui-label">Enabled</span>
+                        <Switch
+                          aria-label={`Enable ${item.label}`}
+                          checked={item.enabled}
+                          disabled={busy}
+                          onCheckedChange={(enabled) => {
+                            void changeKeyEnabled(item.id, enabled);
+                          }}
+                        />
+                      </div>
+                      <UiV2.TooltipProvider>
+                        <UiV2.Tooltip>
+                          <UiV2.TooltipTrigger asChild>
+                            <Button
+                              aria-label={`Move up ${item.label}`}
+                              disabled={busy || index === 0}
+                              onClick={() => void moveKeyUp(index)}
+                              size="icon"
+                              variant="ghost"
+                            >
+                              <ArrowUp aria-hidden="true" size={16} strokeWidth={1.75} />
+                            </Button>
+                          </UiV2.TooltipTrigger>
+                          <UiV2.TooltipContent>Move up</UiV2.TooltipContent>
+                        </UiV2.Tooltip>
+                      </UiV2.TooltipProvider>
+                      <UiV2.TooltipProvider>
+                        <UiV2.Tooltip>
+                          <UiV2.TooltipTrigger asChild>
+                            <Button
+                              aria-label={`Move down ${item.label}`}
+                              disabled={busy || index === providerKeys.length - 1}
+                              onClick={() => void moveKeyDown(index)}
+                              size="icon"
+                              variant="ghost"
+                            >
+                              <ArrowDown aria-hidden="true" size={16} strokeWidth={1.75} />
+                            </Button>
+                          </UiV2.TooltipTrigger>
+                          <UiV2.TooltipContent>Move down</UiV2.TooltipContent>
+                        </UiV2.Tooltip>
+                      </UiV2.TooltipProvider>
+                      {confirmRemoveKeyId === item.id ? null : (
+                        <UiV2.TooltipProvider>
+                          <UiV2.Tooltip>
+                            <UiV2.TooltipTrigger asChild>
+                              <Button
+                                aria-label={`Remove ${item.label}`}
+                                disabled={busy}
+                                onClick={() => {
+                                  setConfirmRemoveKeyId(item.id);
+                                }}
+                                size="icon"
+                                variant="ghost"
+                                className="text-destructive hover:text-destructive"
+                              >
+                                <Trash2 aria-hidden="true" size={16} strokeWidth={1.75} />
+                              </Button>
+                            </UiV2.TooltipTrigger>
+                            <UiV2.TooltipContent>Remove key</UiV2.TooltipContent>
+                          </UiV2.Tooltip>
+                        </UiV2.TooltipProvider>
+                      )}
+                    </div>
+                    {confirmRemoveKeyId === item.id && (
+                      <div className="flex flex-wrap items-center gap-2" role="alert">
+                        <span className="mr-auto text-meta text-text-3">Remove {item.label}?</span>
+                        <Button
+                          disabled={busy}
+                          onClick={() => {
+                            setConfirmRemoveKeyId(null);
+                          }}
+                          variant="ghost"
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          disabled={busy}
+                          onClick={() => void removeKeyEntry(item.id)}
+                          variant="destructive"
+                        >
+                          Remove key
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </section>
@@ -359,8 +449,7 @@ export function ProviderKeyDialog({
               <section className="grid gap-3" aria-label="Provider routing">
                 <h3 className="text-ui-label">Routing</h3>
                 <p className="text-meta text-text-3">
-                  Higher priority is tried first. Weight changes the share among near-equal
-                  providers at that priority.
+                  Higher priority is tried first; weight sets share within that tier.
                 </p>
                 <label className="grid gap-2 text-ui-label">
                   Priority
@@ -554,54 +643,58 @@ export function ProviderKeyDialog({
                 {message}
               </p>
             )}
-            {confirmRemove ? (
-              <p role="alert">
-                Remove the saved key for {provider?.name}?{' '}
-                <Button
-                  onClick={() => {
-                    setConfirmRemove(false);
-                  }}
-                  variant="secondary"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  disabled={busy}
-                  onClick={() => {
-                    void remove();
-                  }}
-                  variant="destructive"
-                >
-                  {busy ? 'Removing…' : 'Remove key'}
-                </Button>
-              </p>
-            ) : (
-              <div className="flex flex-wrap justify-end gap-2">
-                <Button disabled={busy} onClick={() => void test()} variant="secondary">
-                  {busy ? 'Testing…' : 'Test connection'}
-                </Button>
-                <Button disabled={busy} onClick={() => void save()}>
-                  {busy ? 'Saving…' : providerKeys.length ? 'Add key' : 'Save key'}
-                </Button>
-                {providerKeys.length === 0 && provider?.keyStatus !== 'missing' && (
-                  <Button
-                    disabled={busy}
-                    onClick={() => {
-                      setConfirmRemove(true);
-                    }}
-                    variant="ghost"
-                  >
-                    Remove key
-                  </Button>
-                )}
-              </div>
-            )}
             <p className="text-meta text-text-3">
               {realProviders
                 ? 'Keys never leave your device or appear in Ferry logs.'
                 : 'Keys stay in the demo client store. Never paste a real secret into a shared demo.'}
             </p>
           </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-border pt-3">
+          {confirmRemove ? (
+            <>
+              <span className="mr-auto text-meta text-text-3" role="alert">
+                Remove the saved key for {provider?.name}?
+              </span>
+              <Button
+                onClick={() => {
+                  setConfirmRemove(false);
+                }}
+                variant="secondary"
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  void remove();
+                }}
+                variant="destructive"
+              >
+                {busy ? 'Removing…' : 'Remove key'}
+              </Button>
+            </>
+          ) : (
+            <>
+              {providerKeys.length === 0 && provider?.keyStatus !== 'missing' && (
+                <Button
+                  disabled={busy}
+                  onClick={() => {
+                    setConfirmRemove(true);
+                  }}
+                  variant="ghost"
+                >
+                  Remove key
+                </Button>
+              )}
+              <Button disabled={busy} onClick={() => void test()} variant="secondary">
+                {busy ? 'Testing…' : 'Test connection'}
+              </Button>
+              <Button disabled={busy} onClick={() => void save()}>
+                {busy ? 'Saving…' : providerKeys.length ? 'Add key' : 'Save key'}
+              </Button>
+            </>
+          )}
         </div>
       </DialogContent>
     </Dialog>

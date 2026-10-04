@@ -7,6 +7,7 @@ import type {
   ModelInfo,
   Profile,
   Provider,
+  ProviderKey,
   Session,
   Skill,
   TaskRecord,
@@ -18,6 +19,7 @@ export interface MockState {
   workspaces: Workspace[];
   sessions: Session[];
   providers: MockProvider[];
+  providerKeys: Map<string, ProviderKey[]>;
   models: ModelInfo[];
   profiles: Profile[];
   messages: Map<string, Message[]>;

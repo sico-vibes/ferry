@@ -13,6 +13,7 @@ import {
   TaskRecordSchema,
   WorkspaceSchema,
   ProviderSchema,
+  ProviderKeySchema,
   newId,
 } from '@ferry/shared';
 import type {
@@ -48,6 +49,12 @@ const persistenceSchema = (state: unknown) => {
   const workspaces = (value.workspaces as unknown[]).map((x) => WorkspaceSchema.parse(x));
   const sessions = (value.sessions as unknown[]).map((x) => SessionSchema.parse(x));
   const providers = (value.providers as unknown[]).map((x) => ProviderSchema.parse(x));
+  const providerKeys = new Map(
+    ((value.providerKeys as [string, unknown[]][] | undefined) ?? []).map(([id, entries]) => [
+      id,
+      entries.map((entry) => ProviderKeySchema.parse(entry)),
+    ]),
+  );
   const models = (value.models as unknown[]).map((x) => ModelInfoSchema.parse(x));
   const profiles = (value.profiles as unknown[]).map((x) => ProfileSchema.parse(x));
   const settingsValue = value.settings as Record<string, unknown>;
@@ -77,6 +84,7 @@ const persistenceSchema = (state: unknown) => {
     workspaces,
     sessions,
     providers,
+    providerKeys,
     models,
     profiles,
     settings,
@@ -117,6 +125,7 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
     workspaces: structuredClone(fixtures.workspaces),
     sessions: structuredClone(fixtures.sessions),
     providers: structuredClone(fixtures.providers),
+    providerKeys: new Map(),
     models: structuredClone(fixtures.models),
     profiles: structuredClone(fixtures.profiles),
     messages: new Map(fixtures.messages),
@@ -137,6 +146,7 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
       state = {
         ...state,
         ...restored,
+        providerKeys: restored.providerKeys ?? state.providerKeys,
         providers: (restored.providers ?? state.providers).map((provider) => {
           const budget = fixtures.providers.find(
             (fixture) => fixture.id === provider.id,
@@ -159,6 +169,7 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
         messages: [...state.messages],
         taskRecords: [...state.taskRecords],
         selections: [...state.selections],
+        providerKeys: [...state.providerKeys],
       },
     });
   };

@@ -7,7 +7,7 @@ import type { MockStore } from '../types.js';
 
 export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryClient['providers'] {
   const { state, rng, before, persist, emit } = deps;
-  const keys = new Map<string, ProviderKey[]>();
+  const keys = state.providerKeys;
   return {
     async list() {
       await before();

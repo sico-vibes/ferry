@@ -42,6 +42,7 @@ const states = [
   'settings-scrolled',
   'settings-profiles',
   'settings-providers',
+  'settings-provider-key-dialog',
   'settings-routing',
   'settings-optimizers',
   'settings-delegation',
@@ -61,6 +62,14 @@ const states = [
 ];
 const filename = (state, theme, viewport) =>
   `${state}-${theme}-${viewport.width}x${viewport.height}.png`;
+const requestedStates = process.env.FERRY_SHOT_STATES?.split(',')
+  .map((state) => state.trim())
+  .filter(Boolean);
+const statesToCapture = requestedStates
+  ? states.filter((state) => requestedStates.includes(state))
+  : states;
+if (requestedStates?.some((state) => !states.includes(state)))
+  throw new Error(`Unknown screenshot state in FERRY_SHOT_STATES: ${requestedStates.join(', ')}`);
 const errors = [];
 
 async function selectTheme(page, theme) {
@@ -121,7 +130,7 @@ async function captureState(browser, state, theme, viewport) {
       await page.getByRole('tab', { name: tab, exact: true }).waitFor();
     } else if (state.startsWith('settings-')) {
       const section =
-        state === 'settings-scrolled'
+        state === 'settings-scrolled' || state === 'settings-provider-key-dialog'
           ? 'Providers & keys'
           : {
               'settings-general': 'General',
@@ -147,6 +156,72 @@ async function captureState(browser, state, theme, viewport) {
         await page.waitForFunction(
           () => document.querySelector('.v2-settings-content')?.scrollTop > 0,
         );
+      } else if (state === 'settings-provider-key-dialog') {
+        await page.evaluate(async () => {
+          const raw = localStorage.getItem('ferry.mock.v1');
+          if (!raw) throw new Error('Persisted mock fixture is unavailable');
+          const persisted = JSON.parse(raw);
+          const provider = persisted.data?.providers?.find((item) => item.id === 'openai');
+          if (!provider) throw new Error('OpenAI mock provider is unavailable');
+          provider.keyStatus = 'valid';
+          provider.keyCount = 2;
+          provider.enabled = true;
+          persisted.data.providerKeys = [
+            [
+              'openai',
+              [
+                {
+                  id: '1',
+                  providerId: 'openai',
+                  label: 'Primary project key',
+                  order: 0,
+                  enabled: true,
+                  status: 'ok',
+                  lastFour: '4d21',
+                  usageToday: { requests: 18, tokens: 12400 },
+                  lastError: null,
+                  cooldownUntil: null,
+                },
+                {
+                  id: '2',
+                  providerId: 'openai',
+                  label: 'Project key',
+                  order: 1,
+                  enabled: false,
+                  status: 'disabled',
+                  lastFour: 'b738',
+                  usageToday: { requests: 7, tokens: 5200 },
+                  lastError: 'Paused manually',
+                  cooldownUntil: null,
+                },
+              ],
+            ],
+          ];
+          localStorage.setItem('ferry.mock.v1', JSON.stringify(persisted));
+        });
+        await page.reload();
+        await page.getByRole('navigation', { name: 'Settings sections' }).waitFor();
+        await page.getByRole('button', { name: 'Providers & keys', exact: true }).click();
+        const providerRow = page.locator('.provider-key-row').filter({ hasText: 'OpenAI API' });
+        await providerRow.getByRole('button', { name: 'Manage key', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: 'Manage OpenAI API key', exact: true });
+        await dialog.waitFor();
+        const savedKeys = dialog.getByRole('region', { name: 'Saved provider keys' });
+        await savedKeys.waitFor();
+        await dialog.getByText('Project key (ending b738)', { exact: true }).waitFor();
+        await savedKeys.getByText('Healthy', { exact: true }).waitFor();
+        await savedKeys.getByText('Disabled', { exact: true }).waitFor();
+        await savedKeys.getByText('Paused manually', { exact: true }).waitFor();
+        const usageLines = await page.evaluate(() => {
+          const format = new Intl.NumberFormat();
+          return [
+            `${format.format(18)} requests / ${format.format(12400)} tokens today`,
+            `${format.format(7)} requests / ${format.format(5200)} tokens today`,
+          ];
+        });
+        for (const usageLine of usageLines)
+          await savedKeys.getByText(usageLine, { exact: true }).waitFor();
+        await dialog.getByRole('region', { name: 'Provider routing' }).waitFor();
       }
     } else if (state.startsWith('onboarding-')) {
       await page.goto(new URL('/settings', baseUrl).href);
@@ -272,7 +347,7 @@ try {
   try {
     for (const viewport of viewports) {
       for (const theme of themes) {
-        for (const state of states) {
+        for (const state of statesToCapture) {
           await captureState(browser, state, theme, viewport);
         }
       }

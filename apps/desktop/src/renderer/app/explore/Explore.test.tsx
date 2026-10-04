@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FerryClient, ModelListQuery } from '@ferry/client';
 import { DEFAULT_ROUTING_SETTINGS } from '@ferry/shared';
-import type { ModelInfo, Provider } from '@ferry/shared';
+import type { ModelInfo, Provider, ProviderKey } from '@ferry/shared';
 import { FerryProvider } from '../../data/client';
 import { ModelsCanvas } from './Explore';
 
@@ -13,8 +13,11 @@ const pushToast = vi.fn();
 const navigate = vi.fn();
 let client: FerryClient;
 let providerListSpy: ReturnType<typeof vi.fn>;
+let providerKeys: ProviderKey[];
+let providerKeyListSpy: ReturnType<typeof vi.fn>;
 let setKeySpy: ReturnType<typeof vi.fn>;
 let removeKeySpy: ReturnType<typeof vi.fn>;
+let removeKeyEntrySpy: ReturnType<typeof vi.fn>;
 let probeSpy: ReturnType<typeof vi.fn>;
 let modelListSpy: ReturnType<typeof vi.fn>;
 let oauthLoginSpy: ReturnType<typeof vi.fn>;
@@ -89,8 +92,32 @@ beforeEach(() => {
       keyStatus: 'missing',
     }),
   ]);
-  setKeySpy = vi.fn().mockResolvedValue(provider({ keyStatus: 'unchecked' }));
+  providerKeys = [];
+  providerKeyListSpy = vi
+    .fn()
+    .mockImplementation(() => Promise.resolve(structuredClone(providerKeys)));
+  setKeySpy = vi.fn().mockImplementation((id: Provider['id'], key: string) => {
+    providerKeys = [
+      {
+        id: '1',
+        providerId: id,
+        label: 'Key 1',
+        order: 0,
+        enabled: true,
+        status: 'ok',
+        lastFour: key.slice(-4),
+        usageToday: { requests: 0, tokens: 0 },
+        lastError: null,
+        cooldownUntil: null,
+      },
+    ];
+    return Promise.resolve(provider({ keyStatus: 'unchecked' }));
+  });
   removeKeySpy = vi.fn().mockResolvedValue(provider({ keyStatus: 'missing' }));
+  removeKeyEntrySpy = vi.fn().mockImplementation((_id: Provider['id'], keyId: string) => {
+    providerKeys = providerKeys.filter((entry) => entry.id !== keyId);
+    return Promise.resolve();
+  });
   probeSpy = vi.fn().mockResolvedValue({
     ok: true,
     keyValid: true,
@@ -133,8 +160,14 @@ beforeEach(() => {
   client = {
     providers: {
       list: providerListSpy,
+      listKeys: providerKeyListSpy,
       setKey: setKeySpy,
+      addKey: vi.fn(),
       removeKey: removeKeySpy,
+      removeKeyEntry: removeKeyEntrySpy,
+      setKeyEnabled: vi.fn(),
+      reorderKeys: vi.fn(),
+      setAutoDisablePolicy: vi.fn(),
       probe: probeSpy,
       setEnabled: vi.fn().mockResolvedValue(provider()),
     },
@@ -281,10 +314,11 @@ describe('Models providers and catalog', () => {
     await waitFor(() => {
       expect(setKeySpy).toHaveBeenCalledWith('mistral', 'demo-mistral-key');
     });
-    await user.click(screen.getByRole('button', { name: 'Remove key' }));
+    await user.click(screen.getByRole('button', { name: 'Remove Key 1' }));
+    expect(screen.getByRole('alert').textContent).toContain('Remove Key 1?');
     await user.click(screen.getByRole('button', { name: 'Remove key' }));
     await waitFor(() => {
-      expect(removeKeySpy).toHaveBeenCalledWith('mistral');
+      expect(removeKeyEntrySpy).toHaveBeenCalledWith('mistral', '1');
     });
   }, 20_000);
 

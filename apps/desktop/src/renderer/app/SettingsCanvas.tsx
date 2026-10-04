@@ -29,8 +29,9 @@ import {
 } from '@ferry/shared';
 import type { RoutingSettings } from '@ferry/shared';
 import type { UpdateSnapshot } from '../../main/update-state.js';
-import { Eye, EyeOff, Info } from 'lucide-react';
+import { Eye, EyeOff, Info, KeyRound, PlugZap } from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
+import { ProviderStatusBadge } from './ProviderStatusBadge';
 import { OAuthProviderRows } from './OAuthProviderRows';
 import { saveKeybindings, useKeybindings } from '../state/keybindings';
 import type { SettingsSection } from '../state/ui.types';
@@ -1140,72 +1141,86 @@ export function SettingsCanvas() {
       return (
         <Group>
           <p className="muted">
-            Keys are stored by the local client. Free tier data use depends on each provider's
-            terms.
+            Keys are stored locally. Check each provider's terms for data use and limits.
           </p>
           <p className="muted">
-            Avoid multi-account workarounds, shared keys, and web-session proxies. Providers may ban
-            accounts or revoke access for these practices; Ferry does not support them.
+            Use keys you own under one provider account, such as separate project keys. Pooling
+            accounts to multiply free tiers may violate provider terms; Ferry does not support it.
           </p>
           <div aria-label="Provider keys" className="provider-key-table">
-            <div aria-hidden="true" className="provider-key-columns text-meta text-text-3">
-              <span>Provider</span>
-              <span>Status</span>
-              <span>Manage key</span>
-              <span>Test</span>
-              <span>Enabled</span>
-            </div>
             {providers.map((provider) => {
-              const status = provider.keyStatus.replace('_', ' ');
-              const statusTone =
-                provider.keyStatus === 'valid'
-                  ? 'ok'
-                  : provider.keyStatus === 'invalid'
-                    ? 'bad'
-                    : provider.keyStatus === 'missing'
-                      ? 'pending'
-                      : 'neutral';
+              const statusCode =
+                provider.health === 'cooldown' ||
+                provider.health === 'down' ||
+                provider.health === 'auth_invalid' ||
+                provider.health === 'account_disabled'
+                  ? provider.health
+                  : provider.keyStatus;
               const toggleApplicable = provider.tag !== 'subscription_oauth';
               return (
                 <div className="provider-key-row" key={provider.id}>
                   <div className="provider-key-description">
-                    <strong title={provider.name}>{provider.name}</strong>
+                    <div className="provider-key-heading">
+                      <strong title={provider.name}>{provider.name}</strong>
+                      <ProviderStatusBadge
+                        status={statusCode}
+                        cooldownUntil={provider.cooldownUntil}
+                      />
+                    </div>
                     <small title={provider.termsNote ?? provider.dataUse ?? undefined}>
                       {provider.termsNote ?? provider.dataUse ?? 'No data use note provided.'}
                     </small>
                   </div>
-                  <span className={`status-pill ${statusTone}`}>{status}</span>
-                  <UiV2.Button
-                    size="sm"
-                    onClick={() => {
-                      setKeyProvider(provider);
-                    }}
-                  >
-                    Manage key
-                  </UiV2.Button>
-                  <UiV2.Button
-                    size="sm"
-                    disabled={testingProvider === provider.id || !provider.enabled}
-                    variant="outline"
-                    onClick={() => void testProvider(provider)}
-                  >
-                    {testingProvider === provider.id ? 'Testing…' : 'Test'}
-                  </UiV2.Button>
-                  <span
-                    className="provider-key-toggle"
-                    title={toggleApplicable ? undefined : 'Manage subscription access in Explore.'}
-                  >
-                    <Switch
-                      label={`${provider.enabled ? 'Disable' : 'Enable'} ${provider.name}`}
-                      checked={provider.enabled}
-                      disabled={!toggleApplicable}
-                      onCheckedChange={(enabled) =>
-                        void client.providers
-                          .setEnabled(provider.id, enabled)
-                          .then(() => cache.invalidateQueries({ queryKey: ['providers'] }))
+                  <div className="provider-key-row-actions">
+                    <UiV2.Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setKeyProvider(provider);
+                      }}
+                    >
+                      <KeyRound aria-hidden="true" size={16} strokeWidth={1.75} />
+                      Manage key
+                    </UiV2.Button>
+                    <UiV2.TooltipProvider>
+                      <UiV2.Tooltip>
+                        <UiV2.TooltipTrigger asChild>
+                          <UiV2.Button
+                            aria-label={`Test ${provider.name}`}
+                            size="icon"
+                            disabled={testingProvider === provider.id || !provider.enabled}
+                            variant="ghost"
+                            onClick={() => void testProvider(provider)}
+                          >
+                            <PlugZap aria-hidden="true" size={16} strokeWidth={1.75} />
+                          </UiV2.Button>
+                        </UiV2.TooltipTrigger>
+                        <UiV2.TooltipContent>
+                          {testingProvider === provider.id ? 'Testing' : `Test ${provider.name}`}
+                        </UiV2.TooltipContent>
+                      </UiV2.Tooltip>
+                    </UiV2.TooltipProvider>
+                    <span
+                      className="provider-key-toggle"
+                      title={
+                        toggleApplicable ? undefined : 'Manage subscription access in Explore.'
                       }
-                    />
-                  </span>
+                    >
+                      <span className="provider-key-toggle-state text-meta text-text-3">
+                        {provider.enabled ? 'On' : 'Off'}
+                      </span>
+                      <Switch
+                        label={`Enable ${provider.name}`}
+                        checked={provider.enabled}
+                        disabled={!toggleApplicable}
+                        onCheckedChange={(enabled) =>
+                          void client.providers
+                            .setEnabled(provider.id, enabled)
+                            .then(() => cache.invalidateQueries({ queryKey: ['providers'] }))
+                        }
+                      />
+                    </span>
+                  </div>
                 </div>
               );
             })}
@@ -2245,6 +2260,7 @@ export function SettingsCanvas() {
         {body()}
       </main>
       <ProviderKeyDialog
+        showRoutingControls
         provider={keyProvider}
         open={Boolean(keyProvider)}
         onOpenChange={(open) => {
