@@ -427,6 +427,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           verifiedModelRefs,
           routing,
           reliability,
+          random: services.random,
         } as const;
         const chain = chainForProfile(profile);
         const chainResult = resolveFallbackChain({

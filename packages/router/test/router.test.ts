@@ -787,12 +787,61 @@ describe('step classification and routing', () => {
     const defaults = scoreModels({ ...input, random }).map(({ ref }) => ref);
     expect(defaults).toEqual(['gemini/llama', 'groq/llama']);
     expect(randomCalls).toBe(0);
+    randomCalls = 0;
     expect(
       scoreModels({
         ...input,
         routing: { ...DEFAULT_ROUTING_SETTINGS, providerPriorities: {}, providerWeights: {} },
+        random,
       }).map(({ ref }) => ref),
     ).toEqual(defaults);
+    expect(randomCalls).toBeGreaterThan(0);
+  });
+
+  it('keeps default ordering stable across timezones at a UTC day boundary', () => {
+    const geminiProvider = { ...provider, id: 'gemini' as Provider['id'] };
+    const groqProvider = { ...provider, id: 'groq' as Provider['id'] };
+    const geminiModel = {
+      ...model,
+      ref: 'gemini/llama' as ModelInfo['ref'],
+      providerId: geminiProvider.id,
+    };
+    const groqModel = {
+      ...model,
+      ref: 'groq/llama' as ModelInfo['ref'],
+      providerId: groqProvider.id,
+    };
+    const originalTz = process.env.TZ;
+    const input = {
+      models: [groqModel, geminiModel],
+      providers: [groqProvider, geminiProvider],
+      capacity: {
+        providers: [groqProvider, geminiProvider],
+        now: '2026-01-15T00:05:00.000Z',
+      },
+      profile,
+      step: 'edit' as const,
+      estimate: { inputTokens: 100 },
+      routing: DEFAULT_ROUTING_SETTINGS,
+      random: () => 0.5,
+    };
+    try {
+      process.env.TZ = 'UTC';
+      const utcOffset = new Date(input.capacity.now).getTimezoneOffset();
+      const utcOrder = scoreModels(input).map(({ ref }) => ref);
+
+      process.env.TZ = 'America/Los_Angeles';
+      const nonUtcOffset = new Date(input.capacity.now).getTimezoneOffset();
+      const nonUtcOrder = scoreModels(input).map(({ ref }) => ref);
+
+      expect(utcOffset).toBe(0);
+      expect(nonUtcOffset).toBe(480);
+      expect(nonUtcOrder).toEqual(utcOrder);
+      expect(utcOrder).toEqual(['gemini/llama', 'groq/llama']);
+    } finally {
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
   });
 
   it('orders by hard priority tiers and uses seeded weighted sampling for near-equal candidates', () => {
@@ -832,7 +881,7 @@ describe('step classification and routing', () => {
     ).toBe('gemini/llama');
 
     let wins = 0;
-    for (let seed = 1; seed <= 400; seed += 1) {
+    for (let seed = 1; seed <= 4_000; seed += 1) {
       let state = seed;
       const random = () => {
         state = (state * 1_664_525 + 1_013_904_223) >>> 0;
@@ -848,6 +897,7 @@ describe('step classification and routing', () => {
           models: [...base.models, geminiAltModel],
           routing: {
             ...DEFAULT_ROUTING_SETTINGS,
+            smartReliability: false,
             providerPriorities: {},
             providerWeights: { [geminiProvider.id]: 3, [groqProvider.id]: 1 },
           },
@@ -856,8 +906,8 @@ describe('step classification and routing', () => {
       )
         wins += 1;
     }
-    expect(wins).toBeGreaterThan(260);
-    expect(wins).toBeLessThan(340);
+    expect(wins).toBeGreaterThan(2_880);
+    expect(wins).toBeLessThan(3_120);
   });
 
   it('returns deterministic candidates with an explanation', () => {

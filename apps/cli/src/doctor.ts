@@ -2,6 +2,7 @@ import { accessSync, constants, existsSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveEngineDataDirectory } from './data-directory.js';
 type DoctorCli = 'codex' | 'opencode' | 'claude';
 interface CliProbeResult {
   available: boolean;
@@ -15,6 +16,10 @@ export interface DoctorRow {
   status: 'ok' | 'warn' | 'fail';
   reason: string;
 }
+export interface DoctorCoreChannel {
+  state: 'available' | 'offline' | 'unavailable';
+  pid?: number;
+}
 export interface DoctorProbes {
   resolveCommand(name: string): string | null;
   version(path: string, args: string[], timeoutMs: number): Promise<string>;
@@ -22,6 +27,7 @@ export interface DoctorProbes {
   detectAcpAgents(): Promise<AcpDoctorAgent[]>;
   loadModule(specifier: string): Promise<unknown>;
   openSqlite(): Promise<void>;
+  localCoreChannel(dataDirectory: string): Promise<DoctorCoreChannel>;
   dataDirectory: string;
   nodeVersion: string;
   platform: string;
@@ -101,7 +107,11 @@ const defaultProbes: DoctorProbes = {
     const db = new Constructor(':memory:');
     db.close();
   },
-  dataDirectory: join(process.env.APPDATA ?? process.env.HOME ?? process.cwd(), '.ferry'),
+  async localCoreChannel(dataDirectory) {
+    const core = await import('@ferry/core');
+    return await core.getLocalControlStatus(dataDirectory);
+  },
+  dataDirectory: resolveEngineDataDirectory(),
   nodeVersion: process.version,
   platform: process.platform,
 };
@@ -130,16 +140,27 @@ export async function collectDoctor(overrides: Partial<DoctorProbes> = {}): Prom
       }
     }),
   );
-  const [keyring, sqlite, pty, rg, acpAgents] = await Promise.all([
+  const [keyring, sqlite, pty, rg, acpAgents, coreChannel] = await Promise.all([
     moduleCheck('keyring', '@napi-rs/keyring', probes),
     sqliteCheck(probes),
     moduleCheck('pty', 'node-pty', probes),
     rgCheck(probes),
     probes.detectAcpAgents(),
+    probes.localCoreChannel(probes.dataDirectory),
   ]);
   return [
     { name: 'Node', status: 'ok', reason: probes.nodeVersion },
     { name: 'Data dir', status: 'ok', reason: probes.dataDirectory },
+    {
+      name: 'Core channel',
+      status: coreChannel.state === 'available' ? 'ok' : 'warn',
+      reason:
+        coreChannel.state === 'available'
+          ? `authenticated local channel ready (PID ${String(coreChannel.pid)})`
+          : coreChannel.state === 'unavailable'
+            ? `core PID ${String(coreChannel.pid)} is running but the authenticated local channel is unavailable`
+            : 'no local Ferry core is running',
+    },
     keyring,
     sqlite,
     rg,

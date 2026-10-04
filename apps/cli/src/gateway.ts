@@ -1,8 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createGatewayKey, type GatewayKey } from '@ferry/gateway';
-import { openDatabase, SettingsRepository } from '@ferry/storage';
 import { canonicalizePath } from '@ferry/shared/node-paths';
 import { resolveEngineDataDirectory } from './data-directory.js';
 
@@ -34,7 +32,7 @@ export async function clearGatewayStatus(dataDir: string): Promise<void> {
   await rm(join(canonicalizePath(dataDir), 'gateway-status.json'), { force: true });
 }
 
-async function statusFile(dataDir: string): Promise<GatewayStatusFile | undefined> {
+async function readStatus(dataDir: string): Promise<GatewayStatusFile | undefined> {
   try {
     return JSON.parse(
       await readFile(join(canonicalizePath(dataDir), 'gateway-status.json'), 'utf8'),
@@ -44,31 +42,97 @@ async function statusFile(dataDir: string): Promise<GatewayStatusFile | undefine
   }
 }
 
-export async function startGatewayDaemon(dataDir: string): Promise<GatewayStatusFile> {
-  dataDir = canonicalizePath(dataDir);
-  const previous = await statusFile(dataDir);
-  if (previous && (await isRunning(previous))) return previous;
-  const args = [process.argv[1] ?? 'ferry', 'serve', '--gateway', '--data-dir', dataDir];
-  const child = spawn(process.execPath, args, {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
-  child.unref();
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const current = await statusFile(dataDir);
-    if (current && (await isRunning(current))) return current;
-    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
-  }
-  throw new Error('Gateway process did not become ready within 15 seconds. Check Ferry logs.');
+export async function getGatewayDaemonStatus(
+  dataDir: string,
+): Promise<GatewayStatusFile | undefined> {
+  const status = await readStatus(dataDir);
+  return status && gatewayProcessAlive(status.pid) && (await gatewayHealthy(status))
+    ? status
+    : undefined;
 }
 
-async function isRunning(status: GatewayStatusFile): Promise<boolean> {
-  if (!Number.isSafeInteger(status.pid) || status.pid <= 1 || status.pid === process.pid)
+export async function startGatewayDaemon(dataDir?: string): Promise<GatewayStatusFile> {
+  const resolvedDataDir = gatewayDataDir(dataDir);
+  const current = await readStatus(resolvedDataDir);
+  if (current && gatewayProcessAlive(current.pid)) {
+    const existing = await waitForGatewayStatus(resolvedDataDir, current.pid, 15_000);
+    if (existing) return existing;
+  }
+
+  const executable = process.argv[1];
+  if (!executable) throw new Error('Could not locate the Ferry CLI entry point for Gateway start.');
+  const child = spawn(
+    process.execPath,
+    [executable, 'serve', '--gateway', ...(dataDir ? ['--data-dir', dataDir] : [])],
+    {
+      cwd: process.cwd(),
+      env: process.env,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    },
+  );
+  child.unref();
+  const pid = await new Promise<number>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.off('error', reject);
+      if (child.pid === undefined) reject(new Error('Gateway process did not receive a PID'));
+      else resolve(child.pid);
+    });
+  });
+  const status = await waitForGatewayStatus(resolvedDataDir, pid, 30_000);
+  if (status) return status;
+  if (gatewayProcessAlive(pid)) {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      /* The child may have exited during the readiness check. */
+    }
+  }
+  throw new Error('Gateway process did not become ready within 30 seconds. Check Ferry logs.');
+}
+
+export async function stopGatewayDaemon(dataDir: string): Promise<boolean> {
+  const status = await readStatus(dataDir);
+  if (!status || status.pid === process.pid || !gatewayProcessAlive(status.pid)) {
+    await clearGatewayStatus(dataDir);
     return false;
+  }
   try {
-    process.kill(status.pid, 0);
+    process.kill(status.pid, 'SIGTERM');
+  } catch (error) {
+    if (!isMissingProcess(error)) throw error;
+  }
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (!gatewayProcessAlive(status.pid)) {
+      await clearGatewayStatus(dataDir);
+      return true;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+  throw new Error('Gateway process did not stop within 10 seconds.');
+}
+
+async function waitForGatewayStatus(
+  dataDir: string,
+  pid: number,
+  timeoutMs: number,
+): Promise<GatewayStatusFile | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const status = await readStatus(dataDir);
+    if (status?.pid === pid && (await gatewayHealthy(status))) return status;
+    if (!gatewayProcessAlive(pid)) return undefined;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+  return undefined;
+}
+
+async function gatewayHealthy(status: GatewayStatusFile): Promise<boolean> {
+  if (!gatewayProcessAlive(status.pid)) return false;
+  try {
     const response = await fetch(`${status.url}/health`, { signal: AbortSignal.timeout(1_000) });
     return response.ok;
   } catch {
@@ -76,81 +140,16 @@ async function isRunning(status: GatewayStatusFile): Promise<boolean> {
   }
 }
 
-export async function getGatewayDaemonStatus(
-  dataDir: string,
-): Promise<GatewayStatusFile | undefined> {
-  const status = await statusFile(dataDir);
-  return status && (await isRunning(status)) ? status : undefined;
-}
-
-export async function stopGatewayDaemon(dataDir: string): Promise<boolean> {
-  const status = await statusFile(dataDir);
-  if (!status || !(await isRunning(status))) {
-    await clearGatewayStatus(dataDir);
-    return false;
-  }
-  if (!Number.isSafeInteger(status.pid) || status.pid <= 1 || status.pid === process.pid)
-    throw new Error('Refusing to stop an invalid gateway process ID.');
-  process.kill(status.pid, 'SIGTERM');
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    if (!(await isRunning(status))) return true;
-    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
-  }
-  throw new Error('Gateway did not stop within 10 seconds.');
-}
-
-async function withSettings<T>(
-  dataDir: string,
-  run: (settings: SettingsRepository) => T,
-): Promise<T> {
-  const db = await openDatabase(join(canonicalizePath(dataDir), 'db', 'ferry.sqlite'));
+function gatewayProcessAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) return false;
   try {
-    return run(new SettingsRepository(db.client));
-  } finally {
-    db.close();
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return typeof error === 'object' && error !== null && 'code' in error && error.code === 'EPERM';
   }
 }
 
-export async function createGatewayToken(dataDir: string, name: string, profile: string) {
-  const created = createGatewayKey({ name, profile });
-  await withSettings(dataDir, (settings) => {
-    const current = settings.get('gateway-keys');
-    const entries = Array.isArray(current) ? (current as GatewayKey[]) : [];
-    settings.put('gateway-keys', [...entries, created.key]);
-  });
-  const { hash: _hash, ...key } = created.key;
-  return { key, secret: created.secret };
-}
-
-export async function listGatewayTokens(dataDir: string) {
-  return await withSettings(dataDir, (settings) => {
-    const stored = settings.get('gateway-keys');
-    const entries = Array.isArray(stored) ? (stored as GatewayKey[]) : [];
-    return entries.map(({ hash: _hash, ...key }) => ({
-      ...key,
-      usage: settings.get(`gateway-usage:${key.id}`) ?? {
-        requests: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      },
-    }));
-  });
-}
-
-export async function revokeGatewayToken(dataDir: string, id: string): Promise<boolean> {
-  return await withSettings(dataDir, (settings) => {
-    const stored = settings.get('gateway-keys');
-    const entries = Array.isArray(stored) ? (stored as GatewayKey[]) : [];
-    let found = false;
-    settings.put(
-      'gateway-keys',
-      entries.map((key) => {
-        if (key.id !== id) return key;
-        found = true;
-        return { ...key, revokedAt: new Date().toISOString() };
-      }),
-    );
-    return found;
-  });
+function isMissingProcess(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH';
 }

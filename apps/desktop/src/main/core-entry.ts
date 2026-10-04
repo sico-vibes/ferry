@@ -41,6 +41,7 @@ parentPort.on('message', (event) => {
         env: process.env,
         selfTest: runNativeSelfTest,
         websocketEnabled: process.env.FERRY_E2E_WEBSOCKET === '1',
+        localControl: true,
         transport: {
           send(message) {
             activePort?.postMessage(message);

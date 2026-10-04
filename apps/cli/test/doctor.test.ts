@@ -36,6 +36,7 @@ describe('doctor probes', () => {
       loadModule: (specifier) =>
         Promise.resolve(specifier === '@vscode/ripgrep' ? { rgPath: '/mock/rg' } : {}),
       openSqlite: () => Promise.resolve(),
+      localCoreChannel: () => Promise.resolve({ state: 'available', pid: 12345 }),
       dataDirectory: '/mock/ferry',
       nodeVersion: 'v22.0.0',
       platform: 'linux',
@@ -46,6 +47,11 @@ describe('doctor probes', () => {
     });
     expect(rows.find((row) => row.name === 'claude')).toMatchObject({ status: 'warn' });
     expect(rows.find((row) => row.name === 'SQLite')).toMatchObject({ status: 'ok' });
+    expect(rows.find((row) => row.name === 'Core channel')).toMatchObject({
+      status: 'ok',
+      reason: 'authenticated local channel ready (PID 12345)',
+    });
+    expect(JSON.stringify(rows.find((row) => row.name === 'Core channel'))).not.toContain('token');
     expect(rows.find((row) => row.name === 'ripgrep')).toMatchObject({ status: 'ok' });
     expect(rows.find((row) => row.name === 'ACP: Pi')).toMatchObject({
       status: 'warn',

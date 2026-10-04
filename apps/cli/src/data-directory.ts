@@ -72,7 +72,7 @@ export async function prepareEngineDataDirectory(
   return dataDirectory;
 }
 
-export type LegacyMigrationResult = 'none' | 'migrated' | 'both-exist';
+export type LegacyMigrationResult = 'none' | 'migrated' | 'both-exist' | 'core-active';
 
 export async function migrateLegacyEngineData(
   legacyDataDirectory: string,
@@ -85,7 +85,7 @@ export async function migrateLegacyEngineData(
   if (await fileExists(desktopDatabase)) return 'both-exist';
 
   await assertCoreStopped(legacyDataDirectory);
-  await assertCoreStopped(desktopDataDirectory);
+  if (await coreIsRunning(desktopDataDirectory)) return 'core-active';
   await mkdir(dirname(desktopDataDirectory), { recursive: true });
   const stagingDirectory = join(
     dirname(desktopDataDirectory),
@@ -123,7 +123,7 @@ async function copyEngineFiles(
 ): Promise<void> {
   await mkdir(destinationDirectory, { recursive: true });
   for (const entry of await readdir(sourceDirectory, { withFileTypes: true })) {
-    if (isCoreLockName(entry.name)) continue;
+    if (isCoreTransientFile(entry.name)) continue;
     const sourcePath = join(sourceDirectory, entry.name);
     const destinationPath = join(destinationDirectory, entry.name);
     const sourceStats = await lstat(sourcePath);
@@ -145,16 +145,29 @@ async function copyEngineFiles(
   }
 }
 
-function isCoreLockName(name: string): boolean {
-  return name === 'core.lock' || name.startsWith('core.lock.');
+function isCoreTransientFile(name: string): boolean {
+  return (
+    name === 'core.lock' ||
+    name.startsWith('core.lock.') ||
+    name === 'core.endpoint.json' ||
+    name.startsWith('core.endpoint.json.') ||
+    name === 'core.sock'
+  );
 }
 
 async function assertCoreStopped(dataDirectory: string): Promise<void> {
+  if (await coreIsRunning(dataDirectory))
+    throw new Error(
+      `Cannot copy Ferry data while a core is running for ${dataDirectory}. Stop Ferry and retry.`,
+    );
+}
+
+async function coreIsRunning(dataDirectory: string): Promise<boolean> {
   let lock: unknown;
   try {
     lock = JSON.parse(await readFile(join(dataDirectory, 'core.lock'), 'utf8')) as unknown;
   } catch {
-    return;
+    return false;
   }
   if (
     typeof lock !== 'object' ||
@@ -164,15 +177,13 @@ async function assertCoreStopped(dataDirectory: string): Promise<void> {
     !Number.isSafeInteger(lock.pid) ||
     lock.pid <= 1
   )
-    return;
+    return false;
   try {
     process.kill(lock.pid, 0);
+    return true;
   } catch (error) {
-    if (!isPermissionError(error)) return;
+    return isPermissionError(error);
   }
-  throw new Error(
-    `Cannot copy Ferry data while a core is running for ${dataDirectory}. Stop Ferry and retry.`,
-  );
 }
 
 async function fileExists(path: string): Promise<boolean> {
