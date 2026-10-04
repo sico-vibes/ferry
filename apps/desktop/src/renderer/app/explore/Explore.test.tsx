@@ -315,8 +315,13 @@ describe('Models providers and catalog', () => {
       expect(setKeySpy).toHaveBeenCalledWith('mistral', 'demo-mistral-key');
     });
     await user.click(screen.getByRole('button', { name: 'Remove Key 1' }));
-    expect(screen.getByRole('alert').textContent).toContain('Remove Key 1?');
-    await user.click(screen.getByRole('button', { name: 'Remove key' }));
+    const confirmation = screen.getByRole('alertdialog', { name: 'Remove key entry?' });
+    expect(confirmation.textContent).toContain('Remove Key 1 from Ferry.');
+    await user.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
+    expect(removeKeyEntrySpy).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Remove Key 1' }));
+    const repeatedConfirmation = screen.getByRole('alertdialog', { name: 'Remove key entry?' });
+    await user.click(within(repeatedConfirmation).getByRole('button', { name: 'Remove key' }));
     await waitFor(() => {
       expect(removeKeyEntrySpy).toHaveBeenCalledWith('mistral', '1');
     });

@@ -724,12 +724,14 @@ body {
   color: var(--text-2);
   font-size: 11px;
 }
-.update-banner button {
+.update-banner button,
+.update-banner .update-notes-link {
   border: 0;
   background: transparent;
   color: var(--text-link);
   cursor: pointer;
   font: inherit;
+  text-decoration: none;
 }
 @media (prefers-reduced-motion: reduce) {
   .skeleton-row {
@@ -1950,11 +1952,7 @@ body {
   gap: 10px;
   padding-left: 10px;
 }
-.v2-brand-row > svg {
-  width: 20px;
-  height: 20px;
-  flex: 0 0 20px;
-}
+
 .v2-brand-row {
   gap: 8px;
 }
@@ -1975,11 +1973,7 @@ body {
   gap: 16px;
   padding-left: 0;
 }
-.v2-sidebar.is-collapsed .v2-brand-row > svg {
-  width: 18px;
-  height: 18px;
-  flex-basis: 18px;
-}
+
 .v2-sidebar.is-collapsed .v2-collapse {
   margin-top: 8px;
 }
@@ -3017,12 +3011,17 @@ body {
   background: var(--card);
 }
 .v2-drawer-content {
+  top: 44px;
+  height: calc(100dvh - 44px);
   display: flex;
   flex-direction: column;
   gap: 12px;
   background: var(--card);
   padding: 20px;
   box-shadow: var(--shadow-popover);
+}
+.v2-drawer-overlay {
+  top: 44px;
 }
 .v2-drawer-heading {
   display: flex;

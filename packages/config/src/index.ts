@@ -1,9 +1,13 @@
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import pino, { type Logger, type LoggerOptions } from 'pino';
 import { SettingsSchema, type Settings } from '@ferry/shared';
+import { resolveFerryRuntimePaths } from '@ferry/shared/electron-paths';
 import { z } from 'zod';
 import { redactKnownSecretText } from '@ferry/shared';
 import { canonicalizePath } from '@ferry/shared/node-paths';
@@ -202,13 +206,39 @@ export interface LoggerFactoryOptions {
   pretty?: boolean;
   direct?: boolean;
 }
-export function createLogger({
+interface PinoRollOptions {
+  file: string;
+  frequency: string;
+  size: string;
+  mkdir: boolean;
+}
+interface PinoRollDestination {
+  write(message: string): void;
+  flush(callback?: (error?: Error) => unknown): void;
+  end(): void;
+  once(event: 'error', listener: (error: Error) => void): this;
+  once(event: 'close', listener: () => void): this;
+}
+type PinoRollBuilder = (options: PinoRollOptions) => Promise<PinoRollDestination>;
+
+function createRuntimeRequire(): NodeJS.Require {
+  const runtimePaths = resolveFerryRuntimePaths({
+    entryFilePath: fileURLToPath(import.meta.url),
+    execPath: process.execPath,
+    env: process.env,
+    resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
+    exists: existsSync,
+  });
+  return createRequire(runtimePaths.nativeModuleAnchor);
+}
+
+export async function createLogger({
   logsDir,
   level = process.env.FERRY_LOG_LEVEL ?? 'info',
   name = 'ferry',
   pretty = false,
   direct = process.env.FERRY_LOG_DIRECT === 'true',
-}: LoggerFactoryOptions): Logger & { close(): Promise<void> } {
+}: LoggerFactoryOptions): Promise<Logger & { close(): Promise<void> }> {
   const redact: LoggerOptions['redact'] = {
     paths: [
       'authorization',
@@ -246,16 +276,29 @@ export function createLogger({
     },
   };
   if (direct) {
-    const logger = pino(
-      options,
-      pino.destination({ dest: join(logsDir, `${name}.log`), sync: true }),
-    );
+    const pinoRoll = createRuntimeRequire()('pino-roll') as unknown as PinoRollBuilder;
+    const destination = await pinoRoll({
+      file: join(logsDir, `${name}.log`),
+      frequency: 'daily',
+      size: '10m',
+      mkdir: true,
+    });
+    const logger = pino(options, destination);
     return Object.assign(logger, {
       close: () =>
         new Promise<void>((resolve, reject) => {
           logger.flush((error) => {
-            if (error) reject(error);
-            else resolve();
+            if (error) {
+              reject(error);
+              return;
+            }
+            destination.once('error', (writeError) => {
+              reject(writeError);
+            });
+            destination.once('close', () => {
+              resolve();
+            });
+            destination.end();
           });
         }),
     });

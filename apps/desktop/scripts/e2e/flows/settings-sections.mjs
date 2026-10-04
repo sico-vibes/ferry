@@ -86,7 +86,7 @@ export async function run(page, ctx) {
   const headerPadding = await chatHeader.evaluate(
     (element) => getComputedStyle(element).paddingRight,
   );
-  await ctx.expect(headerPadding).toBe('164px');
+  await ctx.expect(headerPadding).toBe('152px');
   const actionRegion = await chatHeader
     .locator('.v2-header-actions button')
     .first()

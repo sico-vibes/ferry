@@ -9,23 +9,44 @@ Var ExplorerCheckbox
 Var ForceAddToPath
 Var AddToPathState
 Var ExplorerState
+Var FerryIsUpdated
+Var FerryInstallerParams
 
 !macro customInit
+  StrCpy $FerryIsUpdated 0
   StrCpy $ForceAddToPath 0
+  ${GetParameters} $FerryInstallerParams
   ReadRegDWORD $AddToPathState HKCU "Software\Ferry" "AddToPath"
   ReadRegDWORD $ExplorerState HKCU "Software\Ferry" "ExplorerMenu"
-  ${GetParameters} $0
   ClearErrors
-  ${GetOptions} $0 "/ADD_TO_PATH" $1
+  ${GetOptions} $FerryInstallerParams "/ADD_TO_PATH" $1
   ${IfNot} ${Errors}
     StrCpy $ForceAddToPath 1
   ${EndIf}
   ClearErrors
-  ${GetOptions} $0 "/TEST_OPTIONS" $1
+  ${GetOptions} $FerryInstallerParams "/TEST_OPTIONS" $1
   ${IfNot} ${Errors}
     StrCpy $0 ${BST_CHECKED}
     StrCpy $1 ${BST_CHECKED}
     Call FerryStoreInstallOptions
+  ${EndIf}
+  ClearErrors
+  ${GetOptions} $FerryInstallerParams "--updated" $1
+  ${IfNot} ${Errors}
+    StrCpy $FerryIsUpdated 1
+  ${EndIf}
+  ClearErrors
+  ${GetOptions} $FerryInstallerParams "/UPDATED" $1
+  ${IfNot} ${Errors}
+    StrCpy $FerryIsUpdated 1
+  ${EndIf}
+  ClearErrors
+  ${GetOptions} $FerryInstallerParams "/TEST_UPDATED" $1
+  ${IfNot} ${Errors}
+    StrCpy $FerryIsUpdated 1
+  ${EndIf}
+  ${If} $FerryIsUpdated == 1
+    SetSilent silent
   ${EndIf}
 !macroend
 
@@ -34,6 +55,9 @@ Var ExplorerState
 !macroend
 
 Function FerryInstallOptionsPage
+  ${If} $FerryIsUpdated == 1
+    Abort
+  ${EndIf}
   nsDialogs::Create 1018
   Pop $0
   ${If} $0 == error
@@ -172,11 +196,18 @@ FunctionEnd
 !ifdef BUILD_UNINSTALLER
 Var DeleteUserDataCheckbox
 Var ForceDeleteUserData
+Var UnFerryIsUpdated
 
 !macro customUnInit
   StrCpy $DeleteUserDataCheckbox 0
   StrCpy $ForceDeleteUserData 0
+  StrCpy $UnFerryIsUpdated 0
   ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "--updated" $1
+  ${IfNot} ${Errors}
+    StrCpy $UnFerryIsUpdated 1
+  ${EndIf}
   ClearErrors
   ${GetOptions} $0 "/REMOVE_DATA" $1
   ${IfNot} ${Errors}
@@ -203,38 +234,40 @@ Function un.DeleteUserDataPage
 FunctionEnd
 
 !macro customUnInstall
-  ReadRegDWORD $1 HKCU "Software\Ferry" "AddToPath"
-  ${If} $1 == 1
-    ReadRegStr $2 HKCU "Environment" "Path"
-    StrCpy $3 "$INSTDIR\resources\cli"
-    Call un.RemoveFerryPathEntry
-    System::Call 'kernel32::GetLongPathName(t r3, t .r4, i ${NSIS_MAX_STRLEN}) i .r5'
-    ${If} $5 > 0
-      StrCpy $3 $4
+  ${If} $UnFerryIsUpdated != 1
+    ReadRegDWORD $1 HKCU "Software\Ferry" "AddToPath"
+    ${If} $1 == 1
+      ReadRegStr $2 HKCU "Environment" "Path"
+      StrCpy $3 "$INSTDIR\resources\cli"
       Call un.RemoveFerryPathEntry
+      System::Call 'kernel32::GetLongPathName(t r3, t .r4, i ${NSIS_MAX_STRLEN}) i .r5'
+      ${If} $5 > 0
+        StrCpy $3 $4
+        Call un.RemoveFerryPathEntry
+      ${EndIf}
+      System::Call 'kernel32::GetShortPathName(t r3, t .r4, i ${NSIS_MAX_STRLEN}) i .r5'
+      ${If} $5 > 0
+        StrCpy $3 $4
+        Call un.RemoveFerryPathEntry
+      ${EndIf}
+      WriteRegExpandStr HKCU "Environment" "Path" "$2"
+      SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment"
     ${EndIf}
-    System::Call 'kernel32::GetShortPathName(t r3, t .r4, i ${NSIS_MAX_STRLEN}) i .r5'
-    ${If} $5 > 0
-      StrCpy $3 $4
-      Call un.RemoveFerryPathEntry
+    ReadRegDWORD $1 HKCU "Software\Ferry" "ExplorerMenu"
+    ${If} $1 == 1
+      DeleteRegKey HKCU "Software\Classes\Directory\shell\Ferry"
     ${EndIf}
-    WriteRegExpandStr HKCU "Environment" "Path" "$2"
-    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment"
-  ${EndIf}
-  ReadRegDWORD $1 HKCU "Software\Ferry" "ExplorerMenu"
-  ${If} $1 == 1
-    DeleteRegKey HKCU "Software\Classes\Directory\shell\Ferry"
-  ${EndIf}
-  DeleteRegKey HKCU "Software\Ferry"
-  SetShellVarContext current
-  ${NSD_GetState} $DeleteUserDataCheckbox $0
-  ${If} $ForceDeleteUserData == 1
-    StrCpy $0 ${BST_CHECKED}
-  ${EndIf}
-  ${If} $0 == ${BST_CHECKED}
-    RMDir /r "$APPDATA\@ferry\desktop"
-    RMDir /r "$APPDATA\Ferry"
-  ${EndIf}
+    DeleteRegKey HKCU "Software\Ferry"
+    SetShellVarContext current
+    ${NSD_GetState} $DeleteUserDataCheckbox $0
+    ${If} $ForceDeleteUserData == 1
+      StrCpy $0 ${BST_CHECKED}
+    ${EndIf}
+    ${If} $0 == ${BST_CHECKED}
+      RMDir /r "$APPDATA\@ferry\desktop"
+      RMDir /r "$APPDATA\Ferry"
+    ${EndIf}
+    ${EndIf}
 !macroend
 
 Function un.RemoveFerryPathEntry

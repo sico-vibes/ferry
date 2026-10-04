@@ -1,7 +1,10 @@
 import { accessSync, constants, existsSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { execFile } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { resolveFerryRuntimePaths } from '@ferry/shared/electron-paths';
 import { resolveEngineDataDirectory } from './data-directory.js';
 type DoctorCli = 'codex' | 'opencode' | 'claude';
 interface CliProbeResult {
@@ -11,6 +14,16 @@ interface CliProbeResult {
 }
 
 const execFileAsync = promisify(execFile);
+function createRuntimeRequire(): NodeJS.Require {
+  const runtimePaths = resolveFerryRuntimePaths({
+    entryFilePath: fileURLToPath(import.meta.url),
+    execPath: process.execPath,
+    env: process.env,
+    resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
+    exists: existsSync,
+  });
+  return createRequire(runtimePaths.nativeModuleAnchor);
+}
 export interface DoctorRow {
   name: string;
   status: 'ok' | 'warn' | 'fail';
@@ -100,12 +113,17 @@ const defaultProbes: DoctorProbes = {
     return await delegateModule.detectAcpAgents();
   },
   loadModule: (specifier) => import(specifier),
-  async openSqlite() {
-    const driver = 'better-sqlite3';
-    const loaded = (await import(driver)) as { default: unknown };
-    const Constructor = loaded.default as new (path: string) => { close(): void };
-    const db = new Constructor(':memory:');
-    db.close();
+  openSqlite() {
+    return Promise.resolve().then(() => {
+      const driver = 'better-sqlite3';
+      const loaded = createRuntimeRequire()(driver) as
+        { default?: unknown } | (new (path: string) => { close(): void });
+      const Constructor = (typeof loaded === 'function' ? loaded : loaded.default) as
+        (new (path: string) => { close(): void }) | undefined;
+      if (!Constructor) throw new Error('better-sqlite3 did not expose a constructor');
+      const db = new Constructor(':memory:');
+      db.close();
+    });
   },
   async localCoreChannel(dataDirectory) {
     const core = await import('@ferry/core');

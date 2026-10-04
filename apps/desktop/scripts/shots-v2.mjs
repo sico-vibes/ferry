@@ -94,15 +94,8 @@ async function selectTheme(page, theme) {
 }
 
 async function hidePreviewChrome(page) {
-  // The browser preview fakes the OS window controls but Chromium reports
-  // windowControlsOverlay.visible === false, so the app reserves no title-bar
-  // space for them and they cover the rightmost header buttons. Reserve the
-  // controls width (as the real Electron overlay does) so captures match the
-  // desktop app and the buttons stay clickable.
   await page.addStyleTag({
-    content:
-      '.web-preview-toggle,.web-preview-panel{display:none!important}' +
-      '.v2-app-shell{--titlebar-overlay-right:138px!important}',
+    content: '.web-preview-toggle,.web-preview-panel{display:none!important}',
   });
 }
 
@@ -165,7 +158,9 @@ async function captureState(browser, state, theme, viewport) {
     } else if (state === 'user-menu-theme-open') {
       await page.getByRole('button', { name: 'User menu', exact: true }).click();
       await page.getByRole('menuitem', { name: 'Theme', exact: true }).hover();
-      await page.getByRole('menuitemradio', { name: 'System', exact: true }).waitFor();
+      const systemTheme = page.getByRole('menuitemradio', { name: 'System', exact: true });
+      await systemTheme.waitFor();
+      if (!(await systemTheme.isVisible())) throw new Error('Theme submenu is not visible.');
     } else if (state === 'sidebar-tooltip') {
       await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
       const firstNavItem = page.locator('.v2-primary-nav button').first();
@@ -174,6 +169,11 @@ async function captureState(browser, state, theme, viewport) {
     } else if (state === 'titlebar-collapsed') {
       await openSeededSession(page);
       await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+      await page.locator('.v2-app-shell.left-is-collapsed').waitFor();
+      await page.waitForFunction(() => {
+        const sidebar = document.querySelector('.v2-sidebar');
+        return sidebar && Math.abs(sidebar.getBoundingClientRect().width - 64) < 0.5;
+      });
     } else if (state === 'confirm-dialog') {
       await openSeededSession(page);
       await page.getByRole('button', { name: 'More session actions', exact: true }).click();
@@ -396,8 +396,29 @@ async function captureState(browser, state, theme, viewport) {
       }
     }
 
-    if (state !== 'model-picker-hover' && state !== 'sidebar-tooltip') await page.mouse.move(0, 0);
+    if (
+      state !== 'model-picker-hover' &&
+      state !== 'sidebar-tooltip' &&
+      state !== 'user-menu-theme-open'
+    )
+      await page.mouse.move(0, 0);
     await hidePreviewChrome(page);
+    if (state === 'titlebar-collapsed') {
+      await page.waitForFunction(() => {
+        const root = document.querySelector('.v2-app-shell');
+        const sidebar = document.querySelector('.v2-sidebar');
+        return Boolean(
+          root?.classList.contains('left-is-collapsed') &&
+          sidebar?.classList.contains('is-collapsed') &&
+          Math.abs((sidebar?.getBoundingClientRect().width ?? 0) - 64) < 0.5,
+        );
+      });
+    }
+    if (state === 'user-menu-theme-open') {
+      const systemTheme = page.getByRole('menuitemradio', { name: 'System', exact: true });
+      if (!(await systemTheme.isVisible())) throw new Error('Theme submenu closed before capture.');
+    }
+
     await page.screenshot({ path: join(outputDirectory, filename(state, theme, viewport)) });
     console.log(`Captured ${label}`);
   } catch (error) {

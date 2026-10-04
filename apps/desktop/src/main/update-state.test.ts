@@ -23,6 +23,7 @@ describe('UpdateController', () => {
 
     expect(states).toEqual(['available', 'downloaded']);
     expect(updater.quitAndInstall).toHaveBeenCalledOnce();
+    expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true);
   });
 
   it('checks on request and captures updater errors', async () => {
@@ -40,7 +41,7 @@ describe('UpdateController', () => {
     const updater = new FakeUpdater();
     const updates = new UpdateController(updater);
 
-    updates.install();
+    expect(updates.install()).toBe(false);
     expect(updater.quitAndInstall).not.toHaveBeenCalled();
     expect(updates.setAutoDownload(false).autoDownload).toBe(false);
     expect(updater.autoDownload).toBe(false);
@@ -55,5 +56,14 @@ describe('UpdateController', () => {
     await updates.download();
 
     expect(updater.downloadUpdate).toHaveBeenCalledOnce();
+  });
+
+  it('installs a downloaded update silently and forces the app to relaunch', () => {
+    const updater = new FakeUpdater();
+    const updates = new UpdateController(updater);
+    updater.emit('update-downloaded', { version: '0.9.1' });
+
+    expect(updates.install()).toBe(true);
+    expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true);
   });
 });

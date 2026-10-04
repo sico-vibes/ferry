@@ -1,14 +1,15 @@
-import { cp, mkdir } from 'node:fs/promises';
+import { cp } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { rcedit } from 'rcedit';
 
-export default async function copyCliRuntimeDependencies(context) {
-  const source = resolve(import.meta.dirname, '..', 'out', 'cli', 'node_modules');
-  const destination = resolve(context.appOutDir, 'resources', 'cli', 'node_modules');
-  await mkdir(destination, { recursive: true });
-  await cp(source, destination, { recursive: true, dereference: true });
-
+export default async function setExecutableMetadata(context) {
   if (context.electronPlatformName !== 'win32') return;
+
+  await cp(
+    resolve(import.meta.dirname, '..', 'out', 'cli', 'node_modules'),
+    resolve(context.appOutDir, 'resources', 'cli', 'node_modules'),
+    { recursive: true, force: true },
+  );
 
   await rcedit(resolve(context.appOutDir, 'Ferry.exe'), {
     icon: resolve(import.meta.dirname, '..', 'build', 'icon.ico'),

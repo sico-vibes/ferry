@@ -1,7 +1,9 @@
-import { access, readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
 import { parse } from 'yaml';
+import { resolveFerryRuntimePaths } from '@ferry/shared/electron-paths';
 import { loadCapabilityRegistry, normalizeModelId } from './registry.js';
 import { loadQualityPriors, qualityPenaltyForModel, resolveQualityFamily } from './quality.js';
 import {
@@ -20,7 +22,6 @@ import {
 } from '@ferry/shared';
 import { z } from 'zod';
 
-const here = dirname(fileURLToPath(import.meta.url));
 const WindowSchema = z.object({
   scope: z.enum(['provider', 'model']),
   model: z.string().optional(),
@@ -193,10 +194,14 @@ export async function loadCatalog(
     now?: Date;
   } = {},
 ): Promise<Catalog & { warnings: string[] }> {
-  const bundledData = join(here, 'data');
-  const data = await access(bundledData)
-    .then(() => bundledData)
-    .catch(() => join(here, '..', 'data'));
+  const runtimePaths = resolveFerryRuntimePaths({
+    entryFilePath: fileURLToPath(import.meta.url),
+    execPath: process.execPath,
+    env: process.env,
+    resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
+    exists: existsSync,
+  });
+  const data = runtimePaths.catalogDataDirectory;
   const [snapshotText, tierText, files] = await Promise.all([
     readFile(join(data, 'models.snapshot.json'), 'utf8'),
     readFile(join(data, 'tiers.yaml'), 'utf8'),

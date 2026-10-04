@@ -313,6 +313,15 @@ try {
     timeout: 900_000,
   });
   await access(generatedUpgradeInstaller);
+  const previousBlockmap = `${baseInstaller}.blockmap`;
+  const updatedBlockmap = `${generatedUpgradeInstaller}.blockmap`;
+  await access(previousBlockmap);
+  await access(updatedBlockmap);
+  record(
+    'Previous and updated installer blockmaps are available',
+    'PASS',
+    `${(await stat(previousBlockmap)).size} + ${(await stat(updatedBlockmap)).size} bytes`,
+  );
   record('Build higher-stamped upgrade installer', 'PASS', `${baseVersion} -> ${upgrade}`);
 
   const installDirectory = join(tempRoot, 'default-install');
@@ -331,17 +340,30 @@ try {
   record('Installed ferry.cmd status reports local engine', 'PASS');
 
   const beforePath = userPath();
+  const fullInstallerBytes = (await stat(generatedUpgradeInstaller)).size;
   const upgradeEnv = {
     ...process.env,
     APPDATA: join(profile, 'Roaming'),
     LOCALAPPDATA: join(profile, 'Local'),
   };
+  const upgradeStartedAt = Date.now();
   run(generatedUpgradeInstaller, ['/S', `/D=${installDirectory}`], {
     env: upgradeEnv,
     timeout: 240_000,
   });
+  const upgradeWallTimeMs = Date.now() - upgradeStartedAt;
   verifyPersistedRecords(databasePath, state);
+  const installedFileCount = await countFiles(installDirectory);
+  record(
+    'Silent full-installer control measurement',
+    'INFO',
+    `${fullInstallerBytes} bytes; ${upgradeWallTimeMs} ms; ${installedFileCount} installed files`,
+  );
   record('Higher-version install preserves settings, session, and key reference', 'PASS');
+  await runInstalledSmoke(installDirectory, profile, stateFile, false);
+  const relaunchedState = JSON.parse(await readFile(stateFile, 'utf8'));
+  assert.equal(relaunchedState.theme, state.theme);
+  record('Updated app relaunches with persisted profile data', 'PASS');
   let defaultDataStatus = 'SKIP';
   let defaultDataDetail = isCi
     ? 'real roaming data path is unavailable for sentinel verification'
@@ -385,7 +407,7 @@ try {
   );
   assert.equal(optionsState, 'enabled', 'Interactive Open in Ferry option was not applied');
   record('Stored interactive options apply PATH and Open in Ferry', 'PASS');
-  run(generatedUpgradeInstaller, ['/S', `/D=${pathInstall}`], {
+  run(generatedUpgradeInstaller, ['/S', '/TEST_UPDATED', `/D=${pathInstall}`], {
     env: {
       ...process.env,
       APPDATA: join(pathProfile, 'Roaming'),
@@ -398,7 +420,7 @@ try {
     1,
     'Upgrade did not preserve the selected PATH option exactly once',
   );
-  record('Silent upgrade preserves PATH and avoids a duplicate entry', 'PASS');
+  record('Updated-mode test switch preserves PATH and avoids a duplicate entry', 'PASS');
   const cliPathAliases = new Set([lexicalPath(cliPath), ...addedEntries.map(lexicalPath)]);
   const canVerifyRemoveData =
     isCi && !(await exists(realFerryData)) && !(await exists(realLegacyData));
@@ -506,6 +528,12 @@ try {
     await rm(generatedUpgradeInstaller, { force: true, maxRetries: 8, retryDelay: 100 }).catch(
       () => undefined,
     );
+  if (generatedUpgradeInstaller)
+    await rm(`${generatedUpgradeInstaller}.blockmap`, {
+      force: true,
+      maxRetries: 8,
+      retryDelay: 100,
+    }).catch(() => undefined);
 }
 
 console.log('\nInstall smoke results');
@@ -519,4 +547,14 @@ async function exists(path) {
   } catch {
     return false;
   }
+}
+
+async function countFiles(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  let count = 0;
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    count += entry.isDirectory() ? await countFiles(path) : 1;
+  }
+  return count;
 }

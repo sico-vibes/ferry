@@ -7,6 +7,10 @@ describe('titlebar overlay right reserve', () => {
     expect(getTitlebarOverlayRightReserve(true, { x: 0, width: 0 }, 1440)).toBe(0);
   });
 
+  it('reserves simulated controls for a browser preview with a hidden overlay', () => {
+    expect(getTitlebarOverlayRightReserve(false, { x: 0, width: 0 }, 1440, 138)).toBe(138);
+  });
+
   it('reserves the space to the right of a visible overlay', () => {
     expect(getTitlebarOverlayRightReserve(true, { x: 0, width: 1300 }, 1440)).toBe(140);
   });

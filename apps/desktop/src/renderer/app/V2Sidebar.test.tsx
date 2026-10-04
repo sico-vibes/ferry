@@ -8,7 +8,7 @@ import {
   Outlet,
   RouterProvider,
 } from '@tanstack/react-router';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createDemoFerryClient } from '@ferry/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -149,6 +149,7 @@ describe('V2Sidebar new chat', () => {
     queryClient.setQueryData(keys.capacity, await client.quota.capacity());
     const systemInfo = await client.system.info();
     queryClient.setQueryData(keys.system, systemInfo);
+    if (!useUI.getState().leftCollapsed) useUI.getState().toggleLeft();
     render(
       <FerryProvider client={client}>
         <QueryClientProvider client={queryClient}>
@@ -157,6 +158,11 @@ describe('V2Sidebar new chat', () => {
       </FerryProvider>,
     );
 
+    const primaryNav = screen.getByRole('navigation', { name: 'Primary' });
+    expect(within(primaryNav).getByRole('button', { name: 'New chat' })).toBeTruthy();
+    expect(within(primaryNav).getByRole('button', { name: 'Library' })).toBeTruthy();
+    expect(within(primaryNav).getByRole('button', { name: 'Models' })).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Ferry' }).style.width).toBe('18px');
     await userEvent.click(await screen.findByRole('button', { name: /^User menu$/ }));
     await userEvent.click(await screen.findByRole('menuitem', { name: /^About \/ changelog$/ }));
     const dialog = await screen.findByRole('dialog', { name: /^About Ferry$/ });
@@ -166,6 +172,7 @@ describe('V2Sidebar new chat', () => {
     expect(dialog.textContent).toContain(systemInfo.dataDir);
     expect(dialog.textContent).toContain('MIT');
     await userEvent.keyboard('{Escape}');
+
     await userEvent.click(await screen.findByRole('button', { name: /^User menu$/ }));
     await userEvent.click(await screen.findByRole('menuitem', { name: /^Help$/ }));
     await waitFor(() => {

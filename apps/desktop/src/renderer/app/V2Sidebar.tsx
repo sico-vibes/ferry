@@ -116,7 +116,7 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
     <TooltipProvider>
       <aside className={`v2-sidebar ${collapsed ? 'is-collapsed' : ''}`} aria-label="App sidebar">
         <div className="v2-brand-row">
-          <FerryMark size={20} variant="brand" />
+          <FerryMark size={collapsed ? 18 : 20} variant="brand" />
           {!collapsed && <span className="v2-brand-name">Ferry</span>}
         </div>
         <nav aria-label="Primary" className="v2-primary-nav">
@@ -505,7 +505,12 @@ function NavButton({
   onClick: () => void;
 }) {
   const button = (
-    <button className="v2-nav-button" aria-current={active ? 'page' : undefined} onClick={onClick}>
+    <button
+      aria-label={label}
+      className="v2-nav-button"
+      aria-current={active ? 'page' : undefined}
+      onClick={onClick}
+    >
       {icon}
       {!collapsed && <span>{label}</span>}
     </button>

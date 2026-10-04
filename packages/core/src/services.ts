@@ -69,7 +69,7 @@ export interface FerryServices {
   readonly cooldowns: CooldownRepository;
   readonly quotaObservations: QuotaObservationRepository;
   readonly handoffs: HandoffRepository;
-  readonly logger: ReturnType<typeof createLogger>;
+  readonly logger: Awaited<ReturnType<typeof createLogger>>;
   readonly databaseRecoveryMessage?: string;
   dispose(): Promise<void>;
 }
@@ -139,7 +139,10 @@ export async function createServices({
     mkdir(paths.logs, { recursive: true }),
     mkdir(paths.checkpoints, { recursive: true }),
   ]);
-  const logger = createLogger({ logsDir: paths.logs });
+  const logger = await createLogger({
+    logsDir: paths.logs,
+    direct: env.FERRY_CLI_PROCESS === 'true' || env.FERRY_LOG_DIRECT === 'true',
+  });
   const databasePath = resolve(paths.db, 'ferry.sqlite');
   let db: DatabaseConnection;
   let databaseRecoveryMessage: string | undefined;

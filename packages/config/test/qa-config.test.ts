@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import pino from 'pino';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createLogger,
@@ -173,7 +174,7 @@ describe('QA config: project config', () => {
 
   it('never writes raw secrets to the log file', async () => {
     const logsDir = await tempDir('ferry-qa-logs-');
-    const logger = createLogger({ logsDir });
+    const logger = await createLogger({ logsDir });
     logger.info(
       {
         apiKey: 'sk-secret-value-1234567890',
@@ -216,8 +217,27 @@ describe('QA config: project config', () => {
 
   it('does not wait for transport worker shutdown when closing a buffered logger', async () => {
     const logsDir = await tempDir('ferry-qa-logger-close-');
-    const logger = createLogger({ logsDir });
+    const logger = await createLogger({ logsDir });
     logger.info('close-marker');
     await logger.close();
+  }, 30_000);
+
+  it('writes through an in-process rotating destination and closes cleanly', async () => {
+    const logsDir = await tempDir('ferry-qa-direct-logger-');
+    const transport = vi.spyOn(pino, 'transport');
+    try {
+      const logger = await createLogger({ logsDir, direct: true });
+      logger.info('direct-log-marker');
+      await logger.close();
+      expect(transport).not.toHaveBeenCalled();
+    } finally {
+      transport.mockRestore();
+    }
+
+    const files = await readdir(logsDir);
+    const contents = await Promise.all(
+      files.map((file) => readFile(path.join(logsDir, file), 'utf8')),
+    );
+    expect(contents.join('\n')).toContain('direct-log-marker');
   }, 30_000);
 });
