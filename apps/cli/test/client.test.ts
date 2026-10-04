@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -168,10 +169,21 @@ describe('CLI client engine selection', () => {
   it('fails clearly instead of starting a second local core on an owned database', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ferry-cli-owned-core-'));
     dataDirs.push(dataDir);
+    const canonicalDataDir = realpathSync.native(dataDir);
     const host = await createCoreHost({ dataDir });
     try {
-      await expect(createClientAsync({ engine: 'local', dataDir })).rejects.toThrow(
-        `Ferry core PID ${String(process.pid)} owns ${dataDir}, but its local control channel is unavailable.`,
+      const error = await createClientAsync({ engine: 'local', dataDir }).then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+      expect(error).toBeInstanceOf(Error);
+      const actual = error instanceof Error ? error.message : '';
+      const expectedPrefix = `Ferry core PID ${String(process.pid)} owns ${canonicalDataDir}, but its local control channel is unavailable.`;
+      expect(process.platform === 'win32' ? actual.toLowerCase() : actual).toContain(
+        process.platform === 'win32' ? expectedPrefix.toLowerCase() : expectedPrefix,
+      );
+      expect(actual).toContain(
+        'Update or restart Ferry, or pass --data-dir to use another engine directory.',
       );
     } finally {
       await host.stop();

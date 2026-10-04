@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createMockFerryClient, createPlaybackRunner } from '@ferry/client';
 import { createRpcFerryClient, RpcError, type RpcTransport } from '@ferry/client';
 import type { FerryClient } from '@ferry/client';
@@ -182,8 +182,9 @@ function managedClient(
 }
 
 function unavailableCoreError(dataDir: string, pid: number, cause?: unknown): Error {
+  const canonicalDataDir = realpathSync.native(dataDir);
   return new Error(
-    `Ferry core PID ${String(pid)} owns ${dataDir}, but its local control channel is unavailable. Update or restart Ferry, or pass --data-dir to use another engine directory.`,
+    `Ferry core PID ${String(pid)} owns ${canonicalDataDir}, but its local control channel is unavailable. Update or restart Ferry, or pass --data-dir to use another engine directory.`,
     cause === undefined ? undefined : { cause },
   );
 }
