@@ -1,16 +1,11 @@
 import { defineCommand, runMain } from 'citty';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { createClientAsync, prepareEngineDataDirectory } from './client.js';
+import { createClientAsync, inspectLocalCore, resolveEngineDataDirectory } from './client.js';
 import { good, muted, warn } from './colors.js';
 import {
   clearGatewayStatus,
-  createGatewayToken,
   gatewayDataDir,
-  getGatewayDaemonStatus,
-  listGatewayTokens,
-  revokeGatewayToken,
   startGatewayDaemon,
   stopGatewayDaemon,
   writeGatewayStatus,
@@ -289,14 +284,22 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       )
         throw new CliError(2, 'Non-interactive OAuth login requires --i-understand-the-risk.');
     }
-    if (command === 'gateway') {
-      const engineDataDir = await prepareEngineDataDirectory(dataDir);
-      return await gatewayCommand(flags.positionals.slice(1), json, gatewayDataDir(engineDataDir));
+    if (engine === 'local' && command === 'gateway' && flags.positionals[1] === 'start') {
+      const selection = await inspectLocalCore(dataDir);
+      if (selection.kind === 'start') {
+        const status = await startGatewayDaemon(dataDir);
+        writeResult(json, status, `Ferry Gateway running at ${status.url}\n`);
+        return 0;
+      }
     }
+    if (command === 'doctor' && flags.values.providers !== true)
+      return await doctor(dataDir, undefined, json);
     client = await createClientAsync({
       engine,
       ...(dataDir ? { dataDir } : {}),
     });
+    if (command === 'gateway')
+      return await gatewayCommand(flags.positionals.slice(1), json, client, dataDir);
     if (!command) {
       const { interactive } = await import('./interactive.js');
       await interactive(client, cwd);
@@ -335,11 +338,11 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     if (command === 'serve') {
       if (flags.values.gateway === true) {
         const status = await client.gateway.start();
-        const serverStatus = status as { port?: number; host?: string; url?: string };
+        const gatewayStatus = status as { port?: number; host?: string; url?: string };
         await writeGatewayStatus(gatewayDataDir(dataDir), {
-          port: serverStatus.port ?? 11435,
-          host: serverStatus.host ?? '127.0.0.1',
-          url: serverStatus.url ?? 'http://127.0.0.1:11435',
+          port: gatewayStatus.port ?? 11435,
+          host: gatewayStatus.host ?? '127.0.0.1',
+          url: gatewayStatus.url ?? 'http://127.0.0.1:11435',
         });
         writeResult(
           json,
@@ -347,6 +350,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
           `Ferry Gateway running at ${(status as { url?: string }).url ?? 'localhost'}\nPress Ctrl+C to stop.\n`,
         );
         await waitForShutdownSignal();
+        await client.gateway.stop();
         await clearGatewayStatus(gatewayDataDir(dataDir));
         return 0;
       }
@@ -496,15 +500,23 @@ const CLI_COMMANDS = new Set([
   'status',
 ]);
 
-async function gatewayCommand(args: string[], json: boolean, dataDir: string): Promise<number> {
+async function gatewayCommand(
+  args: string[],
+  json: boolean,
+  client: FerryClient,
+  dataDir?: string,
+): Promise<number> {
   const [action, subcommand, ...rest] = args;
   if (action === 'start') {
-    const status = await startGatewayDaemon(dataDir);
-    writeResult(json, status, `Ferry Gateway running at ${status.url}\n`);
+    const status = (await client.gateway.start()) as { url?: string | null };
+    writeResult(json, status, `Ferry Gateway running at ${status.url ?? 'localhost'}\n`);
     return 0;
   }
   if (action === 'stop') {
-    const stopped = await stopGatewayDaemon(dataDir);
+    const before = await client.gateway.settings();
+    const status = (await client.gateway.stop()) as { running?: boolean };
+    const stopped = before.status.running && status.running === false;
+    await stopGatewayDaemon(gatewayDataDir(dataDir));
     writeResult(
       json,
       { running: false, stopped },
@@ -513,16 +525,17 @@ async function gatewayCommand(args: string[], json: boolean, dataDir: string): P
     return 0;
   }
   if (action === 'status') {
-    const status = await getGatewayDaemonStatus(dataDir);
+    const settings = await client.gateway.settings();
+    const status = settings.status;
     writeResult(
       json,
-      status ?? { running: false },
-      status ? `Running at ${status.url}\n` : 'Stopped\n',
+      status,
+      status.running ? `Running at ${status.url ?? 'localhost'}\n` : 'Stopped\n',
     );
     return 0;
   }
   if (action === 'keys' && subcommand === 'list') {
-    const keys = await listGatewayTokens(dataDir);
+    const keys = await client.gateway.listKeys();
     writeResult(
       json,
       keys,
@@ -538,15 +551,16 @@ async function gatewayCommand(args: string[], json: boolean, dataDir: string): P
   if (action === 'keys' && subcommand === 'create') {
     const [name, profile = 'auto-free'] = rest;
     if (!name) throw new CliError(2, 'Usage: ferry gateway keys create <name> [profile]');
-    const created = await createGatewayToken(dataDir, name, profile);
+    const created = await client.gateway.createKey({ name, profile });
     writeResult(json, created, `Key shown once; copy it now:\n${created.secret}\n`);
     return 0;
   }
   if (action === 'keys' && subcommand === 'revoke') {
     const id = rest[0];
     if (!id) throw new CliError(2, 'Usage: ferry gateway keys revoke <id>');
-    if (!(await revokeGatewayToken(dataDir, id)))
-      throw new CliError(2, `Gateway key not found: ${id}`);
+    const keys = await client.gateway.listKeys();
+    if (!keys.some((key) => key.id === id)) throw new CliError(2, `Gateway key not found: ${id}`);
+    await client.gateway.revokeKey(id);
     writeResult(json, { revoked: id }, `Revoked ${id}\n`);
     return 0;
   }
@@ -1144,7 +1158,7 @@ export async function doctor(
 ): Promise<number> {
   const rows = await collectDoctor({
     ...(probes ?? {}),
-    dataDirectory: probes?.dataDirectory ?? dataDir ?? join(homedir(), '.ferry'),
+    dataDirectory: probes?.dataDirectory ?? resolveEngineDataDirectory(dataDir),
   });
   if (json) process.stdout.write(`${JSON.stringify(rows)}\n`);
   else

@@ -15,6 +15,7 @@ import {
   type JsonRpcRequest,
 } from '@ferry/shared';
 import { startCoreWebSocketServer, type CoreWebSocketHandle } from './websocket.js';
+import { startLocalControlServer, type LocalControlServer } from './local-control.js';
 import { ZodError } from 'zod';
 import { redactKnownSecretText, redactKnownSecrets } from '@ferry/shared';
 import { canonicalizePath } from '@ferry/shared/node-paths';
@@ -38,6 +39,7 @@ export interface CoreOptions {
       }>;
   websocketEnabled?: boolean;
   websocketPort?: number;
+  localControl?: boolean;
   services?: import('./services.js').FerryServices;
 }
 
@@ -93,10 +95,10 @@ export class CoreHost {
   readonly #events = new Set<(method: string, payload: unknown) => void>();
   readonly #shutdownHandlers = new Set<() => void | Promise<void>>();
   readonly #startHandlers = new Set<() => void | Promise<void>>();
+  readonly #transportDisposers = new Map<CoreTransport, () => void>();
   #releaseLock: (() => Promise<void>) | undefined;
-  #unsubscribe: (() => void) | undefined;
-  #unsubscribeEvents: (() => void) | undefined;
   #websocket: CoreWebSocketHandle | undefined;
+  #localControl: LocalControlServer | undefined;
   #started = false;
   #stopped = false;
   #activeRpcMethods = new Map<string, number>();
@@ -191,13 +193,7 @@ export class CoreHost {
     };
     this.#started = true;
     this.#startLagMonitor();
-    if (this.options.transport)
-      this.#unsubscribe = this.options.transport.subscribe((message) => {
-        void this.handleMessage(message);
-      });
-    this.#unsubscribeEvents = this.onEvent((method, params) =>
-      this.options.transport?.send({ jsonrpc: '2.0', method, params }),
-    );
+    if (this.options.transport) this.#attachTransport(this.options.transport);
     if (this.options.services?.databaseRecoveryMessage)
       this.emit('toast', {
         message: this.options.services.databaseRecoveryMessage,
@@ -220,6 +216,16 @@ export class CoreHost {
           }),
       ),
     );
+    const localControlEnabled = this.options.localControl ?? process.env.NODE_ENV !== 'test';
+    if (localControlEnabled) {
+      try {
+        this.#localControl = await startLocalControlServer(this, this.dataDir);
+      } catch (error) {
+        const warning = 'Local control channel is unavailable; core started without CLI access';
+        if (this.options.services) this.options.services.logger.warn({ err: error }, warning);
+        else console.warn(warning, error);
+      }
+    }
   }
 
   async stop(): Promise<void> {
@@ -230,22 +236,36 @@ export class CoreHost {
     await Promise.allSettled(
       [...this.#shutdownHandlers].map((handler) => Promise.resolve().then(handler)),
     );
-    this.#unsubscribe?.();
-    this.#unsubscribe = undefined;
-    this.#unsubscribeEvents?.();
-    this.#unsubscribeEvents = undefined;
+    await this.#localControl?.close();
+    this.#localControl = undefined;
+    for (const transport of [...this.#transportDisposers.keys()]) this.#detachTransport(transport);
     await this.#websocket?.close();
     this.#websocket = undefined;
-    this.options.transport?.close?.();
     await this.options.services?.dispose();
     await this.#releaseLock?.();
     this.#releaseLock = undefined;
     this.#stopped = true;
   }
 
-  async handleMessage(raw: unknown): Promise<void> {
+  attachTransport(transport: CoreTransport): () => void {
+    if (!this.#started) throw new Error('Cannot attach a transport before the core is started');
+    this.#attachTransport(transport);
+    return () => {
+      this.#detachTransport(transport);
+    };
+  }
+
+  async handleMessage(raw: unknown, transport = this.options.transport): Promise<void> {
+    const send = (message: unknown) => {
+      if (!transport) return;
+      try {
+        transport.send(message);
+      } catch {
+        this.#detachTransport(transport);
+      }
+    };
     if (!this.#started) {
-      this.options.transport?.send({
+      send({
         jsonrpc: '2.0',
         id:
           typeof raw === 'object' && raw !== null && 'id' in raw && validRpcId(raw.id)
@@ -257,7 +277,7 @@ export class CoreHost {
     }
     if (Array.isArray(raw)) {
       if (raw.length === 0) {
-        this.options.transport?.send({
+        send({
           jsonrpc: '2.0',
           id: null,
           error: rpcError(-32600, 'invalid_request', 'Empty JSON-RPC batch'),
@@ -266,11 +286,37 @@ export class CoreHost {
       }
       const responses = await Promise.all(raw.map((message) => this.#responseFor(message)));
       const present = responses.filter((response) => response !== undefined);
-      if (present.length) this.options.transport?.send(present);
+      if (present.length) send(present);
       return;
     }
     const response = await this.#responseFor(raw);
-    if (response !== undefined) this.options.transport?.send(response);
+    if (response !== undefined) send(response);
+  }
+
+  #attachTransport(transport: CoreTransport): void {
+    if (this.#transportDisposers.has(transport)) return;
+    const unsubscribeMessages = transport.subscribe((message) => {
+      void this.handleMessage(message, transport);
+    });
+    const unsubscribeEvents = this.onEvent((method, params) => {
+      try {
+        transport.send({ jsonrpc: '2.0', method, params });
+      } catch {
+        this.#detachTransport(transport);
+      }
+    });
+    this.#transportDisposers.set(transport, () => {
+      unsubscribeMessages();
+      unsubscribeEvents();
+      transport.close?.();
+    });
+  }
+
+  #detachTransport(transport: CoreTransport): void {
+    const dispose = this.#transportDisposers.get(transport);
+    if (!dispose) return;
+    this.#transportDisposers.delete(transport);
+    dispose();
   }
 
   async #responseFor(raw: unknown): Promise<unknown> {

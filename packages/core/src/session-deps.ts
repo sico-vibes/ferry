@@ -502,6 +502,7 @@ export function createSessionDependencies(
         trialOptInProviders: routingSettings().trialOptInProviders,
         textToolFallbackEnabled: routingSettings().textToolFallbackEnabled,
         reliability: reliability(),
+        random: services.random,
       });
       const modelByRef = new Map(candidates.map((model) => [model.ref, model]));
       return [

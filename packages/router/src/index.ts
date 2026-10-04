@@ -443,7 +443,14 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       continue;
     const prior = statByRef.get(model.ref);
     const success = input.routing?.smartReliability
-      ? sampleBeta(decayedBetaPosterior(input.reliability ?? [], model.ref, nowMs), input.random)
+      ? (() => {
+          const posterior = decayedBetaPosterior(input.reliability ?? [], model.ref, nowMs);
+          // Random exploration is opt-in through ScoreInput.random. Without an injected
+          // generator, use the posterior mean so identical routing inputs always tie.
+          return input.random
+            ? sampleBeta(posterior, input.random)
+            : posterior.alpha / (posterior.alpha + posterior.beta);
+        })()
       : prior && prior.toolCalls > 0
         ? (prior.toolCalls - prior.toolCallValidationFailures + 2 * 0.8) / (prior.toolCalls + 2)
         : 0.8;
@@ -554,7 +561,10 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
     for (const group of groups) {
       if (group.length < 2 || new Set(group.map((candidate) => candidate.weight)).size < 2)
         continue;
-      const random = input.random ?? Math.random;
+      // Weight sampling is opt-in through ScoreInput.random so this function stays
+      // deterministic when callers do not provide a random source.
+      if (!input.random) continue;
+      const random = input.random;
       const providerKeys = new Map<string, number>();
       for (const candidate of group) {
         if (providerKeys.has(candidate.providerId)) continue;

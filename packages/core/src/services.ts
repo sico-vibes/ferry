@@ -38,6 +38,7 @@ export interface FerryClock {
 export interface ServiceOptions {
   dataDir: string;
   clock?: FerryClock;
+  random?: () => number;
   env?: NodeJS.ProcessEnv;
   secrets?: SecretStore;
 }
@@ -46,6 +47,7 @@ export interface FerryServices {
   readonly dataDir: string;
   readonly paths: DataPaths;
   readonly clock: FerryClock;
+  readonly random: () => number;
   readonly env: NodeJS.ProcessEnv;
   readonly db: DatabaseConnection;
   readonly settings: SettingsRepository;
@@ -125,6 +127,7 @@ export function recordProviderKeyFailure(
 export async function createServices({
   dataDir,
   clock,
+  random = Math.random,
   env = process.env,
   secrets,
 }: ServiceOptions): Promise<FerryServices> {
@@ -281,6 +284,7 @@ export async function createServices({
     dataDir: home,
     paths,
     clock: clock ?? { now: () => new Date() },
+    random,
     env,
     db,
     settings: new SettingsRepository(db.client),

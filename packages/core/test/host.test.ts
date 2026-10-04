@@ -392,8 +392,13 @@ describe('core host dispatcher and lifecycle', () => {
     const fake = await new FakeOpenAIServer({ models: [{ id: 'gpt-oss-120b' }] }).start();
     const path = join(dataDir, 'snapshotless-live-models');
     const providerId = ProviderIdSchema.parse('sambanova');
+    let routingRandomCalls = 0;
     const services = await createServices({
       dataDir: path,
+      random: () => {
+        routingRandomCalls += 1;
+        return 0.5;
+      },
       env: {
         ...process.env,
         NODE_ENV: 'test',
@@ -433,9 +438,12 @@ describe('core host dispatcher and lifecycle', () => {
       const profile = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_best_available');
       if (!profile) throw new Error('Best Available profile is missing');
       const gateway = createSessionDependencies(services, () => undefined).gateway;
-      expect(gateway.resolveCandidates(profile, 'plan').map((model) => model.ref)).toContain(
-        'sambanova/gpt-oss-120b',
-      );
+      expect(
+        gateway
+          .resolveCandidates({ ...profile, name: 'Random source test', fallbackChain: [] }, 'plan')
+          .map((model) => model.ref),
+      ).toContain('sambanova/gpt-oss-120b');
+      expect(routingRandomCalls).toBeGreaterThan(0);
     } finally {
       rpc.close();
       await host.stop();

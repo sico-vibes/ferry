@@ -9,6 +9,11 @@ coverage/
 *.sqlite
 *.sqlite-*
 *.log
+**/core.lock
+**/core.lock.*
+**/core.endpoint.json
+**/core.endpoint.json.*.tmp
+**/core.sock
 .env
 .env.*
 .dev/

@@ -34,6 +34,26 @@ that every UI domain is connected to a production service.
   fresh random bearer token per server start, uses constant-time token comparison,
   rejects any `Origin` header, locks out an address after five bad tokens, and
   caps buffered frames.
+- The desktop core also exposes the existing JSON-RPC protocol to same-user CLI
+  clients over a local control channel while it owns `core.lock`. On Windows,
+  the endpoint descriptor lives in Ferry's per-user AppData directory and
+  inherits its ACL for the current user, SYSTEM, and Administrators; the named
+  pipe uses Node's default ACL from the creating user's token. Ferry does not
+  rewrite Windows ACLs. If `FERRY_DATA_DIR` points elsewhere, the user is
+  responsible for that directory's permissions.
+  On POSIX, the data directory is mode `0700`, the `core.sock` socket and
+  endpoint descriptor are mode `0600`. The descriptor contains a fresh 256-bit
+  token. A connection must present that token in a separate handshake before it
+  is attached to the core transport, and comparison is constant-time. The token
+  is the authentication gate; no TCP listener is used for CLI control. The
+  descriptor is removed on clean shutdown and rotated at the next start after a
+  crash. `doctor` reports channel state and PID only; the endpoint token is
+  never logged or displayed. Other local processes and local users are threats;
+  OS permissions plus the random token restrict access. A process that can read
+  the current user's Ferry data directory can also read the token. If endpoint
+  publication fails, the core logs one warning and continues to start; CLI
+  clients report that the desktop core owns the lock but its channel is
+  unavailable.
 - Stdio transport behavior is unchanged.
 - Workspace file tools deny credential paths, including `.env`, `.env.local`, and
   other `.env.*` variants. Listing and grep paths apply the same protection.

@@ -19,6 +19,12 @@ export { domainRegistrars } from './domains/index.js';
 export { startCoreWebSocketServer } from './websocket.js';
 export type { CoreWebSocketHandle } from './websocket.js';
 export {
+  connectLocalControl,
+  getLocalControlStatus,
+  hasLocalControlEndpoint,
+} from './local-control.js';
+export type { LocalControlStatus } from './local-control.js';
+export {
   isCoreWindowActive,
   onCoreWindowActiveChange,
   setCoreWindowActive,

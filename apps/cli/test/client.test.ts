@@ -2,16 +2,21 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createRpcFerryClient } from '@ferry/client';
+import { ProviderIdSchema } from '@ferry/shared';
 import { canonicalizePath } from '@ferry/shared/node-paths';
-import { createCoreHost } from '@ferry/core';
+import { createCoreHost, createMemoryTransportPair } from '@ferry/core';
+import { FakeOpenAIServer } from '@ferry/testkit';
 import {
   createClient,
   createClientAsync,
   desktopEngineDataDirectory,
   prepareEngineDataDirectory,
   resolveEngineDataDirectory,
+  selectLocalCore,
 } from '../src/client.js';
 import { migrateLegacyEngineData } from '../src/data-directory.js';
+import { runCli } from '../src/main.js';
 
 const dataDirs: string[] = [];
 
@@ -24,6 +29,14 @@ afterEach(async () => {
 });
 
 describe('CLI client engine selection', () => {
+  it('selects an existing channel, reports an owner without one, and ignores stale locks', () => {
+    const live = (pid: number) => pid === 42;
+    expect(selectLocalCore(undefined, false, live)).toEqual({ kind: 'start' });
+    expect(selectLocalCore({ pid: 42 }, true, live)).toEqual({ kind: 'connect', pid: 42 });
+    expect(selectLocalCore({ pid: 42 }, false, live)).toEqual({ kind: 'unavailable', pid: 42 });
+    expect(selectLocalCore({ pid: 41 }, true, live)).toEqual({ kind: 'start' });
+  });
+
   it('uses the Electron Ferry user data engine directory on each desktop platform', () => {
     expect(
       desktopEngineDataDirectory(
@@ -158,10 +171,191 @@ describe('CLI client engine selection', () => {
     const host = await createCoreHost({ dataDir });
     try {
       await expect(createClientAsync({ engine: 'local', dataDir })).rejects.toThrow(
-        'A Ferry core already owns',
+        `Ferry core PID ${String(process.pid)} owns ${dataDir}, but its local control channel is unavailable.`,
       );
     } finally {
       await host.stop();
     }
   }, 30_000);
+
+  it('uses one desktop-style core for CLI status, Gateway, and a streamed session run', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ferry-cli-shared-core-'));
+    dataDirs.push(root);
+    const dataDir = join(root, 'engine');
+    const workspacePath = join(root, 'workspace');
+    await mkdir(workspacePath, { recursive: true });
+    const providerId = ProviderIdSchema.parse('openrouter');
+    const fake = new FakeOpenAIServer({
+      responses: [
+        {
+          chunks: [
+            fakeChunk({ role: 'assistant' }),
+            fakeChunk({ content: 'shared core stream' }),
+            fakeChunk({}, 'stop'),
+          ],
+        },
+      ],
+    });
+    await fake.start();
+    const [desktopTransport, desktopClientTransport] = createMemoryTransportPair();
+    const host = await createCoreHost({
+      dataDir,
+      transport: desktopTransport,
+      localControl: true,
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        FERRY_TEST_KEYRING_NAMESPACE: `ferry-cli-local-control-${String(process.pid)}`,
+        FERRY_PROVIDER_BASE_URL_OPENROUTER: `${fake.baseUrl}/openrouter/v1`,
+      },
+    });
+    const services = host.options.services;
+    if (!services) throw new Error('Desktop-style core services were not created');
+    const desktopClient = createRpcFerryClient(desktopClientTransport);
+    await desktopClient.hello;
+    let cliClient: Awaited<ReturnType<typeof createClientAsync>> | undefined;
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await services.secrets.set(providerId, 'integration-fixture-key');
+      services.providerKeys.put({
+        id: providerId,
+        providerId,
+        keyringRef: providerId,
+        createdAt: new Date().toISOString(),
+      });
+      await desktopClient.providers.setEnabled(providerId, true);
+      const fixtureModel = services.catalog.models.find(
+        (model) =>
+          model.providerId === providerId &&
+          model.toolCalling &&
+          model.free &&
+          /:free(?:$|:)/i.test(model.ref),
+      );
+      if (!fixtureModel) throw new Error('No free tool-capable OpenRouter test model exists');
+      services.models.put(providerId, fixtureModel);
+      const workspace = await desktopClient.workspaces.open(workspacePath);
+      const autoFree = (await desktopClient.profiles.list()).find(
+        (profile) => profile.name === 'Auto-Free',
+      );
+      if (!autoFree) throw new Error('Auto-Free profile is unavailable');
+      await desktopClient.profiles.save({
+        ...autoFree,
+        roles: { ...autoFree.roles, enabled: false },
+      });
+
+      await expect(
+        runCli(['status', '--json', '--engine', 'local', '--data-dir', dataDir]),
+      ).resolves.toBe(0);
+      expect(JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(''))).toMatchObject({
+        engine: 'local',
+        providersConfigured: true,
+      });
+
+      await desktopClient.gateway.setSettings({ enabled: false, port: 0, allowLan: false });
+      output.mockClear();
+      await expect(
+        runCli(['gateway', 'start', '--json', '--engine', 'local', '--data-dir', dataDir]),
+      ).resolves.toBe(0);
+      expect(JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(''))).toMatchObject({
+        running: true,
+      });
+
+      output.mockClear();
+      await expect(
+        runCli(['gateway', 'status', '--json', '--engine', 'local', '--data-dir', dataDir]),
+      ).resolves.toBe(0);
+      expect(JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(''))).toMatchObject({
+        running: true,
+      });
+
+      output.mockClear();
+      await expect(
+        runCli([
+          'gateway',
+          'keys',
+          'create',
+          'round-trip',
+          'auto-free',
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+        ]),
+      ).resolves.toBe(0);
+      const createdKey = JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join('')) as {
+        key: { id: string };
+        secret: string;
+      };
+      expect(createdKey.secret).toBeTruthy();
+      output.mockClear();
+      await expect(
+        runCli(['gateway', 'keys', 'list', '--json', '--engine', 'local', '--data-dir', dataDir]),
+      ).resolves.toBe(0);
+      expect(JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(''))).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: createdKey.key.id })]),
+      );
+      await expect(
+        runCli([
+          'gateway',
+          'keys',
+          'revoke',
+          createdKey.key.id,
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+        ]),
+      ).resolves.toBe(0);
+      output.mockClear();
+      await expect(
+        runCli(['gateway', 'stop', '--json', '--engine', 'local', '--data-dir', dataDir]),
+      ).resolves.toBe(0);
+      expect(JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(''))).toMatchObject({
+        running: false,
+        stopped: true,
+      });
+
+      output.mockClear();
+      await expect(
+        runCli([
+          'run',
+          'stream through the desktop core',
+          '--profile',
+          autoFree.name,
+          '--max-steps',
+          '2',
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+          '--cwd',
+          workspace.path,
+        ]),
+      ).resolves.toBe(0);
+      const runOutput = output.mock.calls.map(([chunk]) => String(chunk)).join('');
+      expect(runOutput).toContain('shared core stream');
+      expect(fake.requests.some((request) => request.url.endsWith('/chat/completions'))).toBe(true);
+      cliClient = await createClientAsync({ engine: 'local', dataDir });
+      expect((await cliClient.system.info()).mock).toBe(false);
+    } finally {
+      output.mockRestore();
+      await cliClient?.dispose?.();
+      desktopClient.close();
+      await fake.stop();
+      await host.stop();
+    }
+  }, 60_000);
 });
+
+function fakeChunk(delta: Record<string, unknown>, finishReason: string | null = null) {
+  return {
+    id: 'chatcmpl_local_control',
+    object: 'chat.completion.chunk',
+    created: 1,
+    model: 'fake',
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  };
+}
