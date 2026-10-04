@@ -1,7 +1,6 @@
 !include "LogicLib.nsh"
 !include "nsDialogs.nsh"
 !include "WinMessages.nsh"
-!include "StrFunc.nsh"
 !include "FileFunc.nsh"
 
 !ifndef BUILD_UNINSTALLER
@@ -171,7 +170,6 @@ FunctionEnd
 !endif
 
 !ifdef BUILD_UNINSTALLER
-${UnStrRep}
 Var DeleteUserDataCheckbox
 Var ForceDeleteUserData
 

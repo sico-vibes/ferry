@@ -1,0 +1,5 @@
+# Installer build fails: NSIS warning 6010 treated as error (no commit)
+
+`main` (6caa41a) CI is green, but the Beta release and Install smoke fail while building the installer:
+`warning 6010: uninstall function "un.StrRep" not referenced - zeroing code (0-52) out` -> `Error: warning treated as error` (makensis via electron-builder).
+This comes from the round-1 PATH changes in `apps/desktop/nsis/installer.nsh`: a StrFunc helper (`${UnStrRep}` / `un.StrRep`) is declared for the uninstaller pass but not referenced in that pass (or only in the installer pass). Declare StrFunc helpers only in the pass that uses them (`!ifdef BUILD_UNINSTALLER` / `!ifndef`), or use the helper the uninstaller actually needs for the exact PATH entry removal. Re-check the whole file for any other unused function/variable that would trip 6010/6001 in either pass (installer and uninstaller are compiled separately). Keep the PATH and Explorer behaviour from round 1 (leave callback, upgrade preservation, no duplicates, exact removal). No commit; the orchestrator builds the installer locally.
