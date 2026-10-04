@@ -1,5 +1,5 @@
 import { mkdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serveDirectory } from './static-server.mjs';
 
@@ -9,7 +9,9 @@ process.env.PLAYWRIGHT_BROWSERS_PATH = '0';
 const { chromium } = await import('@playwright/test');
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const packageDirectory = join(scriptDirectory, '..');
-const outputDirectory = join(packageDirectory, '..', '..', 'design', 'screenshots', 'v2');
+const outputDirectory = process.env.FERRY_SHOTS_DIR
+  ? resolve(process.env.FERRY_SHOTS_DIR)
+  : join(packageDirectory, '..', '..', 'design', 'screenshots', 'v2');
 await mkdir(outputDirectory, { recursive: true });
 const hostedUrl = process.env.FERRY_E2E_URL;
 const served = hostedUrl ? null : await serveDirectory(join(packageDirectory, 'out', 'web'));
@@ -22,6 +24,8 @@ const viewports = [
 const themes = ['dark', 'light'];
 const states = [
   'home-idle',
+  'user-menu-open',
+  'sidebar-tooltip',
   'session-idle',
   'session-activity-collapsed',
   'session-activity-expanded',
@@ -38,6 +42,8 @@ const states = [
   'models-providers',
   'models-catalog',
   'models-usage',
+  'model-picker-open',
+  'model-picker-hover',
   'settings-general',
   'settings-scrolled',
   'settings-profiles',
@@ -83,10 +89,24 @@ async function selectTheme(page, theme) {
   await page.evaluate(() => document.fonts.ready);
 }
 
+async function hidePreviewChrome(page) {
+  await page.addStyleTag({
+    content: '.web-preview-toggle,.web-preview-panel{display:none!important}',
+  });
+}
+
 async function configureTheme(page, theme) {
   await page.goto(baseUrl);
   await page.locator('.v2-app-shell').waitFor();
+  await hidePreviewChrome(page);
   await selectTheme(page, theme);
+}
+
+// Navigate through the sidebar so the seeded transcript uses the mounted mock
+// client and keeps the theme selected by configureTheme.
+async function openSeededSession(page) {
+  await page.getByRole('button', { name: 'Fix flaky tests', exact: true }).click();
+  await page.locator('.transcript-viewport[data-session-status="idle"]').waitFor();
 }
 
 async function captureState(browser, state, theme, viewport) {
@@ -95,6 +115,18 @@ async function captureState(browser, state, theme, viewport) {
   try {
     const page = await context.newPage();
     page.setDefaultTimeout(30_000);
+    if (process.env.FERRY_PREVIEW === '1')
+      await page.addInitScript(() => {
+        const url = new URL(location.href);
+        url.searchParams.set('preview', 'web');
+        if (!url.searchParams.has('scenario')) url.searchParams.set('scenario', 'busy');
+        if (!url.searchParams.has('size'))
+          url.searchParams.set(
+            'size',
+            `${String(window.innerWidth)}x${String(window.innerHeight)}`,
+          );
+        history.replaceState(null, '', url);
+      });
     await configureTheme(page, theme);
 
     if (state.startsWith('library-')) {
@@ -116,6 +148,14 @@ async function captureState(browser, state, theme, viewport) {
         await page.keyboard.press('Control+k');
         await page.getByRole('dialog', { name: 'Command palette' }).waitFor();
       }
+    } else if (state === 'user-menu-open') {
+      await page.getByRole('button', { name: 'User menu', exact: true }).click();
+      await page.getByRole('menu').waitFor();
+    } else if (state === 'sidebar-tooltip') {
+      await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+      const firstNavItem = page.locator('.v2-primary-nav button').first();
+      await firstNavItem.hover();
+      await page.getByRole('tooltip').waitFor();
     } else if (state.startsWith('models-')) {
       const route =
         state === 'models-usage'
@@ -128,6 +168,16 @@ async function captureState(browser, state, theme, viewport) {
       await page.goto(new URL(route, baseUrl).href);
       await page.getByRole('heading', { name: 'Models', exact: true }).waitFor();
       await page.getByRole('tab', { name: tab, exact: true }).waitFor();
+    } else if (state === 'model-picker-open' || state === 'model-picker-hover') {
+      await openSeededSession(page);
+      await page.getByRole('button', { name: /Auto/ }).click();
+      const picker = page.getByRole('dialog', { name: 'Choose model' });
+      await picker.waitFor();
+      if (state === 'model-picker-hover') {
+        const candidate = picker.locator('.model-candidate').last();
+        await candidate.waitFor();
+        await candidate.hover();
+      }
     } else if (state.startsWith('settings-')) {
       const section =
         state === 'settings-scrolled' || state === 'settings-provider-key-dialog'
@@ -249,32 +299,24 @@ async function captureState(browser, state, theme, viewport) {
         if (state === 'session-activity-expanded') await activity.click();
       }
     } else if (state === 'session-idle' || state === 'drawer-open') {
-      await page.goto(new URL('/s/session_3', baseUrl).href);
-      await page.locator('.transcript-viewport').waitFor();
-      await selectTheme(page, theme);
+      await openSeededSession(page);
       if (state === 'drawer-open') {
         await page.getByRole('button', { name: 'Toggle drawer' }).click();
         await page.getByRole('tablist', { name: 'Session drawer tabs' }).waitFor();
       }
     } else if (state === 'session-interrupted') {
-      await page.evaluate(() => {
-        const persisted = JSON.parse(localStorage.getItem('ferry.mock.v1') ?? '{}');
-        const session = persisted.data?.sessions?.find((item) => item.id === 'session_3');
-        if (!session) throw new Error('session_3 is missing from the mock fixture');
-        session.status = 'interrupted';
-        session.inFlight = false;
-        localStorage.setItem('ferry.mock.v1', JSON.stringify(persisted));
-      });
-      await page.goto(new URL('/s/session_3', baseUrl).href);
+      const interruptedUrl = new URL(baseUrl);
+      interruptedUrl.searchParams.set('scenario', 'errors');
+      interruptedUrl.searchParams.set('route', '/s/session_3');
+      interruptedUrl.searchParams.set('theme', theme);
+      await page.goto(interruptedUrl.href);
       await page.locator('.session-resume-banner').waitFor();
     } else if (state === 'about-dialog') {
       await page.getByRole('button', { name: 'User menu', exact: true }).click();
       await page.getByRole('menuitem', { name: 'About', exact: true }).click();
       await page.getByRole('dialog', { name: 'About Ferry', exact: true }).waitFor();
     } else if (state.startsWith('drawer-')) {
-      await page.goto(new URL('/s/session_3', baseUrl).href);
-      await page.locator('.transcript-viewport').waitFor();
-      await selectTheme(page, theme);
+      await openSeededSession(page);
       await page.getByRole('button', { name: 'Toggle drawer' }).click();
       const tabs = page.getByRole('tablist', { name: 'Session drawer tabs' });
       await tabs.waitFor();
@@ -331,7 +373,8 @@ async function captureState(browser, state, theme, viewport) {
       }
     }
 
-    await page.mouse.move(0, 0);
+    if (state !== 'model-picker-hover' && state !== 'sidebar-tooltip') await page.mouse.move(0, 0);
+    await hidePreviewChrome(page);
     await page.screenshot({ path: join(outputDirectory, filename(state, theme, viewport)) });
     console.log(`Captured ${label}`);
   } catch (error) {

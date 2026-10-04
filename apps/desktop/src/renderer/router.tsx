@@ -1,6 +1,13 @@
 import { createHashHistory, createRouter, RouterProvider } from '@tanstack/react-router';
 import { rootRoute, routeRegistry } from './app/routes';
 
+const previewUrl = new URL(window.location.href);
+const requestedPreviewRoute = previewUrl.searchParams.get('route');
+if (import.meta.env.DEV && requestedPreviewRoute?.startsWith('/')) {
+  previewUrl.searchParams.delete('route');
+  previewUrl.pathname = requestedPreviewRoute;
+  window.history.replaceState(null, '', previewUrl);
+}
 const routeTree = rootRoute.addChildren(routeRegistry);
 const router = createRouter({
   routeTree,

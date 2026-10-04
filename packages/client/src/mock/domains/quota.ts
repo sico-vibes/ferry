@@ -13,10 +13,10 @@ export function createQuotaDomain(_store: MockStore, deps: MockDeps): FerryClien
     async history(days) {
       await before();
       const providers = ['gemini', 'openrouter', 'nvidia', 'cerebras', 'groq', 'opencode-go'];
-      return Array.from({ length: Math.max(0, Math.min(14, Math.floor(days))) }, (_, d) =>
+      return Array.from({ length: Math.max(0, Math.min(30, Math.floor(days))) }, (_, d) =>
         providers.map((id) => ({
           date: new Date(
-            clock.now().getTime() - (Math.min(14, Math.floor(days)) - d - 1) * 86400000,
+            clock.now().getTime() - (Math.min(30, Math.floor(days)) - d - 1) * 86400000,
           )
             .toISOString()
             .slice(0, 10),

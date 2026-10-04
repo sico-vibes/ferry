@@ -1,0 +1,11 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "ferry-web-preview",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["preview:web"],
+      "port": 5199
+    }
+  ]
+}

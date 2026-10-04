@@ -11,6 +11,8 @@
   "scripts": {
     "app": "pnpm --filter @ferry/desktop dev",
     "app:web": "pnpm --filter @ferry/desktop dev:web",
+    "preview:web": "pnpm --filter @ferry/desktop exec vite --config vite.web.config.ts --host 127.0.0.1 --port 5199",
+    "shots:review": "node apps/desktop/scripts/shots-review.mjs",
     "cli": "pnpm --filter @ferry/cli exec node dist/ferry.js",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",

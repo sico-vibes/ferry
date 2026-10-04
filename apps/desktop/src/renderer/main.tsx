@@ -29,7 +29,12 @@ const appRoot = createRoot(root);
 
 const speedParam = new URLSearchParams(location.search).get('speed');
 const configuredSpeed = speedParam === null ? undefined : Number(speedParam);
+const previewParams = new URLSearchParams(location.search);
+const webPreview =
+  import.meta.env.DEV && (previewParams.get('preview') === 'web' || location.port === '5199');
+const previewScenario = previewParams.get('scenario') ?? 'busy';
 const mock = createDemoFerryClient({
+  ...(webPreview ? { storage: { load: () => undefined, save: () => undefined } } : {}),
   ...(configuredSpeed !== undefined && Number.isFinite(configuredSpeed) && configuredSpeed >= 0
     ? { speed: configuredSpeed }
     : {}),
@@ -177,6 +182,11 @@ if (demoMode === 'long' || demoMode === 'exhausted' || demoMode === 'explore-per
       mountApp(mock);
     },
   );
+} else if (webPreview) {
+  void import('./web-preview').then(async ({ seedWebPreview }) => {
+    await seedWebPreview(mock, previewScenario);
+    mountApp(mock);
+  });
 } else if (window.ferryHost) {
   void bootstrapClient()
     .then((currentClient) => {

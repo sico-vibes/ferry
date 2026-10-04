@@ -2,7 +2,7 @@ import { Profiler, useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, SlidersHorizontal } from 'lucide-react';
 import { Dialog, UiV2 } from '@ferry/ui';
 import type { SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
@@ -22,7 +22,109 @@ import { useKeybindings } from '../state/keybindings';
 import { matchesKeybinding } from '@ferry/config/keybindings';
 import { getTitlebarOverlayRightReserve } from './titlebarOverlay';
 
+function WebPreviewControls() {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const toggle = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'p') {
+        event.preventDefault();
+        setOpen((value) => !value);
+      }
+    };
+    window.addEventListener('keydown', toggle);
+    return () => {
+      window.removeEventListener('keydown', toggle);
+    };
+  }, []);
+  const update = (key: string, value: string) => {
+    const url = new URL(location.href);
+    url.searchParams.set(key, value);
+    location.href = url.href;
+  };
+  if (
+    !import.meta.env.DEV ||
+    (new URLSearchParams(location.search).get('preview') !== 'web' && location.port !== '5199')
+  )
+    return null;
+  return (
+    <>
+      <div className="web-preview-titlebar" aria-label="Simulated Windows title bar">
+        <div className="web-preview-window-controls" aria-label="Window controls">
+          <button aria-label="Minimize" type="button">
+            <span className="web-preview-control-glyph web-preview-minimize-glyph" />
+          </button>
+          <button aria-label="Maximize" type="button">
+            <span className="web-preview-control-glyph web-preview-maximize-glyph" />
+          </button>
+          <button aria-label="Close" type="button">
+            <span className="web-preview-control-glyph web-preview-close-glyph">&#x2715;</span>
+          </button>
+        </div>
+      </div>
+      <button
+        aria-label="Preview tools"
+        className="web-preview-toggle"
+        onClick={() => {
+          setOpen((value) => !value);
+        }}
+        type="button"
+      >
+        <SlidersHorizontal aria-hidden="true" size={12} />
+      </button>
+      {open && (
+        <aside className="web-preview-panel" aria-label="Preview tools">
+          <label>
+            Scenario
+            <select
+              defaultValue={new URLSearchParams(location.search).get('scenario') ?? 'busy'}
+              onChange={(event) => {
+                update('scenario', event.target.value);
+              }}
+            >
+              <option value="busy">Busy</option>
+              <option value="empty">Empty</option>
+              <option value="errors">Errors</option>
+            </select>
+          </label>
+          <label>
+            Theme
+            <select
+              defaultValue={new URLSearchParams(location.search).get('theme') ?? 'system'}
+              onChange={(event) => {
+                update('theme', event.target.value);
+              }}
+            >
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+          <label>
+            Size
+            <select
+              defaultValue={
+                new URLSearchParams(location.search).get('size') ??
+                (window.innerWidth < 1280 ? '1024x680' : '1440x900')
+              }
+              onChange={(event) => {
+                update('size', event.target.value);
+              }}
+            >
+              <option value="1024x680">1024 x 680</option>
+              <option value="1440x900">1440 x 900</option>
+            </select>
+          </label>
+          <small>Ctrl+Shift+P closes this panel. Screenshots omit preview tools.</small>
+        </aside>
+      )}
+    </>
+  );
+}
+
 export function AppFrame({ children }: { children: React.ReactNode }) {
+  const browserPreview =
+    import.meta.env.DEV &&
+    (new URLSearchParams(location.search).get('preview') === 'web' || location.port === '5199');
   const client = useFerryClient();
   const navigate = useNavigate();
   const cache = useQueryClient();
@@ -48,7 +150,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           getTitlebarOverlayRightReserve(overlay.visible, area, window.innerWidth),
         );
       } else {
-        setTitlebarReserve(0);
+        setTitlebarReserve(browserPreview ? 138 : 0);
       }
     };
     syncTitlebarReserve();
@@ -58,7 +160,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       window.removeEventListener('resize', syncTitlebarReserve);
       overlay?.removeEventListener?.('geometrychange', syncTitlebarReserve);
     };
-  }, []);
+  }, [browserPreview]);
   useFerryEvents();
   useEffect(() => {
     if (!window.ferryHost) return;
@@ -352,11 +454,19 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
 
   return (
     <div
-      className={`ferry-ui v2-app-shell ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed || reviewPage ? 'right-is-collapsed' : ''} ${reviewPage ? 'v2-review-route' : pathname === '/' || pathname.startsWith('/s/') ? 'v2-chat-route' : pathname.startsWith('/settings') ? 'v2-settings-route' : ''}`}
+      className={`ferry-ui v2-app-shell ${browserPreview ? 'web-preview-shell' : ''} ${leftCollapsed ? 'left-is-collapsed' : ''} ${rightCollapsed || reviewPage ? 'right-is-collapsed' : ''} ${reviewPage ? 'v2-review-route' : pathname === '/' || pathname.startsWith('/s/') ? 'v2-chat-route' : pathname.startsWith('/settings') ? 'v2-settings-route' : ''}`}
       data-density={density}
+      data-preview-size={
+        browserPreview
+          ? (new URLSearchParams(location.search).get('size') ??
+            (window.innerWidth < 1280 ? '1024x680' : '1440x900'))
+          : undefined
+      }
       style={{ '--titlebar-overlay-right': `${String(titlebarReserve)}px` } as CSSProperties}
     >
-      <div className="title-strip" aria-hidden="true" />
+      <div className="title-strip" aria-hidden="false">
+        <WebPreviewControls />
+      </div>
       <div
         className={`v2-app-grid ${!rightCollapsed && !reviewPage && pathname.startsWith('/s/') ? 'drawer-open' : ''}`}
       >
