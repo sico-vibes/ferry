@@ -2,6 +2,9 @@ provider: anyapi
 name: AnyAPI Free plan
 tag: caution
 optional: true
+free_plan:
+  source_url: https://anyapi.ai/terms-of-service
+  models: ['*']
 signup_url: https://anyapi.ai/
 docs_url: https://anyapi.ai/terms-of-service
 terms_note: >-

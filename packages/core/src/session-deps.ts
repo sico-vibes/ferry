@@ -107,6 +107,7 @@ export function createSessionDependencies(
         docs_url,
         verified_at,
         key_required,
+        free_plan,
       }) => {
         const id = ProviderIdSchema.parse(provider);
         const saved = services.providers.get(id);
@@ -124,6 +125,18 @@ export function createSessionDependencies(
           id,
           name,
           tag,
+          ...(free_plan === undefined
+            ? {}
+            : {
+                freePlan: {
+                  sourceUrl: free_plan.source_url,
+                  models: free_plan.models,
+                  ...(free_plan.excluded_models === undefined
+                    ? {}
+                    : { excludedModels: free_plan.excluded_models }),
+                },
+              }),
+          billingEnabled: saved?.billingEnabled ?? false,
           kind: tag === 'subscription_cli' ? 'cli' : 'api',
           brand: null,
           keyStatus,
@@ -416,7 +429,7 @@ export function createSessionDependencies(
               modelSupportsTools(model) &&
               (isPreferredToolModel(provider, model.ref.slice(provider.length + 1)) ||
                 model.capability?.toolCall == null ||
-                (provider === 'openrouter' && /:free(?:$|:)/i.test(model.ref))),
+                (provider === 'openrouter' && model.free)),
           )
           .map((model) => model.ref);
         return [...new Set([...exactPreferences, ...providerDefaults])];

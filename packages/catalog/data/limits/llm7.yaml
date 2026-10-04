@@ -16,6 +16,9 @@ source_url: https://docs.llm7.io/limits
 endpoints: [https://api.llm7.io/v1]
 models_endpoint: /models
 key_required: false
+free_plan:
+  source_url: https://docs.llm7.io/limits
+  models: ['*']
 probe_models: [llm7-default]
 windows:
   - { scope: provider, metric: tokens, kind: rolling, length: 86400, limit: 1000000 }

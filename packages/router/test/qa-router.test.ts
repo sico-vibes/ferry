@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import type { ModelInfo, Profile, Provider, TaskRecord } from '@ferry/shared';
+import { loadCatalog } from '@ferry/catalog';
 import {
   BUILTIN_PROFILES,
   buildBriefing,
@@ -8,6 +9,7 @@ import {
   normalizeToolCallIds,
   onStepError,
   scoreModels,
+  isFreeForRouting,
   type CapacityView,
 } from '../src/index.js';
 
@@ -20,6 +22,30 @@ const best = profileByName('Best Available');
 const autoFree = profileByName('Auto-Free');
 
 const now = '2026-09-24T12:00:00.000Z';
+
+describe('free classification consistency', () => {
+  it('agrees with the catalog for OpenRouter zero priced promotional models', async () => {
+    const catalog = await loadCatalog();
+    const model = catalog.models.find(
+      (candidate) => candidate.ref === 'openrouter/stealth/space-bunny-alpha',
+    );
+    expect(model).toBeDefined();
+    if (!model) return;
+    const provider = {
+      ...makeProvider({
+        enabled: true,
+        health: 'ok',
+        cooldownFuture: false,
+        keyStatus: 'valid',
+        stepsLeftToday: 20,
+      }),
+      id: 'openrouter' as Provider['id'],
+      tag: 'legit' as const,
+    };
+    expect(model.free).toBe(true);
+    expect(isFreeForRouting(provider, model)).toBe(model.free);
+  });
+});
 
 function makeProvider(flags: {
   enabled: boolean;

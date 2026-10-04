@@ -13,6 +13,14 @@ data_use: >-
   submit confidential data.
 verified_at: '2026-09-25'
 source_url: https://kilo.ai/docs/gateway/usage-and-billing
+free_plan:
+  source_url: https://kilo.ai/docs/gateway/usage-and-billing
+  models:
+    - stepfun/step-3.7-flash:free
+    - poolside/laguna-s-2.1:free
+    - nvidia/nemotron-3-ultra-550b-a55b:free
+    - tencent/hy3:free
+    - openrouter/free
 endpoints: [https://api.kilo.ai/api/gateway]
 key_required: false
 probe_models: [openrouter/free]

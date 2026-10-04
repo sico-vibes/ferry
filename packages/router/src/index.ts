@@ -9,6 +9,7 @@ import type {
   Message,
   RoutingSettings,
 } from '@ferry/shared';
+import { isModelFreeForPlan } from '@ferry/shared';
 import type { Catalog } from '@ferry/catalog';
 import {
   DEFAULT_AUTO_FREE_CHAIN,
@@ -273,8 +274,19 @@ export function resolveLogicalModelCandidates(
 export function estimateSpend(
   usage: SpendUsage,
   model: Pick<ModelInfo, 'priceInPerM' | 'priceOutPerM'> &
-    Partial<Pick<ModelInfo, 'priceCachedInPerM' | 'cachedInputRatio'>>,
+    Partial<
+      Pick<ModelInfo, 'ref' | 'providerId' | 'free' | 'priceCachedInPerM' | 'cachedInputRatio'>
+    >,
+  provider?: Provider,
 ): { amountUsd: number; estimated: boolean } {
+  if (
+    provider &&
+    model.ref !== undefined &&
+    model.providerId !== undefined &&
+    model.free !== undefined &&
+    isModelFreeForPlan(provider, model as ModelInfo)
+  )
+    return { amountUsd: 0, estimated: false };
   if (model.priceInPerM === null || model.priceOutPerM === null)
     return { amountUsd: UNKNOWN_PRICE_ESTIMATE_USD, estimated: true };
   const cachedTokens = Math.min(usage.inputTokens, Math.max(0, usage.cachedTokens ?? 0));
@@ -292,9 +304,12 @@ export function estimateSpend(
 export function calculateSpend(
   usage: SpendUsage,
   model: Pick<ModelInfo, 'priceInPerM' | 'priceOutPerM'> &
-    Partial<Pick<ModelInfo, 'priceCachedInPerM' | 'cachedInputRatio'>>,
+    Partial<
+      Pick<ModelInfo, 'ref' | 'providerId' | 'free' | 'priceCachedInPerM' | 'cachedInputRatio'>
+    >,
+  provider?: Provider,
 ): number {
-  return estimateSpend(usage, model).amountUsd;
+  return estimateSpend(usage, model, provider).amountUsd;
 }
 
 export function canSpend(
@@ -723,12 +738,8 @@ function providerAllowed(
 ): boolean {
   if (provider.tag === 'trial' && !trialOptInProviders.includes(provider.id)) return false;
   if (!profile.paidAllowed) {
-    if (
-      provider.freeTierUnsupported ||
-      provider.id === 'opencode' ||
-      ['paid', 'credits'].includes(provider.tag)
-    )
-      return false;
+    if (provider.freeTierUnsupported || provider.id === 'opencode') return false;
+    if (['paid', 'credits'].includes(provider.tag) && provider.id !== 'openrouter') return false;
     if (!isFreeForRouting(provider, model, trialOptInProviders)) return false;
   }
   if (profile.allowedProviders === 'all') return true;
@@ -742,19 +753,7 @@ export function isFreeForRouting(
   model: Pick<ModelInfo, 'ref' | 'free' | 'priceInPerM' | 'priceOutPerM'>,
   trialOptInProviders: readonly string[] = [],
 ): boolean {
-  if (provider.tag === 'trial')
-    return !provider.billingEnabled && trialOptInProviders.includes(provider.id);
-  // OpenRouter's free label is model-specific even when the account has credits.
-  if (provider.id === 'openrouter') return /:free(?:$|:)/i.test(model.ref);
-  if (provider.id === 'kilo')
-    return /:free(?:$|:)/i.test(model.ref) || (model.priceInPerM === 0 && model.priceOutPerM === 0);
-  if (provider.billingEnabled) return false;
-  if (provider.keyRequired === false) return true;
-  if (['paid', 'credits'].includes(provider.tag)) return false;
-  if (['subscription_cli', 'subscription_oauth'].includes(provider.tag))
-    return model.free || (model.priceInPerM === 0 && model.priceOutPerM === 0);
-  if (['legit', 'promo'].includes(provider.tag)) return true;
-  return model.free;
+  return isModelFreeForPlan(provider, { ...model, providerId: provider.id }, trialOptInProviders);
 }
 function capacityRemaining(capacity: CapacityView, provider: Provider): number | null {
   const entry = capacity.providers.find((item) => item.id === provider.id);

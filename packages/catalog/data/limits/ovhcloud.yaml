@@ -12,6 +12,9 @@ verified_at: '2026-09-25'
 source_url: https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-endpoints-getting-started
 endpoints: [https://oai.endpoints.kepler.ai.cloud.ovh.net/v1]
 key_required: false
+free_plan:
+  source_url: https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-endpoints-getting-started
+  models: ['*']
 probe_models: [Meta-Llama-3_3-70B-Instruct]
 windows:
   - { scope: provider, metric: requests, kind: rolling, length: 60, limit: 2 }

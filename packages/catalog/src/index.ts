@@ -6,6 +6,9 @@ import { loadCapabilityRegistry, normalizeModelId } from './registry.js';
 import { loadQualityPriors, qualityPenaltyForModel, resolveQualityFamily } from './quality.js';
 import {
   ModelInfoSchema,
+  isModelFreeForPlan,
+  ProviderIdSchema,
+  ModelRefSchema,
   ProviderTagSchema,
   TierSchema,
   type ModelInfo,
@@ -57,6 +60,13 @@ export const ProviderLimitsSchema = z.object({
   required_headers: z.array(z.string().min(1)).optional(),
   probe_models: z.array(z.string().min(1)).optional(),
   key_required: z.boolean().optional(),
+  free_plan: z
+    .object({
+      source_url: z.url(),
+      models: z.array(z.string().min(1)),
+      excluded_models: z.array(z.string().min(1)).optional(),
+    })
+    .optional(),
   cached_input_ratio: z.number().nonnegative().max(1).optional(),
   optional: z.boolean().optional(),
   dead: z.boolean().optional(),
@@ -114,7 +124,11 @@ interface SnapshotProvider {
 }
 type Snapshot = Record<string, SnapshotProvider>;
 
-export function normalizeModels(snapshot: unknown, tiers: TierCatalog = {}): ModelInfo[] {
+export function normalizeModels(
+  snapshot: unknown,
+  tiers: TierCatalog = {},
+  providerPlans: readonly Pick<ProviderLimits, 'provider' | 'tag' | 'free_plan'>[] = [],
+): ModelInfo[] {
   const result: ModelInfo[] = [];
   if (snapshot === null || typeof snapshot !== 'object' || Array.isArray(snapshot)) return result;
   for (const [snapshotProviderId, provider] of Object.entries(snapshot as Snapshot)) {
@@ -122,6 +136,7 @@ export function normalizeModels(snapshot: unknown, tiers: TierCatalog = {}): Mod
     for (const model of Object.values(provider.models ?? {})) {
       const ref = `${providerId}/${model.id}`;
       const tierInfo = tiers[ref] ?? tiers[model.id];
+      const plan = providerPlans.find((providerPlan) => providerPlan.provider === providerId);
       const normalized = ModelInfoSchema.safeParse({
         ref,
         providerId,
@@ -132,7 +147,31 @@ export function normalizeModels(snapshot: unknown, tiers: TierCatalog = {}): Mod
         maxOutput: model.limit?.output ?? Math.min(model.limit?.context ?? 8192, 4096),
         toolCalling: model.tool_call ?? false,
         reasoning: model.reasoning ?? false,
-        free: (model.cost?.input ?? 0) === 0 && (model.cost?.output ?? 0) === 0,
+        free: isModelFreeForPlan(
+          {
+            id: ProviderIdSchema.parse(providerId),
+            tag: plan?.tag ?? (providerId === 'kilo' ? 'promo' : 'legit'),
+            ...(plan?.free_plan === undefined
+              ? {}
+              : {
+                  freePlan: {
+                    sourceUrl: plan.free_plan.source_url,
+                    models: plan.free_plan.models,
+                    ...(plan.free_plan.excluded_models === undefined
+                      ? {}
+                      : { excludedModels: plan.free_plan.excluded_models }),
+                  },
+                }),
+          },
+          {
+            ref: ModelRefSchema.parse(ref),
+            providerId: ProviderIdSchema.parse(providerId),
+            free: model.cost?.input === 0 && model.cost.output === 0,
+            priceInPerM: model.cost?.input ?? null,
+            priceOutPerM: model.cost?.output ?? null,
+          },
+          plan?.tag === 'trial' ? [providerId] : [],
+        ),
         priceInPerM: model.cost?.input ?? null,
         priceOutPerM: model.cost?.output ?? null,
         ...(model.cost?.cache_read === undefined
@@ -194,7 +233,7 @@ export async function loadCatalog(
       (provider) => now.getTime() - Date.parse(`${provider.verified_at}T00:00:00Z`) > 60 * 86400000,
     )
     .map((provider) => `Provider limits for ${provider.provider} are older than 60 days.`);
-  const models = normalizeModels(JSON.parse(snapshotText), tiers).map((model) => {
+  const models = normalizeModels(JSON.parse(snapshotText), tiers, providers).map((model) => {
     const providerCacheRatio = providers.find(
       (provider) => provider.provider === model.providerId,
     )?.cached_input_ratio;

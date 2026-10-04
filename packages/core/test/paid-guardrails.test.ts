@@ -13,7 +13,7 @@ function requestModel(body: unknown): string | undefined {
 }
 
 describe('paid-call guardrails', () => {
-  it('streams an unpriced free model without paid approval or cap spend', async () => {
+  it('requires paid approval when model pricing is unknown', async () => {
     const h = await startHarness({ provider: 'groq', turns: [textTurn('Free lane answer')] });
     try {
       const catalogModel = h.services.catalog.models.find(
@@ -21,13 +21,14 @@ describe('paid-call guardrails', () => {
       );
       expect(catalogModel).toBeDefined();
       if (!catalogModel) return;
+      // Groq's sourced free-plan patterns exclude llama-3.3; unknown pricing must stay billable.
       const model = Object.assign(catalogModel, {
         free: false,
         priceInPerM: null,
         priceOutPerM: null,
       });
       h.services.models.put(model.providerId, model);
-      const profile = BUILTIN_PROFILES.find((item) => item.name === 'Auto-Free');
+      const profile = BUILTIN_PROFILES.find((item) => item.name === 'Best Available');
       expect(profile).toBeDefined();
       if (!profile) return;
       const session = await h.rpc.sessions.create({
@@ -38,40 +39,28 @@ describe('paid-call guardrails', () => {
       await h.rpc.sessions.send(session.id, { text: 'answer using the free model' });
       await waitFor(async () => {
         const detail = await h.rpc.sessions.get(session.id);
-        return (
-          detail.session.status === 'idle' ||
-          detail.messages.some((message) =>
-            message.parts.some(
-              (part) => part.type === 'approval_request' && part.kind === 'paid_model',
-            ),
-          )
+        return detail.messages.some((message) =>
+          message.parts.some(
+            (part) => part.type === 'approval_request' && part.kind === 'paid_model',
+          ),
         );
       });
 
       const detail = await h.rpc.sessions.get(session.id);
-      expect(detail.session.status).toBe('idle');
       expect(
         detail.messages.some((message) =>
           message.parts.some(
             (part) => part.type === 'approval_request' && part.kind === 'paid_model',
           ),
         ),
-      ).toBe(false);
-      expect(
-        detail.messages.some((message) =>
-          message.parts.some(
-            (part) => part.type === 'text' && part.text.includes('Free lane answer'),
-          ),
-        ),
       ).toBe(true);
-      expect(h.server.requests).toHaveLength(1);
-      expect(h.services.quota.queryUsage({ sessionId: session.id })[0]?.costUsd).toBe(0);
+      expect(h.server.requests).toHaveLength(0);
     } finally {
       await h.close();
     }
   }, 30_000);
 
-  it('keeps a priced model free when the router marks its provider plan free', async () => {
+  it('requires paid approval for a priced model on a free provider plan', async () => {
     const h = await startHarness({ provider: 'groq', turns: [textTurn('Free plan answer')] });
     try {
       const catalogModel = h.services.catalog.models.find(
@@ -85,7 +74,7 @@ describe('paid-call guardrails', () => {
         priceOutPerM: 2,
       });
       h.services.models.put(model.providerId, model);
-      const profile = BUILTIN_PROFILES.find((item) => item.name === 'Auto-Free');
+      const profile = BUILTIN_PROFILES.find((item) => item.name === 'Best Available');
       expect(profile).toBeDefined();
       if (!profile) return;
       const session = await h.rpc.sessions.create({
@@ -96,27 +85,22 @@ describe('paid-call guardrails', () => {
       await h.rpc.sessions.send(session.id, { text: 'answer using the free provider plan' });
       await waitFor(async () => {
         const detail = await h.rpc.sessions.get(session.id);
-        return (
-          detail.session.status === 'idle' ||
-          detail.messages.some((message) =>
-            message.parts.some(
-              (part) => part.type === 'approval_request' && part.kind === 'paid_model',
-            ),
-          )
+        return detail.messages.some((message) =>
+          message.parts.some(
+            (part) => part.type === 'approval_request' && part.kind === 'paid_model',
+          ),
         );
       });
 
       const detail = await h.rpc.sessions.get(session.id);
-      expect(detail.session.status).toBe('idle');
       expect(
         detail.messages.some((message) =>
           message.parts.some(
             (part) => part.type === 'approval_request' && part.kind === 'paid_model',
           ),
         ),
-      ).toBe(false);
-      expect(h.server.requests).toHaveLength(1);
-      expect(h.services.quota.queryUsage({ sessionId: session.id })[0]?.costUsd).toBe(0);
+      ).toBe(true);
+      expect(h.server.requests).toHaveLength(0);
     } finally {
       await h.close();
     }
@@ -257,68 +241,62 @@ describe('paid-call guardrails', () => {
     },
     30_000,
   );
-  it.each([
-    { priceInPerM: 0.5, priceOutPerM: 1 },
-    { priceInPerM: 0, priceOutPerM: 0 },
-  ])(
-    'requires confirmation before the first request for a pinned non-free OpenRouter model',
-    async ({ priceInPerM, priceOutPerM }) => {
-      const h = await startHarness({ turns: [textTurn('Pinned paid answer')] });
-      try {
-        await h.rpc.providers.setBillingEnabled(ProviderIdSchema.parse('openrouter'), true);
-        const catalogModel = h.services.catalog.models.find(
-          (item) => item.providerId === 'openrouter' && !item.free && item.toolCalling,
-        );
-        expect(catalogModel).toBeDefined();
-        if (!catalogModel) return;
-        const model = Object.assign(catalogModel, {
-          free: false,
-          priceInPerM,
-          priceOutPerM,
-        });
-        const profile = BUILTIN_PROFILES.find((item) => item.name === 'Best Available');
-        expect(profile).toBeDefined();
-        if (!profile) return;
-        const session = await h.rpc.sessions.create({
-          workspaceId: h.workspaceId,
-          profileId: profile.id,
-        });
-        await h.rpc.models.select(session.id, model.ref);
-        await h.rpc.sessions.send(session.id, { text: 'use the pinned paid model' });
-        await waitFor(async () => {
-          const detail = await h.rpc.sessions.get(session.id);
-          return detail.messages.some((message) =>
-            message.parts.some(
-              (part) => part.type === 'approval_request' && part.kind === 'paid_model',
-            ),
-          );
-        });
-
-        const paidRequests = () =>
-          h.server.requests.filter((request) => request.url.endsWith('/chat/completions'));
-        expect(paidRequests()).toHaveLength(0);
+  it('requires confirmation before the first request for a pinned priced OpenRouter model', async () => {
+    const h = await startHarness({ turns: [textTurn('Pinned paid answer')] });
+    try {
+      await h.rpc.providers.setBillingEnabled(ProviderIdSchema.parse('openrouter'), true);
+      const catalogModel = h.services.catalog.models.find(
+        (item) => item.providerId === 'openrouter' && !item.free && item.toolCalling,
+      );
+      expect(catalogModel).toBeDefined();
+      if (!catalogModel) return;
+      // $0/$0 OpenRouter routes are explicitly free on credit-backed accounts; this case tests a priced route.
+      const model = Object.assign(catalogModel, {
+        free: false,
+        priceInPerM: 0.5,
+        priceOutPerM: 1,
+      });
+      const profile = BUILTIN_PROFILES.find((item) => item.name === 'Best Available');
+      expect(profile).toBeDefined();
+      if (!profile) return;
+      const session = await h.rpc.sessions.create({
+        workspaceId: h.workspaceId,
+        profileId: profile.id,
+      });
+      await h.rpc.models.select(session.id, model.ref);
+      await h.rpc.sessions.send(session.id, { text: 'use the pinned paid model' });
+      await waitFor(async () => {
         const detail = await h.rpc.sessions.get(session.id);
-        expect(detail.session.pinnedModelRef).toBe(model.ref);
-        const approval = detail.messages
-          .flatMap((message) => message.parts)
-          .find(
-            (part): part is Extract<MessagePart, { type: 'approval_request' }> =>
-              part.type === 'approval_request' && part.kind === 'paid_model',
-          );
-        expect(approval?.summary).toContain(model.name);
-        if (!approval) return;
-        await h.rpc.approvals.respond(session.id, approval.id, 'allow_once');
-        await waitFor(async () => (await h.rpc.sessions.get(session.id)).session.status === 'idle');
-        expect(paidRequests()).toHaveLength(1);
-        expect(paidRequests()[0]?.method).toBe('POST');
-        expect(paidRequests()[0]?.url.endsWith('/chat/completions')).toBe(true);
-        expect(requestModel(paidRequests()[0]?.body)).toBe(model.ref.replace(/^openrouter\//, ''));
-      } finally {
-        await h.close();
-      }
-    },
-    30_000,
-  );
+        return detail.messages.some((message) =>
+          message.parts.some(
+            (part) => part.type === 'approval_request' && part.kind === 'paid_model',
+          ),
+        );
+      });
+
+      const paidRequests = () =>
+        h.server.requests.filter((request) => request.url.endsWith('/chat/completions'));
+      expect(paidRequests()).toHaveLength(0);
+      const detail = await h.rpc.sessions.get(session.id);
+      expect(detail.session.pinnedModelRef).toBe(model.ref);
+      const approval = detail.messages
+        .flatMap((message) => message.parts)
+        .find(
+          (part): part is Extract<MessagePart, { type: 'approval_request' }> =>
+            part.type === 'approval_request' && part.kind === 'paid_model',
+        );
+      expect(approval?.summary).toContain(model.name);
+      if (!approval) return;
+      await h.rpc.approvals.respond(session.id, approval.id, 'allow_once');
+      await waitFor(async () => (await h.rpc.sessions.get(session.id)).session.status === 'idle');
+      expect(paidRequests()).toHaveLength(1);
+      expect(paidRequests()[0]?.method).toBe('POST');
+      expect(paidRequests()[0]?.url.endsWith('/chat/completions')).toBe(true);
+      expect(requestModel(paidRequests()[0]?.body)).toBe(model.ref.replace(/^openrouter\//, ''));
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
   it('keeps catalog pricing through paged model listing and requires paid confirmation', async () => {
     const h = await startHarness({ turns: [textTurn('Paid answer')] });
     try {
