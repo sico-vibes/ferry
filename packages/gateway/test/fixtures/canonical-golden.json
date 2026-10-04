@@ -21,6 +21,30 @@
     "input": [{ "role": "user", "content": [{ "type": "input_text", "text": "hello" }] }],
     "tools": [{ "type": "function", "name": "lookup", "parameters": { "type": "object" } }]
   },
+  "codexResponses": {
+    "model": "ferry/auto-free",
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [{ "type": "input_text", "text": "inspect" }]
+      },
+      {
+        "type": "reasoning",
+        "summary": [{ "type": "summary_text", "text": "Need inspect before editing." }]
+      },
+      {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_1",
+        "name": "read_file",
+        "arguments": "{\"path\":\"README.md\"}"
+      },
+      { "type": "function_call_output", "call_id": "call_1", "output": "# Ferry" }
+    ],
+    "tools": [{ "type": "function", "name": "read_file", "parameters": { "type": "object" } }],
+    "stream": true
+  },
   "gemini": {
     "model": "ferry/auto-free",
     "contents": [{ "role": "user", "parts": [{ "text": "hello" }] }],
@@ -36,6 +60,22 @@
     "response.output_text.done",
     "response.completed"
   ],
+  "codexToolStream": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.function_call_arguments.delta",
+    "response.function_call_arguments.done",
+    "response.output_item.done",
+    "response.completed"
+  ],
+  "codexStreamError": {
+    "event": "error",
+    "data": {
+      "type": "error",
+      "error": { "message": "upstream unavailable", "type": "server_error", "code": "server" }
+    }
+  },
   "geminiStream": [
     { "candidates": [{ "content": { "role": "model", "parts": [{ "text": "hello" }] } }] },
     { "usageMetadata": { "promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 3 } }

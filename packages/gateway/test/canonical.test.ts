@@ -24,7 +24,7 @@ describe('canonical protocol conversions', () => {
     const responses = openAiResponsesToCanonical(golden.responses as Record<string, unknown>);
     const gemini = geminiToCanonical(golden.gemini as Record<string, unknown>, 'ferry/auto-free');
     expect(chat.messages[0]?.parts).toEqual([{ type: 'text', text: 'hello' }]);
-    expect(anthropic.messages[0]?.toolCalls).toEqual([
+    expect(anthropic.messages.find((item) => item.role === 'assistant')?.toolCalls).toEqual([
       { id: 'call_1', name: 'lookup', arguments: '{"q":"x"}' },
     ]);
     expect(responses.tools?.[0]?.name).toBe('lookup');
@@ -44,27 +44,48 @@ describe('canonical protocol conversions', () => {
     );
   });
 
+  it('normalizes Codex Responses reasoning, function calls, and tool results', () => {
+    const request = openAiResponsesToCanonical(golden.codexResponses as Record<string, unknown>);
+    expect(request.stream).toBe(true);
+    expect(request.messages.map((item) => item.role)).toEqual([
+      'user',
+      'assistant',
+      'assistant',
+      'tool',
+    ]);
+    expect(request.messages[1]?.parts).toEqual([
+      { type: 'reasoning', text: 'Need inspect before editing.' },
+    ]);
+    expect(canonicalToGatewayMessages(request.messages).messages).toMatchObject([
+      { role: 'user', content: 'inspect' },
+      { role: 'assistant', tool_calls: [{ id: 'call_1' }] },
+      { role: 'tool', tool_call_id: 'call_1', content: '# Ferry' },
+    ]);
+  });
+
   it('rejects unsupported Responses chaining and flushes terminal usage on finalization', () => {
     expect(() =>
       openAiResponsesToCanonical({ model: 'ferry/best', previous_response_id: 'resp_1' }),
     ).toThrow('previous_response_id is not supported');
     const final = finalizeCanonicalStream([{ type: 'text_delta', text: 'hello' }], 'stop', {
       inputTokens: 2,
+      cachedTokens: 1,
       outputTokens: 1,
     });
     expect(final.events.at(-1)).toEqual({
       type: 'completed',
       finishReason: 'stop',
-      usage: { inputTokens: 2, outputTokens: 1 },
+      usage: { inputTokens: 2, cachedTokens: 1, outputTokens: 1 },
     });
     expect(canonicalStreamEventsToResponses(final.events, 'resp_test').at(-1)).toMatchObject({
       type: 'response.completed',
+      usage: { input_tokens_details: { cached_tokens: 1 } },
     });
     expect(canonicalStreamEventsToGemini(final.events).at(-1)).toMatchObject({
-      usageMetadata: { totalTokenCount: 3 },
+      usageMetadata: { totalTokenCount: 3, cachedContentTokenCount: 1 },
     });
     expect(canonicalStreamEventsToOpenAiChat(final.events).at(-1)).toMatchObject({
-      usage: { total_tokens: 3 },
+      usage: { total_tokens: 3, prompt_tokens_details: { cached_tokens: 1 } },
     });
     expect(canonicalStreamEventsToAnthropic(final.events).at(-1)).toEqual({
       type: 'message_stop',

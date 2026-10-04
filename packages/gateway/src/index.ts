@@ -34,7 +34,13 @@ export interface GatewayStore {
   delete(id: string): void;
   recordRequest(keyId: string, at: string): void;
   recentRequests(keyId: string, now: string): number;
-  recordUsage(keyId: string, inputTokens: number, outputTokens: number, at: string): void;
+  recordUsage(
+    keyId: string,
+    inputTokens: number,
+    outputTokens: number,
+    at: string,
+    cachedTokens?: number,
+  ): void;
   tokenUsage(keyId: string, now: string): { minuteTokens: number; dayTokens: number };
   usage(keyId: string): {
     requests: number;
@@ -68,6 +74,7 @@ export interface GatewayCompletion {
   text: string;
   toolCalls?: { id: string; name: string; arguments: string }[];
   inputTokens: number;
+  cachedTokens?: number;
   outputTokens: number;
   finishReason: string;
   reasoning?: string;
@@ -418,7 +425,7 @@ async function handleChat(
         .update(JSON.stringify(input.messages[0] ?? {}))
         .digest('hex'),
   );
-  const usage = { inputTokens: 0, outputTokens: 0 };
+  const usage = { inputTokens: 0, cachedTokens: 0, outputTokens: 0 };
   try {
     const normalized = normalizeMessages(input.messages);
     if (input.stream) {
@@ -461,6 +468,7 @@ async function handleChat(
       reserved.release();
       beginStream();
       usage.inputTokens = result.inputTokens;
+      usage.cachedTokens = result.cachedTokens ?? 0;
       usage.outputTokens = result.outputTokens;
       if (tools.length)
         res.write(
@@ -468,7 +476,7 @@ async function handleChat(
         );
       const finishReason = tools.length ? 'tool_calls' : result.finishReason;
       res.write(
-        `data: ${JSON.stringify({ ...chatChunk(id, input.model, {}, finishReason), choices: [{ index: 0, delta: {}, finish_reason: finishReason }], usage: { prompt_tokens: result.inputTokens, completion_tokens: result.outputTokens, total_tokens: result.inputTokens + result.outputTokens } })}\n\n`,
+        `data: ${JSON.stringify({ ...chatChunk(id, input.model, {}, finishReason), choices: [{ index: 0, delta: {}, finish_reason: finishReason }], usage: { prompt_tokens: result.inputTokens, prompt_tokens_details: { cached_tokens: result.cachedTokens ?? 0 }, completion_tokens: result.outputTokens, total_tokens: result.inputTokens + result.outputTokens } })}\n\n`,
       );
       res.end('data: [DONE]\n\n');
     } else {
@@ -490,6 +498,7 @@ async function handleChat(
       });
       reserved.release();
       usage.inputTokens = result.inputTokens;
+      usage.cachedTokens = result.cachedTokens ?? 0;
       usage.outputTokens = result.outputTokens;
       json(res, 200, {
         id: result.id || id,
@@ -517,6 +526,7 @@ async function handleChat(
         ],
         usage: {
           prompt_tokens: usage.inputTokens,
+          prompt_tokens_details: { cached_tokens: usage.cachedTokens },
           completion_tokens: usage.outputTokens,
           total_tokens: usage.inputTokens + usage.outputTokens,
         },
@@ -527,6 +537,7 @@ async function handleChat(
       usage.inputTokens,
       usage.outputTokens,
       new Date().toISOString(),
+      usage.cachedTokens,
     );
   } catch (error) {
     reserved.release();
@@ -642,7 +653,7 @@ async function handleAnthropic(
             content: [],
             stop_reason: null,
             stop_sequence: null,
-            usage: { input_tokens: 0, output_tokens: 0 },
+            usage: { input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 },
           },
         });
       };
@@ -705,7 +716,11 @@ async function handleAnthropic(
           stop_reason: result.toolCalls?.length ? 'tool_use' : 'end_turn',
           stop_sequence: null,
         },
-        usage: { input_tokens: result.inputTokens, output_tokens: result.outputTokens },
+        usage: {
+          input_tokens: result.inputTokens,
+          cache_read_input_tokens: result.cachedTokens ?? 0,
+          output_tokens: result.outputTokens,
+        },
       });
       send('message_stop', { type: 'message_stop' });
       res.end();
@@ -714,6 +729,7 @@ async function handleAnthropic(
         result.inputTokens,
         result.outputTokens,
         new Date().toISOString(),
+        result.cachedTokens,
       );
     } else {
       const result = await runtime.complete({
@@ -733,6 +749,7 @@ async function handleAnthropic(
         result.inputTokens,
         result.outputTokens,
         new Date().toISOString(),
+        result.cachedTokens,
       );
       json(res, 200, {
         id,
@@ -750,7 +767,11 @@ async function handleAnthropic(
         ],
         stop_reason: result.toolCalls?.length ? 'tool_use' : 'end_turn',
         stop_sequence: null,
-        usage: { input_tokens: result.inputTokens, output_tokens: result.outputTokens },
+        usage: {
+          input_tokens: result.inputTokens,
+          cache_read_input_tokens: result.cachedTokens ?? 0,
+          output_tokens: result.outputTokens,
+        },
       });
     }
   } catch (error) {
@@ -777,9 +798,29 @@ function protocolError(
     res,
     status,
     protocol === 'responses'
-      ? errorBody(message)
+      ? errorBody(
+          message,
+          status === 429
+            ? 'rate_limit_error'
+            : status === 401
+              ? 'authentication_error'
+              : status >= 500
+                ? 'server_error'
+                : 'invalid_request_error',
+        )
       : {
-          error: { code: status, status: status >= 500 ? 'INTERNAL' : 'INVALID_ARGUMENT', message },
+          error: {
+            code: status,
+            status:
+              status === 429
+                ? 'RESOURCE_EXHAUSTED'
+                : status === 401
+                  ? 'UNAUTHENTICATED'
+                  : status >= 500
+                    ? 'INTERNAL'
+                    : 'INVALID_ARGUMENT',
+            message,
+          },
         },
   );
 }
@@ -971,19 +1012,11 @@ async function handleCanonicalProtocol(
       result.inputTokens,
       result.outputTokens,
       new Date().toISOString(),
+      result.cachedTokens,
     );
     const allCalls = result.toolCalls?.length ? result.toolCalls : calls;
     if (protocol === 'responses') {
       const output = [
-        ...(result.reasoning
-          ? [
-              {
-                type: 'reasoning',
-                id: `${responseId}_reasoning`,
-                summary: [{ type: 'summary_text', text: result.reasoning }],
-              },
-            ]
-          : []),
         ...(result.text
           ? [
               {
@@ -1003,6 +1036,15 @@ async function handleCanonicalProtocol(
           arguments: call.arguments,
           status: 'completed',
         })),
+        ...(result.reasoning
+          ? [
+              {
+                type: 'reasoning',
+                id: `${responseId}_reasoning`,
+                summary: [{ type: 'summary_text', text: result.reasoning }],
+              },
+            ]
+          : []),
       ];
       const responseBody = {
         id: responseId,
@@ -1017,6 +1059,7 @@ async function handleCanonicalProtocol(
         parallel_tool_calls: true,
         usage: {
           input_tokens: result.inputTokens,
+          input_tokens_details: { cached_tokens: result.cachedTokens ?? 0 },
           output_tokens: result.outputTokens,
           total_tokens: result.inputTokens + result.outputTokens,
         },
@@ -1075,7 +1118,7 @@ async function handleCanonicalProtocol(
           delta: call.arguments,
         });
       });
-      const messageOutputIndex = result.reasoning ? 1 : 0;
+      const messageOutputIndex = 0;
       if (result.text) {
         responseSend('response.output_text.done', {
           type: 'response.output_text.done',
@@ -1098,7 +1141,7 @@ async function handleCanonicalProtocol(
         });
       }
       allCalls.forEach((call, index) => {
-        const outputIndex = (result.reasoning ? 1 : 0) + (result.text ? 1 : 0) + index;
+        const outputIndex = (result.text ? 1 : 0) + index;
         responseSend('response.function_call_arguments.done', {
           type: 'response.function_call_arguments.done',
           item_id: call.id,
@@ -1112,15 +1155,33 @@ async function handleCanonicalProtocol(
         });
       });
       if (result.reasoning)
+        responseSend('response.output_item.added', {
+          type: 'response.output_item.added',
+          output_index: output.length - 1,
+          item: {
+            type: 'reasoning',
+            id: `${responseId}_reasoning`,
+            summary: [],
+            status: 'in_progress',
+          },
+        });
+      if (result.reasoning)
         responseSend('response.reasoning_summary_text.delta', {
           type: 'response.reasoning_summary_text.delta',
           item_id: `${responseId}_reasoning`,
-          output_index: 0,
+          output_index: output.length - 1,
           summary_index: 0,
           delta: result.reasoning,
         });
+      if (result.reasoning)
+        responseSend('response.output_item.done', {
+          type: 'response.output_item.done',
+          output_index: output.length - 1,
+          item: output.at(-1),
+        });
       const final = finalizeCanonicalStream([], result.finishReason, {
         inputTokens: result.inputTokens,
+        ...(result.cachedTokens === undefined ? {} : { cachedTokens: result.cachedTokens }),
         outputTokens: result.outputTokens,
       });
       responseSend('response.completed', {
@@ -1145,6 +1206,7 @@ async function handleCanonicalProtocol(
     };
     const usageMetadata = {
       promptTokenCount: result.inputTokens,
+      cachedContentTokenCount: result.cachedTokens ?? 0,
       candidatesTokenCount: result.outputTokens,
       totalTokenCount: result.inputTokens + result.outputTokens,
     };
@@ -1158,6 +1220,7 @@ async function handleCanonicalProtocol(
       );
     const final = finalizeCanonicalStream(deltas, result.finishReason, {
       inputTokens: result.inputTokens,
+      ...(result.cachedTokens === undefined ? {} : { cachedTokens: result.cachedTokens }),
       outputTokens: result.outputTokens,
     });
     res.write(
@@ -1264,7 +1327,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
       json(res, 200, { ok: true, service: 'ferry-gateway' });
       return;
     }
-    if (req.method === 'GET' && path === '/v1/models') {
+    if (req.method === 'GET' && (path === '/v1/models' || path === '/v1beta/models')) {
       const token = bearer(req);
       const key = token ? authenticateGatewayKey(token, options.runtime.store.list()) : undefined;
       if (!key) {
@@ -1289,6 +1352,16 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
           (id) => key.allowedModels.length === 0 || key.allowedModels.includes(id),
         ),
       ];
+      if (path === '/v1beta/models') {
+        json(res, 200, {
+          models: ids.map((id) => ({
+            name: `models/${id}`,
+            displayName: id,
+            supportedGenerationMethods: ['generateContent', 'streamGenerateContent'],
+          })),
+        });
+        return;
+      }
       json(res, 200, {
         object: 'list',
         data: ids.map((id) => ({ id, object: 'model', created: 0, owned_by: 'ferry' })),

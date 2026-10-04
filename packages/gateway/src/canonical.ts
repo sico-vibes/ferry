@@ -37,6 +37,7 @@ export interface CanonicalRequest {
 
 export interface CanonicalUsage {
   inputTokens: number;
+  cachedTokens?: number;
   outputTokens: number;
 }
 
@@ -95,7 +96,15 @@ function parts(value: unknown): CanonicalPart[] {
         : source?.type === 'base64' && typeof source.data === 'string'
           ? `data:${stringValue(source.media_type, 'image/jpeg')};base64,${source.data}`
           : undefined;
-    if (typeof url === 'string' && String(part.type).includes('image'))
+    if (String(part.type).includes('image')) {
+      const validUrl =
+        typeof url === 'string' &&
+        (/^https?:\/\/\S+$/i.test(url) ||
+          /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/]+={0,2}$/i.test(url));
+      if (!validUrl)
+        throw Object.assign(new Error('Image URL must be HTTP(S) or valid base64 image data'), {
+          name: 'AI_InvalidPromptError',
+        });
       return [
         {
           type: 'image',
@@ -103,6 +112,7 @@ function parts(value: unknown): CanonicalPart[] {
           ...(typeof image?.detail === 'string' ? { detail: image.detail } : {}),
         },
       ];
+    }
     if (part.type === 'thinking' && typeof part.thinking === 'string')
       return [{ type: 'reasoning', text: part.thinking }];
     if (part.type === 'reasoning' && Array.isArray(part.summary))
@@ -233,7 +243,20 @@ export function openAiResponsesToCanonical(input: Record<string, unknown>): Cano
           ],
         },
       ];
-    if (item.type === 'reasoning') return [{ role: 'assistant', parts: parts(item) }];
+    if (item.type === 'reasoning')
+      return [
+        {
+          role: 'assistant',
+          parts: Array.isArray(item.summary)
+            ? item.summary.flatMap((part): CanonicalPart[] => {
+                const summary = record(part);
+                return typeof summary?.text === 'string'
+                  ? [{ type: 'reasoning', text: summary.text }]
+                  : [];
+              })
+            : parts(item),
+        },
+      ];
     const role = typeof item.role === 'string' ? item.role : 'user';
     const content = item.content ?? item;
     return [{ role: role as CanonicalMessage['role'], parts: parts(content) }];
@@ -404,11 +427,14 @@ export function canonicalToGatewayMessages(messages: CanonicalMessage[]): {
           : [],
       );
       const visible = item.parts.filter((part) => part.type !== 'tool_result');
-      const text = visible
+      const providerVisible = visible.filter(
+        (part) => part.type === 'text' || part.type === 'image',
+      );
+      const text = providerVisible
         .filter((part) => part.type === 'text')
         .map((part) => (part as { text: string }).text)
         .join('');
-      const imageParts = visible
+      const imageParts = providerVisible
         .filter((part) => part.type === 'image')
         .map((part) => ({ type: 'image', image: (part as { url: string }).url }));
       const toolCalls = item.toolCalls?.map((call) => ({
@@ -424,7 +450,7 @@ export function canonicalToGatewayMessages(messages: CanonicalMessage[]): {
         ...(toolCalls?.length ? { tool_calls: toolCalls } : {}),
         ...(item.toolCallId ? { tool_call_id: item.toolCallId } : {}),
       };
-      return [...results, ...(visible.length || toolCalls?.length ? [message] : [])];
+      return [...results, ...(providerVisible.length || toolCalls?.length ? [message] : [])];
     });
   return { instructions, messages: converted };
 }
@@ -454,6 +480,7 @@ export function canonicalToOpenAiChat(
     finish_reason: finishReason,
     usage: {
       prompt_tokens: usage.inputTokens,
+      prompt_tokens_details: { cached_tokens: usage.cachedTokens ?? 0 },
       completion_tokens: usage.outputTokens,
       total_tokens: usage.inputTokens + usage.outputTokens,
     },
@@ -477,7 +504,11 @@ export function canonicalToAnthropicMessage(response: CanonicalResponse): unknow
     ],
     stop_reason: response.toolCalls.length ? 'tool_use' : 'end_turn',
     stop_sequence: null,
-    usage: { input_tokens: response.usage.inputTokens, output_tokens: response.usage.outputTokens },
+    usage: {
+      input_tokens: response.usage.inputTokens,
+      cache_read_input_tokens: response.usage.cachedTokens ?? 0,
+      output_tokens: response.usage.outputTokens,
+    },
   };
 }
 
@@ -520,6 +551,7 @@ export function canonicalToResponses(response: CanonicalResponse): unknown {
     output_text: response.text,
     usage: {
       input_tokens: response.usage.inputTokens,
+      input_tokens_details: { cached_tokens: response.usage.cachedTokens ?? 0 },
       output_tokens: response.usage.outputTokens,
       total_tokens: response.usage.inputTokens + response.usage.outputTokens,
     },
@@ -545,6 +577,7 @@ export function canonicalToGemini(response: CanonicalResponse): unknown {
     ],
     usageMetadata: {
       promptTokenCount: response.usage.inputTokens,
+      cachedContentTokenCount: response.usage.cachedTokens ?? 0,
       candidatesTokenCount: response.usage.outputTokens,
       totalTokenCount: response.usage.inputTokens + response.usage.outputTokens,
     },
@@ -591,6 +624,7 @@ export function canonicalStreamEventsToResponses(
           type: 'response.completed',
           usage: {
             input_tokens: event.usage.inputTokens,
+            input_tokens_details: { cached_tokens: event.usage.cachedTokens ?? 0 },
             output_tokens: event.usage.outputTokens,
             total_tokens: event.usage.inputTokens + event.usage.outputTokens,
           },
@@ -633,6 +667,7 @@ export function canonicalStreamEventsToGemini(events: CanonicalStreamEvent[]): u
         {
           usageMetadata: {
             promptTokenCount: event.usage.inputTokens,
+            cachedContentTokenCount: event.usage.cachedTokens ?? 0,
             candidatesTokenCount: event.usage.outputTokens,
             totalTokenCount: event.usage.inputTokens + event.usage.outputTokens,
           },
@@ -674,6 +709,7 @@ export function canonicalStreamEventsToOpenAiChat(events: CanonicalStreamEvent[]
           choices: [{ index: 0, delta: {}, finish_reason: event.finishReason }],
           usage: {
             prompt_tokens: event.usage.inputTokens,
+            prompt_tokens_details: { cached_tokens: event.usage.cachedTokens ?? 0 },
             completion_tokens: event.usage.outputTokens,
             total_tokens: event.usage.inputTokens + event.usage.outputTokens,
           },

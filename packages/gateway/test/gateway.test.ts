@@ -313,7 +313,14 @@ describe('Ferry gateway', () => {
     });
     expect(await geminiTool.json()).toMatchObject({
       candidates: [
-        { content: { parts: [{ functionCall: { name: 'lookup', args: { q: 'x' } } }] } },
+        {
+          content: {
+            parts: [
+              { text: 'Hello' },
+              { functionCall: { id: 'call_1', name: 'lookup', args: { q: 'x' } } },
+            ],
+          },
+        },
       ],
     });
 
@@ -327,6 +334,144 @@ describe('Ferry gateway', () => {
     );
     expect(geminiStream.headers.get('content-type')).toContain('text/event-stream');
     expect(await geminiStream.text()).toContain('usageMetadata');
+  }, 30_000);
+
+  it('advertises OpenAI and Gemini model-list shapes from the same key-filtered aliases', async () => {
+    const url = await server();
+    const headers = { authorization: `Bearer ${created.secret}` };
+    const [openAi, gemini] = await Promise.all([
+      fetch(`${url}/v1/models`, { headers }),
+      fetch(`${url}/v1beta/models`, { headers }),
+    ]);
+    const openAiIds = ((await openAi.json()) as { data: { id: string }[] }).data.map(
+      (item) => item.id,
+    );
+    const geminiNames = ((await gemini.json()) as { models: { name: string }[] }).models.map(
+      (item) => item.name,
+    );
+    expect(openAiIds).toContain('ferry/auto-free');
+    expect(geminiNames).toContain('models/ferry/auto-free');
+  }, 30_000);
+
+  it('applies token budgets to both stream modes for every inbound protocol', async () => {
+    const url = await server();
+    created.key.tokenLimitPerMinute = 1;
+    const headers = {
+      authorization: `Bearer ${created.secret}`,
+      'x-api-key': created.secret,
+      'content-type': 'application/json',
+    };
+    const requests = [
+      [
+        '/v1/chat/completions',
+        { model: 'ferry/auto-free', messages: [{ role: 'user', content: 'x' }] },
+        false,
+      ],
+      [
+        '/v1/chat/completions',
+        { model: 'ferry/auto-free', messages: [{ role: 'user', content: 'x' }], stream: true },
+        false,
+      ],
+      [
+        '/v1/messages',
+        { model: 'ferry/auto-free', messages: [{ role: 'user', content: 'x' }], max_tokens: 16 },
+        true,
+      ],
+      [
+        '/v1/messages',
+        {
+          model: 'ferry/auto-free',
+          messages: [{ role: 'user', content: 'x' }],
+          max_tokens: 16,
+          stream: true,
+        },
+        true,
+      ],
+      ['/v1/responses', { model: 'ferry/auto-free', input: 'x' }, false],
+      ['/v1/responses', { model: 'ferry/auto-free', input: 'x', stream: true }, false],
+      [
+        '/v1beta/models/ferry%2Fauto-free:generateContent',
+        { contents: [{ role: 'user', parts: [{ text: 'x' }] }] },
+        false,
+      ],
+      [
+        '/v1beta/models/ferry%2Fauto-free:streamGenerateContent?alt=sse',
+        { contents: [{ role: 'user', parts: [{ text: 'x' }] }] },
+        false,
+      ],
+    ] as const;
+    for (const [path, payload, anthropic] of requests) {
+      const response = await fetch(`${url}${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+      expect(response.status, path).toBe(429);
+      const body = await response.json();
+      if (anthropic)
+        expect(body).toMatchObject({ type: 'error', error: { type: 'rate_limit_error' } });
+      else if (path.startsWith('/v1beta/'))
+        expect(body).toMatchObject({ error: { code: 429, status: 'RESOURCE_EXHAUSTED' } });
+      else expect(body).toMatchObject({ error: { type: 'rate_limit_error' } });
+    }
+    expect(received).toHaveLength(0);
+  }, 30_000);
+
+  it('emits Codex tool-call stream completion with usage and native mid-stream errors', async () => {
+    const url = await server();
+    const headers = {
+      authorization: `Bearer ${created.secret}`,
+      'content-type': 'application/json',
+    };
+    const success = await fetch(`${url}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        input: [
+          { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'inspect' }] },
+        ],
+        tools: [{ type: 'function', name: 'read_file', parameters: { type: 'object' } }],
+        stream: true,
+      }),
+    });
+    const successBody = await success.text();
+    for (const eventName of (
+      JSON.parse(
+        await readFile(new URL('./fixtures/canonical-golden.json', import.meta.url), 'utf8'),
+      ) as { codexToolStream: string[] }
+    ).codexToolStream)
+      expect(successBody, eventName).toContain(`event: ${eventName}`);
+    expect(successBody).toContain(
+      '"usage":{"input_tokens":4,"input_tokens_details":{"cached_tokens":0},"output_tokens":2,"total_tokens":6}',
+    );
+
+    const failingRuntime: GatewayRuntime = {
+      ...runtime,
+      complete: (input) => {
+        input.onText?.('partial');
+        return Promise.reject(
+          Object.assign(new Error('upstream unavailable'), { statusCode: 503 }),
+        );
+      },
+    };
+    const handle = await startGateway({ runtime: failingRuntime, port: 0 });
+    stop = () => handle.close();
+    const failed = await fetch(`http://127.0.0.1:${String(handle.port)}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model: 'ferry/auto-free', input: 'inspect', stream: true }),
+    });
+    const failedBody = await failed.text();
+    expect(failed.status).toBe(200);
+    const errorGolden = (
+      JSON.parse(
+        await readFile(new URL('./fixtures/canonical-golden.json', import.meta.url), 'utf8'),
+      ) as { codexStreamError: { event: string; data: unknown } }
+    ).codexStreamError;
+    expect(failedBody).toContain(`event: ${errorGolden.event}`);
+    expect(failedBody).toContain(JSON.stringify(errorGolden.data));
+    expect(runtime.store.usage(created.key.id).successfulRequests).toBe(1);
   }, 30_000);
 
   it('passes logical names and concrete provider/model refs through the gateway contract', async () => {
@@ -344,7 +489,34 @@ describe('Ferry gateway', () => {
       expect(response.status).toBe(200);
       await response.text();
     }
-    expect(received.map((input) => input.model)).toEqual(['gpt-test-logical', 'openai/gpt-test']);
+    for (const [path, payload] of [
+      ['/v1/responses', { model: 'gpt-test-logical', input: 'Hi' }],
+      [
+        '/v1beta/models/gpt-test-logical:generateContent',
+        { contents: [{ role: 'user', parts: [{ text: 'Hi' }] }] },
+      ],
+      ['/v1/responses', { model: 'ferry/fast', input: 'Hi' }],
+      [
+        '/v1beta/models/ferry%2Ffast:generateContent',
+        { contents: [{ role: 'user', parts: [{ text: 'Hi' }] }] },
+      ],
+    ] as const) {
+      const response = await fetch(`${url}${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+      expect(response.status, path).toBe(200);
+      await response.text();
+    }
+    expect(received.map((input) => input.model)).toEqual([
+      'gpt-test-logical',
+      'openai/gpt-test',
+      'gpt-test-logical',
+      'gpt-test-logical',
+      '@profile:fast',
+      '@profile:fast',
+    ]);
   }, 30_000);
 
   it('streams OpenAI chunks, tools, usage, and Anthropic messages events', async () => {
@@ -453,7 +625,7 @@ describe('Ferry gateway', () => {
     });
     expect(image.status).toBe(400);
     expect(((await image.json()) as { error: { message: string } }).error.message).toContain(
-      'not supported yet',
+      'valid base64 image data',
     );
 
     const invalidRuntime: GatewayRuntime = {
@@ -646,20 +818,22 @@ describe('Ferry gateway', () => {
     const handle = await startGateway({ runtime: slowRuntime, port: 0 });
     stop = () => handle.close();
     created.key.concurrencyLimit = 1;
-    const request = () =>
-      fetch(`http://127.0.0.1:${String(handle.port)}/v1/chat/completions`, {
+    const request = (path: string, payload: unknown) =>
+      fetch(`http://127.0.0.1:${String(handle.port)}${path}`, {
         method: 'POST',
         headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: 'ferry/auto-free',
-          messages: [{ role: 'user', content: 'Hi' }],
-        }),
+        body: JSON.stringify(payload),
       });
-    const first = request();
+    const first = request('/v1/responses', { model: 'ferry/auto-free', input: 'Hi' });
     await entered;
-    const second = await request();
+    const second = await request('/v1beta/models/ferry%2Fauto-free:generateContent', {
+      contents: [{ role: 'user', parts: [{ text: 'Hi' }] }],
+    });
     expect(second.status).toBe(429);
     expect(second.headers.get('retry-after')).toBe('1');
+    expect(await second.json()).toMatchObject({
+      error: { code: 429, status: 'RESOURCE_EXHAUSTED' },
+    });
     finish?.();
     expect((await first).status).toBe(502);
     expect(runtime.store.usage(created.key.id)).toMatchObject({

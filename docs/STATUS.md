@@ -71,6 +71,6 @@ indexes) and must ship in all build targets.
 - grep and checkpoint snapshots on a 50k-file repo are slow on this laptop with Defender real-time
   scanning (see `docs/PERFORMANCE.md`).
 - Gemini is not signed in on the dev machine, so ACP Gemini delegation is untested live.
-- Codex `/v1/responses` is not implemented by the Gateway on `main` yet (WIP on `feat/n2`).
+- Codex Responses and native Gemini Gateway routes are implemented on the N integration branch; verify the complete gate and client e2e before calling the wave complete.
 - Provider availability, free limits and model pricing change outside Ferry's control.
 - Code signing is deferred (the unsigned beta is a documented, accepted risk in `docs/SECURITY.md`).

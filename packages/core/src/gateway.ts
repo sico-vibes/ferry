@@ -50,6 +50,7 @@ interface GatewayUsageState {
   requests: number;
   successfulRequests: number;
   inputTokens: number;
+  cachedTokens: number;
   outputTokens: number;
   tokenEvents: { at: string; tokens: number }[];
   requestEvents: string[];
@@ -61,6 +62,7 @@ function gatewayUsage(services: FerryServices, id: string): GatewayUsageState {
       requests: 0,
       successfulRequests: 0,
       inputTokens: 0,
+      cachedTokens: 0,
       outputTokens: 0,
       tokenEvents: [],
       requestEvents: [],
@@ -70,6 +72,7 @@ function gatewayUsage(services: FerryServices, id: string): GatewayUsageState {
     requests: stored.requests ?? 0,
     successfulRequests: stored.successfulRequests ?? stored.requests ?? 0,
     inputTokens: stored.inputTokens ?? 0,
+    cachedTokens: stored.cachedTokens ?? 0,
     outputTokens: stored.outputTokens ?? 0,
     tokenEvents: Array.isArray(stored.tokenEvents) ? stored.tokenEvents : [],
     requestEvents: Array.isArray(stored.requestEvents) ? stored.requestEvents : [],
@@ -256,7 +259,7 @@ export function createGatewayController(services: FerryServices) {
           .reduce((sum, event) => sum + event.tokens, 0);
         return { minuteTokens, dayTokens };
       },
-      recordUsage: (id, inputTokens, outputTokens, at) => {
+      recordUsage: (id, inputTokens, outputTokens, at, cachedTokens = 0) => {
         const current = gatewayUsage(services, id);
         const tokenEvents = current.tokenEvents.filter(
           (event) => Date.parse(at) - Date.parse(event.at) < 86_400_000,
@@ -267,6 +270,7 @@ export function createGatewayController(services: FerryServices) {
           successfulRequests: current.successfulRequests + 1,
           inputTokens: current.inputTokens + inputTokens,
           outputTokens: current.outputTokens + outputTokens,
+          cachedTokens: current.cachedTokens + cachedTokens,
           tokenEvents,
         });
       },
@@ -518,6 +522,7 @@ export function createGatewayController(services: FerryServices) {
             modelRef: model.ref,
             occurredAt: timestamp,
             inputTokens: result.inputTokens,
+            ...(result.cachedTokens === undefined ? {} : { cachedTokens: result.cachedTokens }),
             outputTokens: result.outputTokens,
             status: 'success',
           });

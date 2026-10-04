@@ -369,10 +369,20 @@ export async function streamProviderChat(input: ProviderChatInput) {
     }
   }
   const [usage, finishReason] = await Promise.all([result.usage, result.finishReason]);
+  const usageDetails = usage as unknown as { inputTokenDetails?: unknown };
+  const inputTokenDetails = usageDetails.inputTokenDetails;
+  const cachedTokens =
+    inputTokenDetails &&
+    typeof inputTokenDetails === 'object' &&
+    'cacheReadTokens' in inputTokenDetails &&
+    typeof inputTokenDetails.cacheReadTokens === 'number'
+      ? inputTokenDetails.cacheReadTokens
+      : undefined;
   return {
     text,
     toolCalls,
     inputTokens: usage.inputTokens ?? 0,
+    ...(cachedTokens == null ? {} : { cachedTokens }),
     outputTokens: usage.outputTokens ?? 0,
     finishReason: finishReason === 'tool-calls' ? 'tool_calls' : finishReason,
   };
