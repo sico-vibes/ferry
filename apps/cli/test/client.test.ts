@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRpcFerryClient } from '@ferry/client';
 import { ProviderIdSchema } from '@ferry/shared';
+import type { Profile } from '@ferry/shared';
 import { canonicalizePath } from '@ferry/shared/node-paths';
 import { createCoreHost, createMemoryTransportPair } from '@ferry/core';
 import { FakeOpenAIServer } from '@ferry/testkit';
@@ -288,6 +289,14 @@ describe('CLI client engine selection', () => {
           'create',
           'round-trip',
           'auto-free',
+          '--rpm',
+          '40',
+          '--concurrency',
+          '2',
+          '--tokens-per-min',
+          '5000',
+          '--tokens-per-day',
+          '90000',
           '--json',
           '--engine',
           'local',
@@ -302,11 +311,274 @@ describe('CLI client engine selection', () => {
       expect(createdKey.secret).toBeTruthy();
       output.mockClear();
       await expect(
+        runCli([
+          'gateway',
+          'keys',
+          'show',
+          createdKey.key.id,
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+        ]),
+      ).resolves.toBe(0);
+      expect(JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(''))).toMatchObject({
+        rateLimit: 40,
+        concurrencyLimit: 2,
+        tokenLimitPerMinute: 5000,
+        tokenLimitPerDay: 90000,
+      });
+      output.mockClear();
+      await expect(
+        runCli([
+          'gateway',
+          'keys',
+          'update',
+          createdKey.key.id,
+          '--rpm',
+          '80',
+          '--clear',
+          'tokens-per-day',
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+        ]),
+      ).resolves.toBe(0);
+      expect(JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(''))).toMatchObject({
+        rateLimit: 80,
+        tokenLimitPerDay: null,
+      });
+      output.mockClear();
+      await expect(
         runCli(['gateway', 'keys', 'list', '--json', '--engine', 'local', '--data-dir', dataDir]),
       ).resolves.toBe(0);
       expect(JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(''))).toEqual(
         expect.arrayContaining([expect.objectContaining({ id: createdKey.key.id })]),
       );
+
+      const stdinIterator = vi.spyOn(process.stdin, Symbol.asyncIterator);
+      const addProviderKey = async (secret: string, label: string) => {
+        let sent = false;
+        stdinIterator.mockReturnValue({
+          next: () =>
+            Promise.resolve(
+              sent
+                ? { done: true, value: undefined }
+                : ((sent = true), { done: false, value: Buffer.from(secret) }),
+            ),
+          return: () => Promise.resolve({ done: true, value: undefined }),
+          [Symbol.asyncDispose]: () => Promise.resolve(),
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+        });
+        output.mockClear();
+        await expect(
+          runCli([
+            'providers',
+            'keys',
+            'openrouter',
+            'add',
+            '--stdin',
+            '--label',
+            label,
+            '--json',
+            '--engine',
+            'local',
+            '--data-dir',
+            dataDir,
+          ]),
+        ).resolves.toBe(0);
+        return JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join('')) as {
+          id: string;
+        };
+      };
+      await addProviderKey('provider-core-secret-1111', 'core-one');
+      const providerKeyTwo = await addProviderKey('provider-core-secret-2222', 'core-two');
+      output.mockClear();
+      await expect(
+        runCli([
+          'providers',
+          'keys',
+          'openrouter',
+          'move',
+          providerKeyTwo.id,
+          '1',
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+        ]),
+      ).resolves.toBe(0);
+
+      const affinityBase = (await desktopClient.profiles.list()).find(
+        (profile) => profile.name === 'Auto-Free',
+      );
+      if (!affinityBase) throw new Error('Auto-Free profile is unavailable');
+      const affinityProfile = await desktopClient.profiles.save({
+        ...affinityBase,
+        id: 'profile_cli_affinity' as Profile['id'],
+        name: 'CLI affinity',
+        builtin: false,
+      });
+      output.mockClear();
+      await expect(
+        runCli([
+          'profiles',
+          'affinity',
+          affinityProfile.name,
+          'strict',
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+        ]),
+      ).resolves.toBe(0);
+      expect(JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(''))).toEqual({
+        profile: affinityProfile.name,
+        affinityMode: 'strict',
+      });
+      output.mockClear();
+      await expect(
+        runCli([
+          'profiles',
+          'affinity',
+          affinityProfile.id,
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+        ]),
+      ).resolves.toBe(0);
+      expect(JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(''))).toMatchObject({
+        affinityMode: 'strict',
+      });
+      await runCli([
+        'providers',
+        'keys',
+        'openrouter',
+        'disable',
+        providerKeyTwo.id,
+        '--json',
+        '--engine',
+        'local',
+        '--data-dir',
+        dataDir,
+      ]);
+      output.mockClear();
+      await expect(
+        runCli([
+          'providers',
+          'keys',
+          'openrouter',
+          'list',
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+        ]),
+      ).resolves.toBe(0);
+      expect(JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(''))).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: providerKeyTwo.id, enabled: false }),
+        ]),
+      );
+      await expect(
+        runCli([
+          'providers',
+          'keys',
+          'openrouter',
+          'remove',
+          providerKeyTwo.id,
+          '--yes',
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+        ]),
+      ).resolves.toBe(0);
+      stdinIterator.mockRestore();
+
+      await expect(
+        runCli([
+          'providers',
+          'routing',
+          'openrouter',
+          '--priority',
+          '9',
+          '--weight',
+          '3',
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+        ]),
+      ).resolves.toBe(0);
+      output.mockClear();
+      await expect(
+        runCli([
+          'providers',
+          'routing',
+          'openrouter',
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+        ]),
+      ).resolves.toBe(0);
+      expect(JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(''))).toMatchObject({
+        priority: 9,
+        weight: 3,
+      });
+      await expect(
+        runCli([
+          'models',
+          'map',
+          'set',
+          'logical-core',
+          'openrouter',
+          'openai/test-model',
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+        ]),
+      ).resolves.toBe(0);
+      output.mockClear();
+      await expect(
+        runCli(['models', 'map', 'list', '--json', '--engine', 'local', '--data-dir', dataDir]),
+      ).resolves.toBe(0);
+      const mappings = JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join('')) as {
+        mappings: unknown[];
+      };
+      expect(mappings.mappings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ logicalName: 'logical-core', upstreamId: 'openai/test-model' }),
+        ]),
+      );
+      await expect(
+        runCli([
+          'providers',
+          'overrides',
+          'openrouter',
+          '--json',
+          '--engine',
+          'local',
+          '--data-dir',
+          dataDir,
+        ]),
+      ).resolves.toBe(0);
       await expect(
         runCli([
           'gateway',

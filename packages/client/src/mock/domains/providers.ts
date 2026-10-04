@@ -1,5 +1,5 @@
 import { MockNotFoundError } from '../errors.js';
-import type { ProbeResult } from '@ferry/shared';
+import { ProviderRequestOverridesSchema, type ProbeResult } from '@ferry/shared';
 import type { ProviderKey } from '@ferry/shared';
 import type { FerryClient } from '../../ferry-client.js';
 import type { MockDeps } from './deps.js';
@@ -16,6 +16,12 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
     async listKeys(id) {
       await before();
       return structuredClone(keys.get(id) ?? []);
+    },
+    async effectiveOverrides(id) {
+      await before();
+      return ProviderRequestOverridesSchema.parse(
+        state.settings.routing.providerOverrides[id] ?? {},
+      );
     },
     async setKey(id, key) {
       await before();

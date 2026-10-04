@@ -318,6 +318,16 @@ export function register(host: CoreHost, services: FerryServices): void {
         }),
       );
     },
+    effectiveOverrides(rawId: unknown) {
+      const id = ProviderIdInput.parse(rawId);
+      const stored = services.settings.get('global');
+      const routing =
+        typeof stored === 'object' && stored !== null && 'routing' in stored
+          ? stored.routing
+          : undefined;
+      const custom = RoutingSettingsSchema.parse(routing ?? {}).providerOverrides[id];
+      return resolveProviderRequestOverrides(id, custom);
+    },
     async addKey(rawId: unknown, rawLabel: unknown, rawKey: unknown) {
       const id = ProviderIdInput.parse(rawId);
       const label = z.string().trim().min(1).max(80).parse(rawLabel);

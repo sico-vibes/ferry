@@ -36,6 +36,7 @@ export const FERRY_METHODS = [
   'checkpoints.restore',
   'providers.list',
   'providers.listKeys',
+  'providers.effectiveOverrides',
   'providers.setKey',
   'providers.addKey',
   'providers.removeKey',
@@ -93,6 +94,7 @@ export const FERRY_METHOD_PARAMS_SCHEMAS: Readonly<
 > = {
   'sessions.readOutput': z.tuple([ReadOutputInputSchema]),
   'providers.listKeys': z.tuple([ProviderIdSchema]),
+  'providers.effectiveOverrides': z.tuple([ProviderIdSchema]),
   'providers.setKey': z.tuple([ProviderIdSchema, z.string()]),
   'providers.addKey': z.tuple([ProviderIdSchema, z.string(), z.string()]),
   'providers.removeKeyEntry': z.tuple([ProviderIdSchema, z.string()]),

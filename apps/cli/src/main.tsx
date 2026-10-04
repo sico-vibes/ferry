@@ -13,7 +13,9 @@ import {
 import { collectDoctor } from './doctor.js';
 import type { FerryClient } from '@ferry/client';
 import {
+  LogicalModelMappingSchema,
   ModelRefSchema,
+  ProviderIdSchema,
   RoutingSettingsSchema,
   type MessagePart,
   type Profile,
@@ -271,6 +273,11 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     if (command === 'resume' && !flags.positionals[1])
       throw new CliError(2, 'Usage: ferry resume <sessionId>');
     if (command && !CLI_COMMANDS.has(command)) throw new CliError(2, `Unknown command: ${command}`);
+    if (flags.values.help === true) {
+      const help = commandHelp(flags.positionals);
+      process.stdout.write(json ? `${JSON.stringify({ help })}\n` : help);
+      return 0;
+    }
     if (command === 'oauth' && flags.positionals[1] === 'login') {
       const id = flags.positionals[2];
       if (!id) throw new CliError(2, 'Usage: ferry oauth login <id>');
@@ -299,7 +306,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       ...(dataDir ? { dataDir } : {}),
     });
     if (command === 'gateway')
-      return await gatewayCommand(flags.positionals.slice(1), json, client, dataDir);
+      return await gatewayCommand(flags.positionals.slice(1), json, client, dataDir, flags.values);
     if (!command) {
       const { interactive } = await import('./interactive.js');
       await interactive(client, cwd);
@@ -363,7 +370,19 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     }
     if (command === 'quota')
       return flags.values.watch === true ? quotaWatch(client, json) : await quota(client, json);
-    if (command === 'providers') return await providers(client, flags.positionals.slice(1), json);
+    if (command === 'providers') {
+      const args = flags.positionals.slice(1);
+      if (args[0] === 'keys')
+        return await providerKeysCommand(client, args.slice(1), flags.values, json);
+      if (args[0] === 'routing')
+        return await providerRoutingCommand(client, args.slice(1), flags.values, json);
+      if (args[0] === 'overrides')
+        return await providerOverridesCommand(client, args.slice(1), json);
+      return await providers(client, args, json);
+    }
+    if (command === 'models' && flags.positionals[1] === 'map')
+      return await modelMapCommand(client, flags.positionals.slice(2), json);
+    if (command === 'models') throw new CliError(2, 'Usage: ferry models map list|set|remove');
     if (command === 'oauth')
       return await oauth(
         client,
@@ -447,6 +466,16 @@ function writeResult(json: boolean, value: unknown, human: string): void {
 }
 
 export async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
+  if (
+    argv.includes('--help') &&
+    ['gateway', 'providers', 'models', 'profiles'].includes(argv[0] ?? '')
+  ) {
+    const flags = readFlags(argv);
+    const help = commandHelp(flags.positionals);
+    process.stdout.write(flags.values.json === true ? `${JSON.stringify({ help })}\n` : help);
+    return;
+  }
   const command = defineCommand({
     meta: {
       name: 'ferry',
@@ -461,7 +490,12 @@ export async function main(): Promise<void> {
         '  serve --gateway                              Run Ferry core and Gateway in the foreground',
         '  gateway start|stop|status                    Manage the local Gateway',
         '  gateway keys create <name> [profile]         Create a Gateway key (shown once)',
-        '  gateway keys list|revoke <key-id>            List or revoke Gateway keys',
+        '  gateway keys list|show|update|revoke <id>     List, inspect, update, or revoke Gateway keys',
+        '  providers keys <provider> <action>            Manage provider keys without argv secrets',
+        '  providers routing <provider>                  Show or set provider priority and weight',
+        '  providers overrides <provider>                Show effective provider request overrides',
+        '  models map list|set|remove                     Manage logical model mappings and aliases',
+        '  profiles affinity <profile> [soft|strict]      Show or set profile account affinity',
       ].join('\n'),
     },
     run: async () => {
@@ -497,14 +531,16 @@ const CLI_COMMANDS = new Set([
   'keys',
   'settings',
   'init',
+  'models',
   'status',
 ]);
 
-async function gatewayCommand(
+export async function gatewayCommand(
   args: string[],
   json: boolean,
   client: FerryClient,
   dataDir?: string,
+  flags: Record<string, string | boolean> = {},
 ): Promise<number> {
   const [action, subcommand, ...rest] = args;
   if (action === 'start') {
@@ -549,10 +585,39 @@ async function gatewayCommand(
     return 0;
   }
   if (action === 'keys' && subcommand === 'create') {
-    const [name, profile = 'auto-free'] = rest;
+    const { positionals } = splitOptions(rest);
+    const [name, profile = 'auto-free'] = positionals;
     if (!name) throw new CliError(2, 'Usage: ferry gateway keys create <name> [profile]');
+    const patch = gatewayLimitPatch(flags);
     const created = await client.gateway.createKey({ name, profile });
-    writeResult(json, created, `Key shown once; copy it now:\n${created.secret}\n`);
+    let key: unknown = created.key;
+    if (Object.keys(patch).length) {
+      await client.gateway.updateKey({ id: created.key.id, patch });
+      key = (await client.gateway.listKeys()).find((entry) => entry.id === created.key.id) ?? key;
+    }
+    writeResult(
+      json,
+      { key, secret: created.secret },
+      `Key shown once; copy it now:\n${created.secret}\n`,
+    );
+    return 0;
+  }
+  if (action === 'keys' && (subcommand === 'show' || subcommand === 'update')) {
+    const { positionals } = splitOptions(rest);
+    const id = positionals[0];
+    if (!id) throw new CliError(2, `Usage: ferry gateway keys ${subcommand} <id>`);
+    const current = (await client.gateway.listKeys()).find((key) => key.id === id);
+    if (!current) throw new CliError(2, `Gateway key not found: ${id}`);
+    if (subcommand === 'show') {
+      writeResult(json, current, `${current.id} ${current.name} ${current.profile}\n`);
+      return 0;
+    }
+    const patch = gatewayLimitPatch(flags);
+    if (!Object.keys(patch).length)
+      throw new CliError(2, 'Usage: ferry gateway keys update <id> [limit flags]');
+    await client.gateway.updateKey({ id, patch });
+    const updated = (await client.gateway.listKeys()).find((key) => key.id === id);
+    writeResult(json, updated, `Updated ${id}\n`);
     return 0;
   }
   if (action === 'keys' && subcommand === 'revoke') {
@@ -564,7 +629,328 @@ async function gatewayCommand(
     writeResult(json, { revoked: id }, `Revoked ${id}\n`);
     return 0;
   }
-  throw new CliError(2, 'Usage: ferry gateway start|stop|status|keys create|list|revoke');
+  throw new CliError(
+    2,
+    'Usage: ferry gateway start|stop|status|keys create|list|show|update|revoke',
+  );
+}
+
+function splitOptions(args: string[]): {
+  positionals: string[];
+  options: Record<string, string | boolean>;
+} {
+  const positionals: string[] = [];
+  const options: Record<string, string | boolean> = {};
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index];
+    if (!token?.startsWith('--')) {
+      if (token) positionals.push(token);
+      continue;
+    }
+    const [key, inline] = token.slice(2).split('=', 2);
+    if (!key) continue;
+    if (inline !== undefined) options[key] = inline;
+    else if (args[index + 1] && !args[index + 1]?.startsWith('--'))
+      options[key] = args[++index] ?? '';
+    else options[key] = true;
+  }
+  return { positionals, options };
+}
+
+function gatewayLimitPatch(
+  options: Record<string, string | boolean>,
+): NonNullable<Parameters<FerryClient['gateway']['updateKey']>[0]['patch']> {
+  const patch: NonNullable<Parameters<FerryClient['gateway']['updateKey']>[0]['patch']> = {};
+  const limits = [
+    ['rpm', 'rateLimit'],
+    ['concurrency', 'concurrencyLimit'],
+    ['tokens-per-min', 'tokenLimitPerMinute'],
+    ['tokens-per-day', 'tokenLimitPerDay'],
+  ] as const;
+  const names: Record<string, (typeof limits)[number][1]> = {
+    rpm: 'rateLimit',
+    concurrency: 'concurrencyLimit',
+    'tokens-per-min': 'tokenLimitPerMinute',
+    'tokens-per-day': 'tokenLimitPerDay',
+  };
+  if (options.clear !== undefined) {
+    const clear = typeof options.clear === 'string' ? options.clear.split(',') : [];
+    if (!clear.length)
+      throw new CliError(2, 'Usage: --clear rpm|concurrency|tokens-per-min|tokens-per-day');
+    for (const item of clear) {
+      const field = names[item.trim()];
+      if (!field) throw new CliError(2, `Unknown limit for --clear: ${item}`);
+      patch[field] = null;
+    }
+  }
+  for (const [flag, field] of limits) {
+    const value = options[flag];
+    if (value === undefined) continue;
+    const parsed = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
+    if (!Number.isSafeInteger(parsed) || parsed <= 0)
+      throw new CliError(2, `Invalid --${flag}. Provide a positive integer.`);
+    patch[field] = parsed;
+  }
+  return patch;
+}
+
+export async function providerKeysCommand(
+  client: FerryClient,
+  args: string[],
+  flags: Record<string, string | boolean>,
+  json: boolean,
+): Promise<number> {
+  const [providerRaw, action, keyId] = args;
+  if (!providerRaw || !action)
+    throw new CliError(
+      2,
+      'Usage: ferry providers keys <provider> list|add|remove|enable|disable|move',
+    );
+  const providerId = providerRaw as import('@ferry/shared').ProviderId;
+  if (!ProviderIdSchema.safeParse(providerId).success)
+    throw new CliError(2, `Unknown provider: ${providerRaw}`);
+  if (action === 'list') {
+    const rows = await client.providers.listKeys(providerId);
+    writeResult(
+      json,
+      rows,
+      rows
+        .map(
+          (key) =>
+            `${key.id} ${key.label} \u00b7 \u2026${key.lastFour} \u00b7 ${key.status} \u00b7 ${key.usageToday.requests} requests / ${key.usageToday.tokens} tokens today`,
+        )
+        .join('\n') + '\n',
+    );
+    return 0;
+  }
+  if (action === 'add') {
+    if (keyId)
+      throw new CliError(
+        2,
+        'A provider secret cannot be passed as an argument. Use --stdin or the hidden prompt.',
+      );
+    if (typeof flags.stdin === 'string')
+      throw new CliError(2, 'Usage: ferry providers keys <provider> add [--label name] [--stdin]');
+    if (flags.stdin !== true && (!process.stdin.isTTY || !process.stdin.setRawMode))
+      throw new CliError(2, 'Non-interactive provider key input requires --stdin.');
+    const secret = flags.stdin === true ? await readStdinSecret() : await readSecret(json);
+    if (!secret.trim())
+      throw new CliError(
+        2,
+        'No key received; provide input with --stdin or enter it at the prompt.',
+      );
+    const label =
+      typeof flags.label === 'string'
+        ? flags.label
+        : `Key ${(await client.providers.listKeys(providerId)).length + 1}`;
+    const result = await client.providers.addKey(providerId, label, secret.trim());
+    writeResult(json, result, `Added ${result.label} (\u2026${result.lastFour}).\n`);
+    return 0;
+  }
+  if (action === 'remove') {
+    if (!keyId)
+      throw new CliError(2, 'Usage: ferry providers keys <provider> remove <key-id> --yes');
+    if ((!process.stdin.isTTY || !process.stdout.isTTY) && flags.yes !== true)
+      throw new CliError(2, 'Non-interactive key removal requires --yes.');
+    if (process.stdin.isTTY && process.stdout.isTTY && flags.yes !== true) {
+      const terminal = createInterface({ input: process.stdin, output: process.stderr });
+      try {
+        const answer = (await terminal.question(`Remove provider key ${keyId}? [y/N] `))
+          .trim()
+          .toLowerCase();
+        if (answer !== 'y' && answer !== 'yes') return 2;
+      } finally {
+        terminal.close();
+      }
+    }
+    await client.providers.removeKeyEntry(providerId, keyId);
+    writeResult(json, { removed: true, providerId, keyId }, '');
+    return 0;
+  }
+  if (action === 'enable' || action === 'disable') {
+    if (!keyId) throw new CliError(2, `Usage: ferry providers keys <provider> ${action} <key-id>`);
+    await client.providers.setKeyEnabled(providerId, keyId, action === 'enable');
+    writeResult(json, { providerId, keyId, enabled: action === 'enable' }, '');
+    return 0;
+  }
+  if (action === 'move') {
+    const destination = args[3];
+    const keys = await client.providers.listKeys(providerId);
+    if (!keyId || !destination)
+      throw new CliError(2, 'Usage: ferry providers keys <provider> move <key-id> <position>');
+    const source = keys.findIndex((key) => key.id === keyId);
+    const target = Number(destination);
+    if (source < 0 || !Number.isInteger(target) || target < 1 || target > keys.length)
+      throw new CliError(2, 'Invalid key ID or 1-based position.');
+    const ordered = [...keys];
+    const moved = ordered.splice(source, 1)[0];
+    if (moved) ordered.splice(target - 1, 0, moved);
+    await client.providers.reorderKeys(
+      providerId,
+      ordered.map((key) => key.id),
+    );
+    writeResult(json, { providerId, order: ordered.map((key) => key.id) }, '');
+    return 0;
+  }
+  throw new CliError(
+    2,
+    'Usage: ferry providers keys <provider> list|add|remove|enable|disable|move',
+  );
+}
+
+async function readStdinSecret(): Promise<string> {
+  const chunks: string[] = [];
+  for await (const chunk of process.stdin)
+    chunks.push(typeof chunk === 'string' ? chunk : String(chunk));
+  return chunks.join('').replace(/[\r\n]+$/, '');
+}
+
+export async function providerRoutingCommand(
+  client: FerryClient,
+  args: string[],
+  options: Record<string, string | boolean>,
+  json: boolean,
+): Promise<number> {
+  const provider = args[0];
+  if (!provider || args.length > 1)
+    throw new CliError(2, 'Usage: ferry providers routing <provider> [--priority N] [--weight N]');
+  if (!ProviderIdSchema.safeParse(provider).success)
+    throw new CliError(2, `Unknown provider: ${provider}`);
+  const routing = RoutingSettingsSchema.parse((await client.settings.get()).routing);
+  if (options.affinity !== undefined)
+    throw new CliError(
+      2,
+      'Per-provider affinity is not supported by desktop routing; affinity is configured per profile (soft or strict).',
+    );
+  if (options.priority !== undefined || options.weight !== undefined) {
+    const priorities = { ...routing.providerPriorities };
+    const weights = { ...routing.providerWeights };
+    if (options.priority !== undefined) {
+      const value = Number(options.priority);
+      if (!Number.isInteger(value) || value < -100 || value > 100)
+        throw new CliError(2, 'Priority must be an integer from -100 to 100.');
+      priorities[provider as keyof typeof priorities] = value;
+    }
+    if (options.weight !== undefined) {
+      const value = Number(options.weight);
+      if (!Number.isFinite(value) || value < 0.01 || value > 1000)
+        throw new CliError(2, 'Weight must be from 0.01 to 1000.');
+      weights[provider as keyof typeof weights] = value;
+    }
+    await client.settings.update({
+      routing: { ...routing, providerPriorities: priorities, providerWeights: weights },
+    });
+  }
+  const after = RoutingSettingsSchema.parse((await client.settings.get()).routing);
+  const result = {
+    providerId: provider,
+    priority: after.providerPriorities[provider as keyof typeof after.providerPriorities] ?? 0,
+    weight: after.providerWeights[provider as keyof typeof after.providerWeights] ?? 1,
+  };
+  writeResult(json, result, `${provider}: priority ${result.priority}, weight ${result.weight}\n`);
+  return 0;
+}
+
+export async function modelMapCommand(
+  client: FerryClient,
+  args: string[],
+  json: boolean,
+): Promise<number> {
+  const [action, logicalName, providerId, upstreamId] = args;
+  const routing = RoutingSettingsSchema.parse((await client.settings.get()).routing);
+  if (action === 'list' && args.length === 1) {
+    const result = {
+      mappings: routing.logicalModelMappings,
+      gatewayAliases: ['ferry/auto-free', 'ferry/best', 'ferry/fast', 'ferry/long-context'],
+    };
+    writeResult(
+      json,
+      result,
+      routing.logicalModelMappings
+        .map((item) => `${item.logicalName} -> ${item.providerId}/${item.upstreamId}`)
+        .join('\n') +
+        (routing.logicalModelMappings.length ? '\n' : '') +
+        'Gateway aliases: ferry/auto-free, ferry/best, ferry/fast, ferry/long-context\n',
+    );
+    return 0;
+  }
+  if (action === 'set' && logicalName && providerId && upstreamId && args.length === 4) {
+    const parsedResult = LogicalModelMappingSchema.safeParse({
+      logicalName,
+      providerId: providerId as import('@ferry/shared').ProviderId,
+      upstreamId,
+    });
+    if (!parsedResult.success)
+      throw new CliError(
+        2,
+        `Invalid logical model mapping: ${parsedResult.error.issues[0]?.message ?? 'check the supplied values'}`,
+      );
+    const parsed = parsedResult.data;
+    const mappings = routing.logicalModelMappings.filter(
+      (item) => !(item.logicalName === logicalName && item.providerId === parsed.providerId),
+    );
+    mappings.push(parsed);
+    await client.settings.update({ routing: { ...routing, logicalModelMappings: mappings } });
+    writeResult(json, parsed, `Mapped ${logicalName} to ${providerId}/${upstreamId}\n`);
+    return 0;
+  }
+  if (action === 'remove' && logicalName && providerId && args.length === 3) {
+    const mappings = routing.logicalModelMappings.filter(
+      (item) => !(item.logicalName === logicalName && item.providerId === providerId),
+    );
+    await client.settings.update({ routing: { ...routing, logicalModelMappings: mappings } });
+    writeResult(json, { removed: true, logicalName, providerId }, '');
+    return 0;
+  }
+  throw new CliError(
+    2,
+    'Usage: ferry models map list|set <logical-name> <provider> <upstream-id>|remove <logical-name> <provider>',
+  );
+}
+
+export async function providerOverridesCommand(
+  client: FerryClient,
+  args: string[],
+  json: boolean,
+): Promise<number> {
+  const provider = args[0];
+  if (!provider || args.length > 1)
+    throw new CliError(2, 'Usage: ferry providers overrides <provider>');
+  if (!ProviderIdSchema.safeParse(provider).success)
+    throw new CliError(2, `Unknown provider: ${provider}`);
+  const overrides = await client.providers.effectiveOverrides(provider as Provider['id']);
+  writeResult(
+    json,
+    { providerId: provider, overrides },
+    `${provider} request overrides\n${JSON.stringify(overrides, null, 2)}\n`,
+  );
+  return 0;
+}
+
+function commandHelp(positionals: string[]): string {
+  const key = positionals.slice(0, 3).join(' ');
+  const helps: Record<string, string> = {
+    gateway: 'Usage: ferry gateway start|stop|status|keys ...\nManage the local Gateway.\n',
+    'gateway keys':
+      'Usage: ferry gateway keys create <name> [profile] [limits] | show <id> | update <id> [limits] | list | revoke <id>\nCreate and manage Gateway keys and budgets.\n',
+    providers:
+      'Usage: ferry providers list|enable|disable|test ... | keys ... | routing ... | overrides ...\nManage provider keys, routing preferences, and effective overrides.\n',
+    'providers keys':
+      'Usage: ferry providers keys <provider> list|add|remove|enable|disable|move\nAdd reads a hidden prompt or --stdin; secrets are never accepted as argv values.\n',
+    'providers routing':
+      'Usage: ferry providers routing <provider> [--priority N] [--weight N]\nShow or change desktop provider routing controls; affinity is per profile, see `ferry profiles affinity`.\n',
+    'providers overrides':
+      'Usage: ferry providers overrides <provider>\nShow effective request parameter, header, and status overrides.\n',
+    'profiles affinity':
+      'Usage: ferry profiles affinity <profile> [soft|strict]\nShow or set account affinity for a profile.\n',
+    profiles:
+      'Usage: ferry profiles list|use|roles|chain|affinity ...\nInspect and configure routing profiles.\n',
+    'models map':
+      'Usage: ferry models map list|set <logical-name> <provider> <upstream-id>|remove <logical-name> <provider>\nManage logical model mappings and Gateway aliases.\n',
+  };
+  return (
+    helps[key] ?? helps[positionals.slice(0, 2).join(' ')] ?? 'Usage: ferry <command> --help\n'
+  );
 }
 
 function gatewayUsageRequests(usage: unknown): number {
@@ -594,6 +980,15 @@ const VALUE_FLAGS = new Set([
   'delegation',
   'model',
   'model-ref',
+  'rpm',
+  'concurrency',
+  'tokens-per-min',
+  'tokens-per-day',
+  'clear',
+  'label',
+  'priority',
+  'weight',
+  'affinity',
 ]);
 function readFlags(argv: string[]): Flags {
   const positionals: string[] = [];
@@ -858,9 +1253,38 @@ async function oauth(
   );
   return 0;
 }
-async function profiles(client: FerryClient, args: string[], json = false) {
+export async function profiles(client: FerryClient, args: string[], json = false) {
   const [action, name] = args;
   const rows = await client.profiles.list();
+  if (action === 'affinity') {
+    const profileName = name;
+    const affinity = args[2];
+    if (!profileName || args.length > 3)
+      throw new CliError(2, 'Usage: ferry profiles affinity <profile> [soft|strict]');
+    const profile = rows.find(
+      (item) =>
+        item.id.toLowerCase() === profileName.toLowerCase() ||
+        item.name.toLowerCase() === profileName.toLowerCase(),
+    );
+    if (!profile) throw new CliError(2, `Profile not found: ${profileName}`);
+    if (affinity === undefined) {
+      writeResult(
+        json,
+        { profile: profile.name, affinityMode: profile.affinityMode },
+        `${profile.name}: ${profile.affinityMode}\n`,
+      );
+      return 0;
+    }
+    if (affinity !== 'soft' && affinity !== 'strict')
+      throw new CliError(2, 'Usage: ferry profiles affinity <profile> [soft|strict]');
+    const saved = await client.profiles.save({ ...profile, affinityMode: affinity });
+    writeResult(
+      json,
+      { profile: saved.name, affinityMode: saved.affinityMode },
+      `${saved.name}: ${saved.affinityMode}\n`,
+    );
+    return 0;
+  }
   if (action === 'roles') {
     const roleAction = args[1];
     const profileName = args[2] ?? 'Auto-Free';

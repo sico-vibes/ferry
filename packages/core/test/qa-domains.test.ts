@@ -230,6 +230,43 @@ describe('QA settings domain', () => {
   });
 });
 
+describe('QA provider override domain', () => {
+  it('returns catalog and user overrides through the core RPC', async () => {
+    const core = await makeCore('provider-effective-overrides');
+    try {
+      const providerId = ProviderIdSchema.parse('openrouter');
+      const settings = await core.rpc.settings.get();
+      await core.rpc.settings.update({
+        routing: {
+          ...settings.routing,
+          providerOverrides: {
+            ...settings.routing.providerOverrides,
+            [providerId]: {
+              stripParams: [],
+              forceParams: { temperature: 0.25 },
+              headers: { 'X-Ferry-Test': 'core' },
+              statusRemaps: [],
+            },
+          },
+        },
+      });
+
+      await expect(core.rpc.providers.effectiveOverrides(providerId)).resolves.toMatchObject({
+        forceParams: { temperature: 0.25 },
+        headers: {
+          'HTTP-Referer': 'https://ferry.dev',
+          'X-Title': 'Ferry',
+          'X-Ferry-Test': 'core',
+        },
+        stripParams: [],
+        statusRemaps: [],
+      });
+    } finally {
+      await core.close();
+    }
+  }, 30_000);
+});
+
 describe('QA discovered models', () => {
   it('backs discovery failures off per provider and resets after success', async () => {
     let now = new Date('2026-10-02T10:00:00.000Z');

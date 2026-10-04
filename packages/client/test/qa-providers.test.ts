@@ -48,6 +48,33 @@ describe('QA providers domain', () => {
     expect(entries[1]).toMatchObject({ id: '2', order: 1, lastFour: 'ount' });
   });
 
+  it('returns effective override settings through the mock client method', async () => {
+    const client = makeClient();
+    const openrouter = providerId(client, 'openrouter');
+    const settings = await client.settings.get();
+    await client.settings.update({
+      routing: {
+        ...settings.routing,
+        providerOverrides: {
+          ...settings.routing.providerOverrides,
+          [openrouter]: {
+            stripParams: ['temperature'],
+            forceParams: { stream: false },
+            headers: { 'X-Mock-Override': 'present' },
+            statusRemaps: [{ from: 503, to: 429 }],
+          },
+        },
+      },
+    });
+
+    await expect(client.providers.effectiveOverrides(openrouter)).resolves.toEqual({
+      stripParams: ['temperature'],
+      forceParams: { stream: false },
+      headers: { 'X-Mock-Override': 'present' },
+      statusRemaps: [{ from: 503, to: 429 }],
+    });
+  });
+
   it('probes a valid provider, marks it valid and emits provider.updated', async () => {
     const client = makeClient();
     const mistral = providerId(client, 'mistral');

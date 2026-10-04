@@ -11,10 +11,19 @@ The parser in `apps/cli/src/main.tsx` is the current source of truth. Run `ferry
 | `ferry resume <sessionId>` | Resume a session |
 | `ferry status` | Show the active engine and provider configuration |
 | `ferry serve` | Placeholder; reports that engine transport is coming in B0 |
+| `ferry serve --gateway` | Run the core and Gateway in the foreground |
+| `ferry gateway start|stop|status` | Manage the local Gateway |
+| `ferry gateway keys create <name> [profile] [limits]` | Create a Gateway key; its secret is shown once |
+| `ferry gateway keys list|show|update|revoke ...` | Inspect or manage Gateway keys, limits, and current usage |
 | `ferry quota [--watch]` | Show quotas or watch updates |
 | `ferry providers [list\|probe\|enable\|disable ...]` | Inspect/manage configured providers |
+| `ferry providers keys <provider> list|add|remove|enable|disable|move ...` | Manage provider credentials and ordering |
+| `ferry providers routing <provider> [--priority N] [--weight N]` | Show or set the desktop provider priority and weight |
+| `ferry providers overrides <provider>` | Show effective parameter, header, and status overrides |
+| `ferry models map list|set|remove ...` | Manage logical model mappings and inspect Gateway aliases |
 | `ferry oauth [list\|login\|logout ...]` | Manage supported subscription OAuth logins |
 | `ferry profiles [list\|show\|chain show\|chain set ...]` | Inspect profiles and set fallback chains |
+| `ferry profiles affinity <profile> [soft\|strict]` | Show or set account affinity on a routing profile |
 | `ferry skills [list\|show ...]` | Inspect available skills |
 | `ferry mcp` | List MCP configuration/state |
 | `ferry lanes [list\|show ...]` | Inspect delegation lanes |
@@ -24,11 +33,48 @@ The parser in `apps/cli/src/main.tsx` is the current source of truth. Run `ferry
 | `ferry settings [routing ...]` | Inspect/update routing settings |
 | `ferry init [--yes]` | Initialize workspace configuration |
 
-Subcommand syntax and accepted names are implemented in `apps/cli/src/main.tsx`; use `ferry <command> --help` when supported by the installed version.
+Subcommand syntax and accepted names are implemented in `apps/cli/src/main.tsx`; use `ferry <command> --help` for command-specific usage.
+
+### Gateway key limits
+
+Create or update budgets with positive integer limits. Omitted limits stay unchanged on update; `--clear` removes selected limits (`rpm`, `concurrency`, `tokens-per-min`, or `tokens-per-day`). `show` returns key limits and usage counters.
+
+```sh
+ferry gateway keys create "Build bot" auto-free --rpm 60 --concurrency 3 --tokens-per-min 8000 --tokens-per-day 100000
+ferry gateway keys show <key-id> --json
+ferry gateway keys update <key-id> --rpm 120 --clear tokens-per-day --json
+```
+
+### Provider keys
+
+`add` never accepts a secret as an argument. Enter it at the hidden prompt or pipe it through `--stdin`; `--label` is optional. List output contains the label, last four characters, status, and today's usage, never the credential. Removing a key in a non-interactive invocation requires `--yes`. `move` takes a 1-based destination position.
+
+```sh
+ferry providers keys openrouter add --label "Work account"
+Get-Content .\provider-key.txt -Raw | ferry providers keys openrouter add --stdin --json
+ferry providers keys openrouter move 2 1 --json
+ferry providers keys openrouter disable 2 --json
+ferry providers keys openrouter remove 2 --yes --json
+```
+
+### Routing, mappings, and overrides
+
+Provider priority accepts -100 through 100; weight accepts 0.01 through 1000. Affinity belongs to a profile and accepts `soft` or `strict`; `providers routing --help` points to `ferry profiles affinity`. Effective overrides come from the core that handles the request, including when the CLI connects to the desktop core. Logical model mappings use one provider/upstream pair per row. Reserved Gateway aliases are listed alongside mappings and are not edited by the map commands.
+
+```sh
+ferry providers routing openrouter --priority 10 --weight 2 --json
+ferry providers routing openrouter --json
+ferry models map set gpt-oss-120b groq openai/gpt-oss-120b --json
+ferry models map list --json
+ferry models map remove gpt-oss-120b groq --json
+ferry providers overrides openrouter --json
+ferry profiles affinity "Auto-Free" --json
+ferry profiles affinity "Auto-Free" strict --json
+```
 
 ## Flags
 
-Global parser flags: `--json`, `--verbose`, `--cwd <path>`, `--data-dir <path>`, `--engine <mock|local>`. Commands also accept `--profile <name>`, `--permission <ask|auto_edit|full_auto>`, `--max-steps <positive integer>`, `--watch`, `--providers`, `--yes`, and `--i-understand-the-risk` where applicable. `ferry run --model-ref provider/model` selects a specific model. `ferry run --yes-paid` confirms each paid call once for this run, including under `--permission full_auto`. Without a TTY or profile pre-authorization, a paid call is denied unless this flag is passed. Some admin handlers accept `--delegation` and `--model`. `--json` emits JSON lines/results; verbose routing diagnostics go to stderr. Exact command-specific operands are (updating).
+Global parser flags: `--json`, `--verbose`, `--cwd <path>`, `--data-dir <path>`, `--engine <mock|local>`. Commands also accept `--profile <name>`, `--permission <ask|auto_edit|full_auto>`, `--max-steps <positive integer>`, `--watch`, `--providers`, `--yes`, and `--i-understand-the-risk` where applicable. Gateway-key commands accept `--rpm`, `--concurrency`, `--tokens-per-min`, `--tokens-per-day`, and `--clear`. Provider-key add accepts `--stdin` and `--label`; provider routing accepts `--priority` and `--weight`. `ferry run --model-ref provider/model` selects a specific model. `--json` emits JSON results; verbose routing diagnostics go to stderr.
 
 Examples:
 

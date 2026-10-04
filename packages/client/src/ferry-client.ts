@@ -20,6 +20,7 @@ import type {
   ProfileId,
   Provider,
   ProviderId,
+  ProviderRequestOverrides,
   RunId,
   Session,
   SessionDetail,
@@ -137,6 +138,7 @@ export interface FerryClient {
   providers: {
     list(): Promise<Provider[]>;
     listKeys(id: ProviderId): Promise<import('@ferry/shared').ProviderKey[]>;
+    effectiveOverrides(id: ProviderId): Promise<ProviderRequestOverrides>;
     setKey(id: ProviderId, key: string): Promise<Provider>;
     addKey(
       id: ProviderId,
