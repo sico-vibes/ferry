@@ -158,7 +158,7 @@ describe('V2Sidebar new chat', () => {
     );
 
     await userEvent.click(await screen.findByRole('button', { name: /^User menu$/ }));
-    await userEvent.click(await screen.findByRole('menuitem', { name: /^About$/ }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /^About \/ changelog$/ }));
     const dialog = await screen.findByRole('dialog', { name: /^About Ferry$/ });
     expect(dialog.textContent).toContain(window.ferryHost.versions.app);
     expect(dialog.textContent).toContain('beta');

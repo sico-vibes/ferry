@@ -19,6 +19,8 @@ import { keys, useProfiles, useSessions, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
 import { ApprovalsTray } from './SessionPowerControls';
+import { ConfirmDialog } from './ConfirmDialog';
+import { TextPromptDialog } from './TextPromptDialog';
 
 const {
   Button,
@@ -71,12 +73,6 @@ function loadProjectNames(): Record<string, string> {
   }
 }
 
-function openFolder() {
-  return window.ferryHost
-    ? window.ferryHost.openFolder()
-    : window.prompt('Enter a folder path to add');
-}
-
 export function LibraryCanvas() {
   const client = useFerryClient();
   const cache = useQueryClient();
@@ -97,6 +93,8 @@ export function LibraryCanvas() {
   const [renaming, setRenaming] = useState<Workspace | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [projectNames, setProjectNames] = useState(loadProjectNames);
+  const [folderPromptOpen, setFolderPromptOpen] = useState(false);
+  const [projectConfigPromptOpen, setProjectConfigPromptOpen] = useState(false);
   const selected = workspaces.find((workspace) => workspace.id === detailId) ?? null;
   const { data: lanes = [] } = useQuery({
     queryKey: ['lanes', selected?.id],
@@ -142,7 +140,11 @@ export function LibraryCanvas() {
     useUI.getState().setSelectedWorkspace(workspace.id);
   };
   const chooseFolder = async () => {
-    const path = await openFolder();
+    if (!window.ferryHost) {
+      setFolderPromptOpen(true);
+      return;
+    }
+    const path = await window.ferryHost.openFolder();
     if (!path) return;
     await client.workspaces.open(path);
     await cache.invalidateQueries({ queryKey: keys.workspaces });
@@ -511,16 +513,7 @@ export function LibraryCanvas() {
                   variant="secondary"
                   size="sm"
                   onClick={() => {
-                    if (
-                      !window.confirm(
-                        'Review .ferry/config.json first. Approve these exact bytes so its permission rules apply and its gate commands can run after delegation?',
-                      )
-                    )
-                      return;
-                    void client.delegation.approveProjectConfig().then((result) => {
-                      if (!result.approved)
-                        toast({ kind: 'error', title: 'No project config found', body: null });
-                    });
+                    setProjectConfigPromptOpen(true);
                   }}
                 >
                   Approve project config
@@ -724,40 +717,45 @@ export function LibraryCanvas() {
           </div>
         </DialogContent>
       </Dialog>
-      <Dialog
+      <ConfirmDialog
         open={Boolean(selectedForRemoval)}
         onOpenChange={(open) => {
           if (!open) setSelectedForRemoval(null);
         }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              Remove{' '}
-              {selectedForRemoval
-                ? (projectNames[selectedForRemoval.id] ?? selectedForRemoval.name)
-                : 'project'}
-              ?
-            </DialogTitle>
-            <DialogDescription>
-              This removes the project from Ferry. Its files stay on disk.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="v2-library-dialog-actions">
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setSelectedForRemoval(null);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
-              Remove project
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+        title={`Remove ${selectedForRemoval ? (projectNames[selectedForRemoval.id] ?? selectedForRemoval.name) : 'project'}?`}
+        description="This removes the project from Ferry. Its files stay on disk."
+        confirmLabel="Remove project"
+        destructive
+        onConfirm={() => void remove()}
+      />
+      <ConfirmDialog
+        open={projectConfigPromptOpen}
+        onOpenChange={setProjectConfigPromptOpen}
+        title="Approve project config?"
+        description="Review .ferry/config.json before its permission rules and gates can run."
+        confirmLabel="Approve config"
+        onConfirm={() => {
+          setProjectConfigPromptOpen(false);
+          void client.delegation.approveProjectConfig().then((result) => {
+            if (!result.approved)
+              toast({ kind: 'error', title: 'No project config found', body: null });
+          });
+        }}
+      />
+      <TextPromptDialog
+        open={folderPromptOpen}
+        onOpenChange={setFolderPromptOpen}
+        title="Add a project folder"
+        description="Enter the full path to the folder you want to open."
+        label="Folder path"
+        placeholder="Example: C:/Projects/my-app"
+        onSubmit={(path) => {
+          setFolderPromptOpen(false);
+          void client.workspaces
+            .open(path)
+            .then(() => cache.invalidateQueries({ queryKey: keys.workspaces }));
+        }}
+      />
     </main>
   );
 }

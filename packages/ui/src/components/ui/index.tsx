@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
-import { Check, ChevronDown, ChevronRight, Circle } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { Command as CommandPrimitive } from 'cmdk';
 import { Toaster as SonnerToaster } from 'sonner';
 import {
+  AlertDialog as AlertDialogPrimitive,
   Checkbox as CheckboxPrimitive,
   Collapsible as CollapsiblePrimitive,
   ContextMenu as ContextMenuPrimitive,
@@ -24,6 +25,42 @@ const focus =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background';
 const surface =
   'ferry-ui border border-border bg-card text-card-foreground shadow-[var(--shadow-popover)]';
+
+export const AlertDialog = AlertDialogPrimitive.Root;
+export const AlertDialogTrigger = AlertDialogPrimitive.Trigger;
+export const AlertDialogPortal = AlertDialogPrimitive.Portal;
+export const AlertDialogCancel = AlertDialogPrimitive.Cancel;
+export const AlertDialogAction = AlertDialogPrimitive.Action;
+export const AlertDialogTitle = AlertDialogPrimitive.Title;
+export const AlertDialogDescription = AlertDialogPrimitive.Description;
+export function AlertDialogOverlay({
+  className,
+  ...props
+}: React.ComponentProps<typeof AlertDialogPrimitive.Overlay>) {
+  return (
+    <AlertDialogPrimitive.Overlay
+      className={cn('fixed inset-0 z-[var(--z-modal-overlay)] bg-foreground/50', className)}
+      {...props}
+    />
+  );
+}
+export function AlertDialogContent({
+  className,
+  ...props
+}: React.ComponentProps<typeof AlertDialogPrimitive.Content>) {
+  return (
+    <AlertDialogPrimitive.Portal>
+      <AlertDialogOverlay />
+      <AlertDialogPrimitive.Content
+        className={cn(
+          'ferry-ui fixed left-1/2 top-1/2 z-[var(--z-modal)] w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-card border border-border bg-card p-6 text-card-foreground shadow-[var(--shadow-popover)]',
+          className,
+        )}
+        {...props}
+      />
+    </AlertDialogPrimitive.Portal>
+  );
+}
 const buttonVariants = cva(
   `inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-button text-ui-label transition-colors duration-150 ease-out motion-reduce:transition-none ${focus} disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0`,
   {
@@ -254,7 +291,7 @@ export function DropdownMenuSubTrigger({
   return (
     <DropdownMenuPrimitive.SubTrigger
       className={cn(
-        'flex min-h-8 items-center rounded-control px-2 text-ui-body outline-none data-[state=open]:bg-accent',
+        'flex min-h-8 items-center gap-2 rounded-control px-2 text-ui-body outline-none data-[state=open]:bg-accent [&_svg]:size-4',
         className,
       )}
       {...props}
@@ -339,7 +376,7 @@ export function DropdownMenuRadioItem({
     >
       <span className="absolute left-2 flex size-4 items-center justify-center">
         <DropdownMenuPrimitive.ItemIndicator>
-          <Circle className="size-2 fill-current" strokeWidth={1.75} />
+          <Check className="size-4" strokeWidth={1.75} />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
       {children}
@@ -503,7 +540,7 @@ export function TooltipContent({
       <TooltipPrimitive.Content
         sideOffset={sideOffset}
         className={cn(
-          'ferry-ui z-50 rounded-control bg-foreground px-3 py-1.5 text-ui-meta text-background shadow-[var(--shadow-popover)]',
+          'ferry-ui z-50 rounded-control border border-border bg-popover px-3 py-1.5 text-ui-meta text-popover-foreground shadow-[var(--shadow-popover)]',
           className,
         )}
         {...props}

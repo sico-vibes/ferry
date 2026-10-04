@@ -73,7 +73,7 @@ export function ApprovalsTray({ activeSessionId }: { activeSessionId?: string | 
   return pending.length ? (
     <div className="relative v2-approvals-anchor">
       <button
-        aria-label={`Approvals${pending.length ? `, ${String(pending.length)} pending` : ''}`}
+        aria-label={`Notifications${pending.length ? `, ${String(pending.length)} pending` : ''}`}
         className="relative inline-flex size-8 items-center justify-center rounded-full text-text-2 hover:bg-icon-circle"
         onClick={() => {
           setOpen(!open);

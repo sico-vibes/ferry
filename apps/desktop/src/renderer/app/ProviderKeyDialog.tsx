@@ -6,6 +6,7 @@ import { UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { useSettings } from '../data/queries';
 import { ProviderStatusBadge } from './ProviderStatusBadge';
+import { ConfirmDialog } from './ConfirmDialog';
 
 const numberFormat = new Intl.NumberFormat();
 
@@ -398,49 +399,26 @@ export function ProviderKeyDialog({
                           <UiV2.TooltipContent>Move down</UiV2.TooltipContent>
                         </UiV2.Tooltip>
                       </UiV2.TooltipProvider>
-                      {confirmRemoveKeyId === item.id ? null : (
-                        <UiV2.TooltipProvider>
-                          <UiV2.Tooltip>
-                            <UiV2.TooltipTrigger asChild>
-                              <Button
-                                aria-label={`Remove ${item.label}`}
-                                disabled={busy}
-                                onClick={() => {
-                                  setConfirmRemoveKeyId(item.id);
-                                }}
-                                size="icon"
-                                variant="ghost"
-                                className="text-destructive hover:text-destructive"
-                              >
-                                <Trash2 aria-hidden="true" size={16} strokeWidth={1.75} />
-                              </Button>
-                            </UiV2.TooltipTrigger>
-                            <UiV2.TooltipContent>Remove key</UiV2.TooltipContent>
-                          </UiV2.Tooltip>
-                        </UiV2.TooltipProvider>
-                      )}
+                      <UiV2.TooltipProvider>
+                        <UiV2.Tooltip>
+                          <UiV2.TooltipTrigger asChild>
+                            <Button
+                              aria-label={`Remove ${item.label}`}
+                              disabled={busy}
+                              onClick={() => {
+                                setConfirmRemoveKeyId(item.id);
+                              }}
+                              size="icon"
+                              variant="ghost"
+                              className="text-destructive hover:text-destructive"
+                            >
+                              <Trash2 aria-hidden="true" size={16} strokeWidth={1.75} />
+                            </Button>
+                          </UiV2.TooltipTrigger>
+                          <UiV2.TooltipContent>Remove key</UiV2.TooltipContent>
+                        </UiV2.Tooltip>
+                      </UiV2.TooltipProvider>
                     </div>
-                    {confirmRemoveKeyId === item.id && (
-                      <div className="flex flex-wrap items-center gap-2" role="alert">
-                        <span className="mr-auto text-meta text-text-3">Remove {item.label}?</span>
-                        <Button
-                          disabled={busy}
-                          onClick={() => {
-                            setConfirmRemoveKeyId(null);
-                          }}
-                          variant="ghost"
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          disabled={busy}
-                          onClick={() => void removeKeyEntry(item.id)}
-                          variant="destructive"
-                        >
-                          Remove key
-                        </Button>
-                      </div>
-                    )}
                   </div>
                 ))}
               </section>
@@ -651,52 +629,50 @@ export function ProviderKeyDialog({
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-border pt-3">
-          {confirmRemove ? (
-            <>
-              <span className="mr-auto text-meta text-text-3" role="alert">
-                Remove the saved key for {provider?.name}?
-              </span>
-              <Button
-                onClick={() => {
-                  setConfirmRemove(false);
-                }}
-                variant="secondary"
-              >
-                Cancel
-              </Button>
-              <Button
-                disabled={busy}
-                onClick={() => {
-                  void remove();
-                }}
-                variant="destructive"
-              >
-                {busy ? 'Removing…' : 'Remove key'}
-              </Button>
-            </>
-          ) : (
-            <>
-              {providerKeys.length === 0 && provider?.keyStatus !== 'missing' && (
-                <Button
-                  disabled={busy}
-                  onClick={() => {
-                    setConfirmRemove(true);
-                  }}
-                  variant="ghost"
-                >
-                  Remove key
-                </Button>
-              )}
-              <Button disabled={busy} onClick={() => void test()} variant="secondary">
-                {busy ? 'Testing…' : 'Test connection'}
-              </Button>
-              <Button disabled={busy} onClick={() => void save()}>
-                {busy ? 'Saving…' : providerKeys.length ? 'Add key' : 'Save key'}
-              </Button>
-            </>
+          {providerKeys.length === 0 && provider?.keyStatus !== 'missing' && (
+            <Button
+              disabled={busy}
+              onClick={() => {
+                setConfirmRemove(true);
+              }}
+              variant="ghost"
+            >
+              Remove key
+            </Button>
           )}
+          <Button disabled={busy} onClick={() => void test()} variant="secondary">
+            {busy ? 'Testing…' : 'Test connection'}
+          </Button>
+          <Button disabled={busy} onClick={() => void save()}>
+            {busy ? 'Saving…' : providerKeys.length ? 'Add key' : 'Save key'}
+          </Button>
         </div>
       </DialogContent>
+      <ConfirmDialog
+        open={confirmRemoveKeyId !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmRemoveKeyId(null);
+        }}
+        title="Remove key entry?"
+        description={`Remove ${providerKeys.find((item) => item.id === confirmRemoveKeyId)?.label ?? 'this key'} from Ferry.`}
+        confirmLabel="Remove key"
+        destructive
+        onConfirm={() => {
+          if (confirmRemoveKeyId) void removeKeyEntry(confirmRemoveKeyId);
+          setConfirmRemoveKeyId(null);
+        }}
+      />
+      <ConfirmDialog
+        open={confirmRemove}
+        onOpenChange={setConfirmRemove}
+        title="Remove saved key?"
+        description={`Remove the saved key for ${provider?.name ?? 'this provider'}.`}
+        confirmLabel={busy ? 'Removing…' : 'Remove key'}
+        destructive
+        onConfirm={() => {
+          void remove();
+        }}
+      />
     </Dialog>
   );
 }

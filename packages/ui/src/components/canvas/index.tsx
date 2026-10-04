@@ -6,7 +6,6 @@ import {
   Lightbulb,
   Link,
   Send,
-  Sparkles,
   Square,
   Timer,
 } from 'lucide-react';
@@ -129,7 +128,6 @@ export function Composer({
       )}
       <div className="v2-composer">
         <div className="v2-composer-input-row">
-          <Sparkles aria-hidden="true" />
           <textarea
             aria-label="Message Ferry"
             className="v2-composer-input border-0 shadow-none outline-none focus-visible:ring-0"

@@ -50,6 +50,7 @@ import { useUI } from '../state/ui';
 import { ComposerModelChip } from './SessionPowerControls';
 import { FullOutputDialog } from './FullOutputDialog';
 import { useDisplayName } from './useDisplayName';
+import { ConfirmDialog } from './ConfirmDialog';
 
 const starters: Record<string, string> = {
   'Fix a failing test': 'Find and fix the failing tests in this repo.',
@@ -912,6 +913,7 @@ export function SessionCanvas() {
     setModelPickerOpen(true);
   }, []);
   const [fullOutput, setFullOutput] = useState<string | null>(null);
+  const [retryInterruptedPrompt, setRetryInterruptedPrompt] = useState<string | null>(null);
   const [streamingPartId, setStreamingPartId] = useState<string | null>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
@@ -1244,23 +1246,8 @@ export function SessionCanvas() {
         pushToast({ kind: 'error', title: 'Resume failed', body: message });
         return;
       }
-      if (
-        !window.confirm(
-          message +
-            '\n\nRetry this interrupted tool? It may have completed before the core stopped.',
-        )
-      )
-        return;
-      try {
-        await client.sessions.resume(sessionId, { retryInterruptedTool: true });
-      } catch (retryError) {
-        pushToast({
-          kind: 'error',
-          title: 'Resume failed',
-          body: retryError instanceof Error ? retryError.message : message,
-        });
-        return;
-      }
+      setRetryInterruptedPrompt(message);
+      return;
     }
     await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
     await cache.invalidateQueries({ queryKey: keys.sessions });
@@ -1368,117 +1355,144 @@ export function SessionCanvas() {
     />
   );
   return (
-    <CanvasPanel
-      overflowContained
-      className={`session-canvas v2-session-canvas ${density === 'compact' ? 'density-compact' : ''}`}
-    >
-      <div
-        className={`transcript-viewport ${messages.length === 0 ? 'is-empty' : ''}`}
-        data-at-bottom={atBottom}
-        data-new-output-count={newOutputCount}
-        data-session-status={data?.session.status ?? 'loading'}
-        ref={viewport}
-        style={{ visibility: initialTailReady ? 'visible' : 'hidden' }}
-        onWheel={(event) => {
-          if (event.deltaY < 0) {
-            pinnedToBottom.current = false;
-            setAtBottom(false);
-            streamAnchor.current = captureTranscriptAnchor(viewport.current);
-          }
-        }}
-        onKeyDown={(event) => {
-          if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) {
-            pinnedToBottom.current = false;
-            setAtBottom(false);
-          }
-        }}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          const tail = element.querySelector<HTMLElement>(
-            `.transcript-message[data-index="${String(messages.length - 1)}"]`,
-          );
-          const bottom = Boolean(
-            tail &&
-            Math.abs(
-              tail.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom,
-            ) <= 2,
-          );
-          if (bottom) {
-            pinnedToBottom.current = true;
-            setNewOutputCount(0);
-            setAtBottom(true);
-          } else if (!pinnedToBottom.current) {
-            streamAnchor.current = captureTranscriptAnchor(element);
-            setAtBottom(false);
-          }
-        }}
+    <>
+      <CanvasPanel
+        overflowContained
+        className={`session-canvas v2-session-canvas ${density === 'compact' ? 'density-compact' : ''}`}
       >
-        {messages.length === 0 && (
-          <div className="session-empty">
-            <div className="session-empty-greeting">
-              <FerryMark size={32} variant="brand" />
-              <span>What would you like to work on?</span>
+        <div
+          className={`transcript-viewport ${messages.length === 0 ? 'is-empty' : ''}`}
+          data-at-bottom={atBottom}
+          data-new-output-count={newOutputCount}
+          data-session-status={data?.session.status ?? 'loading'}
+          ref={viewport}
+          style={{ visibility: initialTailReady ? 'visible' : 'hidden' }}
+          onWheel={(event) => {
+            if (event.deltaY < 0) {
+              pinnedToBottom.current = false;
+              setAtBottom(false);
+              streamAnchor.current = captureTranscriptAnchor(viewport.current);
+            }
+          }}
+          onKeyDown={(event) => {
+            if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) {
+              pinnedToBottom.current = false;
+              setAtBottom(false);
+            }
+          }}
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            const tail = element.querySelector<HTMLElement>(
+              `.transcript-message[data-index="${String(messages.length - 1)}"]`,
+            );
+            const bottom = Boolean(
+              tail &&
+              Math.abs(
+                tail.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom,
+              ) <= 2,
+            );
+            if (bottom) {
+              pinnedToBottom.current = true;
+              setNewOutputCount(0);
+              setAtBottom(true);
+            } else if (!pinnedToBottom.current) {
+              streamAnchor.current = captureTranscriptAnchor(element);
+              setAtBottom(false);
+            }
+          }}
+        >
+          {messages.length === 0 && (
+            <div className="session-empty">
+              <div className="session-empty-greeting">
+                <FerryMark size={32} variant="brand" />
+                <span>What would you like to work on?</span>
+              </div>
+              {renderComposer()}
             </div>
-            {renderComposer()}
+          )}
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+            {virtualizer.getVirtualItems().map((item) => {
+              const message = messages[item.index];
+              if (!message) return null;
+              const streamPartId = message.id === streamingMessageId ? streamingPartId : null;
+              return (
+                <TranscriptMessageRow
+                  key={message.id}
+                  message={message}
+                  index={item.index}
+                  top={item.start}
+                  modelName={shortModel(message.modelRef, models)}
+                  planSteps={planSteps}
+                  timelineEvents={timelineByMessage.get(item.index) ?? []}
+                  sessionId={sessionId}
+                  canRetry={data?.session.status === 'error'}
+                  streamPartId={streamPartId}
+                  isRunning={running && message.id === streamingMessageId}
+                  onFullOutput={setFullOutput}
+                  onPickModel={openModelPicker}
+                  measureElement={virtualizer.measureElement}
+                />
+              );
+            })}
+          </div>
+        </div>
+        {!atBottom && initialTailReady && (
+          <button
+            aria-label={`Jump to latest${newOutputCount > 0 ? `, ${String(newOutputCount)} new` : ''}`}
+            className="jump-latest"
+            onClick={jumpToLatest}
+          >
+            Jump to latest{newOutputCount > 0 ? ` · ${String(newOutputCount)} new` : ''}
+          </button>
+        )}
+        {data?.session.status === 'interrupted' && (
+          <div className="session-resume-banner" role="status">
+            <span>
+              Session stopped before the task finished. Durable steps and tool results are saved.
+            </span>
+            <button type="button" onClick={() => void resumeInterrupted()}>
+              Resume
+            </button>
           </div>
         )}
-        <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
-          {virtualizer.getVirtualItems().map((item) => {
-            const message = messages[item.index];
-            if (!message) return null;
-            const streamPartId = message.id === streamingMessageId ? streamingPartId : null;
-            return (
-              <TranscriptMessageRow
-                key={message.id}
-                message={message}
-                index={item.index}
-                top={item.start}
-                modelName={shortModel(message.modelRef, models)}
-                planSteps={planSteps}
-                timelineEvents={timelineByMessage.get(item.index) ?? []}
-                sessionId={sessionId}
-                canRetry={data?.session.status === 'error'}
-                streamPartId={streamPartId}
-                isRunning={running && message.id === streamingMessageId}
-                onFullOutput={setFullOutput}
-                onPickModel={openModelPicker}
-                measureElement={virtualizer.measureElement}
-              />
-            );
-          })}
-        </div>
-      </div>
-      {!atBottom && initialTailReady && (
-        <button
-          aria-label={`Jump to latest${newOutputCount > 0 ? `, ${String(newOutputCount)} new` : ''}`}
-          className="jump-latest"
-          onClick={jumpToLatest}
-        >
-          Jump to latest{newOutputCount > 0 ? ` · ${String(newOutputCount)} new` : ''}
-        </button>
-      )}
-      {data?.session.status === 'interrupted' && (
-        <div className="session-resume-banner" role="status">
-          <span>
-            Session stopped before the task finished. Durable steps and tool results are saved.
-          </span>
-          <button type="button" onClick={() => void resumeInterrupted()}>
-            Resume
-          </button>
-        </div>
-      )}
-      {messages.length > 0 && renderComposer()}
-      {fullOutput !== null && data?.session && (
-        <FullOutputDialog
-          client={client}
-          sessionId={data.session.id}
-          handle={fullOutput}
-          onClose={() => {
-            setFullOutput(null);
-          }}
-        />
-      )}
-    </CanvasPanel>
+        {messages.length > 0 && renderComposer()}
+        {fullOutput !== null && data?.session && (
+          <FullOutputDialog
+            client={client}
+            sessionId={data.session.id}
+            handle={fullOutput}
+            onClose={() => {
+              setFullOutput(null);
+            }}
+          />
+        )}
+      </CanvasPanel>
+      <ConfirmDialog
+        open={retryInterruptedPrompt !== null}
+        onOpenChange={(open) => {
+          if (!open) setRetryInterruptedPrompt(null);
+        }}
+        title="Retry interrupted tool?"
+        description="It may have completed before Ferry stopped."
+        confirmLabel="Retry tool"
+        onConfirm={() => {
+          setRetryInterruptedPrompt(null);
+          void client.sessions
+            .resume(sessionId, { retryInterruptedTool: true })
+            .then(async () => {
+              await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+              await cache.invalidateQueries({ queryKey: keys.sessions });
+            })
+            .catch((error: unknown) => {
+              pushToast({
+                kind: 'error',
+                title: 'Resume failed',
+                body: error instanceof Error ? error.message : 'Unable to resume this session.',
+              });
+            });
+        }}
+      />
+    </>
   );
 }
 

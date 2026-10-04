@@ -107,7 +107,7 @@ body {
 .web-preview-window-controls {
   position: absolute;
   z-index: 71;
-  top: 2px;
+  top: 6px;
   right: 0;
   display: flex;
   width: 138px;
@@ -1892,15 +1892,18 @@ body {
   font-family: Geist, sans-serif;
 }
 .v2-app-shell .title-strip {
-  display: none;
+  position: relative;
+  z-index: 70;
+  display: flex;
+  width: 100%;
+  height: 44px;
+  flex: 0 0 44px;
+  align-items: center;
+  background: var(--background);
+  -webkit-app-region: drag;
 }
 .web-preview-shell .title-strip {
-  position: absolute;
-  z-index: 70;
-  top: 0;
-  left: 0;
-  display: block;
-  height: 36px;
+  background: var(--background);
 }
 .web-preview-shell[data-preview-size='1024x680'] {
   position: absolute;
@@ -1918,7 +1921,7 @@ body {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   width: 100%;
-  height: 100%;
+  height: calc(100% - 44px);
   min-height: 0;
   transition: grid-template-columns 150ms ease-out;
 }
@@ -1945,6 +1948,15 @@ body {
   flex: 0 0 32px;
   align-items: center;
   gap: 10px;
+  padding-left: 10px;
+}
+.v2-brand-row > svg {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+.v2-brand-row {
+  gap: 8px;
 }
 .v2-brand-name {
   flex: 1;
@@ -1961,6 +1973,12 @@ body {
   height: auto;
   flex-basis: auto;
   gap: 16px;
+  padding-left: 0;
+}
+.v2-sidebar.is-collapsed .v2-brand-row > svg {
+  width: 18px;
+  height: 18px;
+  flex-basis: 18px;
 }
 .v2-sidebar.is-collapsed .v2-collapse {
   margin-top: 8px;
@@ -2188,8 +2206,17 @@ body {
   background: var(--muted);
 }
 .v2-user-row .v2-user-name {
-  flex: 1;
   font-size: 13px;
+}
+.v2-user-labels {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  line-height: 16px;
+}
+.v2-user-tier {
+  color: var(--muted-foreground);
+  font-size: 11px;
 }
 .v2-user-row > svg {
   width: 16px;
@@ -2202,7 +2229,23 @@ body {
   height: 30px;
 }
 .v2-user-menu {
-  min-width: 196px;
+  width: max(220px, var(--radix-dropdown-menu-trigger-width));
+  min-width: 220px;
+  transform-origin: bottom left;
+}
+.v2-user-account {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.v2-theme-menu {
+  width: 168px;
+  min-width: 168px;
+}
+.v2-user-menu [role='menuitem'] > svg,
+.v2-theme-menu [role='menuitemradio'] > svg,
+.v2-user-menu [role='menuitem'] > [data-slot='dropdown-menu-shortcut'] {
+  flex: 0 0 auto;
 }
 .v2-rail-spacer {
   flex: 1;
@@ -2217,13 +2260,13 @@ body {
 .v2-chat-header {
   z-index: 5;
   display: flex;
-  height: 56px;
-  flex: 0 0 56px;
+  height: 44px;
+  flex: 0 0 44px;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   border-bottom: 0;
-  padding: 0 calc(24px + var(--titlebar-overlay-right, 0px)) 0 24px;
+  padding: 0 calc(12px + var(--titlebar-overlay-right, 0px)) 0 8px;
   -webkit-app-region: drag;
 }
 .v2-library-header,
@@ -2247,6 +2290,57 @@ body {
 .v2-chat-header input,
 .v2-chat-header [role='button'] {
   -webkit-app-region: no-drag;
+}
+.v2-titlebar {
+  gap: 12px;
+}
+.v2-titlebar-navigation,
+.v2-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+.v2-titlebar-context {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 12px;
+}
+.v2-titlebar-project {
+  overflow: hidden;
+  max-width: 220px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.v2-titlebar-page-title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.v2-titlebar .v2-title-button {
+  max-width: 40vw;
+  text-align: left;
+}
+.v2-titlebar .v2-header-actions {
+  margin-left: auto;
+}
+.v2-titlebar :is(button, input, select, textarea, [role='button']) {
+  -webkit-app-region: no-drag;
+}
+.v2-titlebar .web-preview-toggle,
+.v2-titlebar .web-preview-panel {
+  -webkit-app-region: no-drag;
+}
+.v2-rail-tooltip {
+  border: 1px solid var(--border);
+  background: var(--popover);
+  color: var(--popover-foreground);
 }
 .v2-header-title,
 .v2-header-actions {
@@ -2308,9 +2402,6 @@ body {
 .v2-chat-route .canvas-slot > section > div.relative {
   min-height: 0;
   flex: 1;
-}
-.v2-settings-route .v2-chat-header {
-  background: var(--sidebar);
 }
 .v2-settings-page {
   display: grid;
@@ -5666,6 +5757,10 @@ body {
   overflow: auto;
   background: var(--background);
   color: var(--foreground);
+}
+.v2-app-shell > .v2-onboarding-shell {
+  height: calc(100% - 44px);
+  min-height: 0;
 }
 .onboarding-top {
   display: flex;

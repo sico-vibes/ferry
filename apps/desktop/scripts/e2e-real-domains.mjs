@@ -367,9 +367,6 @@ function hardKillCore(pid) {
 }
 
 async function openRenderer(page) {
-  await page.evaluate((path) => {
-    window.prompt = () => path;
-  }, fixtureRepo);
   await page.waitForFunction(() => Boolean(window.ferryRpcClient), undefined, { timeout: 30_000 });
   const hello = await page.evaluate(() => window.ferryRpcClient.hello);
   assert.ok(
@@ -642,6 +639,7 @@ try {
           document.documentElement.dataset.theme === 'dark',
       );
       await page.getByRole('button', { name: 'User menu' }).click();
+      await page.getByRole('menuitem', { name: 'Theme', exact: true }).hover();
       await page.getByRole('menuitemradio', { name: 'Light', exact: true }).click();
       await page.waitForFunction(
         async () => (await window.ferryRpcClient.settings.get()).theme === 'light',

@@ -154,3 +154,24 @@ ProviderCard, ModelsTable, UsageChart (recharts, themed), DiffView (Monaco, them
 - Text contrast AA; focus ring visible on every interactive element; keyboard reaches everything.
 - No all-caps labels, eyebrows, decorative gradients/glows, "→" in buttons, or mono outside code.
 - Empty, loading, error states present and actionable.
+
+## 7. Application shell rules
+
+- Use one 44 px title bar across the full window, above the sidebar and page content. The full
+  strip is draggable. Interactive controls use `-webkit-app-region: no-drag`; every remaining
+  pixel stays available for dragging. Keep the background continuous with the active app theme.
+- Put the sidebar toggle, back and forward navigation, current project and chat context, page
+  actions, and window controls in that title bar. Do not repeat the sidebar toggle or chat title
+  in a second header. Reserve the native Electron title bar overlay area and update its surface
+  and symbol colors when the resolved theme changes. Web preview uses matching simulated chrome.
+- In the collapsed sidebar rail, tooltips open with no delay or entrance animation, use the active
+  theme's popover and popover-foreground tokens, and open to the right. Never use the native
+  `title` attribute for rail labels.
+- The user menu opens upward, aligns to its trigger, and is at least as wide as the trigger. Show
+  an account label, then consistently aligned icon and label rows, right-aligned shortcuts, and
+  separators between groups. Put System, Light, and Dark in a Theme submenu and mark the active
+  choice with a check.
+- Never use browser-native prompts, alerts, or confirmation boxes, or Electron message boxes for
+  in-app actions. Use the shared themed AlertDialog with a title, one-line description, Cancel,
+  and a primary or destructive action.
+- Use lucide icons for interface actions. Do not use sparkle or star icons, or emoji as icons.

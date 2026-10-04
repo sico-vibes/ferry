@@ -25,7 +25,10 @@ const themes = ['dark', 'light'];
 const states = [
   'home-idle',
   'user-menu-open',
+  'user-menu-theme-open',
   'sidebar-tooltip',
+  'titlebar-collapsed',
+  'confirm-dialog',
   'session-idle',
   'session-activity-collapsed',
   'session-activity-expanded',
@@ -80,6 +83,7 @@ const errors = [];
 
 async function selectTheme(page, theme) {
   await page.getByRole('button', { name: 'User menu' }).click();
+  await page.getByRole('menuitem', { name: 'Theme', exact: true }).hover();
   await page.getByRole('menuitemradio', { name: theme === 'dark' ? 'Dark' : 'Light' }).click();
   await page.getByRole('textbox', { name: 'Message Ferry' }).waitFor();
   await page.evaluate(() => {
@@ -90,8 +94,15 @@ async function selectTheme(page, theme) {
 }
 
 async function hidePreviewChrome(page) {
+  // The browser preview fakes the OS window controls but Chromium reports
+  // windowControlsOverlay.visible === false, so the app reserves no title-bar
+  // space for them and they cover the rightmost header buttons. Reserve the
+  // controls width (as the real Electron overlay does) so captures match the
+  // desktop app and the buttons stay clickable.
   await page.addStyleTag({
-    content: '.web-preview-toggle,.web-preview-panel{display:none!important}',
+    content:
+      '.web-preview-toggle,.web-preview-panel{display:none!important}' +
+      '.v2-app-shell{--titlebar-overlay-right:138px!important}',
   });
 }
 
@@ -105,7 +116,7 @@ async function configureTheme(page, theme) {
 // Navigate through the sidebar so the seeded transcript uses the mounted mock
 // client and keeps the theme selected by configureTheme.
 async function openSeededSession(page) {
-  await page.getByRole('button', { name: 'Fix flaky tests', exact: true }).click();
+  await page.locator('.v2-chat-open').filter({ hasText: 'Fix flaky tests' }).click();
   await page.locator('.transcript-viewport[data-session-status="idle"]').waitFor();
 }
 
@@ -151,11 +162,23 @@ async function captureState(browser, state, theme, viewport) {
     } else if (state === 'user-menu-open') {
       await page.getByRole('button', { name: 'User menu', exact: true }).click();
       await page.getByRole('menu').waitFor();
+    } else if (state === 'user-menu-theme-open') {
+      await page.getByRole('button', { name: 'User menu', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Theme', exact: true }).hover();
+      await page.getByRole('menuitemradio', { name: 'System', exact: true }).waitFor();
     } else if (state === 'sidebar-tooltip') {
       await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
       const firstNavItem = page.locator('.v2-primary-nav button').first();
       await firstNavItem.hover();
       await page.getByRole('tooltip').waitFor();
+    } else if (state === 'titlebar-collapsed') {
+      await openSeededSession(page);
+      await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+    } else if (state === 'confirm-dialog') {
+      await openSeededSession(page);
+      await page.getByRole('button', { name: 'More session actions', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Delete session' }).click();
+      await page.getByRole('alertdialog', { name: 'Delete chat?' }).waitFor();
     } else if (state.startsWith('models-')) {
       const route =
         state === 'models-usage'
@@ -313,7 +336,7 @@ async function captureState(browser, state, theme, viewport) {
       await page.locator('.session-resume-banner').waitFor();
     } else if (state === 'about-dialog') {
       await page.getByRole('button', { name: 'User menu', exact: true }).click();
-      await page.getByRole('menuitem', { name: 'About', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'About / changelog', exact: true }).click();
       await page.getByRole('dialog', { name: 'About Ferry', exact: true }).waitFor();
     } else if (state.startsWith('drawer-')) {
       await openSeededSession(page);

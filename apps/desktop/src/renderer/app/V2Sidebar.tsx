@@ -5,14 +5,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BookOpen,
   ChevronDown,
-  ChevronLeft,
   CircleHelp,
+  History,
+  Keyboard,
   Ellipsis,
   MessageSquarePlus,
   Pin,
   Search,
   Settings,
-  Sparkles,
   SunMoon,
   Boxes,
   Trash2,
@@ -26,6 +26,7 @@ import { useUI } from '../state/ui';
 import { useToasts } from '../state/toasts';
 import type { SessionId, SessionStatus } from '@ferry/shared';
 import { useDisplayName } from './useDisplayName';
+import { ConfirmDialog } from './ConfirmDialog';
 
 const sessionStatusLabels: Partial<Record<SessionStatus, string>> = {
   running: 'Running',
@@ -36,13 +37,17 @@ const sessionStatusLabels: Partial<Record<SessionStatus, string>> = {
 const {
   Avatar,
   AvatarFallback,
-  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuLabel,
+  DropdownMenuShortcut,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
   DialogClose,
   Progress,
@@ -68,6 +73,9 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
   const pushToast = useToasts((state) => state.push);
   const [showAll, setShowAll] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [deleteSession, setDeleteSession] = useState<SessionId | null>(null);
+  const [renameSession, setRenameSession] = useState<SessionId | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const { data: systemInfo } = useQuery({
     queryKey: keys.system,
     queryFn: () => client.system.info(),
@@ -108,20 +116,8 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
     <TooltipProvider>
       <aside className={`v2-sidebar ${collapsed ? 'is-collapsed' : ''}`} aria-label="App sidebar">
         <div className="v2-brand-row">
-          <FerryMark size={28} variant="brand" />
+          <FerryMark size={20} variant="brand" />
           {!collapsed && <span className="v2-brand-name">Ferry</span>}
-          <Button
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            aria-expanded={!collapsed}
-            className="v2-collapse"
-            size="icon"
-            variant="ghost"
-            onClick={() => {
-              useUI.getState().toggleLeft();
-            }}
-          >
-            <ChevronLeft className={collapsed ? 'rotate-180' : ''} aria-hidden="true" />
-          </Button>
         </div>
         <nav aria-label="Primary" className="v2-primary-nav">
           <NavButton
@@ -205,13 +201,8 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
                   <DropdownMenuContent align="end">
                     <DropdownMenuItem
                       onSelect={() => {
-                        const title = window.prompt('Rename chat', session.title)?.trim();
-                        if (title) {
-                          void client.sessions.rename(session.id, title).then(async () => {
-                            useUI.getState().renameTab(session.id, title);
-                            await cache.invalidateQueries({ queryKey: keys.sessions });
-                          });
-                        }
+                        setRenameValue(session.title);
+                        setRenameSession(session.id);
                       }}
                     >
                       <Pencil />
@@ -231,11 +222,7 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
                     <DropdownMenuItem
                       className="text-destructive"
                       onSelect={() => {
-                        if (window.confirm(`Delete “${session.title}”?`))
-                          void client.sessions.remove(session.id).then(async () => {
-                            await cache.invalidateQueries({ queryKey: keys.sessions });
-                            if (pathname === `/s/${session.id}`) await navigate({ to: '/' });
-                          });
+                        setDeleteSession(session.id);
                       }}
                     >
                       <Trash2 />
@@ -283,13 +270,24 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
                 </Avatar>
                 {!collapsed && (
                   <>
-                    {displayName && <span className="v2-user-name">{displayName}</span>}
+                    <span className="v2-user-labels">
+                      <span className="v2-user-name">{displayName ?? 'Account'}</span>
+                      <span className="v2-user-tier">Free plan</span>
+                    </span>
                     <ChevronDown aria-hidden="true" />
                   </>
                 )}
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" side="top" className="v2-user-menu">
+            <DropdownMenuContent
+              align={collapsed ? 'start' : 'end'}
+              side="top"
+              className="v2-user-menu"
+            >
+              <DropdownMenuLabel className="v2-user-account">
+                {window.ferryHost?.displayName ?? displayName ?? 'Local account'}
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={() => {
                   go('/settings');
@@ -297,36 +295,35 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
               >
                 <Settings />
                 Settings
+                <DropdownMenuShortcut>Ctrl+,</DropdownMenuShortcut>
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuRadioGroup value={settings?.theme ?? 'system'}>
-                <DropdownMenuRadioItem
-                  value="system"
-                  onSelect={() => {
-                    void updateTheme('system');
-                  }}
-                >
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
                   <SunMoon />
-                  Theme: System
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem
-                  value="dark"
-                  onSelect={() => {
-                    void updateTheme('dark');
-                  }}
-                >
-                  Dark
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem
-                  value="light"
-                  onSelect={() => {
-                    void updateTheme('light');
-                  }}
-                >
-                  Light
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
+                  Theme
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="v2-theme-menu">
+                  <DropdownMenuRadioGroup value={settings?.theme ?? 'system'}>
+                    <DropdownMenuRadioItem
+                      value="system"
+                      onSelect={() => void updateTheme('system')}
+                    >
+                      System
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="light" onSelect={() => void updateTheme('light')}>
+                      Light
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="dark" onSelect={() => void updateTheme('dark')}>
+                      Dark
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
               <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => void navigate({ to: '/models/usage' })}>
+                <History />
+                Usage
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => {
                   void window.ferryHost?.openHelp().catch((error: unknown) => {
@@ -343,15 +340,96 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => {
+                  window.dispatchEvent(new Event('ferry:show-shortcuts'));
+                }}
+              >
+                <Keyboard />
+                Keyboard shortcuts
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
                   setAboutOpen(true);
                 }}
               >
-                <Sparkles />
-                About
+                <CircleHelp />
+                About / changelog
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        <UiV2.Dialog
+          open={renameSession !== null}
+          onOpenChange={(open) => {
+            if (!open) setRenameSession(null);
+          }}
+        >
+          <UiV2.DialogContent>
+            <UiV2.DialogHeader>
+              <UiV2.DialogTitle>Rename chat</UiV2.DialogTitle>
+              <UiV2.DialogDescription>Choose a title for this chat.</UiV2.DialogDescription>
+            </UiV2.DialogHeader>
+            <UiV2.Input
+              aria-label="Chat title"
+              autoFocus
+              value={renameValue}
+              onChange={(event) => {
+                setRenameValue(event.currentTarget.value);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter')
+                  event.currentTarget
+                    .closest('[role="dialog"]')
+                    ?.querySelector<HTMLButtonElement>('[data-save-chat-name]')
+                    ?.click();
+              }}
+            />
+            <div className="v2-library-dialog-actions">
+              <UiV2.Button
+                variant="secondary"
+                onClick={() => {
+                  setRenameSession(null);
+                }}
+              >
+                Cancel
+              </UiV2.Button>
+              <UiV2.Button
+                data-save-chat-name
+                disabled={!renameValue.trim()}
+                onClick={() => {
+                  if (!renameSession) return;
+                  const id = renameSession;
+                  const title = renameValue.trim();
+                  void client.sessions.rename(id, title).then(async () => {
+                    useUI.getState().renameTab(id, title);
+                    await cache.invalidateQueries({ queryKey: keys.sessions });
+                    setRenameSession(null);
+                  });
+                }}
+              >
+                Save name
+              </UiV2.Button>
+            </div>
+          </UiV2.DialogContent>
+        </UiV2.Dialog>
+        <ConfirmDialog
+          open={deleteSession !== null}
+          onOpenChange={(open) => {
+            if (!open) setDeleteSession(null);
+          }}
+          title="Delete chat?"
+          description="This permanently removes the chat from Ferry."
+          confirmLabel="Delete chat"
+          destructive
+          onConfirm={() => {
+            if (!deleteSession) return;
+            const id = deleteSession;
+            setDeleteSession(null);
+            void client.sessions.remove(id).then(async () => {
+              await cache.invalidateQueries({ queryKey: keys.sessions });
+              if (pathname === `/s/${id}`) await navigate({ to: '/' });
+            });
+          }}
+        />
         <UiV2.Dialog open={aboutOpen} onOpenChange={setAboutOpen}>
           <UiV2.DialogContent className="v2-about-dialog">
             <DialogClose aria-label="Close About dialog" autoFocus className="v2-about-close">
@@ -433,7 +511,7 @@ function NavButton({
     </button>
   );
   return collapsed ? (
-    <Tooltip>
+    <Tooltip delayDuration={0}>
       <TooltipTrigger asChild>{button}</TooltipTrigger>
       <TooltipContent side="right">{label}</TooltipContent>
     </Tooltip>

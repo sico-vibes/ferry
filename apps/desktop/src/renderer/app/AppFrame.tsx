@@ -48,19 +48,6 @@ function WebPreviewControls() {
     return null;
   return (
     <>
-      <div className="web-preview-titlebar" aria-label="Simulated Windows title bar">
-        <div className="web-preview-window-controls" aria-label="Window controls">
-          <button aria-label="Minimize" type="button">
-            <span className="web-preview-control-glyph web-preview-minimize-glyph" />
-          </button>
-          <button aria-label="Maximize" type="button">
-            <span className="web-preview-control-glyph web-preview-maximize-glyph" />
-          </button>
-          <button aria-label="Close" type="button">
-            <span className="web-preview-control-glyph web-preview-close-glyph">&#x2715;</span>
-          </button>
-        </div>
-      </div>
       <button
         aria-label="Preview tools"
         className="web-preview-toggle"
@@ -450,7 +437,24 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     };
   }, [toastItems, dismissToast]);
 
-  if (onboardingPage) return <main className="ferry-ui v2-onboarding-shell">{children}</main>;
+  if (onboardingPage)
+    return (
+      <div
+        className={`ferry-ui v2-app-shell ${browserPreview ? 'web-preview-shell' : ''}`}
+        data-preview-size={
+          browserPreview
+            ? (new URLSearchParams(location.search).get('size') ??
+              (window.innerWidth < 1280 ? '1024x680' : '1440x900'))
+            : undefined
+        }
+        style={{ '--titlebar-overlay-right': `${String(titlebarReserve)}px` } as CSSProperties}
+      >
+        <V2ChatHeader onboardingMode>
+          <WebPreviewControls />
+        </V2ChatHeader>
+        <main className="ferry-ui v2-onboarding-shell">{children}</main>
+      </div>
+    );
 
   return (
     <div
@@ -464,15 +468,14 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       }
       style={{ '--titlebar-overlay-right': `${String(titlebarReserve)}px` } as CSSProperties}
     >
-      <div className="title-strip" aria-hidden="false">
+      <V2ChatHeader>
         <WebPreviewControls />
-      </div>
+      </V2ChatHeader>
       <div
         className={`v2-app-grid ${!rightCollapsed && !reviewPage && pathname.startsWith('/s/') ? 'drawer-open' : ''}`}
       >
         <V2Sidebar onNewChat={() => void createChat()} />
         <main className="v2-main-column">
-          {pathname.startsWith('/s/') && !reviewPage && <V2ChatHeader />}
           {(!networkOnline || simulatedOffline) && (
             <div className="offline-warning" role="status">
               Offline - local work is saved. Provider requests will retry when the network returns.

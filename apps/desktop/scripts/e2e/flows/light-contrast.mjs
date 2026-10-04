@@ -36,6 +36,7 @@ async function readV2Surfaces(page) {
 export async function run(page, { url, expect }) {
   await page.goto(new URL('/', url).href);
   await page.getByRole('button', { name: 'User menu', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Theme', exact: true }).hover();
   await page.getByRole('menuitemradio', { name: 'Dark', exact: true }).click();
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
 
@@ -51,6 +52,7 @@ export async function run(page, { url, expect }) {
 
   await page.goto(new URL('/', url).href);
   await page.getByRole('button', { name: 'User menu', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Theme', exact: true }).hover();
   await page.getByRole('menuitemradio', { name: 'Light', exact: true }).click();
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
 

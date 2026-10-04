@@ -6,6 +6,7 @@ import { FerryMark, UiV2 } from '@ferry/ui';
 import type { ProviderId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { keys } from '../data/queries';
+import { TextPromptDialog } from './TextPromptDialog';
 
 const recommended = [
   'gemini',
@@ -72,12 +73,6 @@ const providerDetails: Record<string, { limit: string; tag: string }> = {
   together: { limit: 'Dynamic limits; no fixed free pool', tag: 'Credits' },
   stepfun: { limit: 'No free API tier', tag: 'Credits' },
 };
-function openFolder() {
-  return window.ferryHost
-    ? window.ferryHost.openFolder()
-    : window.prompt('Enter a folder path to add');
-}
-
 export function OnboardingCanvas() {
   const client = useFerryClient();
   const cache = useQueryClient();
@@ -97,6 +92,7 @@ export function OnboardingCanvas() {
   });
   const [keysByProvider, setKeysByProvider] = useState<Record<string, string>>({});
   const [cloudflareAccountId, setCloudflareAccountId] = useState('');
+  const [folderPromptOpen, setFolderPromptOpen] = useState(false);
   const [tested, setTested] = useState<Record<string, string>>({});
   useEffect(() => {
     localStorage.setItem('ferry.onboardingStep', String(step));
@@ -174,7 +170,11 @@ export function OnboardingCanvas() {
     </div>
   );
   const chooseFolder = async () => {
-    const path = await openFolder();
+    if (!window.ferryHost) {
+      setFolderPromptOpen(true);
+      return;
+    }
+    const path = await window.ferryHost.openFolder();
     if (path) {
       await client.workspaces.open(path);
       await cache.invalidateQueries({ queryKey: keys.workspaces });
@@ -373,6 +373,20 @@ export function OnboardingCanvas() {
           Your provider keys stay in the local Ferry client.
         </footer>
       </div>
+      <TextPromptDialog
+        open={folderPromptOpen}
+        onOpenChange={setFolderPromptOpen}
+        title="Open a project folder"
+        description="Enter the full path to the folder you want Ferry to use."
+        label="Folder path"
+        placeholder="Example: C:/Projects/my-app"
+        onSubmit={(path) => {
+          setFolderPromptOpen(false);
+          void client.workspaces
+            .open(path)
+            .then(() => cache.invalidateQueries({ queryKey: keys.workspaces }));
+        }}
+      />
     </section>
   );
 }

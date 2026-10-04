@@ -1,4 +1,4 @@
-import { useId, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from 'react';
+import { type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import {
   siAnthropic,
@@ -9,7 +9,7 @@ import {
   siOpenrouter,
   siSupabase,
 } from 'simple-icons';
-import { Plus, Sparkles } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { cn } from '../../lib/cn';
 
 const focus =
@@ -179,7 +179,6 @@ export function NewChatButton({
   type = 'button',
   ...props
 }: NewChatButtonProps) {
-  const gradientId = `ferry-sparkle-${useId().replaceAll(':', '')}`;
   return (
     <button
       data-audit-spacing="intentional"
@@ -189,15 +188,6 @@ export function NewChatButton({
     >
       <Plus aria-hidden="true" size={16} strokeWidth={1.75} />
       <span>{children}</span>
-      <svg aria-hidden="true" className="size-[14px]" viewBox="0 0 24 24">
-        <defs>
-          <linearGradient id={gradientId} x1="0" x2="1">
-            <stop stopColor="var(--blue-500)" />
-            <stop offset="1" stopColor="var(--warn)" />
-          </linearGradient>
-        </defs>
-        <Sparkles fill={`url(#${gradientId})`} stroke={`url(#${gradientId})`} size={14} />
-      </svg>
     </button>
   );
 }

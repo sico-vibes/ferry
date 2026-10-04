@@ -200,21 +200,7 @@ function isTrustedSender(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEv
   );
 }
 async function openExternalSafely(url: string): Promise<void> {
-  if (!isExternalHttp(url)) return;
-  if (!isAllowlistedExternal(url)) {
-    const options: Electron.MessageBoxOptions = {
-      type: 'question',
-      buttons: ['Open link', 'Cancel'],
-      defaultId: 1,
-      cancelId: 1,
-      message: 'Open this link in your browser?',
-      detail: new URL(url).hostname,
-    };
-    const choice = mainWindow
-      ? await dialog.showMessageBox(mainWindow, options)
-      : await dialog.showMessageBox(options);
-    if (choice.response !== 0) return;
-  }
+  if (!isExternalHttp(url) || !isAllowlistedExternal(url)) return;
   await shell.openExternal(url);
 }
 
@@ -375,7 +361,7 @@ async function createWindow(): Promise<void> {
     minHeight: 680,
     frame: false,
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: WINDOW_BACKGROUND, symbolColor: WINDOW_SYMBOL, height: 36 },
+    titleBarOverlay: { color: WINDOW_BACKGROUND, symbolColor: WINDOW_SYMBOL, height: 44 },
     backgroundColor: WINDOW_BACKGROUND,
     icon: app.isPackaged ? join(process.resourcesPath, 'app-icon.ico') : DEV_WINDOW_ICON,
     show: false,
@@ -588,7 +574,7 @@ ipcMain.on('ferry:theme', (event, rawTheme: unknown) => {
   mainWindow.setTitleBarOverlay({
     color: theme === 'light' ? WINDOW_LIGHT_BACKGROUND : WINDOW_BACKGROUND,
     symbolColor: theme === 'light' ? WINDOW_LIGHT_SYMBOL : WINDOW_SYMBOL,
-    height: 36,
+    height: 44,
   });
 });
 

@@ -33,6 +33,7 @@ import { Eye, EyeOff, Info, KeyRound, PlugZap } from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
 import { ProviderStatusBadge } from './ProviderStatusBadge';
 import { OAuthProviderRows } from './OAuthProviderRows';
+import { ConfirmDialog } from './ConfirmDialog';
 import { saveKeybindings, useKeybindings } from '../state/keybindings';
 import type { SettingsSection } from '../state/ui.types';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
@@ -241,6 +242,10 @@ export function SettingsCanvas() {
   const section = useUI((state) => state.settingsSection);
   const [confirm, setConfirm] = useState('');
   const [confirmAction, setConfirmAction] = useState<(() => void | Promise<void>) | null>(null);
+  const [confirmDescription, setConfirmDescription] = useState(
+    'Review this change before confirming.',
+  );
+  const [confirmDestructive, setConfirmDestructive] = useState(false);
   const [keyProvider, setKeyProvider] = useState<(typeof providers)[number] | null>(null);
   const [addMcp, setAddMcp] = useState(false);
   const [mcpName, setMcpName] = useState('');
@@ -248,6 +253,7 @@ export function SettingsCanvas() {
   const [gatewayName, setGatewayName] = useState('');
   const [gatewayProfile, setGatewayProfile] = useState('auto-free');
   const [gatewaySecret, setGatewaySecret] = useState('');
+  const [revokeKeyId, setRevokeKeyId] = useState<string | null>(null);
   const [gatewayKeyDrafts, setGatewayKeyDrafts] = useState<
     Record<
       string,
@@ -360,19 +366,27 @@ export function SettingsCanvas() {
   ) => {
     if (!gateway) return;
     const enablingLan = patch.allowLan === true && !gateway.allowLan;
-    if (
-      enablingLan &&
-      !window.confirm(
-        'Allow other devices on your local network to connect to Ferry? Only continue on a trusted network.',
-      )
-    )
+    if (enablingLan) {
+      setConfirm('Allow local network access?');
+      setConfirmDescription('Other devices on this network will be able to connect to Ferry.');
+      setConfirmDestructive(false);
+      setConfirmAction(() => async () => {
+        await client.gateway.setSettings({
+          enabled: gateway.enabled,
+          port: gateway.port,
+          allowLan: gateway.allowLan,
+          ...patch,
+          confirmLan: true,
+        });
+        await cache.invalidateQueries({ queryKey: ['gateway-settings'] });
+      });
       return;
+    }
     await client.gateway.setSettings({
       enabled: gateway.enabled,
       port: gateway.port,
       allowLan: gateway.allowLan,
       ...patch,
-      ...(enablingLan ? { confirmLan: true } : {}),
     });
     await cache.invalidateQueries({ queryKey: ['gateway-settings'] });
   };
@@ -691,6 +705,8 @@ export function SettingsCanvas() {
                     disabled={profileDraft.builtin}
                     onClick={() => {
                       setConfirm(`Delete ${profileDraft.name}?`);
+                      setConfirmDescription('This permanently removes the profile.');
+                      setConfirmDestructive(true);
                       setConfirmAction(
                         () => () =>
                           void client.profiles.remove(profileDraft.id).then(async () => {
@@ -735,9 +751,10 @@ export function SettingsCanvas() {
                   onValueChange={(value) => {
                     mutateProfile('icon', value);
                   }}
-                  options={['lightbulb', 'sparkles', 'zap', 'book-open', 'code', 'brain'].map(
-                    (value) => ({ value, label: value }),
-                  )}
+                  options={['lightbulb', 'zap', 'book-open', 'code', 'brain'].map((value) => ({
+                    value,
+                    label: value,
+                  }))}
                 />
                 <SettingsInput
                   label="Description"
@@ -1529,11 +1546,9 @@ export function SettingsCanvas() {
                 {!key.revokedAt && (
                   <UiV2.Button
                     variant="outline"
-                    onClick={() =>
-                      void client.gateway
-                        .revokeKey(key.id)
-                        .then(() => cache.invalidateQueries({ queryKey: ['gateway-keys'] }))
-                    }
+                    onClick={() => {
+                      setRevokeKeyId(key.id);
+                    }}
                   >
                     Revoke
                   </UiV2.Button>
@@ -2230,6 +2245,10 @@ export function SettingsCanvas() {
                     variant="ghost"
                     onClick={() => {
                       setConfirm('Reset layout?');
+                      setConfirmDescription(
+                        'This restores the sidebar and panel sizes to their defaults.',
+                      );
+                      setConfirmDestructive(false);
                       setConfirmAction(() => () => {
                         useUI.getState().resetLayout();
                       });
@@ -2267,7 +2286,7 @@ export function SettingsCanvas() {
           if (!open) setKeyProvider(null);
         }}
       />
-      <Dialog
+      <ConfirmDialog
         open={Boolean(confirm)}
         onOpenChange={(open) => {
           if (!open) {
@@ -2276,30 +2295,34 @@ export function SettingsCanvas() {
           }
         }}
         title={confirm}
-        description="Review this change before confirming."
-      >
-        <div className="button-row dialog-actions">
-          <UiV2.Button
-            onClick={() => {
-              setConfirm('');
-              setConfirmAction(null);
-            }}
-          >
-            Cancel
-          </UiV2.Button>
-          <UiV2.Button
-            variant="default"
-            onClick={() => {
-              setConfirm('');
-              const action = confirmAction;
-              setConfirmAction(null);
-              if (action) void action();
-            }}
-          >
-            Confirm
-          </UiV2.Button>
-        </div>
-      </Dialog>
+        description={confirmDescription}
+        confirmLabel="Confirm"
+        destructive={confirmDestructive}
+        onConfirm={() => {
+          setConfirm('');
+          const action = confirmAction;
+          setConfirmAction(null);
+          if (action) void action();
+        }}
+      />
+      <ConfirmDialog
+        open={revokeKeyId !== null}
+        onOpenChange={(open) => {
+          if (!open) setRevokeKeyId(null);
+        }}
+        title="Revoke gateway key?"
+        description="Clients using this key will no longer be able to connect."
+        confirmLabel="Revoke key"
+        destructive
+        onConfirm={() => {
+          if (!revokeKeyId) return;
+          const id = revokeKeyId;
+          setRevokeKeyId(null);
+          void client.gateway
+            .revokeKey(id)
+            .then(() => cache.invalidateQueries({ queryKey: ['gateway-keys'] }));
+        }}
+      />
       <Dialog
         open={addMcp}
         onOpenChange={setAddMcp}

@@ -18,6 +18,7 @@ vi.mock('../data/client', () => ({
 vi.mock('../data/queries', () => ({
   keys: { sessions: ['sessions'] },
   useSessions: () => ({ data: [{ id: 'session_1', title: 'Fix flaky tests' }] }),
+  useWorkspaces: () => ({ data: [] }),
 }));
 vi.mock('../state/toasts', () => ({ useToasts: () => ({ push: vi.fn() }) }));
 vi.mock('../state/ui', () => {
