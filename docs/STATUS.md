@@ -1,6 +1,6 @@
 # Ferry status
 
-Last updated: 2026-10-03. Ferry is a Windows-first desktop + CLI coding agent: local core over JSON-RPC,
+Last updated: 2026-10-04. Ferry is a Windows-first desktop + CLI coding agent: local core over JSON-RPC,
 SQLite storage, free-first provider routing with quota tracking and handoffs, workspace tools with
 checkpoints, measured token optimizers, delegation to Codex / OpenCode / Claude / ACP agents, a local
 OpenAI/Anthropic-compatible Gateway, and subscription OAuth (opt-in). Public beta channel on GitHub
@@ -10,19 +10,15 @@ Releases (`v0.9.0-beta.N`, auto-published on every merge to `main`; installed ap
 
 1. **Original master plan: complete** (integrated on `main` 2026-09-30; milestones below).
 2. **v0.10 upgrade waves: first batch on `main`** (`41eb69c`, beta `v0.9.0-beta.10`): P0/P2, P1, U1, U5, U2. P3/P6 parked (see below).
-3. **UI remake v2: complete on `main`** (2026-10-02, `a649d0a`): UI-0 foundation, UI-1 shell/Home/Session/drawer (user-approved at checkpoint C-UI, with seamless tone-based separation), UI-2 Library/Models/Settings/Onboarding/Review/palette/states, UI-3 legacy cleanup + polish. Gates: check 63/63, e2e 5/5 phases, 20/20 web flows, screenshots `design/screenshots/v2/` (both themes, 1440 and 1024). Backend v0.10 work resumes from the "Not started" rows below.
-4. **v0.11 (`docs/plans/v0.11-fixes-and-gateway.md`) in progress.** On `main` (`425cf1d`, beta `v0.9.0-beta.33`+): Wave F real-use fixes (F1 discovery-storm backoff, F2 seamless chat activity chain, F3 shell polish) and Wave N lanes N3 (model mapping + provider overrides), N4 (priority/weight + key affinity), N5 (cached-token pricing + gateway key budgets). **Next:** verify + integrate the WIP branches below, then the rapid test pass, then beta.
+3. **UI remake v2: complete on `main`** (2026-10-02, `a649d0a`): UI-0 foundation, UI-1 shell/Home/Session/drawer (user-approved at checkpoint C-UI, with seamless tone-based separation), UI-2 Library/Models/Settings/Onboarding/Review/palette/states, UI-3 legacy cleanup + polish. Gates: check 63/63, e2e 5/5 phases, 20/20 web flows, screenshots `design/screenshots/v2/` (both themes, 1440 and 1024). Remaining v0.10 work is listed below.
+4. **v0.11 (`docs/plans/v0.11-fixes-and-gateway.md`): complete.** Wave F, N1–N5, CLI parity with v0.11 settings, and shared free-model classification are integrated. `v0.9.0-beta.36` (`24b4851`) is the first green release since N3–N5; N1/N2 integration and the final main-green fixes are included. CLI parity (`e8c60ce`) and free consistency (`826d3a8`) landed after beta.36 on `feat/cli-parity`.
 
-## Resume point (pushed WIP branches, not yet verified)
+## Current state
 
-| Branch | Content | Next step |
+| Area | State | Detail |
 |---|---|---|
-| `feat/n1` | N1 multiple keys per provider, per-key health/rotation, auto-disable (brief: `docs/plans/briefs/N-common.md` + `N1-body.md`) | merge into an integration branch from `main`, run check + e2e, fix rounds via Luna |
-| `feat/n2` | N2 gateway canonical conversion layer, `/v1/responses` (Codex), native Gemini inbound (brief: `N2-body.md`) | same; resolve overlap with N5 gateway changes |
-| `fix/acp-final-race` | Linux-only intermittent CI failure in `packages/delegate/test/delegate.test.ts` (ACP fake agent final message lost; failed on main at c9c8905 and d9e6002) (brief: `ACP-race.md`) | verify on Ubuntu CI, then merge |
-| `wave/p3-caching` | parked P3/P6 caching (see v0.10 table) | rebase onto main, re-check against the v2 model picker |
-
-Both `feat/n1` and `feat/n2` were branched from the N3-N5 integration before its last two fix rounds; merge them onto current `main`. Lane process and rules: Claude only briefs/verifies/merges; Luna (Codex `gpt-6-luna`, effort high) implements in a worktree; gates run outside the sandbox: `pnpm run check:tasks`, `node scripts/check-text.mjs`, `pnpm exec prettier --check .`, `pnpm --filter @ferry/desktop test:e2e`, plus `shots:v2` for UI work.
+| v0.11 | Complete | Wave F and N1–N5 integrated; CLI parity and free-model consistency are on `main`. No v0.11 work remains. |
+| WIP branches | None, except parked P3/P6 | `wave/p3-caching` is parked. Its migration must be renumbered when resumed: `0004` is now `provider_key_entries`, so P3/P6 must use `0005`. |
 
 ## Milestones (original plan)
 
@@ -41,7 +37,7 @@ Quality gates on `main`: `pnpm check` (63 tasks) + desktop e2e in 5 isolated pha
 real domains: core flows, crash resume, paid guardrails; Electron core smoke); GitHub CI on Windows +
 Ubuntu.
 
-## v0.10 waves (docs/plans/v0.10-upgrade.md)
+## Remaining v0.10 work (docs/plans/v0.10-upgrade.md)
 
 | Item | State | Branch / worktree |
 |---|---|---|
@@ -51,7 +47,7 @@ Ubuntu.
 | U5 thinking + tool-call timeline (+ paged "show full output", `sessions.readOutput`) | ✅ on main | `wave/u5-timeline` |
 | P1 pagination / Show more / virtualization (+ paid billing metadata for paged models) | ✅ on main | `wave/perf-b` |
 | U2 command palette + keybindings | ✅ on main | `wave/u2-palette` |
-| P3 caching + P6 storage/memory (migration 0004) | ⏸ parked (WIP committed + pushed on `wave/p3-caching`): check 63/63 green, but real-domains core flows fails (model picker option never "stable"); bisected to its `renderer/data/events.tsx` handlers (not single-handler; removing the settings/status/updated changes together passes). Picker changes reverted (rebuilt in UI-1). Resume after UI-1 against the new picker | `wave/p3-caching` (pushed) |
+| P3 caching + P6 storage/memory | ⏸ parked: check 63/63 green, but real-domains core flows failed (model picker option never "stable"); bisected to its `renderer/data/events.tsx` handlers. Picker changes were reverted and rebuilt in UI-1. On resume, rebase against the current picker and renumber its migration to `0005` (`0004` is `provider_key_entries`) | `wave/p3-caching` |
 | P4 lighter startup/bundle, P5 render hygiene, P7 smaller install | Not started | — |
 | U3 speed/honesty pass, U4 delegate safety (min versions, CODEX_HOME symlink) | Not started | — |
 | U6 subscription-CLI models + traits picker, U7 plan cards + plan mode | Not started | — |
@@ -59,18 +55,16 @@ Ubuntu.
 | Wave 4 (U12 rich CLI transports, U13 terminals, U14 sidebar shelves, U15 reconnect contract) | Not started | — |
 
 Integration rule: merge green lane branches on an integration branch in `C:\dev\ferry`, run all gates,
-fast-forward `main` only when green; migrations are numbered uniquely (0003 agent events, 0004 hot-query
-indexes) and must ship in all build targets.
+fast-forward `main` only when green; migrations are numbered uniquely (0003 agent events, 0004 provider key
+entries) and must ship in all build targets.
 
 ## Known gaps
 
-- Legacy palette tokens still used by a few components (UI-3 cleanup was partial).
-- Ubuntu CI: intermittent ACP delegate final-message race (fix on `fix/acp-final-race`).
-
-- 2 s packaged start-up is a target, not met on cold CI runners (advisory warning; fails above 10 s).
+- Legacy palette tokens remain in a few components after the partial UI-3 cleanup.
+- Packaged time-to-interactive remains above the 2 s target on cold CI runners (advisory warning; fails above 10 s).
 - grep and checkpoint snapshots on a 50k-file repo are slow on this laptop with Defender real-time
   scanning (see `docs/PERFORMANCE.md`).
 - Gemini is not signed in on the dev machine, so ACP Gemini delegation is untested live.
-- Codex Responses and native Gemini Gateway routes are implemented on the N integration branch; verify the complete gate and client e2e before calling the wave complete.
-- Provider availability, free limits and model pricing change outside Ferry's control.
+- P3/P6 caching and storage work remains parked on `wave/p3-caching`.
+- Catalog prices, provider availability, and free-tier limits change outside Ferry's control. Free-tier coverage needs ongoing upkeep as providers change terms and model access.
 - Code signing is deferred (the unsigned beta is a documented, accepted risk in `docs/SECURITY.md`).
