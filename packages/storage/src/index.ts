@@ -1,6 +1,8 @@
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveFerryRuntimePaths } from '@ferry/shared/electron-paths';
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type {
@@ -18,14 +20,13 @@ import * as schema from './schema.js';
 import { redactKnownSecretText } from '@ferry/shared';
 
 export { schema };
-const migrationsDirectory = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
-const storageMigrations = [
+const storageMigrationFiles = [
   '0001_initial.sql',
   '0002_interrupted_sessions.sql',
   '0003_agent_events.sql',
   '0004_provider_key_entries.sql',
-].map((filename) => join(migrationsDirectory, filename));
-export const STORAGE_SCHEMA_VERSION = storageMigrations.length;
+];
+export const STORAGE_SCHEMA_VERSION = storageMigrationFiles.length;
 export interface DatabaseConnection {
   client: Database.Database;
   orm: BetterSQLite3Database<typeof schema>;
@@ -34,6 +35,16 @@ export interface DatabaseConnection {
 
 export async function openDatabase(path: string): Promise<DatabaseConnection> {
   if (path !== ':memory:') await mkdir(dirname(path), { recursive: true });
+  const runtimePaths = resolveFerryRuntimePaths({
+    entryFilePath: fileURLToPath(import.meta.url),
+    execPath: process.execPath,
+    env: process.env,
+    resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
+    exists: existsSync,
+  });
+  const storageMigrations = storageMigrationFiles.map((filename) =>
+    join(runtimePaths.migrationsDirectory, filename),
+  );
   const client = new Database(path);
   try {
     client.pragma('journal_mode = WAL');

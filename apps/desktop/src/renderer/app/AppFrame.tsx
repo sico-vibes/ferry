@@ -375,14 +375,17 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           )}
           {updateState?.status === 'downloaded' && (
             <div className="update-banner" role="status">
-              <span>Update available{updateState.version ? ` · ${updateState.version}` : ''}</span>
+              <span>Update ready{updateState.version ? ` · ${updateState.version}` : ''}</span>
+              <a className="update-notes-link" href="https://github.com/sico-vibes/ferry/releases">
+                Release notes
+              </a>
               <button
                 type="button"
                 onClick={() => {
                   void window.ferryHost?.installUpdate();
                 }}
               >
-                Restart to update
+                Restart to apply
               </button>
             </div>
           )}

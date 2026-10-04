@@ -12,7 +12,7 @@ export interface UpdateSource {
   autoDownload: boolean;
   checkForUpdates(): Promise<unknown>;
   downloadUpdate(): Promise<unknown>;
-  quitAndInstall(): void;
+  quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
   on(event: string, listener: (...args: unknown[]) => void): this;
 }
 
@@ -90,8 +90,10 @@ export class UpdateController {
     }
   }
 
-  install(): void {
-    if (this.snapshot.status === 'downloaded') this.source.quitAndInstall();
+  install(): boolean {
+    if (this.snapshot.status !== 'downloaded') return false;
+    this.source.quitAndInstall(true, true);
+    return true;
   }
 
   private getVersion(info: unknown): string | null {

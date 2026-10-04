@@ -609,12 +609,14 @@ body {
   color: var(--text-2);
   font-size: 11px;
 }
-.update-banner button {
+.update-banner button,
+.update-banner .update-notes-link {
   border: 0;
   background: transparent;
   color: var(--text-link);
   cursor: pointer;
   font: inherit;
+  text-decoration: none;
 }
 @media (prefers-reduced-motion: reduce) {
   .skeleton-row {

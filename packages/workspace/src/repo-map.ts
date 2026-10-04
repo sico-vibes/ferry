@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { resolveFerryRuntimePaths } from '@ferry/shared/electron-paths';
 import simpleGit from 'simple-git';
 import { glob } from 'tinyglobby';
 import { z } from 'zod';
@@ -203,10 +205,17 @@ export async function buildRepoMap(jail: WorkspaceJail, raw: unknown = {}): Prom
 
 async function loadRuntime(): Promise<{ runtime: TreeSitterModule; wasmDir: string }> {
   runtimePromise ??= (async () => {
-    const require = createRequire(import.meta.url);
-    const runtimePath = require.resolve('@vscode/tree-sitter-wasm');
+    const runtimePaths = resolveFerryRuntimePaths({
+      entryFilePath: fileURLToPath(import.meta.url),
+      execPath: process.execPath,
+      env: process.env,
+      resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
+      exists: existsSync,
+    });
+    const runtimeRequire = createRequire(runtimePaths.nativeModuleAnchor);
+    const runtimePath = runtimeRequire.resolve('@vscode/tree-sitter-wasm');
     const wasmDir = path.dirname(runtimePath);
-    const runtime = require('@vscode/tree-sitter-wasm') as TreeSitterModule;
+    const runtime = runtimeRequire('@vscode/tree-sitter-wasm') as TreeSitterModule;
     await runtime.Parser.init({
       locateFile: (file, _folder) => path.join(wasmDir, path.basename(file)),
     });

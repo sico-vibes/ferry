@@ -1,8 +1,8 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium, expect } from '@playwright/test';
 
@@ -42,21 +42,76 @@ function runCliShim(args, options = {}) {
     windowsVerbatimArguments: true,
   });
 }
+async function treeMetrics(directory) {
+  let count = 0;
+  let bytes = 0;
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return { count, bytes };
+  }
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      const nested = await treeMetrics(path);
+      count += nested.count;
+      bytes += nested.bytes;
+    } else {
+      count += 1;
+      bytes += (await stat(path)).size;
+    }
+  }
+  return { count, bytes };
+}
+function assertCliSuccess(label, result) {
+  if (!result.error && result.status === 0) return;
+  const details = [
+    result.error?.message,
+    result.stderr,
+    result.stdout,
+    `exit status: ${String(result.status)}`,
+  ].filter((value) => typeof value === 'string' && value.length > 0);
+  throw new Error(`${label} failed:\n${details.join('\n')}`);
+}
+function parseCliJson(label, result) {
+  assertCliSuccess(label, result);
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    throw new Error(`${label} returned invalid JSON: ${result.stdout}`);
+  }
+}
+const installationDirectory = dirname(executable);
+const resourcesDirectory = join(installationDirectory, 'resources');
+const cliRuntimeDirectory = join(resourcesDirectory, 'cli');
+const cliRuntimeMetrics = await treeMetrics(cliRuntimeDirectory);
+console.log(`Packaged resources/cli files: ${String(cliRuntimeMetrics.count)}`);
+if (cliRuntimeMetrics.count >= 50)
+  throw new Error(
+    `Packaged resources/cli has ${String(cliRuntimeMetrics.count)} files; budget is under 50.`,
+  );
+const installedMetrics = await treeMetrics(installationDirectory);
+const unpackedMetrics = await treeMetrics(join(resourcesDirectory, 'app.asar.unpacked'));
+const localeMetrics = await treeMetrics(join(installationDirectory, 'locales'));
+const asarStats = await stat(join(resourcesDirectory, 'app.asar')).catch(() => ({ size: 0 }));
+console.log(
+  `Packaged installed files: ${String(installedMetrics.count)}; app.asar: ${String(asarStats.size)} bytes; app.asar.unpacked: ${String(unpackedMetrics.count)} files / ${String(unpackedMetrics.bytes)} bytes; locales: ${String(localeMetrics.count)} files / ${String(localeMetrics.bytes)} bytes`,
+);
 const cliResult = runCliShim(['--help'], { encoding: 'utf8', timeout: 15_000 });
-if (cliResult.error || cliResult.status !== 0 || !cliResult.stdout?.includes('ferry'))
-  throw new Error(
-    `Packaged CLI smoke failed: ${cliResult.error?.message ?? cliResult.stderr ?? cliResult.status}`,
-  );
+assertCliSuccess('Packaged CLI smoke', cliResult);
+if (!cliResult.stdout?.includes('ferry'))
+  throw new Error(`Packaged CLI help output did not mention Ferry:\n${cliResult.stdout}`);
 console.log('Packaged CLI shim works');
+const versionResult = runCliShim(['--version'], { encoding: 'utf8', timeout: 15_000 });
+assertCliSuccess('Packaged CLI version', versionResult);
+if (!/\d+\.\d+\.\d+/.test(versionResult.stdout))
+  throw new Error(`Packaged CLI version output was unexpected: ${versionResult.stdout}`);
+console.log('Packaged CLI version works');
 const gatewayResult = runCliShim(['gateway', '--help'], { encoding: 'utf8', timeout: 15_000 });
-if (
-  gatewayResult.error ||
-  gatewayResult.status !== 0 ||
-  !gatewayResult.stdout?.includes('gateway start|stop|status')
-)
-  throw new Error(
-    `Packaged Gateway CLI smoke failed: ${gatewayResult.error?.message ?? gatewayResult.stderr ?? gatewayResult.status}`,
-  );
+assertCliSuccess('Packaged Gateway CLI smoke', gatewayResult);
+if (!gatewayResult.stdout?.includes('gateway start|stop|status'))
+  throw new Error(`Packaged Gateway CLI help output was unexpected:\n${gatewayResult.stdout}`);
 console.log('Packaged Gateway CLI works');
 const userDataDirectory =
   process.env.FERRY_SMOKE_DATA_DIR ?? (await mkdtemp(join(tmpdir(), 'ferry-packaged-smoke-')));
@@ -69,9 +124,7 @@ const cliStatus = runCliShim(['status', '--json', '--data-dir', cliDataDirectory
 });
 if (cliStatus.error || cliStatus.status !== 0) {
   await rm(userDataDirectory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
-  throw new Error(
-    `Packaged CLI default-engine smoke failed: ${cliStatus.error?.message ?? cliStatus.stderr ?? cliStatus.status}`,
-  );
+  assertCliSuccess('Packaged CLI default-engine smoke', cliStatus);
 }
 let cliStatusValue;
 try {
@@ -85,6 +138,53 @@ if (cliStatusValue.engine !== 'local') {
   throw new Error(`Packaged CLI default engine is not local: ${JSON.stringify(cliStatusValue)}`);
 }
 console.log('Packaged CLI defaults to the local engine');
+const providersResult = runCliShim(
+  ['providers', 'list', '--json', '--data-dir', cliDataDirectory],
+  { encoding: 'utf8', timeout: 30_000 },
+);
+if (!Array.isArray(parseCliJson('Packaged providers list', providersResult)))
+  throw new Error('Packaged providers list did not return an array');
+console.log('Packaged providers list works');
+const doctorResult = runCliShim(['doctor', '--json', '--data-dir', cliDataDirectory], {
+  encoding: 'utf8',
+  timeout: 30_000,
+});
+const doctorRows = parseCliJson('Packaged doctor', doctorResult);
+for (const required of ['SQLite', 'keyring', 'pty', 'ripgrep'])
+  if (!doctorRows.some((row) => row.name === required))
+    throw new Error(`Packaged doctor did not report ${required}`);
+console.log('Packaged doctor loads native modules');
+const runResult = runCliShim(
+  ['run', 'Packaged CLI streaming smoke', '--engine', 'mock', '--json', '--max-steps', '2'],
+  { encoding: 'utf8', timeout: 60_000 },
+);
+assertCliSuccess('Packaged CLI streaming run', runResult);
+if (!runResult.stdout.includes('session.delta') && !runResult.stdout.includes('session.part'))
+  throw new Error(`Packaged CLI run emitted no streaming events: ${runResult.stdout}`);
+console.log('Packaged CLI run streams events');
+const gatewayStartResult = runCliShim(
+  ['gateway', 'start', '--json', '--data-dir', cliDataDirectory],
+  { encoding: 'utf8', timeout: 45_000 },
+);
+const gatewayStart = parseCliJson('Packaged Gateway start', gatewayStartResult);
+if (typeof gatewayStart.url !== 'string')
+  throw new Error(`Packaged Gateway start did not return a URL: ${gatewayStartResult.stdout}`);
+try {
+  const gatewayStatusResult = runCliShim(
+    ['gateway', 'status', '--json', '--data-dir', cliDataDirectory],
+    { encoding: 'utf8', timeout: 30_000 },
+  );
+  const gatewayStatus = parseCliJson('Packaged Gateway status', gatewayStatusResult);
+  if (gatewayStatus.running !== true)
+    throw new Error(`Packaged Gateway did not report running: ${gatewayStatusResult.stdout}`);
+  console.log('Packaged Gateway starts and reports status');
+} finally {
+  const gatewayStopResult = runCliShim(
+    ['gateway', 'stop', '--json', '--data-dir', cliDataDirectory],
+    { encoding: 'utf8', timeout: 30_000 },
+  );
+  assertCliSuccess('Packaged Gateway stop cleanup', gatewayStopResult);
+}
 const coreLogPath = join(userDataDirectory, 'engine', 'logs', 'ferry.log');
 const smokeStartedAt = new Date();
 const portServer = createServer();
@@ -110,7 +210,12 @@ const child = spawn(
   ],
   {
     cwd: packageRoot,
-    env: { ...process.env, FERRY_INSTALL_SMOKE: 'true' },
+    env: {
+      ...process.env,
+      FERRY_INSTALL_SMOKE: 'true',
+      FERRY_E2E_USER_DATA_DIR: userDataDirectory,
+      FERRY_DATA_DIR: join(userDataDirectory, 'engine'),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   },
@@ -232,6 +337,41 @@ async function waitForRendererLoad() {
             )
               throw new Error(`Packaged real-domain hello failed: ${JSON.stringify(domains)}`);
             console.log(`Packaged renderer hello reports ${String(domains.length)} real domains`);
+            const attachedStatusResult = runCliShim(['status', '--json'], {
+              encoding: 'utf8',
+              timeout: 30_000,
+              env: {
+                ...process.env,
+                FERRY_ENGINE: '',
+                FERRY_DATA_DIR: join(userDataDirectory, 'engine'),
+              },
+            });
+            const attachedStatus = parseCliJson(
+              'Packaged CLI status over the running app control channel',
+              attachedStatusResult,
+            );
+            if (attachedStatus.engine !== 'local')
+              throw new Error(
+                `Packaged CLI did not report the running local engine: ${attachedStatusResult.stdout}`,
+              );
+            const attachedProvidersResult = runCliShim(['providers', 'list', '--json'], {
+              encoding: 'utf8',
+              timeout: 30_000,
+              env: {
+                ...process.env,
+                FERRY_ENGINE: '',
+                FERRY_DATA_DIR: join(userDataDirectory, 'engine'),
+              },
+            });
+            if (
+              !Array.isArray(
+                parseCliJson('Packaged providers via app control channel', attachedProvidersResult),
+              )
+            )
+              throw new Error(
+                'Packaged providers over the app control channel did not return an array',
+              );
+            console.log('Packaged CLI attaches to the running app core');
             await expect(skipSetup.or(primaryNavigation).first()).toBeVisible({
               timeout: 20_000,
             });

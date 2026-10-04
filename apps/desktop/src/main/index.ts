@@ -67,6 +67,7 @@ let restartCount = 0;
 let coreRestartTimer: NodeJS.Timeout | undefined;
 let shuttingDown = false;
 let shutdownComplete = false;
+let updateInstallStarted = false;
 interface PendingCoreConnector {
   sender: Electron.WebContents;
   connectId: number;
@@ -623,7 +624,7 @@ ipcMain.handle('ferry:update-auto-download', (event, enabled: unknown) => {
 ipcMain.handle('ferry:update-install', (event, ...args: unknown[]) => {
   if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
   EmptyIpcArgsSchema.parse(args);
-  updateController.install();
+  if (updateController.getSnapshot().status === 'downloaded') app.quit();
 });
 ipcMain.handle('ferry:update-download', async (event, ...args: unknown[]) => {
   if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
@@ -690,6 +691,14 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', (event) => {
+  if (updateController.getSnapshot().status === 'downloaded' && !updateInstallStarted) {
+    event.preventDefault();
+    updateInstallStarted = true;
+    if (shutdownComplete || !coreProcess) {
+      updateController.install();
+      return;
+    }
+  }
   if (shutdownComplete || !coreProcess) {
     shuttingDown = true;
     return;
@@ -707,7 +716,8 @@ app.on('before-quit', (event) => {
     clearTimeout(fallback);
     coreProcess = null;
     shutdownComplete = true;
-    app.quit();
+    if (updateInstallStarted) updateController.install();
+    else app.quit();
   });
   child.postMessage({ type: 'ferry:shutdown' });
 });
