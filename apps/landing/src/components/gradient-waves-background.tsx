@@ -71,22 +71,22 @@ export function GradientWavesBackground() {
             horizonColor={palette.horizon}
             waveColor={palette.wave}
             crestColor={palette.crest}
-            speed={0.3}
-            amplitude={2.15}
-            waveScale={0.55}
-            waveRatio={0.92}
+            speed={0.28}
+            amplitude={2.35}
+            waveScale={0.6}
+            waveRatio={0.9}
             swell={28}
-            turbulence={12}
-            tilt={1.08}
-            zoom={1.08}
-            height={5.2}
-            fogDepth={22}
+            turbulence={14}
+            tilt={1.2}
+            zoom={0.98}
+            height={5.8}
+            fogDepth={36}
             detail={detail}
-            brightness={0.78}
+            brightness={1}
             opacity={1}
             mouseInteraction={false}
             grain
-            grainIntensity={0.035}
+            grainIntensity={0.03}
             maxDpr={compact ? 1.15 : 1.5}
           />
         </WavesErrorBoundary>

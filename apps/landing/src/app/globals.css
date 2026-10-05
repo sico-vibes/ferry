@@ -30,20 +30,13 @@
     var(--brand-violet) 55%,
     var(--brand-deep)
   );
-  --hero-wash: linear-gradient(
-    180deg,
-    var(--wave-horizon) 0%,
-    color-mix(in srgb, var(--wave-color) 46%, var(--background)) 46%,
-    color-mix(in srgb, var(--wave-crest) 18%, var(--background)) 72%,
-    var(--background) 100%
-  );
+  --hero-wash: var(--background);
   --hero-scrim: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--background) 24%, transparent) 0%,
-    color-mix(in srgb, var(--background) 86%, transparent) 14%,
-    color-mix(in srgb, var(--background) 92%, transparent) 46%,
-    color-mix(in srgb, var(--background) 40%, transparent) 82%,
-    transparent 100%
+    color-mix(in srgb, var(--background) 28%, transparent) 0%,
+    color-mix(in srgb, var(--background) 22%, transparent) 24%,
+    color-mix(in srgb, var(--background) 12%, transparent) 46%,
+    transparent 68%
   );
 }
 
