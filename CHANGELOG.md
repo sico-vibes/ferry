@@ -14,6 +14,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   downloads enabled by default. Windows beta installers remain unsigned and may
   show a SmartScreen warning.
 
+## [0.9.0-beta.38] - 2026-10-04
+
+### Added
+
+- Packaged CLI runtime bridges and smoke coverage for local-engine startup, Gateway, doctor, streaming, and app-core attachment.
+- Regression coverage for title-bar overlay geometry, installer update preservation, and the collapsed navigation shell.
+
+### Changed
+
+- Refined the full-width title bar, collapsed rail, accessible navigation, themed dialogs, and shell captures.
+- Preserve PATH and Explorer options across silent update passes while keeping normal uninstall cleanup.
+
+### Fixed
+
+- Resolve packaged CLI/runtime paths independently of the source checkout and keep the Theme submenu visible in shell captures.
+- Place the drawer below the title bar and preserve update relaunch behavior.
+
 ## [0.9.0] - 2026-09-28
 
 ### Added
