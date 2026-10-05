@@ -30,13 +30,11 @@ export const hero = {
 
 export const crossing = {
   title: 'The crossing',
-  lead: 'Providers on one shore. Your session on the other. Ferry is the gateway in the middle.',
-  body: 'Each line is a route. Keys stay in the OS keyring on your computer. A request leaves the dock only for the provider Ferry selects, then returns as the session you are already in.',
-  note: 'Free berths when they have room. Paid routes when you choose them.',
-  destinations: [
-    { id: 'session', label: 'Desktop session' },
-    { id: 'cli', label: 'CLI' },
-  ],
+  lead: 'Many providers in. One gateway out.',
+  body: 'Ferry aggregates free and paid providers, routes each request, and fails over when a key runs out of room. The output is one local Gateway: an OpenAI-compatible key you can plug into OpenCode, Kilo Code, and any other compatible app.',
+  note: 'Bring your own keys. Ferry does not pool accounts or promise a fixed free quota.',
+  gateway: 'Gateway',
+  gatewayHint: 'OpenAI-compatible',
 } as const;
 
 export const features = [

@@ -1,40 +1,22 @@
 'use client';
 
-import { Monitor, Terminal } from 'lucide-react';
-import { useRef, type ReactNode, type RefObject } from 'react';
-import { siAnthropic, siGooglegemini, siMistralai, siOpenrouter } from 'simple-icons';
-import { AnimatedBeam } from '@/components/animated-beam';
+import { KeyRound } from 'lucide-react';
+import { useReducedMotion } from 'motion/react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { FerryMark } from '@/components/ferry-mark';
+import { RouteSpine } from '@/components/route-spine';
 import { SectionHeading, Shell } from '@/components/shell';
 import { crossing } from '@/lib/site';
+import { providerSlotQueues, type ProviderMark } from '@/lib/provider-pool';
 import { cn } from '@/lib/utils';
 
-interface ProviderNode {
-  id: string;
-  label: string;
-  icon: ReactNode;
-}
-
-function BrandGlyph({ path }: { path: string }) {
+function BrandGlyph({ path, viewBox = '0 0 24 24' }: { path: string; viewBox?: string }) {
   return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5 fill-current">
+    <svg aria-hidden="true" viewBox={viewBox} className="size-5 fill-current">
       <path d={path} />
     </svg>
   );
 }
-
-const providers: ProviderNode[] = [
-  { id: 'gemini', label: 'Gemini', icon: <BrandGlyph path={siGooglegemini.path} /> },
-  { id: 'groq', label: 'Groq', icon: <span className="font-mono text-xs font-medium">Gq</span> },
-  { id: 'openrouter', label: 'OpenRouter', icon: <BrandGlyph path={siOpenrouter.path} /> },
-  { id: 'mistral', label: 'Mistral', icon: <BrandGlyph path={siMistralai.path} /> },
-  {
-    id: 'openai',
-    label: 'OpenAI',
-    icon: <span className="font-mono text-xs font-medium">OA</span>,
-  },
-  { id: 'anthropic', label: 'Anthropic', icon: <BrandGlyph path={siAnthropic.path} /> },
-];
 
 function useStableRefs(count: number): RefObject<HTMLDivElement | null>[] {
   const refs = useRef<RefObject<HTMLDivElement | null>[]>([]);
@@ -47,14 +29,72 @@ function useStableRefs(count: number): RefObject<HTMLDivElement | null>[] {
   return refs.current;
 }
 
-function NodeCard({
+function FlippingProviderCard({
+  queue,
+  delayMs,
+  nodeRef,
+}: {
+  queue: readonly ProviderMark[];
+  delayMs: number;
+  nodeRef: RefObject<HTMLDivElement | null>;
+}) {
+  const reduced = useReducedMotion();
+  const [index, setIndex] = useState(0);
+  const [turned, setTurned] = useState(false);
+  const mark = queue[index] ?? queue[0];
+
+  useEffect(() => {
+    if (reduced === true || queue.length < 2) return;
+    let cancelled = false;
+    let timer = 0;
+    const cycle = () => {
+      setTurned(true);
+      timer = window.setTimeout(() => {
+        if (cancelled) return;
+        setIndex((current) => (current + 1) % queue.length);
+        setTurned(false);
+        timer = window.setTimeout(cycle, 2800);
+      }, 240);
+    };
+    timer = window.setTimeout(cycle, delayMs);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [delayMs, queue.length, reduced]);
+
+  if (!mark) return null;
+
+  return (
+    <div
+      ref={nodeRef}
+      className="flex h-14 w-44 items-center overflow-hidden rounded-card border border-border bg-card px-2.5 [perspective:700px]"
+    >
+      <div
+        className={cn(
+          'flex min-w-0 flex-1 items-center gap-2.5 transition-transform duration-300 ease-in [transform-style:preserve-3d] motion-reduce:transition-none',
+          turned && '[transform:rotateX(90deg)]',
+        )}
+      >
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-foreground">
+          <BrandGlyph path={mark.path} viewBox={mark.viewBox ?? '0 0 24 24'} />
+        </span>
+        <span className="truncate text-sm font-medium text-foreground">{mark.label}</span>
+      </div>
+    </div>
+  );
+}
+
+function AnchorCard({
   nodeRef,
   label,
+  hint,
   icon,
   className,
 }: {
   nodeRef: RefObject<HTMLDivElement | null>;
   label: string;
+  hint?: string;
   icon: ReactNode;
   className?: string;
 }) {
@@ -62,25 +102,27 @@ function NodeCard({
     <div
       ref={nodeRef}
       className={cn(
-        'flex items-center gap-3 rounded-card border border-border bg-card px-3 py-2 text-left',
+        'flex h-14 items-center gap-2.5 rounded-card border border-border bg-card px-3',
         className,
       )}
     >
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-foreground">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-foreground">
         {icon}
       </span>
-      <span className="text-sm font-medium text-foreground">{label}</span>
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-medium text-foreground">{label}</span>
+        {hint ? <span className="block truncate text-xs text-muted-foreground">{hint}</span> : null}
+      </span>
     </div>
   );
 }
 
 export function Crossing() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const providerRefs = useStableRefs(providers.length);
-  const centerRef = useRef<HTMLDivElement>(null);
-  const sessionRef = useRef<HTMLDivElement>(null);
-  const cliRef = useRef<HTMLDivElement>(null);
-  const curves = [-48, -24, -8, 8, 24, 48];
+  const ferryRef = useRef<HTMLDivElement>(null);
+  const gatewayRef = useRef<HTMLDivElement>(null);
+  const queues = providerSlotQueues();
+  const cardRefs = useStableRefs(queues.length);
 
   return (
     <section id="crossing" className="scroll-mt-16 py-16">
@@ -90,81 +132,53 @@ export function Crossing() {
           {crossing.body}
         </p>
 
-        <div
-          ref={containerRef}
-          className="relative mt-12 grid items-center gap-6 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:gap-8"
-        >
-          <div className="relative z-10 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-1">
-            {providers.map((provider, index) => {
-              const nodeRef = providerRefs[index];
-              if (!nodeRef) return null;
-              return (
-                <NodeCard
-                  key={provider.id}
-                  nodeRef={nodeRef}
-                  label={provider.label}
-                  icon={provider.icon}
-                />
-              );
-            })}
-          </div>
+        <div ref={containerRef} className="relative mx-auto mt-12 w-fit max-w-full">
+          <div className="grid items-center justify-items-center gap-3 md:grid-cols-[11rem_7.5rem_13.5rem] md:justify-center md:gap-x-20">
+            <div className="relative z-10 flex flex-col gap-3">
+              {queues.map((queue, index) => {
+                const nodeRef = cardRefs[index];
+                const key = queue[0]?.id ?? String(index);
+                if (!nodeRef) return null;
+                return (
+                  <FlippingProviderCard
+                    key={key}
+                    queue={queue}
+                    delayMs={280 + index * 520}
+                    nodeRef={nodeRef}
+                  />
+                );
+              })}
+            </div>
 
-          <div className="relative z-10 flex justify-center">
-            <div
-              ref={centerRef}
-              className="flex size-28 flex-col items-center justify-center gap-2 rounded-card border border-border bg-card shadow-[var(--shadow-float)]"
-            >
-              <FerryMark className="size-12" />
-              <span className="text-sm font-semibold">Ferry</span>
+            <div className="relative z-10 flex justify-center">
+              <div
+                ref={ferryRef}
+                className="flex size-28 flex-col items-center justify-center gap-2 rounded-card border border-border bg-card shadow-[var(--shadow-float)]"
+              >
+                <FerryMark className="size-12" />
+                <span className="text-sm font-semibold">Ferry</span>
+              </div>
+            </div>
+
+            <div className="relative z-10">
+              <AnchorCard
+                nodeRef={gatewayRef}
+                className="w-52"
+                label={crossing.gateway}
+                hint={crossing.gatewayHint}
+                icon={<KeyRound aria-hidden="true" className="size-5" strokeWidth={1.75} />}
+              />
             </div>
           </div>
 
-          <div className="relative z-10 grid grid-cols-2 gap-3 md:grid-cols-1">
-            <NodeCard
-              nodeRef={sessionRef}
-              label="Desktop session"
-              icon={<Monitor aria-hidden="true" className="size-5" strokeWidth={1.75} />}
-            />
-            <NodeCard
-              nodeRef={cliRef}
-              label="CLI"
-              icon={<Terminal aria-hidden="true" className="size-5" strokeWidth={1.75} />}
-            />
-          </div>
-
-          {providers.map((provider, index) => {
-            const fromRef = providerRefs[index];
-            if (!fromRef) return null;
-            return (
-              <AnimatedBeam
-                key={provider.id}
-                containerRef={containerRef}
-                fromRef={fromRef}
-                toRef={centerRef}
-                curvature={curves[index] ?? 0}
-                duration={4.8 + index * 0.25}
-                delay={index * 0.15}
-              />
-            );
-          })}
-          <AnimatedBeam
+          <RouteSpine
             containerRef={containerRef}
-            fromRef={centerRef}
-            toRef={sessionRef}
-            curvature={-20}
-            duration={4.6}
-            reverse
-          />
-          <AnimatedBeam
-            containerRef={containerRef}
-            fromRef={centerRef}
-            toRef={cliRef}
-            curvature={20}
-            duration={5.2}
-            delay={0.2}
-            reverse
+            cardRefs={cardRefs}
+            ferryRef={ferryRef}
+            gatewayRef={gatewayRef}
           />
         </div>
+
         <p className="mt-8 text-center text-sm text-muted-foreground">{crossing.note}</p>
       </Shell>
     </section>

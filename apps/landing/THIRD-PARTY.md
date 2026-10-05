@@ -75,6 +75,9 @@ shadcn. They use Radix primitives from the `radix-ui` package.
 
 - Geist Sans and Geist Mono via the `geist` package, SIL Open Font License.
 - `lucide-react`, ISC License.
-- `simple-icons`, CC0 1.0 Universal. Groq and OpenAI have no mark in the
-  installed set, so the diagram uses monograms for those two providers.
+- `simple-icons`, CC0 1.0 Universal, for the provider marks that the installed
+  set includes. The OpenAI blossom is the CC0 path from simple-icons 15.22.0,
+  which later releases dropped. The Groq symbol is that provider's public mark.
+  The xAI/Grok mark is from Boxicons, MIT License
+  (https://github.com/atisawd/boxicons).
 - `ogl` renders the Gradient Waves background. Its license travels with the package.

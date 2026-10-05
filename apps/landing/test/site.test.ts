@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { faq, features, hero, links, steps } from '../src/lib/site';
+import { crossing, faq, features, hero, links, steps } from '../src/lib/site';
 
 describe('landing story', () => {
   it('sends the download CTA to GitHub releases', () => {
@@ -19,6 +19,9 @@ describe('landing story', () => {
       'Honest BYOK',
     ]);
     expect(steps.map((step) => step.title)).toEqual(['Add keys', 'Pick a route', 'Code']);
+    expect(crossing.lead.toLowerCase()).toContain('gateway');
+    expect(crossing.body.toLowerCase()).toContain('openai-compatible');
+    expect(crossing.body.toLowerCase()).not.toContain('desktop session');
   });
 
   it('does not promise pooled accounts or a fixed free quota', () => {
