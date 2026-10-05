@@ -9,7 +9,7 @@ import type {
   Message,
   RoutingSettings,
 } from '@ferry/shared';
-import { isModelFreeForPlan } from '@ferry/shared';
+import { DIRECT_PROFILE_ID, isModelFreeForPlan } from '@ferry/shared';
 import type { Catalog } from '@ferry/catalog';
 import {
   DEFAULT_AUTO_FREE_CHAIN,
@@ -126,6 +126,14 @@ const tiers: Record<StepKind, Profile['tierByStep'][StepKind]> = {
   review: ['T2', 'T3'],
   long_context: ['T2', 'T3'],
 };
+const allTiers: Record<StepKind, Profile['tierByStep'][StepKind]> = {
+  plan: ['T1', 'T2', 'T3'],
+  edit: ['T1', 'T2', 'T3'],
+  search: ['T1', 'T2', 'T3'],
+  summarize: ['T1', 'T2', 'T3'],
+  review: ['T1', 'T2', 'T3'],
+  long_context: ['T1', 'T2', 'T3'],
+};
 function builtinProfile(
   id: string,
   name: string,
@@ -169,6 +177,24 @@ function builtinProfile(
 }
 
 export const BUILTIN_PROFILES: readonly Profile[] = [
+  {
+    ...builtinProfile(
+      DIRECT_PROFILE_ID,
+      'No profile',
+      'Talk to the model you pick. No routing rules, tiers or caps beyond your global settings.',
+      true,
+      'all',
+      allTiers,
+      null,
+      null,
+    ),
+    roles: {
+      enabled: false,
+      plannerModelRef: null,
+      editorModelRef: null,
+      editorFailureThreshold: 2,
+    },
+  },
   builtinProfile(
     'profile_builtin_auto_free',
     'Auto-Free',

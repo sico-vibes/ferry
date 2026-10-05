@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DIRECT_PROFILE_ID,
   CheckpointSchema,
   MessageSchema,
   ModelInfoSchema,
@@ -26,6 +27,13 @@ describe('QA fixture integrity', () => {
     state.providers.forEach((x) => ProviderSchema.parse(x));
     state.models.forEach((x) => ModelInfoSchema.parse(x));
     state.profiles.forEach((x) => ProfileSchema.parse(x));
+    expect(state.profiles.find((profile) => profile.id === DIRECT_PROFILE_ID)).toMatchObject({
+      builtin: true,
+      pinned: false,
+      name: 'No profile',
+      allowedProviders: 'all',
+      paidAllowed: true,
+    });
     state.checkpoints.forEach((x) => CheckpointSchema.parse(x));
     for (const [, rows] of state.messages) rows.forEach((x) => MessageSchema.parse(x));
     for (const [, task] of state.taskRecords) TaskRecordSchema.parse(task);

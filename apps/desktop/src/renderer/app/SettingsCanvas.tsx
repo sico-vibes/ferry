@@ -2,12 +2,10 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useFerryClient } from '../data/client';
-import { listAllModels } from '@ferry/client';
-import { keys, useProfiles, useSettings } from '../data/queries';
+import { keys, useSettings } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { settingsSections, useUI } from '../state/ui';
 import {
-  Checkbox,
   Dialog,
   FerryMark,
   UiV2,
@@ -22,10 +20,7 @@ import { FERRY_DOMAINS } from '@ferry/shared';
 import {
   ProviderRequestOverridesSchema,
   type LogicalModelMapping,
-  type Profile,
   type Provider,
-  type StepKind,
-  type Tier,
 } from '@ferry/shared';
 import type { RoutingSettings } from '@ferry/shared';
 import type { UpdateSnapshot } from '../../main/update-state.js';
@@ -49,12 +44,12 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
+import { ProfilesSettings } from './ProfilesSettings';
 import { ProvidersTable } from './ProvidersTable';
 import { OAuthProviderRows } from './OAuthProviderRows';
 import { ConfirmDialog } from './ConfirmDialog';
 import { saveKeybindings, useKeybindings } from '../state/keybindings';
 import type { SettingsSection } from '../state/ui.types';
-const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
 const settingsSectionIcons: Record<SettingsSection, LucideIcon> = {
   General: SlidersHorizontal,
   Profiles: Layers,
@@ -114,14 +109,6 @@ const settingsPageCopy: Record<string, { title: string; description: string }> =
     description: 'Review local storage and provider data handling.',
   },
   About: { title: 'About', description: 'Ferry version and project information.' },
-};
-const stepLabels: Record<StepKind, string> = {
-  plan: 'Plan',
-  edit: 'Edit',
-  search: 'Search',
-  summarize: 'Summarize',
-  review: 'Review',
-  long_context: 'Long context',
 };
 const routingRows: {
   key: keyof Pick<
@@ -327,7 +314,6 @@ export function SettingsCanvas() {
         developer: { ...settingsData.developer, ...pendingSettings?.developer },
       }
     : undefined;
-  const { data: profiles = [] } = useProfiles();
   const { data: providers = [] } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
@@ -335,10 +321,6 @@ export function SettingsCanvas() {
   const { data: oauthProviders = [] } = useQuery({
     queryKey: ['oauth-providers'],
     queryFn: () => client.oauth.list(),
-  });
-  const { data: models = [] } = useQuery({
-    queryKey: ['models'],
-    queryFn: () => listAllModels(client),
   });
   const { data: lanes = [] } = useQuery({
     queryKey: ['lanes'],
@@ -399,9 +381,6 @@ export function SettingsCanvas() {
     });
     await cache.invalidateQueries({ queryKey: ['gateway-settings'] });
   };
-  const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
-  const fallbackChain = profileDraft?.fallbackChain ?? [];
-  const [chainDragIndex, setChainDragIndex] = useState<number | null>(null);
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
   const testProvider = async (provider: (typeof providers)[number]) => {
     setTestingProvider(provider.id);
@@ -469,38 +448,6 @@ export function SettingsCanvas() {
       setSaveFeedback((current) => ({
         ...current,
         [section]: {
-          kind: 'error',
-          message: error instanceof Error ? error.message : String(error),
-        },
-      }));
-    }
-  };
-  const mutateProfile = <K extends keyof Profile>(key: K, value: Profile[K]) => {
-    setSaveFeedback((current) => {
-      const next = { ...current };
-      Reflect.deleteProperty(next, 'Profiles');
-      return next;
-    });
-    setProfileDraft((current) => (current ? { ...current, [key]: value } : current));
-  };
-  const openProfile = (profile: Profile) => {
-    setSaveFeedback((current) => {
-      const next = { ...current };
-      Reflect.deleteProperty(next, 'Profiles');
-      return next;
-    });
-    setProfileDraft(structuredClone(profile));
-  };
-  const saveProfile = async () => {
-    if (!profileDraft) return;
-    try {
-      await client.profiles.save(profileDraft);
-      await cache.invalidateQueries({ queryKey: keys.profiles });
-      setSaveFeedback((current) => ({ ...current, Profiles: { kind: 'saved' } }));
-    } catch (error) {
-      setSaveFeedback((current) => ({
-        ...current,
-        Profiles: {
           kind: 'error',
           message: error instanceof Error ? error.message : String(error),
         },
@@ -639,520 +586,7 @@ export function SettingsCanvas() {
           </Group>
         </>
       );
-    if (section === 'Profiles')
-      return (
-        <div className="profile-settings">
-          <div className="profile-list">
-            {profiles.map((profile) => (
-              <button
-                key={profile.id}
-                className={`profile-option ${profileDraft?.id === profile.id ? 'is-active' : ''}`}
-                onClick={() => {
-                  openProfile(profile);
-                }}
-              >
-                <span>
-                  {profile.name}
-                  {profile.pinned ? <small className="profile-pin">Pinned</small> : null}
-                </span>
-                <small>{profile.description}</small>
-              </button>
-            ))}
-            <UiV2.Button
-              size="sm"
-              onClick={() => {
-                const source = profiles[0];
-                if (!source) return;
-                const clone = {
-                  ...structuredClone(source),
-                  id: `profile_custom_${String(Date.now())}` as Profile['id'],
-                  name: 'New profile',
-                  builtin: false,
-                  pinned: false,
-                };
-                setProfileDraft(clone);
-              }}
-            >
-              New profile
-            </UiV2.Button>
-          </div>
-          {profileDraft ? (
-            <div className="profile-editor">
-              <div className="group-title">
-                <div>
-                  <h2>{profileDraft.name}</h2>
-                  <p>Edit routing and spending limits.</p>
-                </div>
-                <div className="button-row">
-                  <UiV2.Button
-                    size="sm"
-                    onClick={() => {
-                      const clone = {
-                        ...structuredClone(profileDraft),
-                        id: `profile_copy_${String(Date.now())}` as Profile['id'],
-                        name: `${profileDraft.name} copy`,
-                        builtin: false,
-                        pinned: false,
-                      };
-                      setProfileDraft(clone);
-                    }}
-                  >
-                    Duplicate
-                  </UiV2.Button>
-                  <UiV2.Button
-                    size="sm"
-                    disabled={profileDraft.builtin}
-                    onClick={() => {
-                      setConfirm(`Delete ${profileDraft.name}?`);
-                      setConfirmDescription('This permanently removes the profile.');
-                      setConfirmDestructive(true);
-                      setConfirmAction(
-                        () => () =>
-                          void client.profiles.remove(profileDraft.id).then(async () => {
-                            await cache.invalidateQueries({ queryKey: keys.profiles });
-                            setProfileDraft(null);
-                          }),
-                      );
-                    }}
-                  >
-                    Delete
-                  </UiV2.Button>
-                  {(!profiles.find((item) => item.id === profileDraft.id) ||
-                    JSON.stringify(profileDraft) !==
-                      JSON.stringify(profiles.find((item) => item.id === profileDraft.id))) && (
-                    <UiV2.Button size="sm" variant="default" onClick={() => void saveProfile()}>
-                      Save changes
-                    </UiV2.Button>
-                  )}
-                  {saveFeedback.Profiles?.kind === 'saved' && (
-                    <span aria-label="Saved" className="v2-settings-save-success" role="status">
-                      Saved
-                    </span>
-                  )}
-                  {saveFeedback.Profiles?.kind === 'error' && (
-                    <span className="v2-settings-save-error" role="alert">
-                      Could not save: {saveFeedback.Profiles.message}
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div className="form-grid">
-                <SettingsInput
-                  label="Name"
-                  value={profileDraft.name}
-                  onChange={(value) => {
-                    mutateProfile('name', value);
-                  }}
-                />
-                <Select
-                  label="Icon"
-                  value={profileDraft.icon}
-                  onValueChange={(value) => {
-                    mutateProfile('icon', value);
-                  }}
-                  options={['lightbulb', 'zap', 'book-open', 'code', 'brain'].map((value) => ({
-                    value,
-                    label: value,
-                  }))}
-                />
-                <SettingsInput
-                  label="Description"
-                  value={profileDraft.description}
-                  onChange={(value) => {
-                    mutateProfile('description', value);
-                  }}
-                />
-                <Select
-                  label="Account affinity"
-                  value={profileDraft.affinityMode}
-                  onValueChange={(value) => {
-                    mutateProfile('affinityMode', value as Profile['affinityMode']);
-                  }}
-                  options={[
-                    { value: 'soft', label: 'Soft, switch after failure' },
-                    { value: 'strict', label: 'Strict, keep this account' },
-                  ]}
-                />
-              </div>
-              <h3>Planner/editor split</h3>
-              <SettingRow
-                title="Separate planning and editing"
-                helper="A planner writes a file-by-file edit plan. An editor applies it with its own tool format."
-              >
-                <Switch
-                  label="Planner/editor split"
-                  checked={profileDraft.roles.enabled}
-                  onCheckedChange={(enabled) => {
-                    mutateProfile('roles', { ...profileDraft.roles, enabled });
-                  }}
-                />
-              </SettingRow>
-              {profileDraft.roles.enabled && (
-                <div className="form-grid">
-                  {(['plannerModelRef', 'editorModelRef'] as const).map((key) => (
-                    <Select
-                      key={key}
-                      label={key === 'plannerModelRef' ? 'Planner model' : 'Editor model'}
-                      value={profileDraft.roles[key] ?? 'auto'}
-                      onValueChange={(value) => {
-                        mutateProfile('roles', {
-                          ...profileDraft.roles,
-                          [key]: value === 'auto' ? null : value,
-                        });
-                      }}
-                      options={[
-                        { value: 'auto', label: 'Auto' },
-                        ...models.map((model) => ({ value: model.ref, label: model.name })),
-                      ]}
-                    />
-                  ))}
-                </div>
-              )}
-              <h3>Fallback order</h3>
-              <p className="muted">
-                Drag providers to reorder them. Ferry uses the first live, tool-capable model and
-                then tries scored eligible models.
-              </p>
-              {profileDraft.fallbackChain === undefined ? (
-                <UiV2.Button
-                  size="sm"
-                  onClick={() => {
-                    mutateProfile('fallbackChain', []);
-                  }}
-                >
-                  Add fallback order
-                </UiV2.Button>
-              ) : (
-                <>
-                  <div className="profile-chain-list">
-                    {profileDraft.fallbackChain.map((entry, index) => (
-                      <div
-                        key={`${entry.provider}-${String(index)}`}
-                        className="profile-chain-row"
-                        draggable
-                        onDragStart={() => {
-                          setChainDragIndex(index);
-                        }}
-                        onDragOver={(event) => {
-                          event.preventDefault();
-                        }}
-                        onDrop={() => {
-                          if (chainDragIndex === null || chainDragIndex === index) return;
-                          const next = [...fallbackChain];
-                          const [moved] = next.splice(chainDragIndex, 1);
-                          if (moved) next.splice(index, 0, moved);
-                          mutateProfile('fallbackChain', next);
-                          setChainDragIndex(null);
-                        }}
-                        onDragEnd={() => {
-                          setChainDragIndex(null);
-                        }}
-                      >
-                        <Select
-                          label={`Provider ${String(index + 1)}`}
-                          value={entry.provider}
-                          onValueChange={(value) => {
-                            const next = [...fallbackChain];
-                            next[index] = { ...entry, provider: value as Provider['id'] };
-                            mutateProfile('fallbackChain', next);
-                          }}
-                          options={providers.map((provider) => ({
-                            value: provider.id,
-                            label: provider.name,
-                          }))}
-                        />
-                        <div className="profile-chain-patterns">
-                          {entry.patterns.map((pattern, patternIndex) => (
-                            <div className="button-row" key={`${pattern}-${String(patternIndex)}`}>
-                              <SettingsInput
-                                label={`Model pattern ${String(patternIndex + 1)}`}
-                                value={pattern}
-                                onChange={(value) => {
-                                  const next = [...fallbackChain];
-                                  const patterns = [...entry.patterns];
-                                  patterns[patternIndex] = value;
-                                  next[index] = { ...entry, patterns };
-                                  mutateProfile('fallbackChain', next);
-                                }}
-                              />
-                              <UiV2.Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                  const next = [...fallbackChain];
-                                  next[index] = {
-                                    ...entry,
-                                    patterns: entry.patterns.filter((_, i) => i !== patternIndex),
-                                  };
-                                  mutateProfile('fallbackChain', next);
-                                }}
-                              >
-                                Remove
-                              </UiV2.Button>
-                            </div>
-                          ))}
-                          <UiV2.Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              const next = [...fallbackChain];
-                              next[index] = {
-                                ...entry,
-                                patterns: [...entry.patterns, 'new-model-pattern'],
-                              };
-                              mutateProfile('fallbackChain', next);
-                            }}
-                          >
-                            Add model pattern
-                          </UiV2.Button>
-                        </div>
-                        <UiV2.Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            mutateProfile(
-                              'fallbackChain',
-                              fallbackChain.filter((_, i) => i !== index),
-                            );
-                          }}
-                        >
-                          Remove provider
-                        </UiV2.Button>
-                      </div>
-                    ))}
-                  </div>
-                  <UiV2.Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      const provider = providers.find(
-                        (item) => !fallbackChain.some((entry) => entry.provider === item.id),
-                      );
-                      if (!provider) return;
-                      mutateProfile('fallbackChain', [
-                        ...fallbackChain,
-                        { provider: provider.id, patterns: ['new-model-pattern'] },
-                      ]);
-                    }}
-                  >
-                    Add provider
-                  </UiV2.Button>
-                </>
-              )}
-              <h3>Allowed providers</h3>
-              <div className="check-grid">
-                {providers.map((provider) => (
-                  <Checkbox
-                    key={provider.id}
-                    label={provider.name}
-                    checked={
-                      profileDraft.allowedProviders === 'all' ||
-                      (profileDraft.allowedProviders === 'all_free' && provider.tag !== 'paid') ||
-                      profileDraft.allowedProviders.includes(provider.id)
-                    }
-                    onCheckedChange={(checked) => {
-                      const current =
-                        profileDraft.allowedProviders === 'all'
-                          ? providers.map((item) => item.id)
-                          : profileDraft.allowedProviders === 'all_free'
-                            ? providers.filter((item) => item.tag !== 'paid').map((item) => item.id)
-                            : profileDraft.allowedProviders;
-                      mutateProfile(
-                        'allowedProviders',
-                        checked
-                          ? [...new Set([...current, provider.id])]
-                          : current.filter((id) => id !== provider.id),
-                      );
-                    }}
-                  />
-                ))}
-              </div>
-              <h3>Tier per step kind</h3>
-              <div className="tier-table">
-                <div className="tier-head">
-                  <span>Step</span>
-                  {(['T1', 'T2', 'T3'] as Tier[]).map((tier) => (
-                    <span key={tier}>{tier}</span>
-                  ))}
-                </div>
-                {stepKinds.map((kind) => (
-                  <div className="tier-row" key={kind}>
-                    <span>{stepLabels[kind]}</span>
-                    {(['T1', 'T2', 'T3'] as Tier[]).map((tier) => (
-                      <Checkbox
-                        key={tier}
-                        label={`${stepLabels[kind]} ${tier}`}
-                        checked={profileDraft.tierByStep[kind].includes(tier)}
-                        onCheckedChange={(checked) => {
-                          mutateProfile('tierByStep', {
-                            ...profileDraft.tierByStep,
-                            [kind]: checked
-                              ? [...profileDraft.tierByStep[kind], tier]
-                              : profileDraft.tierByStep[kind].filter((value) => value !== tier),
-                          });
-                        }}
-                      />
-                    ))}
-                  </div>
-                ))}
-              </div>
-              <SettingRow
-                title="Paid models"
-                helper="Allow paid models when free capacity is unavailable."
-              >
-                <Switch
-                  label="Paid models"
-                  checked={profileDraft.paidAllowed}
-                  onCheckedChange={(value) => {
-                    mutateProfile('paidAllowed', value);
-                  }}
-                />
-              </SettingRow>
-              <SettingRow
-                title="Paid confirmation"
-                helper="Skip the first paid-call prompt only when this profile explicitly pre-authorizes paid models."
-              >
-                <Switch
-                  label="Pre-authorize paid models"
-                  checked={profileDraft.paidConfirmation.preauthorize}
-                  onCheckedChange={(value) => {
-                    mutateProfile('paidConfirmation', {
-                      ...profileDraft.paidConfirmation,
-                      preauthorize: value,
-                    });
-                  }}
-                />
-              </SettingRow>
-              <SettingRow
-                title="Subscription account calls"
-                helper="Ask before using subscription OAuth or CLI account lanes."
-              >
-                <Switch
-                  label="Confirm subscription account calls"
-                  checked={profileDraft.paidConfirmation.confirmSubscriptions}
-                  onCheckedChange={(value) => {
-                    mutateProfile('paidConfirmation', {
-                      ...profileDraft.paidConfirmation,
-                      confirmSubscriptions: value,
-                    });
-                  }}
-                />
-              </SettingRow>
-              <SettingRow
-                title="Trial and credit calls"
-                helper="Ask before using provider trial or credit lanes."
-              >
-                <Switch
-                  label="Confirm trial and credit calls"
-                  checked={profileDraft.paidConfirmation.confirmTrials}
-                  onCheckedChange={(value) => {
-                    mutateProfile('paidConfirmation', {
-                      ...profileDraft.paidConfirmation,
-                      confirmTrials: value,
-                    });
-                  }}
-                />
-              </SettingRow>
-              <div className="form-grid">
-                <SettingsInput
-                  label="Session cap ($)"
-                  value={profileDraft.caps.sessionUsd?.toString() ?? ''}
-                  placeholder="No cap"
-                  onChange={(value) => {
-                    mutateProfile('caps', {
-                      ...profileDraft.caps,
-                      sessionUsd: value ? Number(value) : null,
-                    });
-                  }}
-                />
-                <SettingsInput
-                  label="Daily cap ($)"
-                  value={profileDraft.caps.dailyUsd?.toString() ?? ''}
-                  placeholder="No cap"
-                  onChange={(value) => {
-                    mutateProfile('caps', {
-                      ...profileDraft.caps,
-                      dailyUsd: value ? Number(value) : null,
-                    });
-                  }}
-                />
-                <SettingsInput
-                  label="Monthly cap ($)"
-                  value={profileDraft.caps.monthlyUsd?.toString() ?? ''}
-                  placeholder="No cap"
-                  onChange={(value) => {
-                    mutateProfile('caps', {
-                      ...profileDraft.caps,
-                      monthlyUsd: value ? Number(value) : null,
-                    });
-                  }}
-                />
-              </div>
-              <SettingRow
-                title="Delegation"
-                helper="When Ferry can offer work to another coding agent."
-              >
-                <SegmentedControl
-                  label="Delegation mode"
-                  value={profileDraft.delegationMode}
-                  onValueChange={(value) => {
-                    mutateProfile('delegationMode', value as Profile['delegationMode']);
-                  }}
-                  options={[
-                    { value: 'off', label: 'Off' },
-                    { value: 'suggest', label: 'Suggest' },
-                    { value: 'auto', label: 'Auto' },
-                  ]}
-                />
-              </SettingRow>
-              <h3>Optimizer defaults</h3>
-              <SettingRow
-                title="Terse level"
-                helper="How much routine detail Ferry keeps in responses."
-              >
-                <SegmentedControl
-                  label="Profile terse level"
-                  value={profileDraft.optimizers.terse}
-                  onValueChange={(value) => {
-                    mutateProfile('optimizers', {
-                      ...profileDraft.optimizers,
-                      terse: value as Profile['optimizers']['terse'],
-                    });
-                  }}
-                  options={['off', 'lite', 'full', 'ultra'].map((value) => ({
-                    value,
-                    label: value.charAt(0).toUpperCase() + value.slice(1),
-                  }))}
-                />
-              </SettingRow>
-              {(
-                [
-                  ['toolOutputFilters', 'Tool-output filters'],
-                  ['recoveryHandles', 'Recovery handles'],
-                  ['contextHygiene', 'Context hygiene'],
-                  ['rtk', 'RTK'],
-                ] as const
-              ).map(([key, label]) => (
-                <SettingRow
-                  key={key}
-                  title={label}
-                  helper={`Use ${label.toLowerCase()} by default for this profile.`}
-                >
-                  <Switch
-                    label={label}
-                    checked={profileDraft.optimizers[key]}
-                    onCheckedChange={(value) => {
-                      mutateProfile('optimizers', { ...profileDraft.optimizers, [key]: value });
-                    }}
-                  />
-                </SettingRow>
-              ))}
-            </div>
-          ) : (
-            <div className="empty-card">Select a profile to edit.</div>
-          )}
-        </div>
-      );
+    if (section === 'Profiles') return <ProfilesSettings />;
     if (section === 'Providers & keys')
       return (
         <Group>

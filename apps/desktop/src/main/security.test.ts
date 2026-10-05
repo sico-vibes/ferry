@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { buildCoreEnvironment } from './core-environment.js';
 import { isTrustedRendererOrigin } from './renderer-origin.js';
 import { isExpectedCorePortOrigin } from '../shared/core-port-origin.js';
+import { isAllowlistedExternal } from './external-links.js';
 
 const mainSource = await readFile(join(import.meta.dirname, 'index.ts'), 'utf8');
 const preloadSource = await readFile(join(import.meta.dirname, '../preload/index.ts'), 'utf8');
@@ -209,7 +210,11 @@ describe('Electron security boundary', () => {
     expect(mainSource).toContain("on('will-navigate'");
     expect(mainSource).toContain("on('will-redirect'");
     expect(mainSource).toContain('void openExternalSafely(url)');
-    expect(mainSource).toContain("protocol === 'https:' || protocol === 'http:'");
+    expect(isAllowlistedExternal('https://opencode.ai/auth')).toBe(true);
+    expect(isAllowlistedExternal('https://console.groq.com/keys')).toBe(true);
+    expect(isAllowlistedExternal('https://cloud.cerebras.ai')).toBe(true);
+    expect(isAllowlistedExternal('https://evil.example')).toBe(false);
+    expect(isAllowlistedExternal('file:///etc/passwd')).toBe(false);
     expect(mainSource).not.toMatch(/shell\.openExternal\(\s*[^u]/);
   });
 

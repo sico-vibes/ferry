@@ -10,7 +10,7 @@ import {
   classifyProviderError,
   resolveLogicalModelCandidates,
 } from '@ferry/router';
-import { RoutingSettingsSchema, type GatewayRequestRecord } from '@ferry/shared';
+import { DIRECT_PROFILE_ID, RoutingSettingsSchema, type GatewayRequestRecord } from '@ferry/shared';
 import {
   type GatewayRuntime,
   startGateway,
@@ -141,7 +141,11 @@ function compressedMessages(messages: GatewayMessage[], enabled: boolean): Gatew
         };
   });
 }
+function hasConcreteAllowlist(key: GatewayKey): boolean {
+  return key.allowedModels.some((ref) => ref.includes('/') && !ref.startsWith('ferry/'));
+}
 function profileId(raw: string): string {
+  if (raw === 'none') return DIRECT_PROFILE_ID;
   if (raw === 'auto-free') return 'profile_builtin_auto_free';
   if (raw === 'best') return 'profile_builtin_best_available';
   if (raw === 'fast') return 'profile_builtin_fast';
@@ -212,7 +216,10 @@ export function createGatewayController(
       (ref) => ref.includes('/') && !ref.startsWith('ferry/'),
     );
     return allowedConcrete.length
-      ? eligible.filter((model) => allowedConcrete.includes(model.ref))
+      ? allowedConcrete.flatMap((ref) => {
+          const model = eligible.find((item) => item.ref === ref);
+          return model ? [model] : [];
+        })
       : eligible;
   };
   const runtime: GatewayRuntime = {
@@ -292,6 +299,8 @@ export function createGatewayController(
       const concreteAllowlist = key.allowedModels.filter(
         (model) => model.includes('/') && !model.startsWith('ferry/'),
       );
+      if (key.profile === 'none' && concreteAllowlist.length > 0)
+        return eligible.map((model) => model.ref);
       const hasLogicalAllowlist = key.allowedModels.some(
         (model) => !model.includes('/') && !model.startsWith('ferry/'),
       );
@@ -396,7 +405,10 @@ export function createGatewayController(
       ? routed.filter((item) => logicalRefs.has(item.ref))
       : explicit
         ? [
-            candidates.find((item) => item.ref === explicit),
+            // A "No profile" key with picked models only ever routes inside that list.
+            input.key.profile === 'none' && hasConcreteAllowlist(input.key)
+              ? routed.find((item) => item.ref === explicit)
+              : candidates.find((item) => item.ref === explicit),
             ...routed.filter((item) => item.ref !== explicit),
           ].filter((item): item is (typeof candidates)[number] => Boolean(item))
         : routed;

@@ -116,15 +116,16 @@ describe('Library, settings, and onboarding screens', () => {
       resolveSaved?.();
       return result;
     });
-    await user.click(await screen.findByRole('button', { name: /Best Available/ }));
-    await user.clear(screen.getByRole('textbox', { name: 'Daily cap ($)' }));
-    await user.type(screen.getByRole('textbox', { name: 'Daily cap ($)' }), '4');
-    await user.clear(screen.getByRole('textbox', { name: 'Monthly cap ($)' }));
-    await user.type(screen.getByRole('textbox', { name: 'Monthly cap ($)' }), '25');
-    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    // Built-in profiles are read-only apart from roles and fallback order; edit a copy.
+    await user.click(await screen.findByRole('button', { name: 'Duplicate to customize' }));
+    await user.clear(screen.getByRole('textbox', { name: 'Per day cap ($)' }));
+    await user.type(screen.getByRole('textbox', { name: 'Per day cap ($)' }), '4');
+    await user.clear(screen.getByRole('textbox', { name: 'Per month cap ($)' }));
+    await user.type(screen.getByRole('textbox', { name: 'Per month cap ($)' }), '25');
+    await user.click(screen.getByRole('button', { name: 'Save profile' }));
     await saved;
     const savedProfile = (await client.profiles.list()).find(
-      (item) => item.name === 'Best Available',
+      (item) => item.name === 'Best Available copy',
     );
     expect(savedProfile?.caps.dailyUsd).toBe(4);
     expect(savedProfile?.caps.monthlyUsd).toBe(25);

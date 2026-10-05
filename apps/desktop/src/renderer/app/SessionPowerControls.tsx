@@ -4,6 +4,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { Bell, Check, ChevronDown, Search, X } from 'lucide-react';
 import { Popover as PopoverPrimitive } from 'radix-ui';
 import { Dialog, FerryMark, ProviderLogo, ShowMoreList, Skeleton, TagBadge, UiV2 } from '@ferry/ui';
+import { DIRECT_PROFILE_ID } from '@ferry/shared';
 import type { ModelInfo, ModelRef, PartId, ProfileId, SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { listAllModels } from '@ferry/client';
@@ -438,6 +439,8 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
   );
 }
 
+const noProfileValue = 'profile none no profile';
+
 export function ComposerModelChip({
   sessionId,
   profileName = 'Profile',
@@ -468,7 +471,13 @@ export function ComposerModelChip({
   const [localOpen, setLocalOpen] = useState(false);
   const [modelQuery, setModelQuery] = useState('');
   const [commandValue, setCommandValue] = useState('');
+  // The details card is a hover tooltip: it follows cmdk's highlight while the pointer is over the
+  // list or the arrow keys are in use, and is hidden otherwise.
+  const [pointerInList, setPointerInList] = useState(false);
+  const [keyboardNav, setKeyboardNav] = useState(false);
   const open = controlledOpen ?? localOpen;
+  const routingProfiles = profiles.filter((profile) => profile.id !== DIRECT_PROFILE_ID);
+  const noProfile = activeProfileId === DIRECT_PROFILE_ID;
   const setOpen = onOpenChange ?? setLocalOpen;
   const candidateQueryKey = useMemo(() => ['model-candidates', sessionId] as const, [sessionId]);
   const { data: candidates = [] } = useQuery({
@@ -506,9 +515,17 @@ export function ComposerModelChip({
   useEffect(() => {
     if (open) {
       const activeProfile = profiles.find((profile) => profile.id === activeProfileId);
-      setCommandValue(activeProfile ? `profile ${activeProfile.name}` : '');
+      setCommandValue(
+        activeProfileId === DIRECT_PROFILE_ID
+          ? noProfileValue
+          : activeProfile
+            ? `profile ${activeProfile.name}`
+            : '',
+      );
     } else {
       setModelQuery('');
+      setPointerInList(false);
+      setKeyboardNav(false);
     }
   }, [activeProfileId, open, profiles]);
   const autoRef = visibleCandidates[0]?.ref;
@@ -534,7 +551,7 @@ export function ComposerModelChip({
   const autoValue = `Auto ${autoModel}`;
   const modelValue = (model: ModelInfo) =>
     `${model.name} ${model.tier} ${providerById.get(model.providerId)?.name ?? model.providerId} ${model.ref}`;
-  const highlighted = commandValue.toLocaleLowerCase();
+  const highlighted = (pointerInList || keyboardNav ? commandValue : '').toLocaleLowerCase();
   const highlightedModel =
     highlighted === autoValue.toLocaleLowerCase()
       ? autoInfo
@@ -575,8 +592,12 @@ export function ComposerModelChip({
           type="button"
         >
           <FerryMark className="v2-chip-ferry" decorative size={14} variant="brand" />
-          <span className="v2-chip-profile">{profileName}</span>
-          <span aria-hidden="true" className="v2-chip-divider" />
+          {noProfile ? null : (
+            <>
+              <span className="v2-chip-profile">{profileName}</span>
+              <span aria-hidden="true" className="v2-chip-divider" />
+            </>
+          )}
           {chipModel ? (
             <ProviderLogo
               model={`${chipModel.ref} ${chipModel.name}`}
@@ -619,6 +640,9 @@ export function ComposerModelChip({
               className="model-command"
               value={commandValue}
               onValueChange={setCommandValue}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') setKeyboardNav(true);
+              }}
             >
               <div className="model-picker-search">
                 <Search aria-hidden="true" size={14} />
@@ -629,19 +653,41 @@ export function ComposerModelChip({
                   value={modelQuery}
                 />
               </div>
-              <ModelCommand.List>
+              <ModelCommand.List
+                onPointerEnter={() => {
+                  setPointerInList(true);
+                }}
+                onPointerLeave={() => {
+                  setPointerInList(false);
+                  setKeyboardNav(false);
+                }}
+              >
                 <ModelCommand.Empty className="model-picker-empty">
                   No models match.
                 </ModelCommand.Empty>
-                {profiles.length > 0 ? (
+                {onProfileSelect ? (
                   <ModelCommand.Group heading="Profile">
-                    {profiles.map((profile) => (
+                    <ModelCommand.Item
+                      className="model-candidate model-profile"
+                      value={noProfileValue}
+                      onSelect={() => {
+                        onProfileSelect(DIRECT_PROFILE_ID);
+                        setOpen(false);
+                      }}
+                    >
+                      <strong>No profile</strong>
+                      <span className="model-row-meta">Pick the model yourself</span>
+                      {noProfile ? (
+                        <Check aria-hidden="true" className="model-row-check" size={14} />
+                      ) : null}
+                    </ModelCommand.Item>
+                    {routingProfiles.map((profile) => (
                       <ModelCommand.Item
                         className="model-candidate model-profile"
                         key={profile.id}
                         value={`profile ${profile.name}`}
                         onSelect={() => {
-                          onProfileSelect?.(profile.id);
+                          onProfileSelect(profile.id);
                           setOpen(false);
                         }}
                       >
@@ -763,6 +809,17 @@ export function ComposerModelChip({
                 model={highlightedModel}
                 provider={providerById.get(highlightedModel.providerId)}
               />
+            ) : highlighted === noProfileValue.toLocaleLowerCase() ? (
+              <aside aria-label="No profile" className="v2-model-details">
+                <header>
+                  <strong>No profile</strong>
+                  <span className="v2-model-details-provider">Direct model</span>
+                </header>
+                <p className="v2-model-details-description">
+                  Talk to the model you pick, with no routing rules. Auto picks from every connected
+                  model. Your global paid confirmation and spend caps still apply.
+                </p>
+              </aside>
             ) : highlightedProfile ? (
               <aside aria-label={`${highlightedProfile.name} profile`} className="v2-model-details">
                 <header>

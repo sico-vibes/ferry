@@ -13,6 +13,7 @@ export const ProviderIdSchema = idSchema('ProviderId');
 export type ProviderId = z.infer<typeof ProviderIdSchema>;
 export const ProfileIdSchema = idSchema('ProfileId');
 export type ProfileId = z.infer<typeof ProfileIdSchema>;
+export const DIRECT_PROFILE_ID: ProfileId = 'profile_builtin_direct' as ProfileId;
 export const RunIdSchema = idSchema('RunId');
 export type RunId = z.infer<typeof RunIdSchema>;
 export const CheckpointIdSchema = idSchema('CheckpointId');

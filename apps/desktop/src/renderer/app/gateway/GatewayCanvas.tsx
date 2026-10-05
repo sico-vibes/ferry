@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { GatewayRequestRecord } from '@ferry/shared';
 import { Check, Copy, KeyRound, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
-import { FerryMark, PageHeader, ProviderLogo, Select, UiV2 } from '@ferry/ui';
+import { FerryMark, PageHeader, ProviderLogo, SegmentedControl, Select, UiV2 } from '@ferry/ui';
+import { listAllModels } from '@ferry/client';
 import { useFerryClient } from '../../data/client';
 import { useProfiles } from '../../data/queries';
 import { useToasts } from '../../state/toasts';
@@ -10,6 +11,8 @@ import { useUI } from '../../state/ui';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { formatTokens } from '../modelFacts';
 import { gatewaySnippets } from './snippets';
+import { ModelMultiPicker } from './ModelMultiPicker';
+import { gatewayRoutingMode, NO_PROFILE, type GatewayRoutingMode } from './modelSelection';
 
 type GatewayKeyRow = Awaited<
   ReturnType<ReturnType<typeof useFerryClient>['gateway']['listKeys']>
@@ -17,6 +20,7 @@ type GatewayKeyRow = Awaited<
 
 const count = new Intl.NumberFormat('en');
 const builtinProfiles = [
+  { value: 'none', label: 'No profile (pick models)' },
   { value: 'auto-free', label: 'Auto-Free' },
   { value: 'best', label: 'Best Available' },
   { value: 'fast', label: 'Fast' },
@@ -77,9 +81,19 @@ function KeyLimitsDialog({
 }) {
   const client = useFerryClient();
   const cache = useQueryClient();
+  const { data: models = [] } = useQuery({
+    queryKey: ['models'],
+    queryFn: () => listAllModels(client),
+  });
+  const { data: providers = [] } = useQuery({
+    queryKey: ['providers'],
+    queryFn: () => client.providers.list(),
+  });
+  // Profile used when switching back from "Pick models" to "Use a profile".
+  const [lastProfile, setLastProfile] = useState('auto-free');
   const [draft, setDraft] = useState({
     profile: 'auto-free',
-    allowedModels: '',
+    allowedModels: [] as string[],
     rateLimit: '',
     tokenLimitPerMinute: '',
     tokenLimitPerDay: '',
@@ -93,7 +107,7 @@ function KeyLimitsDialog({
     const text = (value: number | null) => (value === null ? '' : String(value));
     setDraft({
       profile: gatewayKey.profile,
-      allowedModels: gatewayKey.allowedModels.join(', '),
+      allowedModels: [...gatewayKey.allowedModels],
       rateLimit: text(gatewayKey.rateLimit),
       tokenLimitPerMinute: text(gatewayKey.tokenLimitPerMinute),
       tokenLimitPerDay: text(gatewayKey.tokenLimitPerDay),
@@ -101,8 +115,10 @@ function KeyLimitsDialog({
       compressToolResults: gatewayKey.compressToolResults,
       terseSystemPrompt: gatewayKey.terseSystemPrompt,
     });
+    if (gatewayKey.profile !== NO_PROFILE) setLastProfile(gatewayKey.profile);
     setError('');
   }, [gatewayKey]);
+  const routingMode = gatewayRoutingMode(draft.profile);
   const limit = (
     field: 'rateLimit' | 'tokenLimitPerMinute' | 'tokenLimitPerDay' | 'concurrencyLimit',
     label: string,
@@ -141,10 +157,7 @@ function KeyLimitsDialog({
       patch: {
         ...limits,
         profile: draft.profile,
-        allowedModels: draft.allowedModels
-          .split(',')
-          .map((item) => item.trim())
-          .filter(Boolean),
+        allowedModels: draft.allowedModels,
         compressToolResults: draft.compressToolResults,
         terseSystemPrompt: draft.terseSystemPrompt,
       },
@@ -167,24 +180,56 @@ function KeyLimitsDialog({
           </UiV2.DialogDescription>
         </UiV2.DialogHeader>
         <div className="v2-gateway-form">
-          <Select
-            label="Routing profile"
-            onValueChange={(profile) => {
-              setDraft((current) => ({ ...current, profile }));
-            }}
-            options={profiles}
-            value={draft.profile}
-          />
-          <label className="v2-gateway-field">
-            <span>Allowed models</span>
-            <UiV2.Input
-              onChange={(event) => {
-                setDraft((current) => ({ ...current, allowedModels: event.target.value }));
+          <div className="v2-gateway-field">
+            <span>Routing</span>
+            <SegmentedControl
+              label="Routing"
+              value={routingMode}
+              onValueChange={(value) => {
+                const mode = value as GatewayRoutingMode;
+                setDraft((current) => ({
+                  ...current,
+                  profile: mode === 'models' ? NO_PROFILE : lastProfile,
+                }));
               }}
-              placeholder="All enabled models"
-              value={draft.allowedModels}
+              options={[
+                { value: 'profile', label: 'Use a profile' },
+                { value: 'models', label: 'Pick models' },
+              ]}
             />
-          </label>
+            <small className="v2-gateway-help">
+              {routingMode === 'models'
+                ? 'No profile. Requests go to the models below, tried in this order when one is rate limited or fails.'
+                : 'The profile picks a model for each request. Optionally limit it to the models below.'}
+            </small>
+          </div>
+          {routingMode === 'profile' ? (
+            <Select
+              label="Routing profile"
+              onValueChange={(profile) => {
+                setLastProfile(profile);
+                setDraft((current) => ({ ...current, profile }));
+              }}
+              options={profiles.filter((profile) => profile.value !== NO_PROFILE)}
+              value={draft.profile}
+            />
+          ) : null}
+          <div className="v2-gateway-field">
+            <span>{routingMode === 'models' ? 'Models' : 'Limit to models (optional)'}</span>
+            <ModelMultiPicker
+              emptyLabel={
+                routingMode === 'models'
+                  ? 'No models picked yet: every connected model is allowed.'
+                  : 'No limit: every model the profile allows.'
+              }
+              models={models}
+              providers={providers}
+              value={draft.allowedModels}
+              onChange={(allowedModels) => {
+                setDraft((current) => ({ ...current, allowedModels }));
+              }}
+            />
+          </div>
           <div className="v2-gateway-form-grid">
             {limit('rateLimit', 'Requests per minute')}
             {limit('concurrencyLimit', 'Concurrent requests')}
@@ -617,7 +662,13 @@ export function GatewayCanvas() {
                           {key.name}
                         </span>
                       </td>
-                      <td className="v2-muted">{profileLabel(key.profile)}</td>
+                      <td className="v2-muted">
+                        {key.profile === NO_PROFILE
+                          ? key.allowedModels.length
+                            ? `${String(key.allowedModels.length)} picked models`
+                            : 'No profile'
+                          : profileLabel(key.profile)}
+                      </td>
                       <td className="v2-num">{count.format(key.usage.requests)}</td>
                       <td className="v2-num">
                         {formatTokens(key.usage.inputTokens + key.usage.outputTokens)}
@@ -695,6 +746,11 @@ export function GatewayCanvas() {
               options={profiles}
               value={newProfile}
             />
+            {newProfile === NO_PROFILE ? (
+              <small className="v2-gateway-help">
+                Pick the models this key may use from its settings after you create it.
+              </small>
+            ) : null}
           </div>
           <div className="v2-gateway-dialog-actions">
             <UiV2.Button

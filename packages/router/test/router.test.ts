@@ -93,6 +93,30 @@ describe('logical model mapping', () => {
     });
   });
 });
+
+describe('No profile built-in', () => {
+  it('allows every tier and provider, disables roles and leaves profile caps unset', () => {
+    const direct = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_direct');
+    expect(direct).toMatchObject({
+      name: 'No profile',
+      builtin: true,
+      pinned: false,
+      allowedProviders: 'all',
+      paidAllowed: true,
+      affinityMode: 'soft',
+      caps: { sessionUsd: null, dailyUsd: null, monthlyUsd: null },
+      roles: { enabled: false },
+    });
+    expect(direct?.tierByStep).toEqual({
+      plan: ['T1', 'T2', 'T3'],
+      edit: ['T1', 'T2', 'T3'],
+      search: ['T1', 'T2', 'T3'],
+      summarize: ['T1', 'T2', 'T3'],
+      review: ['T1', 'T2', 'T3'],
+      long_context: ['T1', 'T2', 'T3'],
+    });
+  });
+});
 const provider: Provider = {
   id: 'groq' as Provider['id'],
   name: 'Groq',

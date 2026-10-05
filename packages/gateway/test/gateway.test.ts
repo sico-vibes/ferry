@@ -98,7 +98,10 @@ const runtime: GatewayRuntime = {
       });
     },
   },
-  models: () => ['openai/gpt-test', 'gpt-test-logical'],
+  models: (key) =>
+    key.profile === 'none' && key.allowedModels.length > 0
+      ? key.allowedModels
+      : ['openai/gpt-test', 'gpt-test-logical'],
   complete: (input) => {
     received.push(input);
     if (input.messages.some((message) => message.content === 'quota'))
@@ -126,6 +129,7 @@ afterEach(async () => {
   await stop?.();
   stop = undefined;
   entries.splice(0, entries.length, created.key);
+  created.key.profile = 'auto-free';
   created.key.revokedAt = null;
   created.key.allowedModels = [];
   created.key.rateLimit = null;
@@ -161,6 +165,27 @@ describe('Ferry gateway', () => {
     expect(authenticateGatewayKey('ferry-gw-invalid', entries)).toBeUndefined();
     created.key.revokedAt = new Date().toISOString();
     expect(authenticateGatewayKey(created.secret, entries)).toBeUndefined();
+  });
+
+  it('accepts a no-profile key with concrete model allowlist refs in user order', () => {
+    const direct = createGatewayKey({
+      name: 'Direct models',
+      profile: 'none',
+      allowedModels: ['groq/x', 'gemini/y'],
+    });
+    expect(direct.key.profile).toBe('none');
+    expect(direct.key.allowedModels).toEqual(['groq/x', 'gemini/y']);
+  });
+
+  it('lists a no-profile concrete allowlist in the runtime supplied order', async () => {
+    const url = await server();
+    created.key.profile = 'none';
+    created.key.allowedModels = ['groq/x', 'gemini/y'];
+    const response = await fetch(`${url}/v1/models`, {
+      headers: { authorization: `Bearer ${created.secret}` },
+    });
+    const result = (await response.json()) as { data: { id: string }[] };
+    expect(result.data.map((model) => model.id)).toEqual(['groq/x', 'gemini/y']);
   });
 
   it('rejects browser origins and throttles repeated invalid authentication', async () => {

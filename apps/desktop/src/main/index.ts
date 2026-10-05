@@ -30,6 +30,7 @@ import {
 } from './window-theme.js';
 import { buildCoreEnvironment } from './core-environment.js';
 import { isTrustedRendererOrigin } from './renderer-origin.js';
+import { isAllowlistedExternal } from './external-links.js';
 import { UpdateController, type UpdateSnapshot } from './update-state.js';
 import { releaseChannelForVersion } from '../../scripts/release-config.mjs';
 
@@ -149,37 +150,6 @@ function saveBounds(window: BrowserWindow): void {
   }, 250);
 }
 
-function isExternalHttp(url: string): boolean {
-  try {
-    const protocol = new URL(url).protocol;
-    return protocol === 'https:' || protocol === 'http:';
-  } catch {
-    return false;
-  }
-}
-
-const externalDomainAllowlist = new Set([
-  'docs.ferry.dev',
-  'github.com',
-  'docs.github.com',
-  'openai.com',
-  'platform.openai.com',
-  'anthropic.com',
-  'console.anthropic.com',
-  'ai.google.dev',
-  'console.groq.com',
-  'openrouter.ai',
-  'docs.mistral.ai',
-  'huggingface.co',
-  'docs.deepseek.com',
-]);
-function isAllowlistedExternal(url: string): boolean {
-  if (!isExternalHttp(url)) return false;
-  const hostname = new URL(url).hostname.toLowerCase();
-  return [...externalDomainAllowlist].some(
-    (domain) => hostname === domain || hostname.endsWith(`.${domain}`),
-  );
-}
 function isTrustedRendererUrl(url: string): boolean {
   try {
     const devUrl = process.env.ELECTRON_RENDERER_URL;
@@ -201,7 +171,7 @@ function isTrustedSender(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEv
   );
 }
 async function openExternalSafely(url: string): Promise<void> {
-  if (!isExternalHttp(url) || !isAllowlistedExternal(url)) return;
+  if (!isAllowlistedExternal(url)) return;
   await shell.openExternal(url);
 }
 

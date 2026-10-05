@@ -63,7 +63,7 @@ describe('QA persistence', () => {
       load: () => ({ version: 1, data: { workspaces: [{ bad: true }] } }),
       save: () => undefined,
     };
-    expect(await createMockFerryClient({ storage: invalid }).profiles.list()).toHaveLength(4);
+    expect(await createMockFerryClient({ storage: invalid }).profiles.list()).toHaveLength(5);
   });
 
   it('falls back to fixtures when the storage adapter itself throws', async () => {

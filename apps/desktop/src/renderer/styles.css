@@ -2175,6 +2175,15 @@ body {
 .v2-chat-header [role='button'] {
   -webkit-app-region: no-drag;
 }
+/* Electron drag regions swallow clicks even under overlays; portaled layers must opt out. */
+[role='dialog'],
+[role='alertdialog'],
+[role='menu'],
+[role='listbox'],
+[data-radix-popper-content-wrapper],
+.ferry-ui[data-state='open'] {
+  -webkit-app-region: no-drag;
+}
 .v2-titlebar {
   gap: 12px;
 }
@@ -5447,6 +5456,236 @@ body {
 .tier-row .ferry-checkbox span {
   display: none;
 }
+/* ---- Profiles settings (v0.12-FIX1): one profile at a time, top to bottom ---- */
+.profile-settings-v3 {
+  display: grid;
+  gap: var(--space-6);
+  min-width: 0;
+  max-width: 760px;
+  color: var(--foreground);
+}
+.profile-intro {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 20px;
+}
+.profile-intro strong {
+  color: var(--foreground);
+  font-weight: 550;
+}
+.profile-picker-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.profile-picker-select {
+  min-width: 0;
+  flex: 1;
+}
+.profile-picker-select .ferry-select-trigger {
+  width: 100%;
+}
+.profile-locked-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  border-radius: var(--r-item);
+  background: var(--accent);
+  padding: var(--space-3) var(--space-4);
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 20px;
+}
+.profile-locked-note > span {
+  min-width: 240px;
+  flex: 1;
+}
+.profile-locked-note > button {
+  flex: none;
+}
+.profile-fieldset {
+  display: grid;
+  gap: var(--space-6);
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+.profile-fieldset:disabled .profile-section {
+  opacity: 0.6;
+}
+.profile-section {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  border-radius: var(--r-card);
+  background: var(--card);
+  padding: var(--space-4) var(--space-4) var(--space-3);
+}
+.profile-section > header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 20px;
+}
+.profile-section > header p {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 20px;
+}
+.profile-section .setting-row {
+  border-top: 1px solid var(--border);
+  padding: var(--space-3) 0 var(--space-2);
+}
+.profile-section .setting-row small {
+  color: var(--muted-foreground);
+}
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.profile-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.profile-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 4px var(--space-2);
+}
+.profile-provider-option {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+  border-radius: 10px;
+  padding: 6px var(--space-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+.profile-provider-option:hover {
+  background: var(--muted);
+}
+.profile-provider-option > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-provider-connected {
+  margin-left: auto;
+  color: var(--success);
+  font-size: 12px;
+}
+.profile-tier-table {
+  display: grid;
+}
+.profile-tier-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, 84px);
+  align-items: center;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border);
+  padding: var(--space-2) 0;
+}
+.profile-tier-row.is-head {
+  border-top: 0;
+  padding-top: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.profile-tier-row.is-head > span:not(:first-child) {
+  text-align: center;
+}
+.profile-tier-row > [role='rowheader'] {
+  display: grid;
+}
+.profile-tier-row > [role='rowheader'] strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+.profile-tier-row > [role='rowheader'] small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.profile-tier-row > [role='cell'] {
+  display: flex;
+  justify-content: center;
+}
+.profile-tier-chip {
+  width: 100%;
+  height: 28px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  transition:
+    background 150ms ease-out,
+    color 150ms ease-out;
+}
+.profile-tier-chip:hover:not(:disabled) {
+  color: var(--foreground);
+}
+.profile-tier-chip[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.profile-tier-chip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.profile-chain {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.profile-chain-item {
+  display: grid;
+  grid-template-columns: 16px 20px minmax(140px, 200px) minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: var(--space-2);
+}
+.profile-chain-grip {
+  color: var(--muted-foreground);
+  cursor: grab;
+}
+.profile-chain-index {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.profile-chain-provider .ferry-select-trigger {
+  width: 100%;
+}
+.profile-save-bar {
+  position: sticky;
+  z-index: 2;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  border-radius: var(--r-card);
+  background: var(--card);
+  padding: var(--space-3) var(--space-4);
+  box-shadow: var(--shadow-popover);
+  font-size: 13px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .profile-tier-chip {
+    transition: none;
+  }
+}
 .stats-summary,
 .about-card {
   display: flex;
@@ -6572,6 +6811,7 @@ button:not(:disabled):active,
 
 /* ---- v0.12 UI pass: model picker + details card (reference 07) ---- */
 .model-picker-popover {
+  position: relative;
   z-index: var(--z-popover);
   display: flex;
   max-height: min(560px, var(--radix-popover-content-available-height));
@@ -6717,6 +6957,21 @@ button:not(:disabled):active,
 }
 .model-candidate.model-profile strong {
   font-weight: 500;
+}
+/* The details card is a hover tooltip beside the list; it never resizes the popover. */
+.model-picker-popover > .v2-model-details {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 8px);
+  max-height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  animation: ferry-fade-in 90ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .model-picker-popover > .v2-model-details {
+    animation: none;
+  }
 }
 
 .v2-model-details {
@@ -7225,7 +7480,141 @@ button:not(:disabled):active,
   text-align: center;
 }
 .v2-gateway-dialog {
-  max-width: 480px;
+  max-width: 560px;
+  max-height: min(90dvh, 52rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.v2-gateway-help {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 16px;
+}
+.v2-model-multi {
+  display: grid;
+  gap: var(--space-2);
+}
+.v2-model-multi-selected {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  border-radius: 10px;
+  background: var(--muted);
+  padding: 4px;
+  list-style: none;
+}
+.v2-model-multi-selected > li {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 4px 0 var(--space-2);
+  color: var(--foreground);
+  font-size: 13px;
+}
+.v2-model-multi-selected button {
+  width: 28px;
+  height: 28px;
+}
+.v2-model-multi-order {
+  width: 16px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.v2-model-multi-name {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: baseline;
+  gap: var(--space-2);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.v2-model-multi-name small {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+.v2-model-multi-warning {
+  color: var(--warning);
+  font-size: 12px;
+}
+.v2-model-multi-empty {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.v2-model-multi-search {
+  display: flex;
+  height: 34px;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--input);
+  border-radius: 10px;
+  padding: 0 var(--space-3);
+  color: var(--muted-foreground);
+}
+.v2-model-multi-search:focus-within {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.v2-model-multi-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 13px;
+}
+.v2-model-multi-list {
+  display: grid;
+  max-height: 220px;
+  gap: var(--space-2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+.v2-model-multi-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px var(--space-2);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+}
+.v2-model-multi-option {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: var(--space-2);
+  border-radius: 8px;
+  padding: 0 var(--space-2);
+  color: var(--foreground);
+  font-size: 13px;
+  cursor: pointer;
+}
+.v2-model-multi-option:hover {
+  background: var(--muted);
+}
+.v2-model-multi-option > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.v2-model-multi-option > small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.v2-model-multi-option > small.is-free {
+  color: var(--success);
 }
 .v2-gateway-form {
   display: grid;

@@ -1,5 +1,5 @@
 import { MockNotFoundError } from '../errors.js';
-import { ProfileSchema } from '@ferry/shared';
+import { DIRECT_PROFILE_ID, ProfileSchema } from '@ferry/shared';
 import type { FerryClient } from '../../ferry-client.js';
 import type { MockDeps } from './deps.js';
 import type { MockStore } from '../types.js';
@@ -14,6 +14,7 @@ export function createProfilesDomain(_store: MockStore, deps: MockDeps): FerryCl
     async save(profile) {
       await before();
       const p = ProfileSchema.parse(profile);
+      if (p.id === DIRECT_PROFILE_ID) throw new Error('The No profile built-in cannot be edited');
       const index = state.profiles.findIndex((x) => x.id === p.id);
       if (index < 0) state.profiles.push(p);
       else state.profiles[index] = p;

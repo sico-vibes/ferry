@@ -53,6 +53,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { HomeStats } from './HomeStats';
 import { WorkspaceMenu } from './WorkspaceMenu';
 import { greeting } from './usageSummary';
+import { canScroll, isLatestVisible, readTailGeometry } from './transcriptScroll';
 
 const warnedOAuthRuns = new Set<string>();
 const warnedTrainingSessions = new Set<string>();
@@ -1058,7 +1059,8 @@ export function SessionCanvas() {
             if (cancelled) return;
             const tailDelta =
               tail.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom;
-            if (Math.abs(tailDelta) <= 2) {
+            // A short transcript cannot scroll its tail down to the bottom edge; that is settled too.
+            if (Math.abs(tailDelta) <= 2 || (tailDelta < 0 && element.scrollTop <= 0)) {
               stableFrames += 1;
               if (stableFrames >= 3) {
                 pinnedToBottom.current = true;
@@ -1195,9 +1197,7 @@ export function SessionCanvas() {
         if (Math.abs(tailDelta) > 2) {
           element.scrollTop += tailDelta;
           requestAnimationFrame(() => {
-            const finalDelta =
-              last.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom;
-            if (Math.abs(finalDelta) <= 2) {
+            if (isLatestVisible(readTailGeometry(element, last))) {
               pinnedToBottom.current = true;
               setNewOutputCount(0);
               setAtBottom(true);
@@ -1340,29 +1340,23 @@ export function SessionCanvas() {
           ref={viewport}
           style={{ visibility: initialTailReady ? 'visible' : 'hidden' }}
           onWheel={(event) => {
-            if (event.deltaY < 0) {
+            // Unpin only; the scroll handler decides whether the latest message left the view.
+            if (event.deltaY < 0 && canScroll(event.currentTarget)) {
               pinnedToBottom.current = false;
-              setAtBottom(false);
               streamAnchor.current = captureTranscriptAnchor(viewport.current);
             }
           }}
           onKeyDown={(event) => {
-            if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) {
+            if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) && canScroll(event.currentTarget))
               pinnedToBottom.current = false;
-              setAtBottom(false);
-            }
           }}
           onScroll={(event) => {
             const element = event.currentTarget;
             const tail = element.querySelector<HTMLElement>(
               `.transcript-message[data-index="${String(messages.length - 1)}"]`,
             );
-            const bottom = Boolean(
-              tail &&
-              Math.abs(
-                tail.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom,
-              ) <= 2,
-            );
+            const bottom =
+              messages.length === 0 || isLatestVisible(readTailGeometry(element, tail));
             if (bottom) {
               pinnedToBottom.current = true;
               setNewOutputCount(0);

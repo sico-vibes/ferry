@@ -1,3 +1,4 @@
+import { DIRECT_PROFILE_ID } from '@ferry/shared';
 import { sampleProfile } from '@ferry/shared/testing';
 import type { Profile } from '@ferry/shared';
 
@@ -28,5 +29,33 @@ export function createProfiles(): Profile[] {
     }),
   );
 
+  profiles.push({
+    ...sampleProfile,
+    id: DIRECT_PROFILE_ID,
+    name: 'No profile',
+    icon: 'sparkles',
+    description:
+      'Talk to the model you pick. No routing rules, tiers or caps beyond your global settings.',
+    affinityMode: 'soft',
+    builtin: true,
+    pinned: false,
+    allowedProviders: 'all',
+    tierByStep: {
+      plan: ['T1', 'T2', 'T3'],
+      edit: ['T1', 'T2', 'T3'],
+      search: ['T1', 'T2', 'T3'],
+      summarize: ['T1', 'T2', 'T3'],
+      review: ['T1', 'T2', 'T3'],
+      long_context: ['T1', 'T2', 'T3'],
+    },
+    paidAllowed: true,
+    caps: { sessionUsd: null, dailyUsd: null, monthlyUsd: null },
+    roles: {
+      enabled: false,
+      plannerModelRef: null,
+      editorModelRef: null,
+      editorFailureThreshold: 2,
+    },
+  });
   return profiles;
 }

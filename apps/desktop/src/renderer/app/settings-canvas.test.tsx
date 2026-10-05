@@ -114,11 +114,12 @@ describe('SettingsCanvas', () => {
     useUI.setState({ settingsSection: 'Profiles' });
     const user = userEvent.setup();
     mount(client);
-    await user.click(await screen.findByRole('button', { name: /Auto-Free/ }));
-    const toggle = await screen.findByRole('switch', { name: 'Planner/editor split' });
+    await user.click(await screen.findByRole('combobox', { name: 'Profile to edit' }));
+    await user.click(await screen.findByRole('option', { name: /Auto-Free/ }));
+    const toggle = await screen.findByRole('switch', { name: 'Split planning and editing' });
     expect(toggle.getAttribute('data-state')).toBe('checked');
     await user.click(toggle);
-    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await user.click(screen.getByRole('button', { name: 'Save profile' }));
     await waitFor(async () => {
       expect(
         (await client.profiles.list()).find((profile) => profile.name === 'Auto-Free')?.roles
@@ -175,14 +176,24 @@ describe('SettingsCanvas', () => {
     expect(() => mount()).not.toThrow();
   });
 
-  // BUG (P3): the profile editor repeats the "Paid models" setting row twice with identical
-  // label, helper and control, so the same option is shown (and toggled) in two places.
   it('shows the paid-models setting exactly once in the profile editor', async () => {
     useUI.setState({ settingsSection: 'Profiles' });
     mount();
-    fireEvent.click(await screen.findByRole('button', { name: /Best Available/ }));
-    await screen.findByText('Edit routing and spending limits.');
-    expect(screen.getAllByText('Paid models')).toHaveLength(1);
+    await screen.findByRole('combobox', { name: 'Profile to edit' });
+    expect(screen.getAllByText('Allow paid models')).toHaveLength(1);
+  });
+
+  it('hides the internal No profile entry and locks built-in fields', async () => {
+    useUI.setState({ settingsSection: 'Profiles' });
+    const user = userEvent.setup();
+    mount();
+    await user.click(await screen.findByRole('combobox', { name: 'Profile to edit' }));
+    expect(screen.queryByRole('option', { name: /No profile/ })).toBeNull();
+    await user.keyboard('{Escape}');
+    expect(await screen.findByRole('note')).toBeTruthy();
+    expect(screen.getByRole('switch', { name: 'Allow paid models' }).matches(':disabled')).toBe(
+      true,
+    );
   });
 
   it('shows the connected core details and disables domains with no registered handlers', async () => {

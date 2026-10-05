@@ -1,4 +1,10 @@
-import { ProfileIdSchema, ProfileSchema, SessionIdSchema, SettingsSchema } from '@ferry/shared';
+import {
+  DIRECT_PROFILE_ID,
+  ProfileIdSchema,
+  ProfileSchema,
+  SessionIdSchema,
+  SettingsSchema,
+} from '@ferry/shared';
 import { DEFAULT_SETTINGS } from '@ferry/config';
 import { BUILTIN_PROFILES } from '@ferry/router';
 import { rpcDomainError, type CoreHost } from '../host.js';
@@ -18,6 +24,7 @@ export function register(host: CoreHost, services: FerryServices): void {
     const overrides = savedBuiltinOverrides(services);
     return [
       ...BUILTIN_PROFILES.map((base) => {
+        if (base.id === DIRECT_PROFILE_ID) return base;
         const override = overrides.find((item) => item.id === base.id);
         return override ? ProfileSchema.parse({ ...base, ...override, builtin: true }) : base;
       }),
@@ -30,6 +37,8 @@ export function register(host: CoreHost, services: FerryServices): void {
     },
     save(rawProfile: unknown) {
       const profile = ProfileSchema.parse(rawProfile);
+      if (profile.id === DIRECT_PROFILE_ID)
+        throw rpcDomainError(-32010, 'validation', 'The No profile built-in cannot be edited');
       const builtin = BUILTIN_PROFILES.find((item) => item.id === profile.id);
       if (builtin) {
         const { fallbackChain: _overrideChain, ...candidateSettings } = profile;

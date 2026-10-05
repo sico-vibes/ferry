@@ -8,6 +8,7 @@ import { ProjectConfigSchema } from '@ferry/config';
 import type { AgentTool, ToolSource as AgentToolSource } from '@ferry/agent';
 import type { ToolSource as ExtensionToolSource } from '@ferry/extensions';
 import {
+  DIRECT_PROFILE_ID,
   MessageSchema,
   PartIdSchema,
   ProfileSchema,
@@ -128,6 +129,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       : [];
     return [
       ...BUILTIN_PROFILES.map((base) => {
+        if (base.id === DIRECT_PROFILE_ID) return base;
         const override = builtinOverrides.find((item) => item.id === base.id);
         return ProfileSchema.parse(override ? { ...base, ...override, builtin: true } : base);
       }),

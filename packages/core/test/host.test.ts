@@ -211,6 +211,30 @@ describe('core host dispatcher and lifecycle', () => {
       const opened = await rpc.workspaces.open(join(path, 'workspace'));
       WorkspaceSchema.parse(opened);
       expect((await rpc.workspaces.list()).map((workspace) => workspace.id)).toContain(opened.id);
+      const directProfile = (await rpc.profiles.list()).find(
+        (profile) => profile.id === 'profile_builtin_direct',
+      );
+      if (!directProfile) throw new Error('No profile built-in is missing');
+      expect(directProfile).toMatchObject({ builtin: true, pinned: false, name: 'No profile' });
+      const directSession = await rpc.sessions.create({
+        workspaceId: opened.id,
+        profileId: 'profile_builtin_direct' as import('@ferry/shared').ProfileId,
+      });
+      expect(directSession.profileId).toBe('profile_builtin_direct');
+      await expect(rpc.profiles.save({ ...directProfile, description: 'Edited' })).rejects.toThrow(
+        /cannot be edited/,
+      );
+      const noneKey = await rpc.gateway.createKey({ name: 'Direct key', profile: 'none' });
+      expect((await rpc.gateway.listKeys()).find((key) => key.id === noneKey.key.id)?.profile).toBe(
+        'none',
+      );
+      await rpc.gateway.updateKey({
+        id: noneKey.key.id,
+        patch: { allowedModels: ['groq/x', 'gemini/y'] },
+      });
+      expect(
+        (await rpc.gateway.listKeys()).find((key) => key.id === noneKey.key.id)?.allowedModels,
+      ).toEqual(['groq/x', 'gemini/y']);
       SettingsSchema.parse(await rpc.settings.update({ theme: 'light' }));
       const sessionId = SessionIdSchema.parse('contract_session');
       const projectFile = join(opened.path, 'project.txt');
