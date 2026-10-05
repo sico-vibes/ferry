@@ -9,6 +9,7 @@ interface RouteSpineProps {
   cardRefs: readonly RefObject<HTMLElement | null>[];
   ferryRef: RefObject<HTMLElement | null>;
   gatewayRef: RefObject<HTMLElement | null>;
+  present?: boolean;
   className?: string;
 }
 
@@ -182,6 +183,7 @@ export function RouteSpine({
   cardRefs,
   ferryRef,
   gatewayRef,
+  present = false,
   className,
 }: RouteSpineProps) {
   const reduced = useReducedMotion();
@@ -221,7 +223,11 @@ export function RouteSpine({
   return (
     <svg
       aria-hidden="true"
-      className={cn('pointer-events-none absolute inset-0 hidden md:block', className)}
+      className={cn(
+        'pointer-events-none absolute inset-0 hidden md:block',
+        present && reduced === false && 'route-spine-present',
+        className,
+      )}
       fill="none"
       viewBox={`0 0 ${fmt(geometry.width)} ${fmt(geometry.height)}`}
       width={geometry.width}
@@ -230,6 +236,7 @@ export function RouteSpine({
       {geometry.tracks.map((path, index) => (
         <path
           key={`track-${String(index)}`}
+          className="route-track"
           d={path}
           stroke="var(--beam-track)"
           strokeLinecap="round"

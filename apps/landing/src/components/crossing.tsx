@@ -4,6 +4,7 @@ import { KeyRound } from 'lucide-react';
 import { useReducedMotion } from 'motion/react';
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { FerryMark } from '@/components/ferry-mark';
+import { Reveal } from '@/components/reveal';
 import { RouteSpine } from '@/components/route-spine';
 import { SectionHeading, Shell } from '@/components/shell';
 import { crossing } from '@/lib/site';
@@ -33,10 +34,12 @@ function FlippingProviderCard({
   queue,
   delayMs,
   nodeRef,
+  active,
 }: {
   queue: readonly ProviderMark[];
   delayMs: number;
   nodeRef: RefObject<HTMLDivElement | null>;
+  active: boolean;
 }) {
   const reduced = useReducedMotion();
   const [index, setIndex] = useState(0);
@@ -44,7 +47,10 @@ function FlippingProviderCard({
   const mark = queue[index] ?? queue[0];
 
   useEffect(() => {
-    if (reduced === true || queue.length < 2) return;
+    if (reduced === true || !active || queue.length < 2) {
+      setTurned(false);
+      return;
+    }
     let cancelled = false;
     let timer = 0;
     const cycle = () => {
@@ -61,7 +67,7 @@ function FlippingProviderCard({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [delayMs, queue.length, reduced]);
+  }, [active, delayMs, queue.length, reduced]);
 
   if (!mark) return null;
 
@@ -118,72 +124,93 @@ function AnchorCard({
 }
 
 export function Crossing() {
+  const sectionRef = useRef<HTMLElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const ferryRef = useRef<HTMLDivElement>(null);
   const gatewayRef = useRef<HTMLDivElement>(null);
   const queues = providerSlotQueues();
   const cardRefs = useStableRefs(queues.length);
+  const [present, setPresent] = useState(false);
+
+  useEffect(() => {
+    const node = sectionRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setPresent(entry?.isIntersecting ?? false);
+      },
+      { threshold: 0.2 },
+    );
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   return (
-    <section id="crossing" className="scroll-mt-16 py-16">
+    <section ref={sectionRef} id="crossing" className="scroll-mt-14 py-16">
       <Shell>
-        <SectionHeading title={crossing.title}>{crossing.lead}</SectionHeading>
-        <p className="mx-auto mt-4 max-w-2xl text-center text-sm leading-6 text-muted-foreground">
-          {crossing.body}
-        </p>
+        <Reveal>
+          <SectionHeading title={crossing.title}>{crossing.lead}</SectionHeading>
+          <p className="mx-auto mt-4 max-w-2xl text-center text-sm leading-6 text-muted-foreground">
+            {crossing.body}
+          </p>
 
-        <div ref={containerRef} className="relative mx-auto mt-12 w-fit max-w-full">
-          <div className="grid items-center justify-items-center gap-3 md:grid-cols-[11rem_7rem_7.5rem_5rem_13.5rem] md:gap-x-0">
-            <div className="relative z-10 flex flex-col gap-3">
-              {queues.map((queue, index) => {
-                const nodeRef = cardRefs[index];
-                const key = queue[0]?.id ?? String(index);
-                if (!nodeRef) return null;
-                return (
-                  <FlippingProviderCard
-                    key={key}
-                    queue={queue}
-                    delayMs={280 + index * 520}
-                    nodeRef={nodeRef}
-                  />
-                );
-              })}
-            </div>
+          <div ref={containerRef} className="relative mx-auto mt-12 w-fit max-w-full">
+            <div className="grid items-center justify-items-center gap-3 md:grid-cols-[11rem_7rem_7.5rem_5rem_13.5rem] md:gap-x-0">
+              <div className="relative z-10 flex flex-col gap-3">
+                {queues.map((queue, index) => {
+                  const nodeRef = cardRefs[index];
+                  const key = queue[0]?.id ?? String(index);
+                  if (!nodeRef) return null;
+                  return (
+                    <FlippingProviderCard
+                      key={key}
+                      queue={queue}
+                      delayMs={280 + index * 520}
+                      nodeRef={nodeRef}
+                      active={present}
+                    />
+                  );
+                })}
+              </div>
 
-            <div className="hidden md:block" aria-hidden="true" />
+              <div className="hidden md:block" aria-hidden="true" />
 
-            <div className="relative z-10 flex justify-center">
-              <div
-                ref={ferryRef}
-                className="flex size-28 flex-col items-center justify-center gap-2 rounded-card border border-border bg-card shadow-[var(--shadow-float)]"
-              >
-                <FerryMark className="size-12" />
-                <span className="text-sm font-semibold">Ferry</span>
+              <div className="relative z-10 flex justify-center">
+                <div
+                  ref={ferryRef}
+                  className="flex size-28 flex-col items-center justify-center gap-2 rounded-card border border-border bg-card shadow-[var(--shadow-float)]"
+                >
+                  <FerryMark className="size-12" />
+                  <span className="text-sm font-semibold">Ferry</span>
+                </div>
+              </div>
+
+              <div className="hidden md:block" aria-hidden="true" />
+
+              <div className="relative z-10">
+                <AnchorCard
+                  nodeRef={gatewayRef}
+                  className="w-52"
+                  label={crossing.gateway}
+                  hint={crossing.gatewayHint}
+                  icon={<KeyRound aria-hidden="true" className="size-5" strokeWidth={1.75} />}
+                />
               </div>
             </div>
 
-            <div className="hidden md:block" aria-hidden="true" />
-
-            <div className="relative z-10">
-              <AnchorCard
-                nodeRef={gatewayRef}
-                className="w-52"
-                label={crossing.gateway}
-                hint={crossing.gatewayHint}
-                icon={<KeyRound aria-hidden="true" className="size-5" strokeWidth={1.75} />}
-              />
-            </div>
+            <RouteSpine
+              containerRef={containerRef}
+              cardRefs={cardRefs}
+              ferryRef={ferryRef}
+              gatewayRef={gatewayRef}
+              present={present}
+            />
           </div>
 
-          <RouteSpine
-            containerRef={containerRef}
-            cardRefs={cardRefs}
-            ferryRef={ferryRef}
-            gatewayRef={gatewayRef}
-          />
-        </div>
-
-        <p className="mt-8 text-center text-sm text-muted-foreground">{crossing.note}</p>
+          <p className="mt-8 text-center text-sm text-muted-foreground">{crossing.note}</p>
+        </Reveal>
       </Shell>
     </section>
   );
