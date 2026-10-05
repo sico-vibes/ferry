@@ -41,7 +41,7 @@ Include files outside the root directory can stay off. Brand marks and product s
 ## Page
 
 1. Nav with the Ferry mark, section links, and Download.
-2. Hero with a React Bits Beams background, ferry headline, dual CTAs, and the desktop home screenshot.
+2. Hero with a React Bits Gradient Waves background, ferry headline, dual CTAs, and the desktop home screenshot.
 3. The crossing: Magic UI animated beams from provider marks through the Ferry mark to the desktop session and CLI.
 4. Feature cards.
 5. Three steps: add keys, pick a route, code.
@@ -49,4 +49,4 @@ Include files outside the root directory can stay off. Brand marks and product s
 7. FAQ accordion.
 8. Final download CTA and footer.
 
-Reduced motion skips the WebGL ribbons and the traveling beam gradient. Narrow viewports use fewer ribbons.
+Reduced motion skips the WebGL sea and the traveling beam gradient. Narrow viewports use a lower wave detail setting.

@@ -1,5 +1,5 @@
 import Image from 'next/image';
-import { BeamsBackground } from '@/components/beams-background';
+import { GradientWavesBackground } from '@/components/gradient-waves-background';
 import { buttonVariants } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { dock, hero, links } from '@/lib/site';
@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 export function Hero() {
   return (
     <section className="relative isolate overflow-hidden">
-      <BeamsBackground />
+      <GradientWavesBackground />
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0"

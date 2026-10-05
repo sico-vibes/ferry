@@ -68,7 +68,7 @@ Text tool-call parsing and bounded recovery patterns in packages/agent/src/weak-
 
 Provider normalization patterns in packages/providers/src/normalization.ts and context compaction patterns in packages/optimizer/src/compaction.ts are independently implemented from ideas documented by OpenCode (MIT) and Goose (Apache-2.0). No source code was copied.
 
-apps/landing/src/components/beams.tsx adapts the Beams background from React Bits,
+apps/landing/src/components/gradient-waves.tsx adapts the Gradient Waves background from React Bits,
 Copyright (c) 2026 David Haz, MIT + Commons Clause License Condition v1.0:
 https://github.com/DavidHDev/react-bits
 The adaptation ships as part of the Ferry marketing site. It is not a standalone

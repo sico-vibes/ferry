@@ -4,10 +4,10 @@ The Ferry application is MIT licensed. Two visual components copied into this ap
 keep their own notices. They ship as part of the marketing site, not as a
 component library.
 
-## React Bits Beams
+## React Bits Gradient Waves
 
-Adapted in `src/components/beams.tsx` from
-https://github.com/DavidHDev/react-bits (Beams background).
+Adapted in `src/components/gradient-waves.tsx` from
+https://reactbits.dev/r/GradientWaves-TS-TW (Gradient Waves background).
 
 MIT + Commons Clause License Condition v1.0
 
@@ -77,5 +77,4 @@ shadcn. They use Radix primitives from the `radix-ui` package.
 - `lucide-react`, ISC License.
 - `simple-icons`, CC0 1.0 Universal. Groq and OpenAI have no mark in the
   installed set, so the diagram uses monograms for those two providers.
-- `three`, `@react-three/fiber`, and `@react-three/drei` render the Beams
-  background. Their own licenses travel with the packages.
+- `ogl` renders the Gradient Waves background. Its license travels with the package.

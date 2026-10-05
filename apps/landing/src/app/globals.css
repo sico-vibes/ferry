@@ -16,6 +16,9 @@
   --beam-light: #c8b5f5;
   --beam-deep: #6d5bd0;
   --beam-track: rgba(143, 122, 224, 0.45);
+  --wave-horizon: #1a1630;
+  --wave-color: #6d5bd0;
+  --wave-crest: #c8b5f5;
   --ink: #090622;
   --brand-lilac: #c8b5f5;
   --brand-violet: #8f7ae0;
@@ -27,18 +30,13 @@
     var(--brand-violet) 55%,
     var(--brand-deep)
   );
-  --hero-wash:
-    radial-gradient(
-      120% 80% at 50% -10%,
-      color-mix(in srgb, var(--beam) 48%, transparent),
-      transparent 55%
-    ),
-    radial-gradient(
-      70% 55% at 82% 8%,
-      color-mix(in srgb, var(--beam-deep) 42%, transparent),
-      transparent 52%
-    ),
-    var(--background);
+  --hero-wash: linear-gradient(
+    180deg,
+    var(--wave-horizon) 0%,
+    color-mix(in srgb, var(--wave-color) 46%, var(--background)) 46%,
+    color-mix(in srgb, var(--wave-crest) 18%, var(--background)) 72%,
+    var(--background) 100%
+  );
   --hero-scrim: linear-gradient(
     180deg,
     color-mix(in srgb, var(--background) 24%, transparent) 0%,
@@ -105,14 +103,14 @@ body {
   color: var(--primary-foreground);
 }
 
-.hero-beams {
+.hero-waves {
   position: absolute;
   inset: 0;
   overflow: hidden;
   background: var(--hero-wash);
 }
 
-.hero-beams canvas {
+.hero-waves canvas {
   display: block;
   width: 100% !important;
   height: 100% !important;
