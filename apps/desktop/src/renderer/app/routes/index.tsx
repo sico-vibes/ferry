@@ -4,6 +4,7 @@ import { exploreRoutes } from './explore';
 import { modelsRoutes } from './models';
 import { libraryRoutes } from './library';
 import { settingsRoutes } from './settings';
+import { gatewayRoutes } from './gateway';
 import { rootRoute } from './root';
 import { createRoute, useNavigate } from '@tanstack/react-router';
 import { EmptyState } from '@ferry/ui';
@@ -35,5 +36,6 @@ export const routeRegistry = [
   ...modelsRoutes,
   ...libraryRoutes,
   ...settingsRoutes,
+  ...gatewayRoutes,
   notFoundRoute,
 ] as const;

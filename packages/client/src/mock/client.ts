@@ -1,3 +1,4 @@
+import type { GatewayRequestRecord } from '@ferry/shared';
 import type { FerryClient } from '../ferry-client.js';
 import type { MockState, MockStore } from './types.js';
 import { createMockStore } from './store.js';
@@ -25,6 +26,8 @@ export type MockFerryClient = FerryClient & {
   __reset(): void;
   __state(): Readonly<MockState>;
   __store(): Readonly<MockStore>;
+  /** Simulate a Gateway request reaching the log (web preview and tests). */
+  __gatewayRequest(record: GatewayRequestRecord): void;
 };
 
 export function createMockFerryClient(options: MockOptions = {}): MockFerryClient {
@@ -52,6 +55,7 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
       outputTokens: number;
     };
   }[] = [];
+  const gatewayRequests: GatewayRequestRecord[] = [];
   const client: FerryClient = {
     gateway: {
       settings: () =>
@@ -107,6 +111,7 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
         if (key) key.revokedAt = new Date().toISOString();
         return Promise.resolve(undefined);
       },
+      requests: () => Promise.resolve(gatewayRequests.map((record) => ({ ...record }))),
       start: async () => {
         gatewaySettings = { ...gatewaySettings, enabled: true };
         return client.gateway.settings();
@@ -137,5 +142,20 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
     __reset: runtime.reset,
     __state: () => runtime.state,
     __store: () => runtime.store,
+    __gatewayRequest: (record: GatewayRequestRecord) => {
+      gatewayRequests.unshift(record);
+      gatewayRequests.splice(200);
+      const key = gatewayKeys.find((entry) => entry.id === record.keyId);
+      if (key) {
+        key.lastUsedAt = record.at;
+        key.usage.requests += 1;
+        if (record.status === 'ok') {
+          key.usage.successfulRequests += 1;
+          key.usage.inputTokens += record.inputTokens;
+          key.usage.outputTokens += record.outputTokens;
+        }
+      }
+      deps.emitter.emit('gateway.request', record);
+    },
   });
 }

@@ -26,6 +26,8 @@ export async function run(page, { url, expect }) {
   const scan = async (route, state = '') => {
     await page.goto(new URL(route, url).href, { waitUntil: 'domcontentloaded' });
     if (route === '/onboarding') await page.getByRole('button', { name: 'Skip setup' }).waitFor();
+    else if (route === '/settings')
+      await page.getByRole('navigation', { name: 'Settings sections' }).waitFor();
     else await page.getByRole('navigation', { name: 'Primary' }).waitFor();
     if (state === 'palette') {
       await page.keyboard.press('Control+k');
@@ -47,6 +49,7 @@ export async function run(page, { url, expect }) {
     '/models/catalog',
     '/models/usage',
     '/library',
+    '/gateway',
     '/settings',
     '/onboarding',
   ]) {

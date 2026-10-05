@@ -44,7 +44,8 @@ export function FerryMark({
     );
   }
 
-  const mask = `url(${markUrl})`;
+  // Quoted: dev asset paths can contain characters (e.g. an apostrophe) that end an unquoted url().
+  const mask = `url(${JSON.stringify(markUrl)})`;
   const style: CSSProperties = {
     width: size,
     height: size,

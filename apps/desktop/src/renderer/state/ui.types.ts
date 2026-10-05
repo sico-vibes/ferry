@@ -2,18 +2,20 @@ import type { SessionId } from '@ferry/shared';
 
 export type RightTab = 'chats' | 'plan' | 'changes';
 export type Density = 'comfortable' | 'compact';
-export type SettingsSection =
-  | 'General'
-  | 'Profiles'
-  | 'Providers & keys'
-  | 'Routing'
-  | 'Optimizers'
-  | 'Delegation'
-  | 'Permissions'
-  | 'Gateway'
-  | 'Data & privacy'
-  | 'Shortcuts'
-  | 'About';
+export const settingsSections = [
+  'General',
+  'Profiles',
+  'Providers & keys',
+  'Routing',
+  'Optimizers',
+  'Delegation',
+  'Permissions',
+  'Gateway',
+  'Data & privacy',
+  'Shortcuts',
+  'About',
+] as const;
+export type SettingsSection = (typeof settingsSections)[number];
 export interface OpenTab {
   id: SessionId;
   title: string;
@@ -34,6 +36,7 @@ export interface UIState extends PersistedLayout {
   density: Density;
   selectedWorkspaceId: string | null;
   settingsSection: SettingsSection;
+  settingsOpen: boolean;
   exploreFilter: 'All' | 'Free' | 'Needs attention' | 'Configured';
   openTab: (tab: OpenTab) => void;
   requestComposerFocus: () => void;
@@ -50,6 +53,8 @@ export interface UIState extends PersistedLayout {
   setBottomHeight: (height: number) => void;
   setBottomTab: (tab: 'terminal' | 'agent-log') => void;
   setSettingsSection: (section: SettingsSection) => void;
+  openSettings: (section?: SettingsSection) => void;
+  closeSettings: () => void;
   setSelectedWorkspace: (id: string | null) => void;
   setExploreFilter: (filter: UIState['exploreFilter']) => void;
   resetLayout: () => void;

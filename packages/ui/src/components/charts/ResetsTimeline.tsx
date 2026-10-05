@@ -82,11 +82,11 @@ export function ResetsTimeline({
         <h2 className="text-ui-label font-semibold text-foreground">Resets</h2>
         <span className="text-ui-meta text-muted-foreground">Next 24 hours</span>
       </header>
-      <div className="relative mx-1 h-12">
+      <div className="relative mx-1 h-14">
         <div className="absolute inset-x-0 top-5 h-px bg-border" />
         <span
           aria-hidden="true"
-          className="absolute top-2.5 h-6 w-px bg-primary"
+          className="absolute top-2 h-6 w-0.5 rounded-full bg-primary"
           style={{
             left: '0%',
           }}
@@ -116,12 +116,12 @@ export function ResetsTimeline({
             </button>
           );
         })}
-        <span className="absolute inset-x-0 top-7 flex justify-between text-ui-meta text-muted-foreground">
-          <span>Now</span>
+        <span className="absolute inset-x-0 top-9 flex justify-between text-ui-meta text-muted-foreground">
+          <span className="pl-0.5 font-medium text-foreground">Now</span>
           <span>+24h</span>
         </span>
       </div>
-      <ul className="mt-2 grid gap-1.5">
+      <ul className="mt-3 grid gap-1.5">
         {resets.slice(0, 4).map((reset) => (
           <li
             className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 text-ui-meta"

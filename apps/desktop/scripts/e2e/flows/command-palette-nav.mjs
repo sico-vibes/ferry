@@ -20,7 +20,10 @@ export async function run(page, ctx) {
 
   dialog = await open();
   await dialog.getByRole('option', { name: 'Go to Settings' }).click();
-  await ctx.expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await ctx.expect(settings).toBeVisible();
+  await page.keyboard.press('Escape');
+  await ctx.expect(settings).toBeHidden();
 
   dialog = await open();
   await dialog.getByRole('option', { name: 'Go to Models' }).click();

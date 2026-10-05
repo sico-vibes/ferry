@@ -60,6 +60,8 @@ const states = [
   'settings-data-privacy',
   'settings-shortcuts',
   'settings-about',
+  'gateway-dashboard',
+  'gateway-log',
   'onboarding-welcome',
   'onboarding-provider',
   'onboarding-folder',
@@ -179,6 +181,12 @@ async function captureState(browser, state, theme, viewport) {
       await page.getByRole('button', { name: 'More session actions', exact: true }).click();
       await page.getByRole('menuitem', { name: 'Delete session' }).click();
       await page.getByRole('alertdialog', { name: 'Delete chat?' }).waitFor();
+    } else if (state === 'gateway-dashboard' || state === 'gateway-log') {
+      await page.goto(new URL('/gateway', baseUrl).href);
+      await page.getByRole('heading', { name: 'Gateway', exact: true }).waitFor();
+      if (state === 'gateway-log') {
+        await page.getByRole('region', { name: 'Live requests' }).scrollIntoViewIfNeeded();
+      }
     } else if (state.startsWith('models-')) {
       const route =
         state === 'models-usage'
@@ -272,10 +280,12 @@ async function captureState(browser, state, theme, viewport) {
           ];
           localStorage.setItem('ferry.mock.v1', JSON.stringify(persisted));
         });
-        await page.reload();
+        await page.goto(new URL('/settings', baseUrl).href);
         await page.getByRole('navigation', { name: 'Settings sections' }).waitFor();
         await page.getByRole('button', { name: 'Providers & keys', exact: true }).click();
-        const providerRow = page.locator('.provider-key-row').filter({ hasText: 'OpenAI API' });
+        const providerRow = page
+          .locator('table[aria-label="Providers"] tbody tr')
+          .filter({ hasText: 'OpenAI API' });
         await providerRow.getByRole('button', { name: 'Manage key', exact: true }).click();
         const dialog = page.getByRole('dialog', { name: 'Manage OpenAI API key', exact: true });
         await dialog.waitFor();
@@ -336,7 +346,7 @@ async function captureState(browser, state, theme, viewport) {
       await page.locator('.session-resume-banner').waitFor();
     } else if (state === 'about-dialog') {
       await page.getByRole('button', { name: 'User menu', exact: true }).click();
-      await page.getByRole('menuitem', { name: 'About / changelog', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'About Ferry', exact: true }).click();
       await page.getByRole('dialog', { name: 'About Ferry', exact: true }).waitFor();
     } else if (state.startsWith('drawer-')) {
       await openSeededSession(page);

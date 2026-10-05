@@ -49,6 +49,8 @@ export interface ComposerProps {
     onSelect?: () => void;
   }[];
   profileControl?: ReactNode;
+  /** Replaces the built-in workspace chip (e.g. an app-level project menu). */
+  workspaceControl?: ReactNode;
   workspaceName?: string;
   workspaceMenuItems?: { label: string; onSelect: () => void }[];
   onWorkspaceClick?: () => void;
@@ -68,6 +70,7 @@ export function Composer({
   onProfileClick,
   profileMenuItems,
   profileControl,
+  workspaceControl,
   workspaceName,
   workspaceMenuItems,
   onWorkspaceClick,
@@ -181,28 +184,29 @@ export function Composer({
                   <ChevronDown aria-hidden="true" />
                 </button>
               ))}
-            {workspaceName &&
-              (workspaceMenuItems?.length ? (
-                <DropdownMenu
-                  align="start"
-                  clampHeight
-                  trigger={
-                    <button className="v2-composer-tool" type="button">
-                      <FolderOpen aria-hidden="true" />
-                      {workspaceName}
-                      <ChevronDown aria-hidden="true" />
-                    </button>
-                  }
-                  items={workspaceMenuItems}
-                  side="top"
-                />
-              ) : (
-                <button className="v2-composer-tool" onClick={onWorkspaceClick} type="button">
-                  <FolderOpen aria-hidden="true" />
-                  {workspaceName}
-                  <ChevronDown aria-hidden="true" />
-                </button>
-              ))}
+            {workspaceControl ??
+              (workspaceName &&
+                (workspaceMenuItems?.length ? (
+                  <DropdownMenu
+                    align="start"
+                    clampHeight
+                    trigger={
+                      <button className="v2-composer-tool" type="button">
+                        <FolderOpen aria-hidden="true" />
+                        {workspaceName}
+                        <ChevronDown aria-hidden="true" />
+                      </button>
+                    }
+                    items={workspaceMenuItems}
+                    side="top"
+                  />
+                ) : (
+                  <button className="v2-composer-tool" onClick={onWorkspaceClick} type="button">
+                    <FolderOpen aria-hidden="true" />
+                    {workspaceName}
+                    <ChevronDown aria-hidden="true" />
+                  </button>
+                )))}
           </div>
           <div className="v2-composer-send">
             {running ? (

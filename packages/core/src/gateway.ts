@@ -10,7 +10,7 @@ import {
   classifyProviderError,
   resolveLogicalModelCandidates,
 } from '@ferry/router';
-import { RoutingSettingsSchema } from '@ferry/shared';
+import { RoutingSettingsSchema, type GatewayRequestRecord } from '@ferry/shared';
 import {
   type GatewayRuntime,
   startGateway,
@@ -156,8 +156,20 @@ function routingSettings(services: FerryServices) {
   return RoutingSettingsSchema.parse(routing ?? {});
 }
 
-export function createGatewayController(services: FerryServices) {
+const requestLogLimit = 200;
+
+export function createGatewayController(
+  services: FerryServices,
+  onRequest?: (record: GatewayRequestRecord) => void,
+) {
   let handle: GatewayHandle | undefined;
+  // Recent routed requests for the live log: metadata only, never prompt or response text.
+  const requestLog: GatewayRequestRecord[] = [];
+  const logRequest = (record: GatewayRequestRecord) => {
+    requestLog.unshift(record);
+    requestLog.splice(requestLogLimit);
+    onRequest?.(record);
+  };
   const providerKeyRotation = new ProviderKeyRotation();
   const stickyRoutes = new Map<
     string,
@@ -305,287 +317,330 @@ export function createGatewayController(services: FerryServices) {
       return [...concreteModels.map((model) => model.ref), ...availableLogical];
     },
     async complete(input) {
-      const selectedProfile = input.model.startsWith('@profile:')
-        ? input.model.slice('@profile:'.length)
-        : input.key.profile;
-      const visibleModels = new Set(allModels());
-      const candidates = [
-        ...services.catalog.models,
-        ...services.catalog.providers.flatMap(({ provider }) => services.models.list(provider)),
-      ].filter((model) => visibleModels.has(model.ref));
-      const runtimeDeps = await import('./session-deps.js');
-      const requestDeps = runtimeDeps.createSessionDependencies(services, () => undefined);
-      const routed = await routeableCandidates(
-        input.key,
-        selectedProfile,
-        Math.max(1, JSON.stringify(input.messages).length / 4),
-      );
-      const isProfile = input.model.startsWith('@profile:');
-      const logicalMappings = resolveLogicalModelCandidates(
-        input.model,
-        candidates,
-        services.catalog.logicalModels ?? [],
-        routingSettings(services).logicalModelMappings,
-      );
-      const isConfiguredLogical = [
-        ...(services.catalog.logicalModels ?? []),
-        ...routingSettings(services).logicalModelMappings,
-      ].some((mapping) => mapping.logicalName === input.model);
-      const logicalRefs = new Set(logicalMappings.map((model) => model.ref));
-      const isLogical = !isProfile && isConfiguredLogical;
-      if (isLogical && logicalRefs.size === 0)
-        throw new Error(`No eligible model is configured for logical name ${input.model}`);
-      const explicit = isProfile || isLogical ? undefined : input.model;
-      let ordered = isLogical
-        ? routed.filter((item) => logicalRefs.has(item.ref))
-        : explicit
-          ? [
-              candidates.find((item) => item.ref === explicit),
-              ...routed.filter((item) => item.ref !== explicit),
-            ].filter((item): item is (typeof candidates)[number] => Boolean(item))
-          : routed;
-      const containsImage = input.messages.some(
-        (message) =>
-          Array.isArray(message.content) &&
-          message.content.some((part) =>
-            Boolean(part && typeof part === 'object' && ('image' in part || 'image_url' in part)),
-          ),
-      );
-      if (containsImage) {
-        ordered = ordered.filter((candidate) => candidate.capability?.vision === true);
-        if (!ordered.length)
-          throw Object.assign(new Error('No eligible upstream model supports image input'), {
-            name: 'AI_InvalidPromptError',
-          });
-      }
-      const sticky = stickyRoutes.get(input.sessionHint);
-      const profileValues = services.settings.get('profiles');
-      const selectedProfileRecord = [
-        ...BUILTIN_PROFILES,
-        ...(Array.isArray(profileValues) ? (profileValues as typeof BUILTIN_PROFILES) : []),
-      ].find((entry) => entry.id === profileId(selectedProfile));
-      const affinityProviderId =
-        sticky?.providerId ?? sticky?.modelRef.slice(0, sticky.modelRef.indexOf('/'));
-      const matchesAffinity = (item: (typeof candidates)[number]) => {
-        if (!sticky || !affinityProviderId || item.providerId !== affinityProviderId) return false;
-        return (
-          !sticky.providerKeyId ||
-          services.providerKeyEntries
-            .list(item.providerId)
-            .some((entry) => entry.id === sticky.providerKeyId)
-        );
+      const started = services.clock.now();
+      const base = {
+        id: `gwreq_${String(started.getTime())}_${Math.random().toString(36).slice(2, 8)}`,
+        at: started.toISOString(),
+        keyId: input.key.id,
+        keyName: input.key.name,
+        requestedModel: input.model.startsWith('@profile:')
+          ? `ferry/${input.model.slice('@profile:'.length)}`
+          : input.model,
       };
-      if (!explicit && sticky && sticky.expiresAt > services.clock.now().getTime()) {
-        ordered =
-          selectedProfileRecord?.affinityMode === 'strict'
-            ? ordered.filter(matchesAffinity)
-            : [
-                ...ordered.filter(matchesAffinity),
-                ...ordered.filter((item) => !matchesAffinity(item) && item.ref === sticky.modelRef),
-                ...ordered.filter((item) => !matchesAffinity(item) && item.ref !== sticky.modelRef),
-              ];
+      const latencyMs = () => Math.max(0, services.clock.now().getTime() - started.getTime());
+      try {
+        const result = await routeCompletion(input);
+        logRequest({
+          ...base,
+          modelRef: result.model,
+          providerId: result.model.includes('/')
+            ? result.model.slice(0, result.model.indexOf('/'))
+            : null,
+          status: 'ok',
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          latencyMs: latencyMs(),
+          error: null,
+        });
+        return result;
+      } catch (error) {
+        logRequest({
+          ...base,
+          modelRef: null,
+          providerId: null,
+          status: 'error',
+          inputTokens: 0,
+          outputTokens: 0,
+          latencyMs: latencyMs(),
+          error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+        });
+        throw error;
       }
-      if (!ordered.length) throw new Error('No eligible provider model is configured');
-      let lastError: unknown;
-      const now = services.clock.now().getTime();
-      const withKeyFallback = ordered.flatMap((model) => {
-        const count = services.providerKeyEntries
-          .list(model.providerId)
-          .filter(
-            (key) =>
-              key.enabled &&
-              key.status !== 'invalid' &&
-              (key.status !== 'disabled' ||
-                Boolean(key.cooldownUntil && Date.parse(key.cooldownUntil) <= now)) &&
-              (key.status !== 'rate_limited' ||
-                !key.cooldownUntil ||
-                Date.parse(key.cooldownUntil) <= now),
-          ).length;
-        return Array.from({ length: Math.max(1, count) }, () => model);
-      });
-      for (const model of withKeyFallback) {
-        const providerId = model.providerId;
-        const entries = services.providerKeyEntries.list(providerId);
-        const stickyKeyId = stickyRoutes.get(input.sessionHint)?.providerKeyId;
-        const preferredKeyId =
-          stickyKeyId &&
-          !entries.some((entry) => entry.id === stickyKeyId) &&
-          services.providerKeys.get(providerId)?.id === stickyKeyId
-            ? entries.find((entry) => entry.position === 0)?.id
-            : stickyKeyId;
-        const providerKey = providerKeyRotation.select(
-          providerId,
-          entries.map((entry) => ({ ...entry, order: entry.position })),
-          services.clock.now(),
-          'round_robin',
-          preferredKeyId,
-        );
-        const key = providerKey
-          ? await services.secrets.get(providerKey.keyringRef)
-          : services.providerKeyEntries.list(providerId).length === 0
-            ? await services.secrets.get(
-                services.providerKeys.get(providerId)?.keyringRef ?? providerId,
-              )
-            : undefined;
-        if (!key) continue;
-        const envName = `FERRY_PROVIDER_BASE_URL_${providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-        const outputState = { started: false };
-        try {
-          const routedMessages = toGatewayModelMessages(
-            compressedMessages(input.messages, input.key.compressToolResults),
-          );
-          const instructions = [
-            input.instructions,
-            input.key.terseSystemPrompt ? terseSystemText('Lite') : undefined,
-          ]
-            .filter((part): part is string => Boolean(part))
-            .join('\n\n');
-          const result = await streamProviderChat({
-            model: model.ref,
-            apiKey: key,
-            messages: routedMessages,
-            ...(instructions ? { system: instructions } : {}),
-            ...(input.tools
-              ? {
-                  tools: input.tools.flatMap((raw) => {
-                    if (!raw || typeof raw !== 'object') return [];
-                    const item = raw as Record<string, unknown>;
-                    if (
-                      item.type !== 'function' ||
-                      !item.function ||
-                      typeof item.function !== 'object'
-                    )
-                      return [];
-                    const fn = item.function as Record<string, unknown>;
-                    return typeof fn.name === 'string'
-                      ? [
-                          {
-                            name: fn.name,
-                            ...(typeof fn.description === 'string'
-                              ? { description: fn.description }
-                              : {}),
-                            parameters:
-                              fn.parameters && typeof fn.parameters === 'object'
-                                ? (fn.parameters as Record<string, unknown>)
-                                : {},
-                          },
-                        ]
-                      : [];
-                  }),
-                }
-              : {}),
-            ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}),
-            ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
-            ...(input.jsonMode ? { jsonMode: true } : {}),
-            ...(input.toolChoice === 'auto' ||
-            input.toolChoice === 'none' ||
-            input.toolChoice === 'required'
-              ? { toolChoice: input.toolChoice }
-              : input.toolChoice &&
-                  typeof input.toolChoice === 'object' &&
-                  'function' in input.toolChoice &&
-                  input.toolChoice.function &&
-                  typeof input.toolChoice.function === 'object' &&
-                  'name' in input.toolChoice.function &&
-                  typeof input.toolChoice.function.name === 'string'
-                ? { toolChoice: { name: input.toolChoice.function.name } }
-                : {}),
-            ...(services.env[envName] ? { baseUrl: services.env[envName] } : {}),
-            overrides: resolveProviderRequestOverrides(
-              providerId,
-              routingSettings(services).providerOverrides[providerId],
-            ),
-            fetch: requestDeps.providerFetch,
-            onObservation: requestDeps.observe,
-            signal: input.signal,
-            onText: (delta) => {
-              outputState.started = true;
-              input.onText?.(delta);
-            },
-            onToolCall: (call) => {
-              outputState.started = true;
-              input.onToolCall?.(call);
-            },
-          });
-          const timestamp = services.clock.now().toISOString();
-          if (providerKey)
-            services.providerKeyUsage.record(
-              providerId,
-              providerKey.keyId,
-              new Date(timestamp),
-              result.inputTokens,
-              result.outputTokens,
-            );
-          services.quota.recordUsage({
-            id: `gateway:${input.key.id}:${timestamp}`,
-            providerId,
-            modelRef: model.ref,
-            occurredAt: timestamp,
-            inputTokens: result.inputTokens,
-            ...(result.cachedTokens === undefined ? {} : { cachedTokens: result.cachedTokens }),
-            outputTokens: result.outputTokens,
-            status: 'success',
-          });
-          stickyRoutes.set(input.sessionHint, {
-            modelRef: model.ref,
-            providerId,
-            ...(providerKey?.id ? { providerKeyId: providerKey.id } : {}),
-            expiresAt: services.clock.now().getTime() + 30 * 60 * 1000,
-          });
-          return { id: `gw-${String(Date.now())}`, model: model.ref, ...result };
-        } catch (error) {
-          const errorName =
-            error && typeof error === 'object' && 'name' in error && typeof error.name === 'string'
-              ? error.name
-              : '';
-          if (
-            /AI_InvalidPromptError|AI_TypeValidationError|AI_NoSuchToolError|ZodError|SchemaValidationError|ValidationError/.test(
-              errorName,
-            )
-          )
-            throw error;
-          const outer =
-            error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
-          const providerError =
-            outer.name === 'AI_StreamProviderError' &&
-            outer.cause &&
-            typeof outer.cause === 'object'
-              ? (outer.cause as Record<string, unknown>)
-              : outer;
-          const typed = classifyProviderError({
-            status: providerError.status,
-            statusCode: providerError.statusCode,
-            code: providerError.code,
-            type: providerError.type,
-            message: providerError.message,
-            responseBody: providerError.data ?? providerError.responseBody,
-            ...(providerError.response instanceof Response
-              ? { headers: providerError.response.headers }
-              : {}),
-          });
-          const providerStatus = Number(
-            providerError.statusCode ??
-              providerError.status ??
-              (providerError.response && typeof providerError.response === 'object'
-                ? (providerError.response as { status?: unknown }).status
-                : 0),
-          );
-          if (providerKey)
-            recordProviderKeyFailure(services, providerKey, providerStatus, typed.message);
-          stickyRoutes.delete(input.sessionHint);
-          const rawMessage =
-            typed.message || (error instanceof Error ? error.message : 'Provider request failed');
-          lastError = new Error(rawMessage.replaceAll(key, '[REDACTED]'));
-          const canFallback = typed.scope !== 'none' || typed.retryable;
-          if (outputState.started || !canFallback) throw error;
-        }
-      }
-      throw lastError instanceof Error
-        ? lastError
-        : new Error('All eligible providers failed before returning output');
     },
   };
+  async function routeCompletion(
+    input: Parameters<GatewayRuntime['complete']>[0],
+  ): ReturnType<GatewayRuntime['complete']> {
+    const selectedProfile = input.model.startsWith('@profile:')
+      ? input.model.slice('@profile:'.length)
+      : input.key.profile;
+    const visibleModels = new Set(allModels());
+    const candidates = [
+      ...services.catalog.models,
+      ...services.catalog.providers.flatMap(({ provider }) => services.models.list(provider)),
+    ].filter((model) => visibleModels.has(model.ref));
+    const runtimeDeps = await import('./session-deps.js');
+    const requestDeps = runtimeDeps.createSessionDependencies(services, () => undefined);
+    const routed = await routeableCandidates(
+      input.key,
+      selectedProfile,
+      Math.max(1, JSON.stringify(input.messages).length / 4),
+    );
+    const isProfile = input.model.startsWith('@profile:');
+    const logicalMappings = resolveLogicalModelCandidates(
+      input.model,
+      candidates,
+      services.catalog.logicalModels ?? [],
+      routingSettings(services).logicalModelMappings,
+    );
+    const isConfiguredLogical = [
+      ...(services.catalog.logicalModels ?? []),
+      ...routingSettings(services).logicalModelMappings,
+    ].some((mapping) => mapping.logicalName === input.model);
+    const logicalRefs = new Set(logicalMappings.map((model) => model.ref));
+    const isLogical = !isProfile && isConfiguredLogical;
+    if (isLogical && logicalRefs.size === 0)
+      throw new Error(`No eligible model is configured for logical name ${input.model}`);
+    const explicit = isProfile || isLogical ? undefined : input.model;
+    let ordered = isLogical
+      ? routed.filter((item) => logicalRefs.has(item.ref))
+      : explicit
+        ? [
+            candidates.find((item) => item.ref === explicit),
+            ...routed.filter((item) => item.ref !== explicit),
+          ].filter((item): item is (typeof candidates)[number] => Boolean(item))
+        : routed;
+    const containsImage = input.messages.some(
+      (message) =>
+        Array.isArray(message.content) &&
+        message.content.some((part) =>
+          Boolean(part && typeof part === 'object' && ('image' in part || 'image_url' in part)),
+        ),
+    );
+    if (containsImage) {
+      ordered = ordered.filter((candidate) => candidate.capability?.vision === true);
+      if (!ordered.length)
+        throw Object.assign(new Error('No eligible upstream model supports image input'), {
+          name: 'AI_InvalidPromptError',
+        });
+    }
+    const sticky = stickyRoutes.get(input.sessionHint);
+    const profileValues = services.settings.get('profiles');
+    const selectedProfileRecord = [
+      ...BUILTIN_PROFILES,
+      ...(Array.isArray(profileValues) ? (profileValues as typeof BUILTIN_PROFILES) : []),
+    ].find((entry) => entry.id === profileId(selectedProfile));
+    const affinityProviderId =
+      sticky?.providerId ?? sticky?.modelRef.slice(0, sticky.modelRef.indexOf('/'));
+    const matchesAffinity = (item: (typeof candidates)[number]) => {
+      if (!sticky || !affinityProviderId || item.providerId !== affinityProviderId) return false;
+      return (
+        !sticky.providerKeyId ||
+        services.providerKeyEntries
+          .list(item.providerId)
+          .some((entry) => entry.id === sticky.providerKeyId)
+      );
+    };
+    if (!explicit && sticky && sticky.expiresAt > services.clock.now().getTime()) {
+      ordered =
+        selectedProfileRecord?.affinityMode === 'strict'
+          ? ordered.filter(matchesAffinity)
+          : [
+              ...ordered.filter(matchesAffinity),
+              ...ordered.filter((item) => !matchesAffinity(item) && item.ref === sticky.modelRef),
+              ...ordered.filter((item) => !matchesAffinity(item) && item.ref !== sticky.modelRef),
+            ];
+    }
+    if (!ordered.length) throw new Error('No eligible provider model is configured');
+    let lastError: unknown;
+    const now = services.clock.now().getTime();
+    const withKeyFallback = ordered.flatMap((model) => {
+      const count = services.providerKeyEntries
+        .list(model.providerId)
+        .filter(
+          (key) =>
+            key.enabled &&
+            key.status !== 'invalid' &&
+            (key.status !== 'disabled' ||
+              Boolean(key.cooldownUntil && Date.parse(key.cooldownUntil) <= now)) &&
+            (key.status !== 'rate_limited' ||
+              !key.cooldownUntil ||
+              Date.parse(key.cooldownUntil) <= now),
+        ).length;
+      return Array.from({ length: Math.max(1, count) }, () => model);
+    });
+    for (const model of withKeyFallback) {
+      const providerId = model.providerId;
+      const entries = services.providerKeyEntries.list(providerId);
+      const stickyKeyId = stickyRoutes.get(input.sessionHint)?.providerKeyId;
+      const preferredKeyId =
+        stickyKeyId &&
+        !entries.some((entry) => entry.id === stickyKeyId) &&
+        services.providerKeys.get(providerId)?.id === stickyKeyId
+          ? entries.find((entry) => entry.position === 0)?.id
+          : stickyKeyId;
+      const providerKey = providerKeyRotation.select(
+        providerId,
+        entries.map((entry) => ({ ...entry, order: entry.position })),
+        services.clock.now(),
+        'round_robin',
+        preferredKeyId,
+      );
+      const key = providerKey
+        ? await services.secrets.get(providerKey.keyringRef)
+        : services.providerKeyEntries.list(providerId).length === 0
+          ? await services.secrets.get(
+              services.providerKeys.get(providerId)?.keyringRef ?? providerId,
+            )
+          : undefined;
+      if (!key) continue;
+      const envName = `FERRY_PROVIDER_BASE_URL_${providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+      const outputState = { started: false };
+      try {
+        const routedMessages = toGatewayModelMessages(
+          compressedMessages(input.messages, input.key.compressToolResults),
+        );
+        const instructions = [
+          input.instructions,
+          input.key.terseSystemPrompt ? terseSystemText('Lite') : undefined,
+        ]
+          .filter((part): part is string => Boolean(part))
+          .join('\n\n');
+        const result = await streamProviderChat({
+          model: model.ref,
+          apiKey: key,
+          messages: routedMessages,
+          ...(instructions ? { system: instructions } : {}),
+          ...(input.tools
+            ? {
+                tools: input.tools.flatMap((raw) => {
+                  if (!raw || typeof raw !== 'object') return [];
+                  const item = raw as Record<string, unknown>;
+                  if (
+                    item.type !== 'function' ||
+                    !item.function ||
+                    typeof item.function !== 'object'
+                  )
+                    return [];
+                  const fn = item.function as Record<string, unknown>;
+                  return typeof fn.name === 'string'
+                    ? [
+                        {
+                          name: fn.name,
+                          ...(typeof fn.description === 'string'
+                            ? { description: fn.description }
+                            : {}),
+                          parameters:
+                            fn.parameters && typeof fn.parameters === 'object'
+                              ? (fn.parameters as Record<string, unknown>)
+                              : {},
+                        },
+                      ]
+                    : [];
+                }),
+              }
+            : {}),
+          ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}),
+          ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+          ...(input.jsonMode ? { jsonMode: true } : {}),
+          ...(input.toolChoice === 'auto' ||
+          input.toolChoice === 'none' ||
+          input.toolChoice === 'required'
+            ? { toolChoice: input.toolChoice }
+            : input.toolChoice &&
+                typeof input.toolChoice === 'object' &&
+                'function' in input.toolChoice &&
+                input.toolChoice.function &&
+                typeof input.toolChoice.function === 'object' &&
+                'name' in input.toolChoice.function &&
+                typeof input.toolChoice.function.name === 'string'
+              ? { toolChoice: { name: input.toolChoice.function.name } }
+              : {}),
+          ...(services.env[envName] ? { baseUrl: services.env[envName] } : {}),
+          overrides: resolveProviderRequestOverrides(
+            providerId,
+            routingSettings(services).providerOverrides[providerId],
+          ),
+          fetch: requestDeps.providerFetch,
+          onObservation: requestDeps.observe,
+          signal: input.signal,
+          onText: (delta) => {
+            outputState.started = true;
+            input.onText?.(delta);
+          },
+          onToolCall: (call) => {
+            outputState.started = true;
+            input.onToolCall?.(call);
+          },
+        });
+        const timestamp = services.clock.now().toISOString();
+        if (providerKey)
+          services.providerKeyUsage.record(
+            providerId,
+            providerKey.keyId,
+            new Date(timestamp),
+            result.inputTokens,
+            result.outputTokens,
+          );
+        services.quota.recordUsage({
+          id: `gateway:${input.key.id}:${timestamp}`,
+          providerId,
+          modelRef: model.ref,
+          occurredAt: timestamp,
+          inputTokens: result.inputTokens,
+          ...(result.cachedTokens === undefined ? {} : { cachedTokens: result.cachedTokens }),
+          outputTokens: result.outputTokens,
+          status: 'success',
+        });
+        stickyRoutes.set(input.sessionHint, {
+          modelRef: model.ref,
+          providerId,
+          ...(providerKey?.id ? { providerKeyId: providerKey.id } : {}),
+          expiresAt: services.clock.now().getTime() + 30 * 60 * 1000,
+        });
+        return { id: `gw-${String(Date.now())}`, model: model.ref, ...result };
+      } catch (error) {
+        const errorName =
+          error && typeof error === 'object' && 'name' in error && typeof error.name === 'string'
+            ? error.name
+            : '';
+        if (
+          /AI_InvalidPromptError|AI_TypeValidationError|AI_NoSuchToolError|ZodError|SchemaValidationError|ValidationError/.test(
+            errorName,
+          )
+        )
+          throw error;
+        const outer = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+        const providerError =
+          outer.name === 'AI_StreamProviderError' && outer.cause && typeof outer.cause === 'object'
+            ? (outer.cause as Record<string, unknown>)
+            : outer;
+        const typed = classifyProviderError({
+          status: providerError.status,
+          statusCode: providerError.statusCode,
+          code: providerError.code,
+          type: providerError.type,
+          message: providerError.message,
+          responseBody: providerError.data ?? providerError.responseBody,
+          ...(providerError.response instanceof Response
+            ? { headers: providerError.response.headers }
+            : {}),
+        });
+        const providerStatus = Number(
+          providerError.statusCode ??
+            providerError.status ??
+            (providerError.response && typeof providerError.response === 'object'
+              ? (providerError.response as { status?: unknown }).status
+              : 0),
+        );
+        if (providerKey)
+          recordProviderKeyFailure(services, providerKey, providerStatus, typed.message);
+        stickyRoutes.delete(input.sessionHint);
+        const rawMessage =
+          typed.message || (error instanceof Error ? error.message : 'Provider request failed');
+        lastError = new Error(rawMessage.replaceAll(key, '[REDACTED]'));
+        const canFallback = typed.scope !== 'none' || typed.retryable;
+        if (outputState.started || !canFallback) throw error;
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('All eligible providers failed before returning output');
+  }
   return {
+    requests() {
+      return requestLog.map((record) => ({ ...record }));
+    },
     get status() {
       return handle
         ? {

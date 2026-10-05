@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Search,
 } from 'lucide-react';
+import { Popover } from 'radix-ui';
 import type { OAuthProvider } from '@ferry/shared';
 import { ShowMoreList } from '@ferry/ui';
 
@@ -127,43 +128,49 @@ export function OAuthProviderRows({
                     </span>
                     <div className="flex items-center justify-end gap-1">
                       {provider.advanced && available && !provider.connected ? (
-                        <details className="relative">
-                          <summary
+                        <Popover.Root>
+                          <Popover.Trigger
                             aria-label={`Configure ${provider.name} gateway`}
-                            className="inline-flex h-8 cursor-pointer list-none items-center rounded-control px-2 text-ui-meta text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            className="inline-flex h-8 cursor-pointer items-center rounded-control px-2 text-ui-meta text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             Configure…
-                          </summary>
-                          <div className="absolute right-0 top-full z-20 mt-1 grid w-72 gap-3 rounded-card border border-border bg-card p-3 shadow-[var(--shadow-popover)]">
-                            <label className="grid gap-1 text-ui-meta text-muted-foreground">
-                              Gateway URL
-                              <input
-                                aria-label={`${provider.name} gateway URL`}
-                                className="h-9 min-w-0 rounded-control border border-input bg-background px-3 text-ui-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                onChange={(event) => {
-                                  setGateways((current) => ({
-                                    ...current,
-                                    [provider.id]: event.target.value,
-                                  }));
-                                }}
-                                placeholder="https://gateway.example"
-                                type="url"
-                                value={gateways[provider.id] ?? ''}
-                              />
-                            </label>
-                            <button
-                              aria-label={`Log in to ${provider.name}`}
-                              className="inline-flex h-8 items-center justify-center gap-1 rounded-control bg-muted px-3 text-ui-meta text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                              disabled={!validGatewayUrl(gateways[provider.id] ?? '')}
-                              onClick={() => {
-                                onLogin(provider, gateways[provider.id]);
-                              }}
-                              type="button"
+                          </Popover.Trigger>
+                          <Popover.Portal>
+                            <Popover.Content
+                              align="end"
+                              className="ferry-ui v2-row-popover grid w-72 gap-3"
+                              sideOffset={6}
                             >
-                              <LogIn aria-hidden="true" size={14} /> Log in
-                            </button>
-                          </div>
-                        </details>
+                              <label className="grid gap-1 text-ui-meta text-muted-foreground">
+                                Gateway URL
+                                <input
+                                  aria-label={`${provider.name} gateway URL`}
+                                  className="h-9 min-w-0 rounded-control border border-input bg-background px-3 text-ui-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                  onChange={(event) => {
+                                    setGateways((current) => ({
+                                      ...current,
+                                      [provider.id]: event.target.value,
+                                    }));
+                                  }}
+                                  placeholder="https://gateway.example"
+                                  type="url"
+                                  value={gateways[provider.id] ?? ''}
+                                />
+                              </label>
+                              <button
+                                aria-label={`Log in to ${provider.name}`}
+                                className="inline-flex h-8 items-center justify-center gap-1 rounded-control bg-muted px-3 text-ui-meta text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={!validGatewayUrl(gateways[provider.id] ?? '')}
+                                onClick={() => {
+                                  onLogin(provider, gateways[provider.id]);
+                                }}
+                                type="button"
+                              >
+                                <LogIn aria-hidden="true" size={14} /> Log in
+                              </button>
+                            </Popover.Content>
+                          </Popover.Portal>
+                        </Popover.Root>
                       ) : provider.signupUrl && !available ? (
                         <a
                           aria-label={`Learn about ${provider.name}`}
@@ -205,32 +212,38 @@ export function OAuthProviderRows({
                       ) : (
                         <span className="px-2 text-meta text-text-3">No login action</span>
                       )}
-                      <details className="relative">
-                        <summary
+                      <Popover.Root>
+                        <Popover.Trigger
                           aria-label={`More options for ${provider.name}`}
-                          className="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           <MoreHorizontal aria-hidden="true" size={16} />
-                        </summary>
-                        <div className="absolute right-0 top-full z-10 mt-1 w-60 rounded-card border border-border bg-card p-3 text-ui-meta text-muted-foreground shadow-[var(--shadow-popover)]">
-                          <p>{provider.riskText}</p>
-                          {provider.models.length > 0 && (
-                            <p className="mt-2 text-muted-foreground">
-                              {provider.models.join(', ')}
-                            </p>
-                          )}
-                          {provider.signupUrl && (
-                            <a
-                              className="mt-2 inline-flex items-center gap-1 text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              href={provider.signupUrl}
-                              rel="noreferrer"
-                              target="_blank"
-                            >
-                              Provider site <ExternalLink aria-hidden="true" size={12} />
-                            </a>
-                          )}
-                        </div>
-                      </details>
+                        </Popover.Trigger>
+                        <Popover.Portal>
+                          <Popover.Content
+                            align="end"
+                            className="ferry-ui v2-row-popover w-64 text-ui-meta text-muted-foreground"
+                            sideOffset={6}
+                          >
+                            <p>{provider.riskText}</p>
+                            {provider.models.length > 0 && (
+                              <p className="mt-2 text-muted-foreground">
+                                {provider.models.join(', ')}
+                              </p>
+                            )}
+                            {provider.signupUrl && (
+                              <a
+                                className="mt-2 inline-flex items-center gap-1 text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                href={provider.signupUrl}
+                                rel="noreferrer"
+                                target="_blank"
+                              >
+                                Provider site <ExternalLink aria-hidden="true" size={12} />
+                              </a>
+                            )}
+                          </Popover.Content>
+                        </Popover.Portal>
+                      </Popover.Root>
                     </div>
                   </li>
                 );

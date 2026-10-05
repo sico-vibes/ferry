@@ -77,7 +77,9 @@ export function V2ChatHeader({
           ? 'Library'
           : pathname.startsWith('/models')
             ? 'Models'
-            : 'New chat';
+            : pathname.startsWith('/gateway')
+              ? 'Gateway'
+              : 'New chat';
   return (
     <>
       <header className="title-strip v2-titlebar v2-chat-header" aria-label="Window title bar">

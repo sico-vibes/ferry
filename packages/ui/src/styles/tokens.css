@@ -120,6 +120,14 @@
   --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.28);
 }
 
+/* Modal backdrop. Lives on the root because dialog overlays portal outside .ferry-ui. */
+:root {
+  --scrim: rgba(6, 5, 10, 0.62);
+}
+:root.light {
+  --scrim: rgba(23, 21, 30, 0.32);
+}
+
 .ferry-ui.light,
 .light .ferry-ui:not(.dark) {
   color-scheme: light;

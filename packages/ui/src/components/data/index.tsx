@@ -48,8 +48,11 @@ export function RingGauge({ value, size = 40, stroke = 4, label }: RingGaugeProp
         transition={reducedMotion ? { duration: 0 } : { duration: 0.22, ease: 'easeOut' }}
       />
       <text
-        className="fill-foreground font-sans text-[10px] leading-3 font-semibold tabular-nums"
+        className="fill-foreground font-sans font-semibold tabular-nums"
         dominantBaseline="central"
+        // Scale with the gauge: 10px on the 40px chip, ~22px on the 104px Usage ring.
+        fontSize={Math.max(10, Math.round(size * 0.21))}
+        letterSpacing="-0.02em"
         textAnchor="middle"
         x="50%"
         y="50%"

@@ -86,7 +86,7 @@ describe('OAuthProviderRows', () => {
     expect(screen.getByText('Subscription (unofficial)')).toBeTruthy();
     expect(screen.getByText('Gateways')).toBeTruthy();
     expect(screen.getByText('Coming soon', { selector: 'summary' })).toBeTruthy();
-    expect(screen.getByText('Removed from pi-ai.')).toBeTruthy();
+    expect(screen.getByText(/Removed from pi-ai\./)).toBeTruthy();
     expect(screen.getAllByText('1 model').length).toBeGreaterThan(0);
     expect(
       screen.getByRole('button', { name: 'Log in to OpenRouter' }).hasAttribute('disabled'),

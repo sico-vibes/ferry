@@ -28,7 +28,9 @@ const updateSchema = z.object({
   }),
 });
 export function register(host: CoreHost, services: FerryServices): void {
-  const gateway = createGatewayController(services);
+  const gateway = createGatewayController(services, (record) => {
+    host.emit('gateway.request', record);
+  });
   host.onStart(async () => {
     if (gateway.settings.enabled) await gateway.start(gateway.settings);
   });
@@ -77,6 +79,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       gateway.revokeKey(idSchema.parse(value));
       return gateway.listKeys();
     },
+    requests: () => gateway.requests(),
     async start() {
       return await gateway.start();
     },

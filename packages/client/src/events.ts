@@ -3,6 +3,7 @@ import {
   CapacitySummarySchema,
   DelegationRunSchema,
   AgentEventSchema,
+  GatewayRequestRecordSchema,
   MessageIdSchema,
   MessagePartSchema,
   MessageSchema,
@@ -116,6 +117,7 @@ export const FerryEventSchemas = {
     body: z.string().nullable(),
   }),
   'oauth.progress': OAuthLoginProgressSchema,
+  'gateway.request': GatewayRequestRecordSchema,
 } as const;
 export interface FerryEvents {
   'session.updated': Session;
@@ -190,4 +192,5 @@ export interface FerryEvents {
   'settings.updated': import('@ferry/shared').Settings;
   toast: { kind: 'info' | 'success' | 'warning' | 'error'; title: string; body: string | null };
   'oauth.progress': import('@ferry/shared').OAuthLoginProgress;
+  'gateway.request': import('@ferry/shared').GatewayRequestRecord;
 }

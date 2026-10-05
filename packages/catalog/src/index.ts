@@ -118,6 +118,11 @@ interface SnapshotModel {
   reasoning?: boolean;
   limit?: { context?: number; output?: number };
   cost?: { input?: number; output?: number; cache_read?: number };
+  description?: string;
+  release_date?: string;
+  knowledge?: string;
+  open_weights?: boolean;
+  modalities?: { input?: string[] };
 }
 interface SnapshotProvider {
   name?: string;
@@ -179,6 +184,11 @@ export function normalizeModels(
           ? {}
           : { priceCachedInPerM: model.cost.cache_read }),
         cachedInputRatio: 1,
+        ...(model.description ? { description: model.description } : {}),
+        ...(model.release_date ? { releaseDate: model.release_date } : {}),
+        ...(model.knowledge ? { knowledgeCutoff: model.knowledge } : {}),
+        ...(typeof model.open_weights === 'boolean' ? { openWeights: model.open_weights } : {}),
+        ...(model.modalities?.input ? { inputModalities: model.modalities.input } : {}),
       });
       if (normalized.success) result.push(normalized.data);
     }

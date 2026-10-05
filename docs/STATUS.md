@@ -18,6 +18,7 @@ Releases (`v0.9.0-beta.N`, auto-published on every merge to `main`; installed ap
 | Area | State | Detail |
 |---|---|---|
 | v0.11 | Complete | Wave F and N1–N5 integrated; CLI parity and free-model consistency are on `main`. No v0.11 work remains. |
+| v0.12 UI | S + U released (beta.38); T, M, H, G implemented 2026-10-05, awaiting user review | `docs/plans/v0.12-ui-and-updates.md` (UI pass record); preview with `pnpm preview:web` |
 | WIP branches | None, except parked P3/P6 | `wave/p3-caching` is parked. Its migration must be renumbered when resumed: `0004` is now `provider_key_entries`, so P3/P6 must use `0005`. |
 
 ## Milestones (original plan)

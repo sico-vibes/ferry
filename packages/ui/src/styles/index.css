@@ -142,7 +142,112 @@
   }
 }
 
+@layer components {
+  .ferry-provider-logo {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
+  .ferry-provider-logo > svg {
+    width: 100%;
+    height: 100%;
+  }
+  /* Switch: 36x20 track inside a 40x28 hit area (DESIGN §7.7 minimum target). */
+  .ferry-switch {
+    position: relative;
+    display: inline-flex;
+    width: 40px;
+    height: 28px;
+    flex: none;
+    align-items: center;
+    border: 0;
+    border-radius: 9999px;
+    background: transparent;
+    padding: 0 4px;
+    cursor: pointer;
+  }
+  .ferry-switch::before {
+    position: absolute;
+    inset: 4px 2px;
+    border-radius: 9999px;
+    background: var(--input);
+    content: '';
+    transition: background-color 150ms ease-out;
+  }
+  .ferry-switch[data-state='checked']::before {
+    background: var(--primary);
+  }
+  .ferry-switch:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .ferry-switch-thumb {
+    position: relative;
+    display: block;
+    width: 16px;
+    height: 16px;
+    border-radius: 9999px;
+    background: var(--foreground);
+    pointer-events: none;
+    transition: transform 150ms ease-out;
+  }
+  .ferry-switch[data-state='checked'] .ferry-switch-thumb {
+    transform: translateX(16px);
+    background: var(--primary-foreground);
+  }
+  :root.light .ferry-switch-thumb {
+    background: var(--card);
+    box-shadow: 0 1px 2px var(--input);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ferry-switch::before,
+    .ferry-switch-thumb {
+      transition: none;
+    }
+  }
+  .ferry-provider-logo-monogram {
+    border-radius: 4px;
+    background: var(--muted);
+    color: var(--muted-foreground);
+    font-weight: 600;
+  }
+}
+
 @layer base {
+  /* Disclosure: a quiet chevron after the label instead of the native triangle (› closed, ⌄ open). */
+  summary {
+    display: flex;
+    width: fit-content;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    list-style: none;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary::after {
+    width: 6px;
+    height: 6px;
+    flex: none;
+    margin: 0 2px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    content: '';
+    opacity: 0.6;
+    transform: translateY(-2px) rotate(45deg);
+    transition: transform 150ms ease-out;
+  }
+  details:not([open]) > summary::after {
+    transform: rotate(-45deg);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    summary::after {
+      transition: none;
+    }
+  }
   html,
   body {
     min-height: 100%;

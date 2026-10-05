@@ -4,7 +4,10 @@ export async function run(page, { url, expect }) {
   const routes = ['/', '/s/session_1', '/settings'];
   for (const route of routes) {
     await page.goto(new URL(route, url).href);
-    await page.getByRole('navigation', { name: 'Primary' }).waitFor();
+    // /settings opens a modal, which hides the app (including Primary) from the a11y tree.
+    if (route === '/settings')
+      await page.getByRole('navigation', { name: 'Settings sections' }).waitFor();
+    else await page.getByRole('navigation', { name: 'Primary' }).waitFor();
     const undersized = await page.evaluate(() => {
       const selector =
         'a[href],button,input,select,textarea,summary,[role="button"],[role="tab"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="option"],[role="checkbox"],[role="switch"],[role="link"],[role="radio"],[contenteditable="true"],[tabindex]:not([tabindex="-1"])';

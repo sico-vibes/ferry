@@ -3,14 +3,15 @@ import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Bell, Check, ChevronDown, Search, X } from 'lucide-react';
 import { Popover as PopoverPrimitive } from 'radix-ui';
-import { DataUseBadge, Dialog, FerryMark, ShowMoreList, Skeleton, TagBadge, UiV2 } from '@ferry/ui';
-import type { ModelRef, PartId, ProfileId, SessionId } from '@ferry/shared';
+import { Dialog, FerryMark, ProviderLogo, ShowMoreList, Skeleton, TagBadge, UiV2 } from '@ferry/ui';
+import type { ModelInfo, ModelRef, PartId, ProfileId, SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { listAllModels } from '@ferry/client';
 import { keys, useSessions, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI, type SettingsSection } from '../state/ui';
-import { ModelQualityBadge } from './ModelQualityBadge';
+import { ModelDetailsCard } from './ModelDetailsCard';
+import { formatTokens } from './modelFacts';
 import { matchesKeybinding } from '@ferry/config/keybindings';
 import { useKeybindings } from '../state/keybindings';
 import { scorePaletteMatch } from './paletteSearch';
@@ -193,8 +194,7 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
   }, [bindings, open]);
   const runAction = async (action: string) => {
     if (action.startsWith('settings:')) {
-      useUI.getState().setSettingsSection(action.slice('settings:'.length) as SettingsSection);
-      await navigate({ to: '/settings' });
+      useUI.getState().openSettings(action.slice('settings:'.length) as SettingsSection);
       return;
     }
     if (action.startsWith('explore:')) {
@@ -254,7 +254,7 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
         await navigate({ to: '/library' });
         break;
       case 'settings':
-        await navigate({ to: '/settings' });
+        useUI.getState().openSettings();
         break;
       case 'shortcuts':
         window.dispatchEvent(new Event('ferry:show-shortcuts'));
@@ -455,7 +455,7 @@ export function ComposerModelChip({
   activeProfileId?: ProfileId;
   modelName: string;
   mode: 'auto' | 'manual';
-  profiles?: { id: ProfileId; name: string; pinned: boolean }[];
+  profiles?: { id: ProfileId; name: string; pinned: boolean; description?: string }[];
   onProfileSelect?: (profileId: ProfileId) => void;
   onModelSelect?: (ref: ModelRef | 'auto') => void;
   open?: boolean;
@@ -511,8 +511,10 @@ export function ComposerModelChip({
       setModelQuery('');
     }
   }, [activeProfileId, open, profiles]);
-  const autoModel =
-    models.find((model) => model.ref === visibleCandidates[0]?.ref)?.name ?? modelName;
+  const autoRef = visibleCandidates[0]?.ref;
+  const autoInfo = models.find((model) => model.ref === autoRef);
+  const autoModel = autoInfo?.name ?? modelName;
+  const chipModel = mode === 'auto' ? autoInfo : models.find((model) => model.name === modelName);
   const configuredProviderIds = new Set(
     providers
       .filter(
@@ -523,10 +525,23 @@ export function ComposerModelChip({
   );
   const availableModels = models.filter((model) => configuredProviderIds.has(model.providerId));
   const candidateByRef = new Map(visibleCandidates.map((candidate) => [candidate.ref, candidate]));
+  const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const grouped = useMemo(
     () => [...new Set(availableModels.map((model) => model.providerId))],
     [availableModels],
   );
+  // cmdk reports the highlighted row by its value; map values back to what the card shows.
+  const autoValue = `Auto ${autoModel}`;
+  const modelValue = (model: ModelInfo) =>
+    `${model.name} ${model.tier} ${providerById.get(model.providerId)?.name ?? model.providerId} ${model.ref}`;
+  const highlighted = commandValue.toLocaleLowerCase();
+  const highlightedModel =
+    highlighted === autoValue.toLocaleLowerCase()
+      ? autoInfo
+      : availableModels.find((model) => modelValue(model).toLocaleLowerCase() === highlighted);
+  const highlightedProfile = highlighted.startsWith('profile ')
+    ? profiles.find((profile) => `profile ${profile.name}`.toLocaleLowerCase() === highlighted)
+    : undefined;
   const selectionInFlight = useRef<ModelRef | 'auto' | null>(null);
   const select = async (ref: ModelRef | 'auto') => {
     if (selectionInFlight.current === ref) return;
@@ -559,9 +574,27 @@ export function ComposerModelChip({
           className="v2-composer-chip inline-flex items-center gap-2 rounded-pill px-2 py-1 text-body font-medium text-text-1 hover:bg-icon-circle"
           type="button"
         >
-          <FerryMark className="text-text-2" decorative size={14} variant="mono" />
-          <span>{profileName}</span>
-          <span className="text-text-3">{mode === 'auto' ? `Auto · ${autoModel}` : modelName}</span>
+          <FerryMark className="v2-chip-ferry" decorative size={14} variant="brand" />
+          <span className="v2-chip-profile">{profileName}</span>
+          <span aria-hidden="true" className="v2-chip-divider" />
+          {chipModel ? (
+            <ProviderLogo
+              model={`${chipModel.ref} ${chipModel.name}`}
+              name={chipModel.name}
+              providerId={chipModel.providerId}
+              size={14}
+            />
+          ) : null}
+          <span className="v2-chip-model">
+            {mode === 'auto' ? (
+              <>
+                <span className="v2-chip-auto">Auto</span>
+                {autoModel}
+              </>
+            ) : (
+              modelName
+            )}
+          </span>
           <ChevronDown aria-hidden="true" size={14} />
         </button>
       </PopoverPrimitive.Trigger>
@@ -571,7 +604,8 @@ export function ComposerModelChip({
             align="start"
             aria-label="Choose model"
             className="ferry-ui model-picker-popover"
-            collisionPadding={12}
+            // Keep clear of the 44px window title bar; symmetric so the preferred side never flips.
+            collisionPadding={{ top: 56, right: 12, bottom: 56, left: 12 }}
             id={dialogId}
             role="dialog"
             side="top"
@@ -586,18 +620,24 @@ export function ComposerModelChip({
               value={commandValue}
               onValueChange={setCommandValue}
             >
-              <ModelCommand.Input
-                aria-label="Search models"
-                onValueChange={setModelQuery}
-                placeholder="Search models…"
-                value={modelQuery}
-              />
+              <div className="model-picker-search">
+                <Search aria-hidden="true" size={14} />
+                <ModelCommand.Input
+                  aria-label="Search models"
+                  onValueChange={setModelQuery}
+                  placeholder="Search models…"
+                  value={modelQuery}
+                />
+              </div>
               <ModelCommand.List>
+                <ModelCommand.Empty className="model-picker-empty">
+                  No models match.
+                </ModelCommand.Empty>
                 {profiles.length > 0 ? (
                   <ModelCommand.Group heading="Profile">
                     {profiles.map((profile) => (
                       <ModelCommand.Item
-                        className="model-candidate"
+                        className="model-candidate model-profile"
                         key={profile.id}
                         value={`profile ${profile.name}`}
                         onSelect={() => {
@@ -607,110 +647,134 @@ export function ComposerModelChip({
                       >
                         <strong>{profile.name}</strong>
                         {profile.id === activeProfileId ? (
-                          <Check aria-hidden="true" size={14} />
-                        ) : (
-                          <span>Profile</span>
-                        )}
+                          <Check aria-hidden="true" className="model-row-check" size={14} />
+                        ) : null}
                       </ModelCommand.Item>
                     ))}
                   </ModelCommand.Group>
                 ) : null}
-                <ModelCommand.Item
-                  className="model-candidate auto"
-                  value={`Auto ${autoModel}`}
-                  onSelect={() => void select('auto')}
-                  onClick={() => void select('auto')}
-                >
-                  <strong>Auto (recommended)</strong>
-                  <span>{autoModel} · Router’s current pick</span>
-                  <small>
-                    {visibleCandidates[0]?.explanation ?? 'Ferry selects the best available model.'}
-                  </small>
-                </ModelCommand.Item>
-                {grouped.map((providerId) => (
-                  <ModelCommand.Group
-                    key={providerId}
-                    heading={
-                      providers.find((provider) => provider.id === providerId)?.name ?? providerId
-                    }
+                <ModelCommand.Group heading="Model">
+                  <ModelCommand.Item
+                    className="model-candidate auto"
+                    value={autoValue}
+                    onSelect={() => void select('auto')}
+                    onClick={() => void select('auto')}
                   >
-                    <ShowMoreList
-                      items={availableModels
-                        .filter((model) => model.providerId === providerId)
-                        .filter((model) => {
-                          const providerName =
-                            providers.find((provider) => provider.id === providerId)?.name ??
-                            providerId;
-                          const needle = modelQuery.trim().toLocaleLowerCase();
+                    <FerryMark className="model-row-logo" decorative size={16} variant="brand" />
+                    <strong>Auto (recommended)</strong>
+                    <span className="model-row-meta">{autoModel}</span>
+                    {mode === 'auto' ? (
+                      <Check aria-hidden="true" className="model-row-check" size={14} />
+                    ) : null}
+                  </ModelCommand.Item>
+                </ModelCommand.Group>
+                {grouped.map((providerId) => {
+                  const provider = providerById.get(providerId);
+                  const providerName = provider?.name ?? providerId;
+                  return (
+                    <ModelCommand.Group
+                      key={providerId}
+                      heading={
+                        <span className="model-group-heading">
+                          <ProviderLogo name={providerName} providerId={providerId} size={14} />
+                          {providerName}
+                        </span>
+                      }
+                    >
+                      <ShowMoreList
+                        items={availableModels
+                          .filter((model) => model.providerId === providerId)
+                          .filter((model) => {
+                            const needle = modelQuery.trim().toLocaleLowerCase();
+                            return (
+                              !needle ||
+                              `${model.name} ${model.ref} ${model.tier} ${providerName}`
+                                .toLocaleLowerCase()
+                                .includes(needle)
+                            );
+                          })}
+                        groupKey={`model-picker:${providerId}`}
+                        label="models"
+                        forceExpand={modelQuery.trim().length > 0}
+                        renderList={(children) => <>{children}</>}
+                        renderItem={(model) => {
+                          const candidate = candidateByRef.get(model.ref);
+                          const selected = mode === 'manual' && model.name === modelName;
                           return (
-                            !needle ||
-                            `${model.name} ${model.ref} ${model.tier} ${providerName}`
-                              .toLocaleLowerCase()
-                              .includes(needle)
-                          );
-                        })}
-                      groupKey={`model-picker:${providerId}`}
-                      label="models"
-                      forceExpand={modelQuery.trim().length > 0}
-                      renderList={(children) => <>{children}</>}
-                      renderItem={(model) => {
-                        const candidate = candidateByRef.get(model.ref);
-                        const provider = providers.find((item) => item.id === providerId);
-                        const capacity = candidate?.stepsLeft ?? provider?.stepsLeftToday ?? null;
-                        const why =
-                          candidate?.explanation ??
-                          `${model.tier} model · ${model.free ? 'Free tier' : 'Paid tier'} · ${String(Math.round(model.contextWindow / 1000))}K context`;
-                        return (
-                          <ModelCommand.Item
-                            className="model-candidate"
-                            key={model.ref}
-                            value={`${model.name} ${model.tier} ${provider?.name ?? providerId} ${why} ${capacity === null ? '' : String(capacity)}`}
-                            onSelect={() => void select(model.ref)}
-                            onClick={() => void select(model.ref)}
-                          >
-                            <strong>
-                              {model.name}
-                              {provider?.tag === 'promo' ? (
-                                <span className="ml-1" title="Promotional — may end without notice">
-                                  <TagBadge kind="promo" />
-                                </span>
-                              ) : null}
-                              {provider?.tag === 'trial' ? (
-                                <TagBadge className="ml-1" kind="trial" />
-                              ) : null}
-                              {['anthropic', 'openai-codex', 'github-copilot'].includes(
-                                model.providerId,
-                              ) ? (
-                                <span
-                                  className="ml-1 rounded-pill bg-warn/10 px-1.5 py-0.5 text-meta text-warn"
-                                  title="Unofficial subscription access may lead to account suspension"
-                                  aria-label="Unofficial subscription OAuth; account suspension risk"
-                                >
-                                  Risk
-                                </span>
-                              ) : null}
-                              {candidate?.selected ? <Check size={13} /> : null}
-                            </strong>
-                            <ModelQualityBadge model={model} />
-                            <span className="model-meta-line">
-                              <DataUseBadge dataUse={provider?.dataUse} />{' '}
-                              <span className="model-tier-pill">{model.tier}</span>
-                              <span className="model-capacity-badge">
-                                {capacity == null
-                                  ? 'Capacity unknown'
-                                  : `≈ ${String(capacity)} steps`}
+                            <ModelCommand.Item
+                              className="model-candidate"
+                              key={model.ref}
+                              value={modelValue(model)}
+                              onSelect={() => void select(model.ref)}
+                              onClick={() => void select(model.ref)}
+                            >
+                              <ProviderLogo
+                                className="model-row-logo"
+                                model={`${model.ref} ${model.name}`}
+                                name={model.name}
+                                providerId={model.providerId}
+                                size={16}
+                              />
+                              <strong>
+                                {model.name}
+                                {provider?.tag === 'promo' ? (
+                                  <TagBadge className="ml-1.5" kind="promo" />
+                                ) : null}
+                                {provider?.tag === 'trial' ? (
+                                  <TagBadge className="ml-1.5" kind="trial" />
+                                ) : null}
+                                {['anthropic', 'openai-codex', 'github-copilot'].includes(
+                                  model.providerId,
+                                ) && provider?.tag === 'subscription_oauth' ? (
+                                  <span
+                                    className="model-risk-pill"
+                                    aria-label="Unofficial subscription OAuth; account suspension risk"
+                                  >
+                                    Risk
+                                  </span>
+                                ) : null}
+                              </strong>
+                              <span className="model-row-meta">
+                                {formatTokens(model.contextWindow)}
+                                {model.free ? (
+                                  <span className="model-free-pill">Free</span>
+                                ) : (
+                                  <span className="model-paid-pill">Paid</span>
+                                )}
                               </span>
-                              · {Math.round(model.contextWindow / 1000)}K ·{' '}
-                              {model.free ? 'Free' : 'Paid'}
-                            </span>
-                          </ModelCommand.Item>
-                        );
-                      }}
-                    />
-                  </ModelCommand.Group>
-                ))}
+                              {selected || candidate?.selected ? (
+                                <Check aria-hidden="true" className="model-row-check" size={14} />
+                              ) : null}
+                            </ModelCommand.Item>
+                          );
+                        }}
+                      />
+                    </ModelCommand.Group>
+                  );
+                })}
               </ModelCommand.List>
             </ModelCommand>
+            {highlightedModel ? (
+              <ModelDetailsCard
+                auto={
+                  highlightedModel === autoInfo && highlighted === autoValue.toLocaleLowerCase()
+                }
+                candidate={candidateByRef.get(highlightedModel.ref)}
+                model={highlightedModel}
+                provider={providerById.get(highlightedModel.providerId)}
+              />
+            ) : highlightedProfile ? (
+              <aside aria-label={`${highlightedProfile.name} profile`} className="v2-model-details">
+                <header>
+                  <strong>{highlightedProfile.name}</strong>
+                  <span className="v2-model-details-provider">Routing profile</span>
+                </header>
+                <p className="v2-model-details-description">
+                  {highlightedProfile.description ??
+                    'Ferry picks a model for each step using this profile’s rules.'}
+                </p>
+              </aside>
+            ) : null}
           </PopoverPrimitive.Content>
         </PopoverPrimitive.Portal>
       ) : null}

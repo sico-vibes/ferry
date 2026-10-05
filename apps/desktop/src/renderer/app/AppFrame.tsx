@@ -14,6 +14,7 @@ import { RightPanel } from './right-panel/RightPanel';
 import { appMounts } from './mounts';
 import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
 import { V2Sidebar } from './V2Sidebar';
+import { SettingsDialog } from './SettingsDialog';
 import { V2ChatHeader } from './V2ChatHeader';
 import { BottomPanel } from './BottomPanel';
 import type { UpdateSnapshot } from '../../main/update-state.js';
@@ -360,6 +361,9 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       if (matches('shortcuts.open')) {
         event.preventDefault();
         setShortcutsOpen(true);
+      } else if (matches('settings.open')) {
+        event.preventDefault();
+        useUI.getState().openSettings();
       } else if (matches('chat.new')) {
         event.preventDefault();
         void createChat();
@@ -627,6 +631,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
         </div>
       </Dialog>
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      <SettingsDialog />
     </div>
   );
 }

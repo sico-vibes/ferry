@@ -32,6 +32,7 @@ export const DEFAULT_KEYBINDINGS: Keybinding[] = [
   { command: 'search.open', key: 'Ctrl+F', when: [] },
   { command: 'tab.close', key: 'Ctrl+W', when: [] },
   { command: 'tab.next', key: 'Ctrl+Tab', when: [] },
+  { command: 'settings.open', key: 'Ctrl+,', when: [] },
 ];
 
 export function parseKeybindings(raw: unknown): KeybindingsValidation {

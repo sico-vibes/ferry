@@ -39,7 +39,7 @@ export function AlertDialogOverlay({
 }: React.ComponentProps<typeof AlertDialogPrimitive.Overlay>) {
   return (
     <AlertDialogPrimitive.Overlay
-      className={cn('fixed inset-0 z-[var(--z-modal-overlay)] bg-foreground/50', className)}
+      className={cn('fixed inset-0 z-[var(--z-modal-overlay)] bg-[var(--scrim)]', className)}
       {...props}
     />
   );
@@ -166,7 +166,7 @@ export function DialogOverlay({
   return (
     <DialogPrimitive.Overlay
       className={cn(
-        'fixed inset-0 z-50 bg-foreground/35 transition-opacity duration-200 ease-out data-[state=open]:animate-[ferry-ui-fade-in_200ms_ease-out_both] data-[state=closed]:animate-[ferry-ui-fade-out_200ms_ease-in_both] motion-reduce:animate-none motion-reduce:transition-none',
+        'fixed inset-0 z-50 bg-[var(--scrim)] transition-opacity duration-200 ease-out data-[state=open]:animate-[ferry-ui-fade-in_200ms_ease-out_both] data-[state=closed]:animate-[ferry-ui-fade-out_200ms_ease-in_both] motion-reduce:animate-none motion-reduce:transition-none',
         className,
       )}
       {...props}
@@ -412,10 +412,7 @@ export function DropdownMenuShortcut({
 }: React.HTMLAttributes<HTMLSpanElement>) {
   return (
     <span
-      className={cn(
-        'ml-auto font-mono text-ui-meta tracking-widest text-muted-foreground',
-        className,
-      )}
+      className={cn('ml-auto pl-4 font-sans text-ui-meta text-muted-foreground', className)}
       {...props}
     />
   );
@@ -646,10 +643,7 @@ export function CommandItem({
 export function CommandShortcut({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) {
   return (
     <span
-      className={cn(
-        'ml-auto font-mono text-ui-meta tracking-widest text-muted-foreground',
-        className,
-      )}
+      className={cn('ml-auto pl-4 font-sans text-ui-meta text-muted-foreground', className)}
       {...props}
     />
   );
@@ -941,15 +935,8 @@ export function SelectSeparator({
 
 export function Switch({ className, ...props }: React.ComponentProps<typeof SwitchPrimitive.Root>) {
   return (
-    <SwitchPrimitive.Root
-      className={cn(
-        'peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent bg-muted transition-colors duration-150 ease-out data-[state=checked]:bg-primary data-[state=unchecked]:bg-input disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none',
-        focus,
-        className,
-      )}
-      {...props}
-    >
-      <SwitchPrimitive.Thumb className="pointer-events-none block size-4 rounded-full bg-background ring-0 transition-transform duration-150 ease-out data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0 motion-reduce:transition-none" />
+    <SwitchPrimitive.Root className={cn('ferry-switch peer', focus, className)} {...props}>
+      <SwitchPrimitive.Thumb className="ferry-switch-thumb" />
     </SwitchPrimitive.Root>
   );
 }

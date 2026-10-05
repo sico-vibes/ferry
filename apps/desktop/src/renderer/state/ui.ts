@@ -6,6 +6,7 @@ import type { UIState } from './ui.types';
 
 export { clampBottomHeight, clampRightWidth, parsePersistedLayout } from './ui-layout';
 export type { Density, OpenTab, RightTab, SettingsSection } from './ui.types';
+export { settingsSections } from './ui.types';
 
 interface PersistedUI {
   tabs: UIState['tabs'];
@@ -72,6 +73,7 @@ export const useUI = create<UIState>((set) => {
     selectedWorkspaceId:
       typeof saved.selectedWorkspaceId === 'string' ? saved.selectedWorkspaceId : null,
     settingsSection: 'General',
+    settingsOpen: false,
     exploreFilter: 'All',
     ...createLayoutSlice(update),
     ...createTabsSlice(update),

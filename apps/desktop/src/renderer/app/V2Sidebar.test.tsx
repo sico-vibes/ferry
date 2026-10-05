@@ -164,7 +164,7 @@ describe('V2Sidebar new chat', () => {
     expect(within(primaryNav).getByRole('button', { name: 'Models' })).toBeTruthy();
     expect(screen.getByRole('img', { name: 'Ferry' }).style.width).toBe('18px');
     await userEvent.click(await screen.findByRole('button', { name: /^User menu$/ }));
-    await userEvent.click(await screen.findByRole('menuitem', { name: /^About \/ changelog$/ }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /^About Ferry$/ }));
     const dialog = await screen.findByRole('dialog', { name: /^About Ferry$/ });
     expect(dialog.textContent).toContain(window.ferryHost.versions.app);
     expect(dialog.textContent).toContain('beta');

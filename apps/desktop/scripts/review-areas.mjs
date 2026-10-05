@@ -44,16 +44,16 @@ export const reviewAreas = {
       'model-picker-open': 'design/references/2026-10-04/07-model-picker.png',
       'model-picker-hover': 'design/references/2026-10-04/07-model-picker.png',
     },
-    note: 'Provider list, model catalog, usage, picker open state, and a hovered catalog candidate. A dedicated hover details card is part of the model product lane.',
+    note: 'Providers table, model catalog, usage, picker open state, and the hovered model details card.',
   },
   home: {
     states: ['home-idle', 'session-idle'],
     reference: 'design/references/2026-10-04/06-home-composer-stats.png',
-    note: 'Home composer and the active conversation shell.',
+    note: 'Home composer with the usage summary, and the active conversation shell.',
   },
   gateway: {
-    states: ['settings-gateway'],
+    states: ['gateway-dashboard', 'gateway-log', 'settings-gateway'],
     reference: 'design/references/2026-10-04/11-gateway-dashboard.png',
-    note: 'Current Settings > Gateway configuration surface; the reference dashboard is reserved for the Gateway product lane.',
+    note: 'Gateway dashboard (endpoint, setup, keys, live request log) and its Settings section.',
   },
 };

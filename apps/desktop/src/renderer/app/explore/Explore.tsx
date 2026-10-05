@@ -1,22 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
-import { ArrowDown, ArrowUp, ArrowUpRight, Check, Search, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpRight, Check, Plus, Search, X } from 'lucide-react';
 import type { OAuthProvider, Provider } from '@ferry/shared';
 import {
   EmptyState,
   ErrorState,
-  BrandIcon,
-  ProviderCard,
+  ProviderLogo,
   DataUseBadge,
   dataUseStatus,
   TagBadge,
   Section,
-  ShowMoreList,
+  SegmentedControl,
   Skeleton,
   UiV2,
   PageHeader,
 } from '@ferry/ui';
+import { ProvidersTable } from '../ProvidersTable';
 import { useFerryClient } from '../../data/client';
 import { useToasts } from '../../state/toasts';
 import { useUI } from '../../state/ui';
@@ -176,7 +176,6 @@ export function ModelsCanvas() {
     ...pinnedProviders,
     ...visibleProviders.filter((provider) => !isPriority(provider)),
   ];
-  const providerListInitialCount = Math.max(6, pinnedProviders.length);
   const visibleModels = models;
 
   const openAdd = () => {
@@ -209,6 +208,12 @@ export function ModelsCanvas() {
             : `Key invalid \u00B7 ${result.message}`,
       }));
       if (!result.ok) pushToast({ kind: 'error', title: 'Key invalid', body: result.message });
+      else
+        pushToast({
+          kind: 'success',
+          title: `${provider.name} connected`,
+          body: result.latencyMs === null ? 'CLI available' : `${String(result.latencyMs)} ms`,
+        });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Try again.';
       setProbeFeedback((current) => ({ ...current, [provider.id]: message }));
@@ -282,16 +287,7 @@ export function ModelsCanvas() {
       className="v2-models-page min-h-0 w-full flex-1 overflow-y-auto px-8 py-8"
     >
       <div className="mx-auto grid w-full max-w-[1040px] gap-6">
-        <PageHeader
-          title="Models"
-          subtitle="Providers, model capabilities and usage"
-          primaryAction={
-            <UiV2.Button onClick={openAdd}>
-              <span aria-hidden="true">+</span>
-              Add provider
-            </UiV2.Button>
-          }
-        />
+        <PageHeader title="Models" subtitle="Providers, model capabilities and usage" />
         <UiV2.Tabs
           onValueChange={(value) => {
             setSelectedTab(value);
@@ -354,8 +350,14 @@ export function ModelsCanvas() {
                   </button>
                 ))}
               </nav>
-              <span className="ml-auto text-ui-meta tabular-nums text-muted-foreground">
-                {visibleProviders.length} providers
+              <span className="ml-auto flex items-center gap-3">
+                <span className="text-ui-meta tabular-nums text-muted-foreground">
+                  {visibleProviders.length} providers
+                </span>
+                <UiV2.Button onClick={openAdd} size="sm">
+                  <Plus aria-hidden="true" />
+                  Add provider
+                </UiV2.Button>
               </span>
             </div>
             {providersLoading ? (
@@ -367,41 +369,13 @@ export function ModelsCanvas() {
                 onAction={() => void refetchProviders()}
               />
             ) : visibleProviders.length > 0 ? (
-              <ShowMoreList
-                items={providerListItems}
-                groupKey="explore:providers"
-                initialCount={providerListInitialCount}
-                label="providers"
-                listClassName="provider-card-grid grid grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))] gap-3"
-                renderItem={(provider) => (
-                  <li
-                    className="min-w-0 list-none"
-                    id={`provider-${provider.id}`}
-                    key={provider.id}
-                  >
-                    <ProviderCard
-                      onManageKey={() => {
-                        openManage(provider);
-                      }}
-                      priority={settings?.routing.providerPriorities[provider.id] ?? 0}
-                      weight={settings?.routing.providerWeights[provider.id] ?? 1}
-                      onTest={() => void probe(provider)}
-                      onToggle={(enabled) => void toggleProvider(provider, enabled)}
-                      probing={probing === provider.id}
-                      provider={provider}
-                    />
-                    {probeFeedback[provider.id] && (
-                      <p
-                        aria-label={probeFeedback[provider.id]}
-                        aria-live="polite"
-                        className="text-ui-meta text-muted-foreground"
-                        role="status"
-                      >
-                        {probeFeedback[provider.id]}
-                      </p>
-                    )}
-                  </li>
-                )}
+              <ProvidersTable
+                feedback={probeFeedback}
+                onManage={openManage}
+                onTest={(provider) => void probe(provider)}
+                onToggle={(provider, enabled) => void toggleProvider(provider, enabled)}
+                providers={providerListItems}
+                testing={probing}
               />
             ) : providers.length === 0 ? (
               <div className="grid gap-2 py-10 text-center">
@@ -493,24 +467,21 @@ export function ModelsCanvas() {
                     ? '0 models'
                     : `${String(modelOffset + 1)}–${String(Math.min(modelOffset + effectiveModelLimit, modelTotal))} of ${new Intl.NumberFormat().format(modelTotal)}`}
                 </span>
-                <label className="flex items-center gap-2 text-ui-meta text-muted-foreground">
+                <span className="flex items-center gap-2 text-ui-meta text-muted-foreground">
                   Rows
-                  <select
-                    aria-label="Models per page"
-                    className="h-9 rounded-control border border-input bg-background px-3 text-ui-body text-foreground"
-                    onChange={(event) => {
-                      setModelLimit(Number(event.target.value));
+                  <SegmentedControl
+                    label="Models per page"
+                    onValueChange={(value) => {
+                      setModelLimit(Number(value));
                       setModelOffset(0);
                     }}
-                    value={modelLimit}
-                  >
-                    {[25, 50, 100].map((size) => (
-                      <option key={size} value={size}>
-                        {size}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    options={[25, 50, 100].map((size) => ({
+                      value: String(size),
+                      label: String(size),
+                    }))}
+                    value={String(modelLimit)}
+                  />
+                </span>
               </div>
               <div
                 className="model-table-scroll"
@@ -541,6 +512,13 @@ export function ModelsCanvas() {
                           className="max-w-56 truncate px-3 font-medium text-foreground"
                           title={model.name}
                         >
+                          <ProviderLogo
+                            className="mr-2 align-[-3px]"
+                            model={`${model.ref} ${model.name}`}
+                            name={model.name}
+                            providerId={model.providerId}
+                            size={16}
+                          />
                           <span>{model.name}</span>
                           {providers.find((provider) => provider.id === model.providerId)?.tag ===
                             'promo' && (
@@ -583,7 +561,14 @@ export function ModelsCanvas() {
                           )}
                         </td>
                         <td className="px-3 text-muted-foreground">
-                          {providerNames[model.providerId] ?? model.providerId}
+                          <span className="inline-flex items-center gap-2">
+                            <ProviderLogo
+                              name={providerNames[model.providerId] ?? model.providerId}
+                              providerId={model.providerId}
+                              size={14}
+                            />
+                            {providerNames[model.providerId] ?? model.providerId}
+                          </span>
                         </td>
                         <td className="px-3">
                           <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
@@ -683,7 +668,7 @@ export function ModelsCanvas() {
                   }}
                   variant="ghost"
                 >
-                  <BrandIcon label={provider.name} slug={provider.brand ?? provider.name} />
+                  <ProviderLogo name={provider.name} providerId={provider.id} size={24} />
                   <span className="min-w-0 flex-1">
                     <strong className="block text-ui-label font-medium text-foreground">
                       {provider.name}

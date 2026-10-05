@@ -5,7 +5,7 @@ import { useFerryClient } from '../data/client';
 import { listAllModels } from '@ferry/client';
 import { keys, useProfiles, useSettings } from '../data/queries';
 import { useToasts } from '../state/toasts';
-import { useUI } from '../state/ui';
+import { settingsSections, useUI } from '../state/ui';
 import {
   Checkbox,
   Dialog,
@@ -29,27 +29,58 @@ import {
 } from '@ferry/shared';
 import type { RoutingSettings } from '@ferry/shared';
 import type { UpdateSnapshot } from '../../main/update-state.js';
-import { Eye, EyeOff, Info, KeyRound, PlugZap } from 'lucide-react';
+import {
+  Eye,
+  EyeOff,
+  Gauge,
+  Info,
+  Keyboard,
+  KeyRound,
+  Layers,
+  LockKeyhole,
+  Network,
+  Plus,
+  Route,
+  Search,
+  ShieldCheck,
+  SlidersHorizontal,
+  Workflow,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
-import { ProviderStatusBadge } from './ProviderStatusBadge';
+import { ProvidersTable } from './ProvidersTable';
 import { OAuthProviderRows } from './OAuthProviderRows';
 import { ConfirmDialog } from './ConfirmDialog';
 import { saveKeybindings, useKeybindings } from '../state/keybindings';
 import type { SettingsSection } from '../state/ui.types';
 const stepKinds: StepKind[] = ['plan', 'edit', 'search', 'summarize', 'review', 'long_context'];
-const settingsSections: SettingsSection[] = [
-  'General',
-  'Profiles',
-  'Providers & keys',
-  'Routing',
-  'Optimizers',
-  'Delegation',
-  'Permissions',
-  'Gateway',
-  'Data & privacy',
-  'Shortcuts',
-  'About',
-];
+const settingsSectionIcons: Record<SettingsSection, LucideIcon> = {
+  General: SlidersHorizontal,
+  Profiles: Layers,
+  'Providers & keys': KeyRound,
+  Routing: Route,
+  Optimizers: Gauge,
+  Delegation: Workflow,
+  Permissions: ShieldCheck,
+  Gateway: Network,
+  'Data & privacy': LockKeyhole,
+  Shortcuts: Keyboard,
+  About: Info,
+};
+const settingsSectionKeywords: Record<SettingsSection, string[]> = {
+  General: ['theme', 'dark', 'light', 'font', 'appearance', 'home', 'onboarding', 'layout'],
+  Profiles: ['profile', 'auto-free', 'fallback', 'caps', 'planner', 'editor', 'tier'],
+  'Providers & keys': ['provider', 'key', 'api key', 'oauth', 'subscription', 'trial', 'login'],
+  Routing: ['routing', 'spending', 'caps', 'sticky', 'quota', 'mapping', 'override'],
+  Optimizers: ['optimizer', 'terse', 'tokens', 'context', 'compression', 'rtk'],
+  Delegation: ['delegation', 'codex', 'opencode', 'claude', 'agent', 'lane'],
+  Permissions: ['permission', 'approval', 'rules', 'auto-edit'],
+  Gateway: ['gateway', 'api', 'port', 'lan', 'openai', 'anthropic'],
+  'Data & privacy': ['data', 'privacy', 'logs', 'retention', 'mcp', 'skills', 'integrations'],
+  Shortcuts: ['shortcut', 'keybinding', 'keyboard'],
+  About: ['about', 'version', 'update', 'license', 'notices'],
+};
 const settingsPageCopy: Record<string, { title: string; description: string }> = {
   General: { title: 'General', description: 'Set the way Ferry looks and behaves.' },
   Profiles: {
@@ -240,6 +271,7 @@ export function SettingsCanvas() {
     setKeybindingsDraft(keybindings.content);
   }, [keybindings.content]);
   const section = useUI((state) => state.settingsSection);
+  const [sectionQuery, setSectionQuery] = useState('');
   const [confirm, setConfirm] = useState('');
   const [confirmAction, setConfirmAction] = useState<(() => void | Promise<void>) | null>(null);
   const [confirmDescription, setConfirmDescription] = useState(
@@ -250,23 +282,6 @@ export function SettingsCanvas() {
   const [addMcp, setAddMcp] = useState(false);
   const [mcpName, setMcpName] = useState('');
   const [mcpAddress, setMcpAddress] = useState('');
-  const [gatewayName, setGatewayName] = useState('');
-  const [gatewayProfile, setGatewayProfile] = useState('auto-free');
-  const [gatewaySecret, setGatewaySecret] = useState('');
-  const [revokeKeyId, setRevokeKeyId] = useState<string | null>(null);
-  const [gatewayKeyDrafts, setGatewayKeyDrafts] = useState<
-    Record<
-      string,
-      {
-        allowedModels: string;
-        rateLimit: string;
-        tokenLimitPerMinute: string;
-        tokenLimitPerDay: string;
-        concurrencyLimit: string;
-        profile: string;
-      }
-    >
-  >({});
   const [benchmarkMode, setBenchmarkMode] = useState(
     () => localStorage.getItem('ferry.benchmarkMode') === 'true',
   );
@@ -352,15 +367,9 @@ export function SettingsCanvas() {
     queryFn: () => client.gateway.settings(),
     enabled: section === 'Gateway',
   });
-  const gatewayKeysQuery = useQuery({
-    queryKey: ['gateway-keys'],
-    queryFn: () => client.gateway.listKeys(),
-    enabled: section === 'Gateway',
-  });
   const gateway = gatewayQuery.data;
   const gatewayStatus = gateway?.status;
   const gatewayPort = gateway?.port ?? 11435;
-  const gatewayHost = gatewayStatus?.url ?? `http://127.0.0.1:${String(gatewayPort)}`;
   const updateGateway = async (
     patch: Partial<{ enabled: boolean; port: number; allowLan: boolean }>,
   ) => {
@@ -389,16 +398,6 @@ export function SettingsCanvas() {
       ...patch,
     });
     await cache.invalidateQueries({ queryKey: ['gateway-settings'] });
-  };
-  const createGatewayKey = async () => {
-    if (!gatewayName.trim()) return;
-    const created = await client.gateway.createKey({
-      name: gatewayName.trim(),
-      profile: gatewayProfile,
-    });
-    setGatewaySecret(created.secret);
-    setGatewayName('');
-    await cache.invalidateQueries({ queryKey: ['gateway-keys'] });
   };
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
   const fallbackChain = profileDraft?.fallbackChain ?? [];
@@ -551,7 +550,7 @@ export function SettingsCanvas() {
                   }
                   options={[
                     { value: 'auto', label: 'Auto' },
-                    { value: 'hero', label: 'Always show hero' },
+                    { value: 'hero', label: 'Hero' },
                     { value: 'compact', label: 'Compact' },
                   ]}
                 />
@@ -572,7 +571,7 @@ export function SettingsCanvas() {
               <SettingRow title="First run" helper="Review the provider and workspace setup again.">
                 <UiV2.Button
                   size="sm"
-                  variant="ghost"
+                  variant="outline"
                   onClick={() => {
                     localStorage.removeItem('ferry.onboardingStep');
                     void client.settings
@@ -1158,90 +1157,20 @@ export function SettingsCanvas() {
       return (
         <Group>
           <p className="muted">
-            Keys are stored locally. Check each provider's terms for data use and limits.
+            Keys are stored locally. Use keys you own under one account; pooling accounts to
+            multiply free tiers may violate provider terms.
           </p>
-          <p className="muted">
-            Use keys you own under one provider account, such as separate project keys. Pooling
-            accounts to multiply free tiers may violate provider terms; Ferry does not support it.
-          </p>
-          <div aria-label="Provider keys" className="provider-key-table">
-            {providers.map((provider) => {
-              const statusCode =
-                provider.health === 'cooldown' ||
-                provider.health === 'down' ||
-                provider.health === 'auth_invalid' ||
-                provider.health === 'account_disabled'
-                  ? provider.health
-                  : provider.keyStatus;
-              const toggleApplicable = provider.tag !== 'subscription_oauth';
-              return (
-                <div className="provider-key-row" key={provider.id}>
-                  <div className="provider-key-description">
-                    <div className="provider-key-heading">
-                      <strong title={provider.name}>{provider.name}</strong>
-                      <ProviderStatusBadge
-                        status={statusCode}
-                        cooldownUntil={provider.cooldownUntil}
-                      />
-                    </div>
-                    <small title={provider.termsNote ?? provider.dataUse ?? undefined}>
-                      {provider.termsNote ?? provider.dataUse ?? 'No data use note provided.'}
-                    </small>
-                  </div>
-                  <div className="provider-key-row-actions">
-                    <UiV2.Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        setKeyProvider(provider);
-                      }}
-                    >
-                      <KeyRound aria-hidden="true" size={16} strokeWidth={1.75} />
-                      Manage key
-                    </UiV2.Button>
-                    <UiV2.TooltipProvider>
-                      <UiV2.Tooltip>
-                        <UiV2.TooltipTrigger asChild>
-                          <UiV2.Button
-                            aria-label={`Test ${provider.name}`}
-                            size="icon"
-                            disabled={testingProvider === provider.id || !provider.enabled}
-                            variant="ghost"
-                            onClick={() => void testProvider(provider)}
-                          >
-                            <PlugZap aria-hidden="true" size={16} strokeWidth={1.75} />
-                          </UiV2.Button>
-                        </UiV2.TooltipTrigger>
-                        <UiV2.TooltipContent>
-                          {testingProvider === provider.id ? 'Testing' : `Test ${provider.name}`}
-                        </UiV2.TooltipContent>
-                      </UiV2.Tooltip>
-                    </UiV2.TooltipProvider>
-                    <span
-                      className="provider-key-toggle"
-                      title={
-                        toggleApplicable ? undefined : 'Manage subscription access in Explore.'
-                      }
-                    >
-                      <span className="provider-key-toggle-state text-meta text-text-3">
-                        {provider.enabled ? 'On' : 'Off'}
-                      </span>
-                      <Switch
-                        label={`Enable ${provider.name}`}
-                        checked={provider.enabled}
-                        disabled={!toggleApplicable}
-                        onCheckedChange={(enabled) =>
-                          void client.providers
-                            .setEnabled(provider.id, enabled)
-                            .then(() => cache.invalidateQueries({ queryKey: ['providers'] }))
-                        }
-                      />
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <ProvidersTable
+            onManage={setKeyProvider}
+            onTest={(provider) => void testProvider(provider)}
+            onToggle={(provider, enabled) =>
+              void client.providers
+                .setEnabled(provider.id, enabled)
+                .then(() => cache.invalidateQueries({ queryKey: ['providers'] }))
+            }
+            providers={providers.filter((provider) => provider.tag !== 'subscription_oauth')}
+            testing={testingProvider}
+          />
           <Section title="Subscription logins" className="mt-4">
             <OAuthProviderRows
               providers={oauthProviders}
@@ -1354,243 +1283,19 @@ export function SettingsCanvas() {
               Providers’ free tiers are per person. Don’t share Ferry gateway keys.
             </p>
           </Group>
-          <Group title="Create a Ferry key">
-            <SettingsInput
-              label="Key name"
-              value={gatewayName}
-              onChange={setGatewayName}
-              placeholder="OpenCode on my laptop"
-            />
-            <Select
-              label="Routing profile"
-              value={gatewayProfile}
-              onValueChange={setGatewayProfile}
-              options={[
-                { value: 'auto-free', label: 'Auto-Free' },
-                { value: 'best', label: 'Best Available' },
-                { value: 'fast', label: 'Fast' },
-                { value: 'long-context', label: 'Long Context' },
-                ...profiles
-                  .filter((profile) => !profile.builtin)
-                  .map((profile) => ({ value: profile.id, label: profile.name })),
-              ]}
-            />
-            <UiV2.Button disabled={!gatewayName.trim()} onClick={() => void createGatewayKey()}>
-              Create key
-            </UiV2.Button>
-          </Group>
-          <Group title="Gateway keys">
-            {(gatewayKeysQuery.data ?? []).map((key) => (
-              <div className="settings-row" key={key.id}>
-                <div>
-                  {(() => {
-                    const draft = gatewayKeyDrafts[key.id] ?? {
-                      allowedModels: key.allowedModels.join(', '),
-                      rateLimit: key.rateLimit === null ? '' : String(key.rateLimit),
-                      tokenLimitPerMinute:
-                        key.tokenLimitPerMinute === null ? '' : String(key.tokenLimitPerMinute),
-                      tokenLimitPerDay:
-                        key.tokenLimitPerDay === null ? '' : String(key.tokenLimitPerDay),
-                      concurrencyLimit:
-                        key.concurrencyLimit === null ? '' : String(key.concurrencyLimit),
-                      profile: key.profile,
-                    };
-                    return (
-                      <>
-                        <strong>{key.name}</strong>
-                        <p>
-                          {key.profile}: {key.usage.requests} total requests,{' '}
-                          {key.usage.successfulRequests} successful.
-                          {key.lastUsedAt
-                            ? `Last used ${new Date(key.lastUsedAt).toLocaleString()}`
-                            : 'Never used'}
-                        </p>
-                        <SettingsInput
-                          label="Allowed model IDs (blank means all enabled models)"
-                          value={draft.allowedModels}
-                          onChange={(value) => {
-                            setGatewayKeyDrafts((current) => ({
-                              ...current,
-                              [key.id]: { ...draft, allowedModels: value },
-                            }));
-                          }}
-                        />
-                        <Select
-                          label="Routing profile"
-                          value={draft.profile}
-                          onValueChange={(profile) => {
-                            setGatewayKeyDrafts((current) => ({
-                              ...current,
-                              [key.id]: { ...draft, profile },
-                            }));
-                          }}
-                          options={[
-                            { value: 'auto-free', label: 'Auto-Free' },
-                            { value: 'best', label: 'Best Available' },
-                            { value: 'fast', label: 'Fast' },
-                            { value: 'long-context', label: 'Long Context' },
-                            ...profiles
-                              .filter((profile) => !profile.builtin)
-                              .map((profile) => ({ value: profile.id, label: profile.name })),
-                          ]}
-                        />
-                        <SettingsInput
-                          label="Requests per minute (blank means unlimited)"
-                          value={draft.rateLimit}
-                          onChange={(value) => {
-                            setGatewayKeyDrafts((current) => ({
-                              ...current,
-                              [key.id]: { ...draft, rateLimit: value },
-                            }));
-                          }}
-                        />
-                        <SettingsInput
-                          label="Tokens per minute (blank means unlimited)"
-                          value={draft.tokenLimitPerMinute}
-                          onChange={(value) => {
-                            setGatewayKeyDrafts((current) => ({
-                              ...current,
-                              [key.id]: { ...draft, tokenLimitPerMinute: value },
-                            }));
-                          }}
-                        />
-                        <SettingsInput
-                          label="Tokens per day (blank means unlimited)"
-                          value={draft.tokenLimitPerDay}
-                          onChange={(value) => {
-                            setGatewayKeyDrafts((current) => ({
-                              ...current,
-                              [key.id]: { ...draft, tokenLimitPerDay: value },
-                            }));
-                          }}
-                        />
-                        <SettingsInput
-                          label="Concurrent requests (blank means unlimited)"
-                          value={draft.concurrencyLimit}
-                          onChange={(value) => {
-                            setGatewayKeyDrafts((current) => ({
-                              ...current,
-                              [key.id]: { ...draft, concurrencyLimit: value },
-                            }));
-                          }}
-                        />
-                        <UiV2.Button
-                          onClick={() => {
-                            const numberOrNull = (value: string) =>
-                              value.trim() ? Number(value) : null;
-                            const rateLimit = numberOrNull(draft.rateLimit);
-                            const tokenLimitPerMinute = numberOrNull(draft.tokenLimitPerMinute);
-                            const tokenLimitPerDay = numberOrNull(draft.tokenLimitPerDay);
-                            const concurrencyLimit = numberOrNull(draft.concurrencyLimit);
-                            if (
-                              [
-                                rateLimit,
-                                tokenLimitPerMinute,
-                                tokenLimitPerDay,
-                                concurrencyLimit,
-                              ].some(
-                                (value) =>
-                                  value !== null && (!Number.isInteger(value) || value < 1),
-                              )
-                            )
-                              return;
-                            const allowedModels = draft.allowedModels
-                              .split(',')
-                              .map((item) => item.trim())
-                              .filter(Boolean);
-                            void client.gateway
-                              .updateKey({
-                                id: key.id,
-                                patch: {
-                                  allowedModels,
-                                  rateLimit,
-                                  tokenLimitPerMinute,
-                                  tokenLimitPerDay,
-                                  concurrencyLimit,
-                                  profile: draft.profile,
-                                },
-                              })
-                              .then(() => {
-                                setGatewayKeyDrafts((current) => {
-                                  const { [key.id]: _removed, ...next } = current;
-                                  return next;
-                                });
-                                return cache.invalidateQueries({ queryKey: ['gateway-keys'] });
-                              });
-                          }}
-                        >
-                          Save key settings
-                        </UiV2.Button>
-                        <Switch
-                          label="Compress tool results"
-                          checked={key.compressToolResults}
-                          onCheckedChange={(compressToolResults) =>
-                            void client.gateway
-                              .updateKey({ id: key.id, patch: { compressToolResults } })
-                              .then(() => cache.invalidateQueries({ queryKey: ['gateway-keys'] }))
-                          }
-                        />
-                        <Switch
-                          label="Terse system prompt"
-                          checked={key.terseSystemPrompt}
-                          onCheckedChange={(terseSystemPrompt) =>
-                            void client.gateway
-                              .updateKey({ id: key.id, patch: { terseSystemPrompt } })
-                              .then(() => cache.invalidateQueries({ queryKey: ['gateway-keys'] }))
-                          }
-                        />
-                      </>
-                    );
-                  })()}
-                </div>
-                {!key.revokedAt && (
-                  <UiV2.Button
-                    variant="outline"
-                    onClick={() => {
-                      setRevokeKeyId(key.id);
-                    }}
-                  >
-                    Revoke
-                  </UiV2.Button>
-                )}
-              </div>
-            ))}
-            {gatewayKeysQuery.data?.length === 0 && (
-              <p className="settings-helper">No gateway keys yet.</p>
-            )}
-          </Group>
-          <Group title="Client setup">
-            <pre>
-              {JSON.stringify(
-                {
-                  $schema: 'https://opencode.ai/config.json',
-                  provider: {
-                    ferry: {
-                      npm: '@ai-sdk/openai-compatible',
-                      name: 'Ferry',
-                      options: { baseURL: `${gatewayHost}/v1`, apiKey: 'YOUR_FERRY_GATEWAY_KEY' },
-                      models: Object.fromEntries(
-                        [
-                          'ferry/auto-free',
-                          'ferry/best',
-                          'ferry/fast',
-                          'ferry/long-context',
-                          ...(settings?.routing.logicalModelMappings.map(
-                            (mapping) => mapping.logicalName,
-                          ) ?? []),
-                          ...models.map((model) => model.ref),
-                        ].map((id) => [id, { name: id }]),
-                      ),
-                    },
-                  },
-                },
-                null,
-                2,
-              )}
-            </pre>
-            <pre>{`Aider (PowerShell):\n$env:OPENAI_API_BASE = '${gatewayHost}/v1'\n$env:OPENAI_API_KEY = 'YOUR_FERRY_GATEWAY_KEY'\naider --model ferry/auto-free`}</pre>
-            <pre>{`Cline / Roo Code / Kilo: choose OpenAI Compatible, then set Base URL ${gatewayHost}/v1, API key YOUR_FERRY_GATEWAY_KEY, and model ferry/auto-free.\n\nContinue config.yaml:\nmodels:\n  - name: Ferry Auto-Free\n    provider: openai\n    model: ferry/auto-free\n    apiBase: ${gatewayHost}/v1\n    apiKey: YOUR_FERRY_GATEWAY_KEY`}</pre>
-            <pre>{`Claude Code (PowerShell):\n$env:ANTHROPIC_BASE_URL = '${gatewayHost}'\n$env:ANTHROPIC_AUTH_TOKEN = 'YOUR_FERRY_GATEWAY_KEY'\nclaude`}</pre>
+          <Group title="Keys and connected tools">
+            <SettingRow
+              title="Gateway dashboard"
+              helper="Create keys, copy setup for OpenCode, Claude Code or Codex, and watch requests live."
+            >
+              <UiV2.Button
+                size="sm"
+                variant="outline"
+                onClick={() => void navigate({ to: '/gateway' })}
+              >
+                Open Gateway
+              </UiV2.Button>
+            </SettingRow>
           </Group>
         </>
       );
@@ -1884,88 +1589,117 @@ export function SettingsCanvas() {
     }
     if (section === 'Delegation')
       return (
-        <Group title="Delegation">
-          <SettingRow title="Mode" helper="Control whether Ferry can suggest or start a lane.">
-            <SegmentedControl
-              label="Delegation mode"
-              value={settings?.delegationMode ?? 'suggest'}
-              onValueChange={(value) =>
-                void update({
-                  delegationMode: value as NonNullable<typeof settings>['delegationMode'],
-                })
-              }
-              options={[
-                { value: 'off', label: 'Off' },
-                { value: 'suggest', label: 'Suggest' },
-                { value: 'auto', label: 'Auto' },
-              ]}
-            />
-          </SettingRow>
-          <h3>Merged lanes</h3>
-          {lanes.map((lane) => (
-            <div className="lane-row" key={lane.name}>
-              <strong>{lane.implementer}</strong>
-              <span>{lane.name}</span>
-              <small>{lane.model ?? lane.effort ?? lane.variant ?? 'Default'}</small>
-              <small>{lane.source}</small>
-              <span className={`status-pill ${lane.trusted ? 'ok' : 'pending'}`}>
-                {lane.trusted ? 'Trusted' : 'Untrusted'}
-              </span>
-            </div>
-          ))}
-          {lanes.some((lane) => lane.implementer === 'opencode' && !lane.model?.trim()) && (
-            <p className="muted" role="status">
-              Choose a model for the OpenCode lane in its lane configuration, or set a default model
-              in your OpenCode config. Delegation cannot start without one.
-            </p>
-          )}
-          <h3>CLI detection</h3>
-          {providers
-            .filter((provider) => provider.kind === 'cli')
-            .map((provider) => (
-              <SettingRow
-                key={provider.id}
-                title={provider.name}
-                helper={
-                  provider.keyStatus === 'not_applicable' ? 'Detected' : 'Status not verified'
+        <>
+          <Group title="Delegation">
+            <SettingRow title="Mode" helper="Control whether Ferry can suggest or start a lane.">
+              <SegmentedControl
+                label="Delegation mode"
+                value={settings?.delegationMode ?? 'suggest'}
+                onValueChange={(value) =>
+                  void update({
+                    delegationMode: value as NonNullable<typeof settings>['delegationMode'],
+                  })
                 }
-              >
-                <span className="status-pill ok">
-                  {provider.keyStatus === 'not_applicable' ? 'Available' : 'Installed'}
-                </span>
-              </SettingRow>
-            ))}
-          <h3>ACP agent detection</h3>
-          <p className="muted">
-            Ferry checks PATH and the version command. Pi credentials remain managed by Pi.
-          </p>
-          {acpAgents.map((agent) => {
-            const configured = lanes.some(
-              (lane) => lane.implementer === 'acp' && lane.agent === agent.id,
-            );
-            return (
-              <div className="lane-row" key={agent.id}>
-                <strong>{agent.name}</strong>
-                <small>
-                  {agent.available
-                    ? `${agent.version ?? agent.executable ?? agent.command}${configured ? ' · Configured in a lane' : ''}`
-                    : agent.installHint}
-                </small>
-                <span className={`status-pill ${agent.available ? 'ok' : 'pending'}`}>
-                  {agent.available ? 'Installed' : 'Not installed'}
-                </span>
-                {agent.verified && (
-                  <span className="status-pill ok">Verified · {agent.verifiedAt}</span>
-                )}
-                {agent.caution && (
-                  <span className="status-pill pending" title={agent.cautionNote ?? undefined}>
-                    {agent.cautionNote ?? 'Use caution'}
+                options={[
+                  { value: 'off', label: 'Off' },
+                  { value: 'suggest', label: 'Suggest' },
+                  { value: 'auto', label: 'Auto' },
+                ]}
+              />
+            </SettingRow>
+          </Group>
+          <Group title="Merged lanes">
+            <p className="muted">
+              Agents Ferry can hand work to, merged from your user and project configuration.
+            </p>
+            <ul className="v2-list" aria-label="Merged lanes">
+              {lanes.map((lane) => (
+                <li className="v2-list-row" key={lane.name}>
+                  <span className="v2-list-main">
+                    <strong>{lane.name}</strong>
+                    <small>
+                      {lane.implementer} · {lane.model ?? lane.effort ?? lane.variant ?? 'Default'}
+                    </small>
                   </span>
-                )}
-              </div>
-            );
-          })}
-        </Group>
+                  <span className="v2-list-meta">{lane.source}</span>
+                  <span className="v2-status-pill" data-tone={lane.trusted ? 'success' : 'warning'}>
+                    {lane.trusted ? 'Trusted' : 'Untrusted'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {lanes.some((lane) => lane.implementer === 'opencode' && !lane.model?.trim()) && (
+              <p className="muted" role="status">
+                Choose a model for the OpenCode lane in its lane configuration, or set a default
+                model in your OpenCode config. Delegation cannot start without one.
+              </p>
+            )}
+          </Group>
+          <Group title="Coding CLIs">
+            <p className="muted">Command-line agents Ferry found on this computer.</p>
+            <ul className="v2-list" aria-label="Coding CLIs">
+              {providers
+                .filter((provider) => provider.kind === 'cli')
+                .map((provider) => (
+                  <li className="v2-list-row" key={provider.id}>
+                    <span className="v2-list-main">
+                      <strong>{provider.name}</strong>
+                      <small>
+                        {provider.keyStatus === 'not_applicable'
+                          ? 'Detected and ready'
+                          : 'Installed; sign-in not verified'}
+                      </small>
+                    </span>
+                    <span
+                      className="v2-status-pill"
+                      data-tone={provider.keyStatus === 'not_applicable' ? 'success' : 'muted'}
+                    >
+                      {provider.keyStatus === 'not_applicable' ? 'Available' : 'Installed'}
+                    </span>
+                  </li>
+                ))}
+            </ul>
+          </Group>
+          <Group title="ACP agent detection">
+            <p className="muted">
+              Agents that speak the Agent Client Protocol. Ferry checks PATH and the version
+              command; Pi credentials remain managed by Pi.
+            </p>
+            <ul className="v2-list" aria-label="ACP agents">
+              {acpAgents.map((agent) => {
+                const configured = lanes.some(
+                  (lane) => lane.implementer === 'acp' && lane.agent === agent.id,
+                );
+                return (
+                  <li className="v2-list-row" key={agent.id}>
+                    <span className="v2-list-main">
+                      <strong>{agent.name}</strong>
+                      <small>
+                        {agent.available
+                          ? `${agent.version ?? agent.executable ?? agent.command}${configured ? ' · Configured in a lane' : ''}`
+                          : agent.installHint}
+                      </small>
+                    </span>
+                    {agent.verified && (
+                      <span className="v2-list-meta">Verified {agent.verifiedAt}</span>
+                    )}
+                    {agent.caution && (
+                      <span className="v2-status-pill" data-tone="warning">
+                        {agent.cautionNote ?? 'Use caution'}
+                      </span>
+                    )}
+                    <span
+                      className="v2-status-pill"
+                      data-tone={agent.available ? 'success' : 'muted'}
+                    >
+                      {agent.available ? 'Installed' : 'Not installed'}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </Group>
+        </>
       );
     if (section === 'Permissions')
       return (
@@ -2201,6 +1935,7 @@ export function SettingsCanvas() {
             <span>React Bits · MIT + Commons Clause</span>
             <span>lucide · ISC</span>
             <span>simple-icons · CC0</span>
+            <span>LobeHub icons · MIT</span>
             <span>Inter · OFL</span>
           </div>
         </Group>
@@ -2211,25 +1946,67 @@ export function SettingsCanvas() {
     title: section,
     description: 'Adjust how Ferry works across your workspaces.',
   };
+  const needle = sectionQuery.trim().toLocaleLowerCase();
+  const visibleSections = settingsSections.filter(
+    (name) =>
+      !needle ||
+      name.toLocaleLowerCase().includes(needle) ||
+      settingsSectionKeywords[name].some((keyword) => keyword.includes(needle)),
+  );
   return (
     <section className="canvas v2-settings-page">
-      <nav className="v2-settings-nav" aria-label="Settings sections">
-        {settingsSections.map((name) => (
-          <button
-            aria-current={section === name ? 'page' : undefined}
-            className={section === name ? 'active' : ''}
-            key={name}
-            onClick={() => {
-              useUI.getState().setSettingsSection(name);
+      <aside className="v2-settings-sidebar">
+        <label className="v2-settings-search">
+          <Search aria-hidden="true" />
+          <input
+            aria-label="Search settings"
+            onChange={(event) => {
+              setSectionQuery(event.target.value);
             }}
-            type="button"
-          >
-            {name}
-          </button>
-        ))}
-      </nav>
-      <main className="v2-settings-content">
-        <h1 className="sr-only">Settings</h1>
+            onKeyDown={(event) => {
+              const first = visibleSections[0];
+              if (event.key === 'Enter' && first) useUI.getState().setSettingsSection(first);
+            }}
+            placeholder="Search"
+            value={sectionQuery}
+          />
+        </label>
+        <span className="v2-settings-sidebar-label">Settings</span>
+        <nav className="v2-settings-nav" aria-label="Settings sections">
+          {visibleSections.map((name) => {
+            const Icon = settingsSectionIcons[name];
+            return (
+              <button
+                aria-current={section === name ? 'page' : undefined}
+                className={section === name ? 'active' : ''}
+                key={name}
+                onClick={() => {
+                  useUI.getState().setSettingsSection(name);
+                }}
+                type="button"
+              >
+                <Icon aria-hidden="true" />
+                {name}
+              </button>
+            );
+          })}
+          {visibleSections.length === 0 && (
+            <p className="v2-settings-no-results">No matching settings</p>
+          )}
+        </nav>
+      </aside>
+      <div className="v2-settings-content">
+        <UiV2.Button
+          aria-label="Close settings"
+          className="v2-settings-close"
+          onClick={() => {
+            useUI.getState().closeSettings();
+          }}
+          size="icon"
+          variant="ghost"
+        >
+          <X aria-hidden="true" />
+        </UiV2.Button>
         <PageHeader
           className="v2-settings-header"
           level={2}
@@ -2242,7 +2019,8 @@ export function SettingsCanvas() {
               <div className="v2-settings-actions">
                 {section === 'General' && (
                   <UiV2.Button
-                    variant="ghost"
+                    size="sm"
+                    variant="outline"
                     onClick={() => {
                       setConfirm('Reset layout?');
                       setConfirmDescription(
@@ -2258,7 +2036,7 @@ export function SettingsCanvas() {
                   </UiV2.Button>
                 )}
                 {pendingSettings && (
-                  <UiV2.Button variant="default" onClick={() => void saveSettings()}>
+                  <UiV2.Button size="sm" variant="default" onClick={() => void saveSettings()}>
                     Save changes
                   </UiV2.Button>
                 )}
@@ -2277,7 +2055,7 @@ export function SettingsCanvas() {
           }
         />
         {body()}
-      </main>
+      </div>
       <ProviderKeyDialog
         showRoutingControls
         provider={keyProvider}
@@ -2303,24 +2081,6 @@ export function SettingsCanvas() {
           const action = confirmAction;
           setConfirmAction(null);
           if (action) void action();
-        }}
-      />
-      <ConfirmDialog
-        open={revokeKeyId !== null}
-        onOpenChange={(open) => {
-          if (!open) setRevokeKeyId(null);
-        }}
-        title="Revoke gateway key?"
-        description="Clients using this key will no longer be able to connect."
-        confirmLabel="Revoke key"
-        destructive
-        onConfirm={() => {
-          if (!revokeKeyId) return;
-          const id = revokeKeyId;
-          setRevokeKeyId(null);
-          void client.gateway
-            .revokeKey(id)
-            .then(() => cache.invalidateQueries({ queryKey: ['gateway-keys'] }));
         }}
       />
       <Dialog
@@ -2359,31 +2119,6 @@ export function SettingsCanvas() {
               }}
             >
               Add server
-            </UiV2.Button>
-          </div>
-        </div>
-      </Dialog>
-      <Dialog
-        open={Boolean(gatewaySecret)}
-        onOpenChange={(open) => {
-          if (!open) setGatewaySecret('');
-        }}
-        title="Copy your Ferry key"
-        description="This key is shown once. Copy it into your coding tool now. Ferry stores only its hash."
-      >
-        <div className="dialog-form">
-          <pre>{gatewaySecret}</pre>
-          <div className="button-row dialog-actions">
-            <UiV2.Button onClick={() => void navigator.clipboard.writeText(gatewaySecret)}>
-              Copy key
-            </UiV2.Button>
-            <UiV2.Button
-              variant="default"
-              onClick={() => {
-                setGatewaySecret('');
-              }}
-            >
-              Done
             </UiV2.Button>
           </div>
         </div>
@@ -2460,22 +2195,17 @@ function RoutingMappingsEditor({
                   changeMapping(index, { ...mapping, logicalName: event.target.value });
                 }}
               />
-              <select
-                aria-label={`Provider ${String(index + 1)}`}
+              <Select
+                label={`Provider ${String(index + 1)}`}
                 value={mapping.providerId}
-                onChange={(event) => {
-                  changeMapping(index, {
-                    ...mapping,
-                    providerId: event.target.value as Provider['id'],
-                  });
+                onValueChange={(value) => {
+                  changeMapping(index, { ...mapping, providerId: value as Provider['id'] });
                 }}
-              >
-                {providers.map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.name}
-                  </option>
-                ))}
-              </select>
+                options={providers.map((provider) => ({
+                  value: provider.id,
+                  label: provider.name,
+                }))}
+              />
               <input
                 aria-label={`Upstream ID ${String(index + 1)}`}
                 value={mapping.upstreamId}
@@ -2526,21 +2256,15 @@ function RoutingMappingsEditor({
           Strip or force request parameters, add headers, or map an upstream error status. Catalog
           defaults are included when no user value replaces them.
         </p>
-        <label className="v2-settings-field">
+        <div className="v2-settings-field">
           <span>Provider</span>
-          <select
+          <Select
+            label="Provider"
             value={providerId}
-            onChange={(event) => {
-              setProviderId(event.target.value);
-            }}
-          >
-            {providers.map((provider) => (
-              <option key={provider.id} value={provider.id}>
-                {provider.name}
-              </option>
-            ))}
-          </select>
-        </label>
+            onValueChange={setProviderId}
+            options={providers.map((provider) => ({ value: provider.id, label: provider.name }))}
+          />
+        </div>
         <label className="v2-settings-field">
           <span>Overrides (JSON)</span>
           <textarea
@@ -2688,10 +2412,12 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
       ))}
       <UiV2.Button
         size="sm"
+        variant="outline"
         onClick={() => {
           persist([...rules, { effect: 'ask', pattern: 'npm test*', tool: 'run_command' }]);
         }}
       >
+        <Plus aria-hidden="true" />
         Add rule
       </UiV2.Button>
     </Group>
@@ -2787,12 +2513,14 @@ function DeveloperSettings({
             return (
               <label className="domain-route-control" key={domain}>
                 <span>{domain}</span>
-                <select
-                  aria-label={`${domain} route`}
-                  disabled={!selectable}
+                <SegmentedControl
+                  label={`${domain} route`}
                   value={route}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
+                  options={[
+                    { value: 'mock', label: 'Mock' },
+                    { value: 'real', label: 'Real', disabled: !selectable },
+                  ]}
+                  onValueChange={(value) => {
                     const next =
                       value === 'real'
                         ? [...new Set([...realDomains, domain])]
@@ -2802,10 +2530,7 @@ function DeveloperSettings({
                     );
                     update({ realDomains: next });
                   }}
-                >
-                  <option value="mock">Mock</option>
-                  <option value="real">Real</option>
-                </select>
+                />
               </label>
             );
           })}

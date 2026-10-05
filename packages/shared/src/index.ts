@@ -12,6 +12,7 @@ export * from './domain/delegation.js';
 export * from './domain/agent-event.js';
 export * from './domain/optimizer.js';
 export * from './domain/settings.js';
+export * from './domain/gateway.js';
 export * from './security/secrets.js';
 export * from './security/credential-path.js';
 export * from './security/desktop-ipc.js';

@@ -1,8 +1,10 @@
 export const name = 'settings-sections';
 export async function run(page, ctx) {
   await page.goto(new URL('/settings', ctx.url).toString());
-  await page.getByRole('navigation', { name: 'Primary' }).waitFor();
-  const nav = page.getByRole('navigation', { name: 'Settings sections' });
+  // Settings is a modal dialog over the app; the deep link opens it on Home.
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await settings.waitFor();
+  const nav = settings.getByRole('navigation', { name: 'Settings sections' });
   const sections = [
     ['General', 'Appearance'],
     ['Profiles', 'Select a profile to edit.'],
@@ -18,14 +20,16 @@ export async function run(page, ctx) {
   ];
   for (const [name, marker] of sections) {
     await nav.getByRole('button', { name, exact: true }).click();
-    const main = page.getByRole('main').last();
-    await ctx.expect(main.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
-    await ctx.expect(main.getByRole('heading', { name, exact: true, level: 2 })).toBeVisible();
-    await ctx.expect(main.getByText(marker, { exact: false }).first()).toBeVisible({
+    const content = settings.locator('.v2-settings-content');
+    await ctx.expect(content.getByRole('heading', { name, exact: true, level: 2 })).toBeVisible();
+    await ctx.expect(content.getByText(marker, { exact: false }).first()).toBeVisible({
       timeout: 10_000,
     });
-    await ctx.expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
   }
+  // Search narrows the section list.
+  await settings.getByRole('textbox', { name: 'Search settings' }).fill('gateway');
+  await ctx.expect(nav.getByRole('button')).toHaveCount(1);
+  await settings.getByRole('textbox', { name: 'Search settings' }).fill('');
   await nav.getByRole('button', { name: 'Providers & keys', exact: true }).click();
   const manageKey = page.getByRole('button', { name: 'Manage key' }).first();
   await manageKey.click();
@@ -70,6 +74,10 @@ export async function run(page, ctx) {
       element.scrollTop = 0;
     });
   }
+  // Escape closes Settings and returns to the app.
+  await page.keyboard.press('Escape');
+  await ctx.expect(settings).toBeHidden();
+  await ctx.expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'windowControlsOverlay', {

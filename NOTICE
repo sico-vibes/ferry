@@ -16,6 +16,11 @@ https://github.com/tashfeenahmed/freellmapi
 The project includes @earendil-works/pi-ai 0.87.1, MIT License. Copyright (c)
 Mario Zechner and contributors.
 
+packages/ui/src/assets/providers/*.svg are provider and model-lab logos copied
+from @lobehub/icons-static-svg 1.95.1 (LobeHub, MIT License):
+https://github.com/lobehub/lobe-icons. The logos are trademarks of their
+respective owners and are used only to identify those services.
+
 Attribution and reference material
 ----------------------------------
 

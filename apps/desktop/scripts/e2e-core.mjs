@@ -13,13 +13,11 @@ try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.goto(url);
     await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
-    const profileChipElement = page.locator('main button.v2-composer-chip');
-    const profileChipName = await profileChipElement.getAttribute('aria-label');
-    if (!profileChipName) throw new Error('Expected the composer chip to have an accessible name');
-    const profileChip = page
-      .getByRole('main')
-      .getByRole('button', { name: profileChipName, exact: true });
+    // The chip's name changes from the fallback model to the router's pick once candidates
+    // load, so locate it structurally and only assert that the name is the Auto form.
+    const profileChip = page.locator('main button.v2-composer-chip');
     await expect(profileChip).toBeVisible();
+    await expect(profileChip).toHaveAttribute('aria-label', /^Auto · /);
     await profileChip.click();
     const modelPicker = page.locator('[role="dialog"][aria-label="Choose model"]');
     await expect(modelPicker).toHaveCount(1);
@@ -167,17 +165,19 @@ try {
       .getByRole('navigation', { name: 'Provider filters' })
       .getByRole('button', { name: 'Free', exact: true })
       .click();
-    const gemini = page.locator('article').filter({ hasText: 'Gemini API' });
+    // CSS, not role queries: the key dialog is modal and hides the table from the a11y tree.
+    const providerRows = page.locator('table[aria-label="Providers"] tbody tr');
+    const gemini = providerRows.filter({ hasText: 'Gemini API' });
     await gemini.getByRole('button', { name: 'Test Gemini API' }).click();
     await expect(page.getByText(/Connected · \d+ ms/)).toBeVisible({ timeout: 10_000 });
-    const mistral = page.locator('article').filter({ hasText: 'Mistral (Experiment)' });
+    const mistral = providerRows.filter({ hasText: 'Mistral (Experiment)' });
     await mistral.getByRole('button', { name: 'Manage key', exact: true }).click();
     await page.getByLabel('API key', { exact: true }).fill('demo-mistral-key');
     await page.getByRole('button', { name: 'Save key', exact: true }).click();
-    await expect(mistral.getByText('Key unchecked')).toBeVisible({ timeout: 10_000 });
+    await expect(mistral.getByText('Not checked')).toBeVisible({ timeout: 10_000 });
     await page.getByRole('button', { name: 'Close dialog' }).click();
     await mistral.getByRole('button', { name: 'Test Mistral (Experiment)' }).click();
-    await expect(mistral.getByText('Key valid')).toBeVisible({ timeout: 10_000 });
+    await expect(mistral.getByText(/^(Key valid|Healthy)$/)).toBeVisible({ timeout: 10_000 });
     await page.getByRole('tab', { name: 'Usage', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Usage dashboard' })).toBeVisible();
     const nvidiaUsage = page
@@ -223,7 +223,8 @@ try {
     await page.getByRole('textbox', { name: 'Monthly cap ($)' }).fill('25');
     await page.getByRole('button', { name: 'Save changes', exact: true }).click();
     await expect(page.getByRole('status', { name: 'Saved' })).toBeVisible();
-    await page.reload();
+    // The /settings deep link replaces itself with Home, so open it again after reloading.
+    await page.goto(`${url}/settings`);
     await page
       .getByRole('navigation', { name: 'Settings sections' })
       .getByRole('button', { name: 'Profiles' })

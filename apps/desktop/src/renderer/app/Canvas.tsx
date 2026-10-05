@@ -41,7 +41,6 @@ import {
   groupParts,
   UserMessage,
 } from '@ferry/ui';
-import { Bug, BookOpenText, FlaskConical, ListChecks } from 'lucide-react';
 import { useFerryClient } from '../data/client';
 import { listAllModels } from '@ferry/client';
 import { keys, useProfiles, useSessionDetail, useSettings, useWorkspaces } from '../data/queries';
@@ -51,16 +50,10 @@ import { ComposerModelChip } from './SessionPowerControls';
 import { FullOutputDialog } from './FullOutputDialog';
 import { useDisplayName } from './useDisplayName';
 import { ConfirmDialog } from './ConfirmDialog';
+import { HomeStats } from './HomeStats';
+import { WorkspaceMenu } from './WorkspaceMenu';
+import { greeting } from './usageSummary';
 
-const starters: Record<string, string> = {
-  'Fix a failing test': 'Find and fix the failing tests in this repo.',
-  'Explain this repo': 'Explain how this repository is structured and where the main flows live.',
-  'Fix failing tests': 'Find and fix the failing tests in this repo.',
-  'Write tests': 'Add focused tests for the behavior that is currently missing.',
-  Refactor: 'Refactor the selected code while preserving its current behavior.',
-  'Review my changes': 'Review my current changes for bugs and missing tests.',
-  'Plan a feature': 'Help me plan this feature and identify the files it will touch.',
-};
 const warnedOAuthRuns = new Set<string>();
 const warnedTrainingSessions = new Set<string>();
 
@@ -276,7 +269,7 @@ export function HomeCanvas() {
       <div className="v2-home-layout">
         <div className="v2-home-greeting">
           <FerryMark size={36} variant="brand" />
-          <h1>{displayName ? `Good morning, ${displayName}.` : 'Good morning.'}</h1>
+          <h1>{displayName ? `${greeting()}, ${displayName}.` : `${greeting()}.`}</h1>
         </div>
         <Composer
           value={prompt}
@@ -301,35 +294,11 @@ export function HomeCanvas() {
               }}
             />
           }
-          workspaceName={selectedWorkspace?.name ?? 'Choose workspace'}
-          workspaceMenuItems={workspaces.map((workspace) => ({
-            label: workspace.name,
-            onSelect: () => {
-              useUI.getState().setSelectedWorkspace(workspace.id);
-            },
-          }))}
+          workspaceControl={
+            <WorkspaceMenu selectedId={selectedWorkspace?.id} workspaces={workspaces} />
+          }
         />
-        <div className="v2-quick-starts" aria-label="Quick starts">
-          {(
-            [
-              ['Fix a failing test', Bug],
-              ['Explain this repo', BookOpenText],
-              ['Write tests', FlaskConical],
-              ['Plan a feature', ListChecks],
-            ] as const
-          ).map(([label, Icon]) => (
-            <button
-              className="v2-quick-start"
-              key={label}
-              onClick={() => {
-                setPrompt(starters[label] ?? label);
-              }}
-            >
-              <Icon aria-hidden="true" />
-              {label}
-            </button>
-          ))}
-        </div>
+        <HomeStats />
       </div>
     </CanvasPanel>
   );
@@ -503,7 +472,13 @@ export function PartView({
                   : undefined
             }
             waitLabel={paidCapReached ? 'Wait for free capacity' : undefined}
-            onRaiseCap={paidCapReached ? () => void navigate({ to: '/settings' }) : undefined}
+            onRaiseCap={
+              paidCapReached
+                ? () => {
+                    useUI.getState().openSettings('Routing');
+                  }
+                : undefined
+            }
             onStop={paidCapReached ? () => void client.sessions.cancel(sessionId) : undefined}
             onAddProvider={
               !paidCapReached && presentation.allExhausted
@@ -1331,11 +1306,9 @@ export function SessionCanvas() {
           }}
         />
       }
-      {...(workspace?.name ? { workspaceName: workspace.name } : {})}
-      onWorkspaceClick={() => {
-        if (workspace) localStorage.setItem('ferry.libraryWorkspace', workspace.id);
-        void navigate({ to: '/library' });
-      }}
+      workspaceControl={
+        <WorkspaceMenu lockedToSession selectedId={workspace?.id} workspaces={workspaces} />
+      }
       profileMenuItems={[
         ...profiles
           .filter((profile) => profile.pinned)
@@ -1347,8 +1320,7 @@ export function SessionCanvas() {
         {
           label: 'Manage profiles…',
           onSelect: () => {
-            useUI.getState().setSettingsSection('Profiles');
-            void navigate({ to: '/settings' });
+            useUI.getState().openSettings('Profiles');
           },
         },
       ]}

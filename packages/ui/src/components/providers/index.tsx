@@ -5,3 +5,4 @@ export type { DataUseStatus } from './DataUseBadge';
 export { ConfidenceDot } from './ConfidenceDot';
 export { QuotaWindowBar, formatQuotaValue } from './QuotaWindowBar';
 export { ProviderCard } from './ProviderCard';
+export { ProviderLogo, providerLogoKey, modelCreatorLogoKey } from './ProviderLogo';

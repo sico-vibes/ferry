@@ -219,27 +219,39 @@ export async function seedWebPreview(client: MockFerryClient, scenario: string):
   } else {
     localStorage.removeItem('ferry.simulateOffline');
   }
-  // The mock gateway UI can consume this local event stream without network access.
-  const requests = Array.from({ length: 6 }, (_, index) => ({
-    id: `preview-request-${String(index + 1)}`,
-    key: ['Local development', 'CI smoke tests', 'Jordan'][index % 3],
-    model: ['gemini/gemini-3.8-flash', 'openai/gpt-6-sol'][index % 2],
-    status: index === 4 && chosen === 'errors' ? '429' : '200',
-    timestamp: new Date(Date.now() - index * 21_000).toISOString(),
-    tokens: 420 + index * 137,
-  }));
-  (window as Window & { ferryPreviewRequests?: typeof requests }).ferryPreviewRequests = requests;
-  window.setInterval(() => {
-    requests.unshift({
-      id: `preview-request-${String(Date.now())}`,
-      key: 'Local development',
-      model: 'gemini/gemini-3.8-flash',
-      status: '200',
-      timestamp: new Date().toISOString(),
-      tokens: 512,
+  // A fake live request stream for the Gateway dashboard; no network access.
+  const gatewayKeys = (await client.gateway.listKeys()).filter((key) => !key.revokedAt);
+  const routes = [
+    ['ferry/auto-free', 'cerebras/gpt-oss-120b'],
+    ['ferry/auto-free', 'gemini/gemini-3.8-flash'],
+    ['ferry/fast', 'groq/openai/gpt-oss-120b'],
+    ['ferry/best', 'nvidia/nemotron-3-ultra'],
+    ['mistral/codestral-latest', 'mistral/codestral-latest'],
+  ] as const;
+  let sequence = 0;
+  const pushRequest = (at: Date) => {
+    sequence += 1;
+    const key = gatewayKeys[sequence % gatewayKeys.length];
+    const route = routes[sequence % routes.length];
+    if (!key || !route) return;
+    const failed = chosen === 'errors' ? sequence % 3 === 0 : sequence % 11 === 0;
+    client.__gatewayRequest({
+      id: `preview-request-${String(sequence)}`,
+      at: at.toISOString(),
+      keyId: key.id,
+      keyName: key.name,
+      requestedModel: route[0],
+      modelRef: failed ? null : route[1],
+      providerId: failed ? null : route[1].slice(0, route[1].indexOf('/')),
+      status: failed ? 'error' : 'ok',
+      inputTokens: failed ? 0 : 1_200 + ((sequence * 977) % 9_000),
+      outputTokens: failed ? 0 : 180 + ((sequence * 331) % 1_400),
+      latencyMs: 380 + ((sequence * 613) % 4_200),
+      error: failed ? 'All eligible providers are cooling down; retry after 30s.' : null,
     });
-    requests.splice(24);
-    const latest = requests[0];
-    if (latest) window.dispatchEvent(new CustomEvent('ferry:preview-request', { detail: latest }));
-  }, 3_200);
+  };
+  for (let index = 18; index > 0; index--) pushRequest(new Date(Date.now() - index * 47_000));
+  window.setInterval(() => {
+    pushRequest(new Date());
+  }, 4_000);
 }

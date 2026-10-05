@@ -5,11 +5,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BookOpen,
   ChevronDown,
+  ChevronUp,
   CircleHelp,
   History,
+  Info,
   Keyboard,
   Ellipsis,
   MessageSquarePlus,
+  Network,
   Pin,
   Search,
   Settings,
@@ -102,7 +105,7 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
     await client.settings.update({ theme });
     await cache.invalidateQueries({ queryKey: keys.settings });
   };
-  const go = (path: '/' | '/library' | '/models' | '/settings') => {
+  const go = (path: '/' | '/library' | '/models' | '/gateway') => {
     void navigate({ to: path });
   };
   const activateSession = (id: SessionId, title: string) => {
@@ -119,6 +122,25 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
           <FerryMark size={collapsed ? 18 : 20} variant="brand" />
           {!collapsed && <span className="v2-brand-name">Ferry</span>}
         </div>
+        {collapsed ? (
+          <NavButton
+            label="Search (Ctrl K)"
+            icon={<Search />}
+            collapsed
+            onClick={() => window.dispatchEvent(new Event('ferry:open-command-palette'))}
+          />
+        ) : (
+          <button
+            aria-label="Search, Ctrl K"
+            className="v2-sidebar-search"
+            onClick={() => window.dispatchEvent(new Event('ferry:open-command-palette'))}
+            type="button"
+          >
+            <Search aria-hidden="true" />
+            <span>Search</span>
+            <kbd>Ctrl K</kbd>
+          </button>
+        )}
         <nav aria-label="Primary" className="v2-primary-nav">
           <NavButton
             label="New chat"
@@ -144,19 +166,15 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
               go('/models');
             }}
           />
-          <button
-            className="v2-nav-button v2-search-button"
-            onClick={() => window.dispatchEvent(new Event('ferry:open-command-palette'))}
-            aria-label="Search, Ctrl K"
-          >
-            <Search aria-hidden="true" />
-            {!collapsed && (
-              <>
-                <span>Search</span>
-                <kbd>Ctrl K</kbd>
-              </>
-            )}
-          </button>
+          <NavButton
+            label="Gateway"
+            icon={<Network />}
+            active={pathname.startsWith('/gateway')}
+            collapsed={collapsed}
+            onClick={() => {
+              go('/gateway');
+            }}
+          />
         </nav>
         {!collapsed && (
           <section className="v2-chat-list" aria-label="Chats">
@@ -239,6 +257,7 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
                   setShowAll((value) => !value);
                 }}
               >
+                {showAll ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
                 {showAll ? 'Show less' : 'Show more'}
               </button>
             )}
@@ -290,7 +309,7 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={() => {
-                  go('/settings');
+                  useUI.getState().openSettings();
                 }}
               >
                 <Settings />
@@ -319,6 +338,15 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
                   </DropdownMenuRadioGroup>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+              <DropdownMenuItem
+                onSelect={() => {
+                  window.dispatchEvent(new Event('ferry:show-shortcuts'));
+                }}
+              >
+                <Keyboard />
+                Keyboard shortcuts
+                <DropdownMenuShortcut>Ctrl+/</DropdownMenuShortcut>
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => void navigate({ to: '/models/usage' })}>
                 <History />
@@ -340,19 +368,11 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => {
-                  window.dispatchEvent(new Event('ferry:show-shortcuts'));
-                }}
-              >
-                <Keyboard />
-                Keyboard shortcuts
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() => {
                   setAboutOpen(true);
                 }}
               >
-                <CircleHelp />
-                About / changelog
+                <Info />
+                About Ferry
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMockFerryClient } from '@ferry/client';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FerryProvider } from '../data/client';
@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 describe('SettingsCanvas', () => {
-  it('keeps Settings as the page heading and renders each section as a second-level heading', async () => {
+  it('renders a searchable section list and each section as a second-level heading', async () => {
     const sections = [
       ['General', 'General'],
       ['Profiles', 'Profiles'],
@@ -51,7 +51,8 @@ describe('SettingsCanvas', () => {
       cleanup();
       useUI.setState({ settingsSection: section });
       mount();
-      expect(await screen.findByRole('heading', { name: 'Settings', level: 1 })).toBeTruthy();
+      // The Settings dialog supplies the "Settings" title; the canvas owns section headings.
+      expect(await screen.findByRole('textbox', { name: 'Search settings' })).toBeTruthy();
       expect(await screen.findByRole('heading', { name: title, level: 2 })).toBeTruthy();
     }
   });
@@ -222,7 +223,10 @@ describe('SettingsCanvas', () => {
     expect(
       (await screen.findByText('better-sqlite3: failed: MODULE_NOT_FOUND')).textContent,
     ).toContain('MODULE_NOT_FOUND');
-    const providerRoute = screen.getByRole('combobox', { name: 'providers route' });
-    expect(providerRoute instanceof HTMLSelectElement && providerRoute.disabled).toBe(true);
+    // Domains without a registered core handler cannot be switched to Real.
+    const providerRoute = screen.getByRole('radiogroup', { name: 'providers route' });
+    expect(
+      within(providerRoute).getByRole('radio', { name: 'Real' }).hasAttribute('disabled'),
+    ).toBe(true);
   });
 });

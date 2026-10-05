@@ -10,6 +10,7 @@ const labels: Record<string, string> = {
   'search.open': 'Search chats',
   'tab.close': 'Close tab',
   'tab.next': 'Next tab',
+  'settings.open': 'Open settings',
 };
 
 export function KeyboardShortcutsDialog({

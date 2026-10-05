@@ -13,7 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import type { Session, Workspace, WorkspaceSettings } from '@ferry/shared';
-import { UiV2, PageHeader } from '@ferry/ui';
+import { UiV2, PageHeader, Select } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { keys, useProfiles, useSessions, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
@@ -308,46 +308,38 @@ export function LibraryCanvas() {
                 </div>
               </div>
               <div className="v2-project-form-row">
-                <label htmlFor="project-instructions-file">Instructions file</label>
-                <select
-                  id="project-instructions-file"
+                <span>Instructions file</span>
+                <Select
+                  label="Instructions file"
                   value={activeSettings.instructionsFile ?? 'none'}
-                  onChange={(event) => {
-                    updateField(
-                      'instructionsFile',
-                      event.currentTarget.value === 'none' ? null : event.currentTarget.value,
-                    );
+                  onValueChange={(value) => {
+                    updateField('instructionsFile', value === 'none' ? null : value);
                   }}
-                >
-                  <option value="none">None</option>
-                  {['AGENTS.md', 'FERRY.md', 'CLAUDE.md'].map((name) => (
-                    <option value={name} key={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: 'none', label: 'None' },
+                    ...['AGENTS.md', 'FERRY.md', 'CLAUDE.md'].map((name) => ({
+                      value: name,
+                      label: name,
+                    })),
+                  ]}
+                />
               </div>
               <div className="v2-project-form-row">
-                <label htmlFor="project-default-profile">Default profile</label>
-                <select
-                  id="project-default-profile"
+                <span>Default profile</span>
+                <Select
+                  label="Default profile"
                   value={activeSettings.defaultProfileId ?? 'default'}
-                  onChange={(event) => {
+                  onValueChange={(value) => {
                     updateField(
                       'defaultProfileId',
-                      event.currentTarget.value === 'default'
-                        ? null
-                        : (event.currentTarget.value as WorkspaceSettings['defaultProfileId']),
+                      value === 'default' ? null : (value as WorkspaceSettings['defaultProfileId']),
                     );
                   }}
-                >
-                  <option value="default">Use app default</option>
-                  {profiles.map((profile) => (
-                    <option value={profile.id} key={profile.id}>
-                      {profile.name}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: 'default', label: 'Use app default' },
+                    ...profiles.map((profile) => ({ value: profile.id, label: profile.name })),
+                  ]}
+                />
               </div>
               <section className="v2-project-subsection">
                 <div>
@@ -424,21 +416,19 @@ export function LibraryCanvas() {
                 </div>
               </div>
               <div className="v2-project-form-row">
-                <label htmlFor="project-permission-mode">Permission mode</label>
-                <select
-                  id="project-permission-mode"
+                <span>Permission mode</span>
+                <Select
+                  label="Permission mode"
                   value={activeSettings.permissionMode}
-                  onChange={(event) => {
-                    updateField(
-                      'permissionMode',
-                      event.currentTarget.value as WorkspaceSettings['permissionMode'],
-                    );
+                  onValueChange={(value) => {
+                    updateField('permissionMode', value as WorkspaceSettings['permissionMode']);
                   }}
-                >
-                  <option value="ask">Ask before each action</option>
-                  <option value="auto_edit">Edit files, ask before commands</option>
-                  <option value="full_auto">Run automatically</option>
-                </select>
+                  options={[
+                    { value: 'ask', label: 'Ask before each action' },
+                    { value: 'auto_edit', label: 'Edit files, ask before commands' },
+                    { value: 'full_auto', label: 'Run automatically' },
+                  ]}
+                />
               </div>
               <section className="v2-project-subsection">
                 <div className="v2-project-section-heading">

@@ -4,6 +4,7 @@ import type {
   CheckpointId,
   DelegationRun,
   AcpAgentDetection,
+  GatewayRequestRecord,
   HandoffStat,
   Lane,
   McpServer,
@@ -93,6 +94,8 @@ export interface FerryClient {
       };
     }): Promise<unknown>;
     revokeKey(id: string): Promise<unknown>;
+    /** Recent requests routed by the Gateway, newest first (metadata only, kept in memory). */
+    requests(): Promise<GatewayRequestRecord[]>;
     start(): Promise<unknown>;
     stop(): Promise<unknown>;
   };

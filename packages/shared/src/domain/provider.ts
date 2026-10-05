@@ -147,6 +147,12 @@ export const ModelInfoSchema = z.object({
   qualityPenalty: z.number().min(0).max(1).optional(),
   qualitySources: z.array(z.string()).optional(),
   qualityDate: z.iso.date().nullable().optional(),
+  /** Catalog facts (models.dev), shown in the model picker only when present. */
+  description: z.string().optional(),
+  releaseDate: z.string().optional(),
+  knowledgeCutoff: z.string().optional(),
+  openWeights: z.boolean().optional(),
+  inputModalities: z.array(z.string()).optional(),
 });
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 export const ModelCandidateSchema = z.object({

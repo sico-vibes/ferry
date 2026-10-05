@@ -83,6 +83,7 @@ export const FERRY_METHODS = [
   'gateway.createKey',
   'gateway.updateKey',
   'gateway.revokeKey',
+  'gateway.requests',
   'gateway.start',
   'gateway.stop',
   'system.info',
@@ -132,6 +133,7 @@ export const FERRY_EVENTS = [
   'settings.updated',
   'toast',
   'oauth.progress',
+  'gateway.request',
 ] as const;
 export const FERRY_DOMAINS = [
   ...new Set(FERRY_METHODS.map((method) => method.split('.')[0] ?? '')),

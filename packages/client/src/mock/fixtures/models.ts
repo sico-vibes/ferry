@@ -120,8 +120,62 @@ export function createModels(): ModelInfo[] {
       free,
       priceInPerM,
       priceOutPerM,
+      ...facts[ref],
     }),
   );
 
   return models;
 }
+
+// Demo catalog facts for the mock (the real values come from models.dev via @ferry/catalog).
+const gptOss: Partial<ModelInfo> = {
+  description: 'Open-weight mixture-of-experts model with strong tool calling and reasoning.',
+  releaseDate: '2025-08-05',
+  knowledgeCutoff: '2024-06',
+  openWeights: true,
+  inputModalities: ['text'],
+};
+const nemotron: Partial<ModelInfo> = {
+  description: 'Open reasoning model tuned for agentic coding, tool use and long context.',
+  releaseDate: '2026-05-20',
+  openWeights: true,
+  inputModalities: ['text'],
+};
+const facts: Record<string, Partial<ModelInfo>> = {
+  'gemini/gemini-3.8-flash': {
+    description: 'Fast multimodal model for everyday coding, search and long documents.',
+    releaseDate: '2026-07-15',
+    knowledgeCutoff: '2026-01',
+    openWeights: false,
+    inputModalities: ['text', 'image', 'audio', 'video', 'pdf'],
+  },
+  'openrouter/nvidia/nemotron-3-ultra:free': nemotron,
+  'nvidia/nemotron-3-ultra': nemotron,
+  'cerebras/gpt-oss-120b': gptOss,
+  'groq/openai/gpt-oss-120b': gptOss,
+  'cerebras/qwen-3.8-27b': {
+    description: 'Dense open model with solid coding and multilingual ability.',
+    releaseDate: '2026-04-28',
+    openWeights: true,
+    inputModalities: ['text'],
+  },
+  'mistral/codestral-latest': {
+    description: 'Code-specialised model for completion, edits and repository questions.',
+    releaseDate: '2026-01-10',
+    openWeights: false,
+    inputModalities: ['text'],
+  },
+  'anthropic/claude-sonnet-5': {
+    description: 'Frontier model for complex reasoning and long agentic coding tasks.',
+    releaseDate: '2026-02-01',
+    knowledgeCutoff: '2025-10',
+    openWeights: false,
+    inputModalities: ['text', 'image', 'pdf'],
+  },
+  'openai/gpt-6-sol': {
+    description: 'General frontier model with strong planning and tool use.',
+    releaseDate: '2026-06-02',
+    openWeights: false,
+    inputModalities: ['text', 'image'],
+  },
+};

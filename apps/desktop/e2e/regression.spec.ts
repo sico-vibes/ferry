@@ -24,12 +24,12 @@ test.describe('known regressions', () => {
   // Repro: localStorage.setItem('ferry.permissionRules', '{}'), open Settings → Permissions.
   test('renders Permissions when the persisted rules are not an array', async ({ page }) => {
     await page.goto('/settings');
-    await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Settings sections' })).toBeVisible();
     await page.evaluate(() => {
       localStorage.setItem('ferry.permissionRules', '{}');
       localStorage.setItem('ferry.ui', JSON.stringify({ settingsSection: 'Permissions' }));
     });
-    await page.reload();
+    await page.goto('/settings');
     await page
       .getByRole('navigation', { name: 'Settings sections' })
       .getByRole('button', { name: 'Permissions' })

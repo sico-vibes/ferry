@@ -263,7 +263,7 @@ describe('Models providers and catalog', () => {
     });
   }, 20_000);
 
-  it('keeps providers needing attention visible above the collapsed group', async () => {
+  it('lists providers needing attention first in the providers table', async () => {
     sessionStorage.removeItem('ferry:list:explore:providers');
     providerListSpy.mockResolvedValue([
       ...Array.from({ length: 7 }, (_, index) =>
@@ -282,7 +282,9 @@ describe('Models providers and catalog', () => {
     expect(
       await screen.findByRole('button', { name: 'Test Provider needing attention' }),
     ).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Show more providers (2)' })).toBeTruthy();
+    const rows = within(screen.getByRole('table', { name: 'Providers' })).getAllByRole('row');
+    expect(rows).toHaveLength(9);
+    expect(rows[1]?.textContent).toContain('Provider needing attention');
   });
 
   it('opens the provider key dialog from Add provider', async () => {
@@ -372,7 +374,11 @@ describe('Models providers and catalog', () => {
     setup();
     await user.click(await screen.findByRole('tab', { name: 'Models' }));
     await screen.findByText('Model 01');
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Models per page' }), '25');
+    await user.click(
+      within(screen.getByRole('radiogroup', { name: 'Models per page' })).getByRole('radio', {
+        name: '25',
+      }),
+    );
     expect(await screen.findByText('1–25 of 60')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Next' }));
     expect(await screen.findByText('26–50 of 60')).toBeTruthy();

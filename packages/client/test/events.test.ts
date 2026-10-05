@@ -93,6 +93,20 @@ const samples = {
   'settings.updated': sampleSettings,
   toast: { kind: 'info', title: 'Ready', body: null },
   'oauth.progress': { type: 'success', id: 'anthropic' },
+  'gateway.request': {
+    id: 'gwreq_1',
+    at: '2026-10-05T10:00:00.000Z',
+    keyId: 'key_1',
+    keyName: 'OpenCode',
+    requestedModel: 'ferry/auto-free',
+    modelRef: 'groq/openai/gpt-oss-120b',
+    providerId: 'groq',
+    status: 'ok',
+    inputTokens: 1200,
+    outputTokens: 300,
+    latencyMs: 840,
+    error: null,
+  },
 } as const;
 
 describe('Ferry event schemas', () => {
