@@ -1,0 +1,146 @@
+@import 'tailwindcss';
+
+:root {
+  --background: #0f0e14;
+  --card: #17161d;
+  --muted: #1e1d25;
+  --border: rgba(255, 255, 255, 0.06);
+  --foreground: #edecf2;
+  --muted-foreground: #a19eae;
+  --primary: #6d5bd0;
+  --primary-foreground: #ffffff;
+  --accent: rgba(143, 122, 224, 0.14);
+  --accent-foreground: #c8b5f5;
+  --ring: #8f7ae0;
+  --beam: #8f7ae0;
+  --beam-light: #c8b5f5;
+  --beam-deep: #6d5bd0;
+  --beam-track: rgba(143, 122, 224, 0.45);
+  --ink: #090622;
+  --brand-lilac: #c8b5f5;
+  --brand-violet: #8f7ae0;
+  --brand-deep: #6552a3;
+  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.28);
+  --mark-fill: linear-gradient(
+    135deg,
+    var(--brand-lilac),
+    var(--brand-violet) 55%,
+    var(--brand-deep)
+  );
+  --hero-wash:
+    radial-gradient(
+      120% 80% at 50% -10%,
+      color-mix(in srgb, var(--beam) 48%, transparent),
+      transparent 55%
+    ),
+    radial-gradient(
+      70% 55% at 82% 8%,
+      color-mix(in srgb, var(--beam-deep) 42%, transparent),
+      transparent 52%
+    ),
+    var(--background);
+  --hero-scrim: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--background) 24%, transparent) 0%,
+    color-mix(in srgb, var(--background) 86%, transparent) 14%,
+    color-mix(in srgb, var(--background) 92%, transparent) 46%,
+    color-mix(in srgb, var(--background) 40%, transparent) 82%,
+    transparent 100%
+  );
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-ink: var(--ink);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --radius-button: 10px;
+  --radius-card: 14px;
+  --animate-accordion-down: accordion-down 200ms ease-out;
+  --animate-accordion-up: accordion-up 200ms ease-out;
+}
+
+@keyframes accordion-down {
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-accordion-content-height);
+  }
+}
+
+@keyframes accordion-up {
+  from {
+    height: var(--radix-accordion-content-height);
+  }
+  to {
+    height: 0;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+  background: var(--background);
+}
+
+body {
+  overflow-x: clip;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+::selection {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.hero-beams {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--hero-wash);
+}
+
+.hero-beams canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.ferry-mark {
+  display: inline-block;
+  background-image: var(--mark-fill);
+  -webkit-mask-image: url('/brand/ferry-mark.png');
+  mask-image: url('/brand/ferry-mark.png');
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
