@@ -133,7 +133,7 @@ export function Crossing() {
         </p>
 
         <div ref={containerRef} className="relative mx-auto mt-12 w-fit max-w-full">
-          <div className="grid items-center justify-items-center gap-3 md:grid-cols-[11rem_7.5rem_13.5rem] md:justify-center md:gap-x-20">
+          <div className="grid items-center justify-items-center gap-3 md:grid-cols-[11rem_7rem_7.5rem_5rem_13.5rem] md:gap-x-0">
             <div className="relative z-10 flex flex-col gap-3">
               {queues.map((queue, index) => {
                 const nodeRef = cardRefs[index];
@@ -150,6 +150,8 @@ export function Crossing() {
               })}
             </div>
 
+            <div className="hidden md:block" aria-hidden="true" />
+
             <div className="relative z-10 flex justify-center">
               <div
                 ref={ferryRef}
@@ -159,6 +161,8 @@ export function Crossing() {
                 <span className="text-sm font-semibold">Ferry</span>
               </div>
             </div>
+
+            <div className="hidden md:block" aria-hidden="true" />
 
             <div className="relative z-10">
               <AnchorCard

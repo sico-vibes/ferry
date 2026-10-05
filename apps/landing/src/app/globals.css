@@ -80,6 +80,17 @@
   }
 }
 
+@keyframes route-flow {
+  to {
+    stroke-dashoffset: -112;
+  }
+}
+
+.route-flow {
+  stroke-dasharray: 12 100;
+  animation: route-flow 5.6s linear infinite;
+}
+
 html {
   scroll-behavior: smooth;
   background: var(--background);
