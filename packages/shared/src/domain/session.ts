@@ -79,7 +79,7 @@ export const MessagePartSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('approval_request'),
     ...partBase,
-    kind: z.enum(['command', 'edit', 'delegation', 'paid_model']),
+    kind: z.enum(['command', 'edit', 'delegation', 'paid_model', 'model_handover']),
     summary: z.string(),
     detail: z.string(),
     risk: z.enum(['low', 'medium', 'high']),
@@ -93,6 +93,7 @@ export const MessagePartSchema = z.discriminatedUnion('type', [
     reason: z.enum(['quota', 'rate_limit', 'error', 'context', 'capability', 'manual']),
     briefingTokens: z.number().int().nonnegative(),
     explanation: z.string(),
+    trigger: z.enum(['reactive', 'proactive', 'manual']).optional(),
   }),
   z.object({ type: z.literal('delegation'), ...partBase, runId: RunIdSchema }),
   z.object({
@@ -130,12 +131,23 @@ export const MessageSchema = z.object({
   role: z.enum(['user', 'assistant']),
   createdAt: z.iso.datetime(),
   modelRef: ModelRefSchema.nullable(),
+  requestedModelRef: ModelRefSchema.or(z.literal('auto')).nullable().optional(),
+  turnId: z.string().optional(),
+  providerReportedModelId: z.string().nullable().optional(),
+  interrupted: z.object({ reason: z.string(), at: z.iso.datetime() }).optional(),
   agentRole: z.enum(['planner', 'editor']).optional(),
   modelAttempts: z
     .array(
       z.object({
         model: ModelRefSchema,
         provider: z.string(),
+        id: z.string().optional(),
+        attempt: z.number().int().positive().optional(),
+        providerKeyId: z.string().optional(),
+        outputStarted: z.boolean().optional(),
+        fallbackReason: z.string().optional(),
+        upstreamModel: z.string().optional(),
+        responseModel: z.string().optional(),
         status: z.number().int().nullable(),
         latencyMs: z.number().nonnegative(),
         errorKind: ProviderFailureFamilySchema.nullable(),

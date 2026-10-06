@@ -2,7 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ProfileIdSchema, SessionIdSchema, WorkspaceIdSchema } from '@ferry/shared';
+import {
+  MessageIdSchema,
+  ModelRefSchema,
+  ProfileIdSchema,
+  SessionIdSchema,
+  WorkspaceIdSchema,
+} from '@ferry/shared';
 import {
   openDatabase,
   runRetention,
@@ -10,6 +16,7 @@ import {
   ProviderKeyEntryRepository,
   ProviderKeyUsageDailyRepository,
   SessionRepository,
+  MessageRepository,
   STORAGE_SCHEMA_VERSION,
   OutboxRepository,
   TurnLogRepository,
@@ -402,6 +409,7 @@ describe('@ferry/storage', () => {
     try {
       expect(db.client.pragma('user_version', { simple: true })).toBe(STORAGE_SCHEMA_VERSION);
       const repo = new SessionRepository(db.client);
+      const messageRepo = new MessageRepository(db.client);
       const session = {
         id: 's1',
         workspaceId: WorkspaceIdSchema.parse('w1'),
@@ -426,6 +434,32 @@ describe('@ferry/storage', () => {
       );
       expect(repo.list()).toHaveLength(8);
       expect(repo.get('s1')?.title).toBe('test');
+      const message = {
+        id: MessageIdSchema.parse('message_00000000000000000000'),
+        sessionId: SessionIdSchema.parse('s1'),
+        role: 'assistant' as const,
+        createdAt: new Date().toISOString(),
+        modelRef: ModelRefSchema.parse('openai/gpt-5'),
+        requestedModelRef: 'auto' as const,
+        turnId: 'turn_1',
+        providerReportedModelId: null,
+        interrupted: { reason: 'stopped', at: new Date().toISOString() },
+        modelAttempts: [
+          {
+            model: ModelRefSchema.parse('openai/gpt-5'),
+            provider: 'openai',
+            id: 'turn_1',
+            attempt: 1,
+            outputStarted: true,
+            status: 429,
+            latencyMs: 5,
+            errorKind: 'quota_exhausted' as const,
+          },
+        ],
+        parts: [],
+      };
+      messageRepo.put(message);
+      expect(messageRepo.get(message.id)).toEqual(message);
     } finally {
       db.close();
     }

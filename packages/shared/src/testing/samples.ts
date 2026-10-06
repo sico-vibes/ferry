@@ -327,6 +327,7 @@ export const sampleSettings: Settings = {
     qualityWeight: 4,
     textToolFallbackEnabled: false,
     quotaReservations: true,
+    pinnedExhaustion: 'handover',
     cooldownReasons: true,
     gentleQuotaRamp: true,
     toolRejectionMemory: true,

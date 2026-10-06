@@ -112,20 +112,14 @@ export function applyHydratedRows(
         agentRole: row.agent_role ?? undefined,
         parts,
         modelAttempts: row.model_attempts ?? undefined,
-        turnId: row.turn_id ?? undefined,
+        turnId: typeof row.turn_id === 'string' ? row.turn_id : undefined,
       };
       const parsed = MessageSchema.safeParse(Object.keys(fullData).length ? fullData : fallback);
       if (!parsed.success) {
         counts.skippedInvalid += 1;
         continue;
       }
-      const restored = {
-        ...parsed.data,
-        ...(typeof (Object.keys(fullData).length ? fullData.turnId : row.turn_id) === 'string'
-          ? { turnId: Object.keys(fullData).length ? fullData.turnId : row.turn_id }
-          : {}),
-      };
-      adapter.messages.put(restored);
+      adapter.messages.put(parsed.data);
       counts.inserted += 1;
       continue;
     }
