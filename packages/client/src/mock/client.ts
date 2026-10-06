@@ -57,6 +57,23 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
   }[] = [];
   const gatewayRequests: GatewayRequestRecord[] = [];
   const client: FerryClient = {
+    cloud: {
+      status: () =>
+        Promise.resolve({
+          storageMode: 'local',
+          configured: false,
+          ownerEmail: null,
+          message: null,
+          auth: { signedIn: false, email: null, userId: null, isOwner: false },
+          sync: { pending: 0, failed: 0, lastError: null, lastFlush: null },
+        }),
+      signIn: () => Promise.reject(new Error('Cloud sign-in is unavailable in mock mode.')),
+      signOut: () => Promise.resolve(),
+      setStorageMode: ({ mode }) => Promise.resolve({ mode, restartRequired: true }),
+      syncNow: () => Promise.resolve(),
+      setCaptureContent: ({ value }) => Promise.resolve(value ?? false),
+      migrateLocalKeys: () => Promise.resolve({ migrated: 0, missing: 0, failed: 0 }),
+    },
     gateway: {
       settings: () =>
         Promise.resolve({

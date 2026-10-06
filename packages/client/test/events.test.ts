@@ -20,6 +20,7 @@ import {
   sampleSettings,
 } from '@ferry/shared/testing';
 import type { FerryClient } from '../src/ferry-client.js';
+import type { CloudStatus } from '../src/ferry-client.js';
 import { FerryEventSchemas } from '../src/events.js';
 
 const sessionId = sampleSession.id;
@@ -91,6 +92,14 @@ const samples = {
   'workspace.updated': sampleWorkspace,
   'workspace.removed': { id: sampleWorkspace.id },
   'settings.updated': sampleSettings,
+  'cloud.status': {
+    storageMode: 'local',
+    configured: false,
+    ownerEmail: null,
+    message: null,
+    auth: { signedIn: false, email: null, userId: null, isOwner: false },
+    sync: { pending: 0, failed: 0, lastError: null, lastFlush: null },
+  } satisfies CloudStatus,
   toast: { kind: 'info', title: 'Ready', body: null },
   'oauth.progress': { type: 'success', id: 'anthropic' },
   'gateway.request': {

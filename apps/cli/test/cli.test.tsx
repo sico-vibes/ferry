@@ -218,6 +218,34 @@ describe('@ferry/cli', () => {
     expect(JSON.parse(emitted)).toMatchObject({ error: { code: 2 } });
   });
 
+  it('documents cloud commands and never prints a non-interactive login password', async () => {
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    expect(await runCli(['cloud', '--help'])).toBe(0);
+    expect(output.mock.calls.map(([chunk]) => String(chunk)).join('')).toContain('migrate-keys');
+    output.mockClear();
+    const before = process.env.FERRY_CLOUD_PASSWORD;
+    process.env.FERRY_CLOUD_PASSWORD = 'cloud-secret-never-echo';
+    try {
+      expect(
+        await runCli([
+          'cloud',
+          'login',
+          '--email',
+          'admin@example.com',
+          '--json',
+          '--engine',
+          'mock',
+        ]),
+      ).toBe(1);
+      expect(output.mock.calls.map(([chunk]) => String(chunk)).join('')).not.toContain(
+        'cloud-secret-never-echo',
+      );
+    } finally {
+      if (before === undefined) delete process.env.FERRY_CLOUD_PASSWORD;
+      else process.env.FERRY_CLOUD_PASSWORD = before;
+    }
+  });
+
   it('shows per-command help and returns usage code 2 for invalid Gateway limits', async () => {
     const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     expect(await runCli(['providers', 'keys', '--help'])).toBe(0);

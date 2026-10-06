@@ -26,6 +26,7 @@ const storageMigrationFiles = [
   '0003_agent_events.sql',
   '0004_provider_key_entries.sql',
   '0005_cloud_outbox_and_telemetry.sql',
+  '0006_outbox_claims.sql',
 ];
 export const STORAGE_SCHEMA_VERSION = storageMigrationFiles.length;
 /** Observes successful local writes so cloud mode can persist them for later sync. */
@@ -70,7 +71,17 @@ export async function openDatabase(path: string): Promise<DatabaseConnection> {
       if (current >= targetVersion) continue;
       const sql = await readFile(migrationPath, 'utf8');
       const migrate = client.transaction(() => {
-        client.exec(sql);
+        if (targetVersion === 6) {
+          const columns = new Set(
+            (client.pragma('table_info(cloud_outbox)') as { name: string }[]).map(
+              ({ name }) => name,
+            ),
+          );
+          if (!columns.has('claimed_generation'))
+            client.exec('ALTER TABLE cloud_outbox ADD COLUMN claimed_generation INTEGER');
+          if (!columns.has('claimed_at'))
+            client.exec('ALTER TABLE cloud_outbox ADD COLUMN claimed_at TEXT');
+        } else client.exec(sql);
         client.pragma(`user_version = ${String(targetVersion)}`);
       });
       migrate();
@@ -218,18 +229,38 @@ export class OutboxRepository {
     now?: string;
   }): void {
     const createdAt = input.now ?? new Date().toISOString();
+    if (input.op === 'upsert') {
+      this.client
+        .prepare(
+          "DELETE FROM cloud_outbox WHERE op_id=? AND target=? AND op='delete' AND status IN ('pending','failed_permanent') AND (claimed_generation IS NULL OR claimed_generation<>generation)",
+        )
+        .run(`${input.opId}:delete`, input.target);
+    } else if (input.op === 'delete' && input.opId.endsWith(':delete')) {
+      this.client
+        .prepare(
+          "DELETE FROM cloud_outbox WHERE op_id=? AND target=? AND op='upsert' AND status IN ('pending','failed_permanent') AND (claimed_generation IS NULL OR claimed_generation<>generation)",
+        )
+        .run(input.opId.slice(0, -7), input.target);
+    }
     this.client
       .prepare(
-        `INSERT INTO cloud_outbox(op_id,target,op,payload_json,created_at,next_attempt_at,status) VALUES(?,?,?,?,?,?, 'pending') ON CONFLICT(op_id) DO UPDATE SET payload_json=excluded.payload_json,created_at=excluded.created_at,next_attempt_at=excluded.next_attempt_at,attempts=0,last_error=NULL,status='pending',generation=cloud_outbox.generation+1 WHERE cloud_outbox.status IN ('pending','failed_permanent')`,
+        `INSERT INTO cloud_outbox(op_id,target,op,payload_json,created_at,next_attempt_at,status) VALUES(?,?,?,?,?,?, 'pending') ON CONFLICT(op_id) DO UPDATE SET payload_json=excluded.payload_json,created_at=excluded.created_at,next_attempt_at=excluded.next_attempt_at,attempts=0,last_error=NULL,status='pending',generation=cloud_outbox.generation+1,claimed_generation=NULL,claimed_at=NULL WHERE cloud_outbox.status IN ('pending','failed_permanent')`,
       )
       .run(input.opId, input.target, input.op, JSON.stringify(input.payload), createdAt, createdAt);
   }
   claimDue(limit: number, now = new Date().toISOString()): OutboxEntry[] {
-    return this.client
-      .prepare(
-        `SELECT id,op_id AS opId,target,op,payload_json AS payloadJson,created_at AS createdAt,attempts,next_attempt_at AS nextAttemptAt,last_error AS lastError,status,generation FROM cloud_outbox WHERE status='pending' AND next_attempt_at<=? ORDER BY id LIMIT ?`,
-      )
-      .all(now, limit) as OutboxEntry[];
+    const staleBefore = new Date(Date.parse(now) - 30_000).toISOString();
+    this.client
+      .prepare('UPDATE cloud_outbox SET claimed_generation=NULL,claimed_at=NULL WHERE claimed_at<?')
+      .run(staleBefore);
+    const select = this.client.prepare(
+      `SELECT id,op_id AS opId,target,op,payload_json AS payloadJson,created_at AS createdAt,attempts,next_attempt_at AS nextAttemptAt,last_error AS lastError,status,generation FROM cloud_outbox WHERE status='pending' AND next_attempt_at<=? AND (claimed_generation IS NULL OR claimed_generation<>generation) ORDER BY id LIMIT ?`,
+    );
+    const rows = select.all(now, limit) as OutboxEntry[];
+    const claim = this.client.prepare(
+      'UPDATE cloud_outbox SET claimed_generation=generation,claimed_at=? WHERE id=? AND generation=? AND (claimed_generation IS NULL OR claimed_generation<>generation)',
+    );
+    return rows.filter((row) => claim.run(now, row.id, row.generation).changes > 0);
   }
   hasPending(target: string, entityId: string): boolean {
     return Boolean(
@@ -244,7 +275,7 @@ export class OutboxRepository {
     this.client.prepare(`DELETE FROM cloud_outbox WHERE id=? AND generation=?`).run(id, generation);
     this.client
       .prepare(
-        "UPDATE cloud_outbox SET next_attempt_at=? WHERE id=? AND generation<>? AND status='pending'",
+        "UPDATE cloud_outbox SET next_attempt_at=?,claimed_generation=NULL,claimed_at=NULL WHERE id=? AND generation<>? AND status='pending'",
       )
       .run(now, id, generation);
   }
@@ -257,12 +288,12 @@ export class OutboxRepository {
   ): void {
     this.client
       .prepare(
-        `UPDATE cloud_outbox SET attempts=attempts+1,last_error=?,next_attempt_at=? WHERE id=? AND generation=?`,
+        `UPDATE cloud_outbox SET attempts=attempts+1,last_error=?,next_attempt_at=?,claimed_generation=NULL,claimed_at=NULL WHERE id=? AND generation=?`,
       )
       .run(redactStorageText(error), nextAt, id, generation);
     this.client
       .prepare(
-        "UPDATE cloud_outbox SET next_attempt_at=? WHERE id=? AND generation<>? AND status='pending'",
+        "UPDATE cloud_outbox SET next_attempt_at=?,claimed_generation=NULL,claimed_at=NULL WHERE id=? AND generation<>? AND status='pending'",
       )
       .run(now, id, generation);
   }
@@ -274,7 +305,7 @@ export class OutboxRepository {
   ): void {
     this.client
       .prepare(
-        `UPDATE cloud_outbox SET attempts=attempts+1,last_error=?,status='failed_permanent' WHERE id=? AND generation=?`,
+        `UPDATE cloud_outbox SET attempts=attempts+1,last_error=?,status='failed_permanent',claimed_generation=NULL,claimed_at=NULL WHERE id=? AND generation=?`,
       )
       .run(redactStorageText(error), id, generation);
     this.client

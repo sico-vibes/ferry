@@ -420,8 +420,9 @@ describe('cloud mirror and worker', () => {
         keyringRef: 'secret-ref',
         secret: 'sk-1234567890123456',
       });
-      const payload = outbox.claimDue(1)[0]?.payloadJson ?? '';
-      expect(outbox.claimDue(1)[0]?.target).toBe('provider_keys');
+      const row = outbox.claimDue(1)[0];
+      const payload = row?.payloadJson ?? '';
+      expect(row?.target).toBe('provider_keys');
       expect(payload).not.toContain('keyringRef');
       expect(payload).not.toContain('secret-ref');
       expect(payload).not.toContain('sk-1234567890123456');

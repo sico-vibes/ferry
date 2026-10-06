@@ -73,6 +73,7 @@ export class CloudSyncWorker {
         await this.sendRows(rows, controller.signal);
       }
       this.lastFlush = new Date().toISOString();
+      this.options.onFlushed?.(this.lastFlush);
     } finally {
       clearTimeout(timeout);
       this.#abortController = undefined;
@@ -137,6 +138,7 @@ export class CloudSyncWorker {
         const message = error instanceof Error ? error.message : 'Cloud sync failed';
         const safeError = redactCloudPayload(redactKnownSecretText(message));
         this.lastError = typeof safeError === 'string' ? safeError : 'Cloud sync failed';
+        this.options.onError?.(this.lastError);
         const code =
           (error as { status?: string; code?: string }).code ??
           (error as { status?: string }).status ??
@@ -211,6 +213,7 @@ export class CloudSyncWorker {
       const message = error instanceof Error ? error.message : 'Cloud hydration failed';
       const safe = redactCloudPayload(redactKnownSecretText(message));
       this.lastError = typeof safe === 'string' ? safe : 'Cloud hydration failed';
+      this.options.onError?.(this.lastError);
     } finally {
       this.#hydrating = false;
     }
@@ -225,6 +228,8 @@ export interface CloudSyncWorkerOptions {
   backoffMs?: (attempts: number) => number;
   permanentAttemptCap?: number;
   foreignKeyAttemptCap?: number;
+  onError?: (message: string) => void;
+  onFlushed?: (at: string) => void;
 }
 
 function orderOutboxRows(rows: OutboxEntry[]): OutboxEntry[] {

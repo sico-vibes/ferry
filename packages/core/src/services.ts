@@ -21,6 +21,8 @@ import {
   isCloudConfigured,
   loadCloudConfig,
   type CloudAuthStatus,
+  migrateLocalKeysToVault,
+  type KeyMigrationCounts,
 } from '@ferry/cloud';
 import {
   WorkspaceRepository,
@@ -39,6 +41,7 @@ import {
   QuotaObservationRepository,
   HandoffRepository,
   SettingsRepository,
+  EventLogRepository,
   openDatabase,
   OutboxRepository,
   createStorageAdapter,
@@ -88,15 +91,27 @@ export interface FerryServices {
   readonly quotaObservations: QuotaObservationRepository;
   readonly handoffs: HandoffRepository;
   readonly logger: Awaited<ReturnType<typeof createLogger>>;
-  readonly cloud?: {
+  readonly eventLogs: EventLogRepository;
+  readonly deviceId: string;
+  emitAppEvent(
+    event: string,
+    data?: Record<string, unknown>,
+    level?: 'info' | 'warn' | 'error',
+  ): void;
+  readonly cloud: {
     auth?: CloudAuthService;
     sync?: CloudSyncWorker;
     status: () => Promise<{
       configured: boolean;
       message: string | null;
       auth: CloudAuthStatus;
-      sync: { pending: number; lastError: string | null; lastFlush: string | null };
+      storageMode: 'local' | 'cloud';
+      ownerEmail: string | null;
+      sync: { pending: number; failed: number; lastError: string | null; lastFlush: string | null };
     }>;
+    syncNow(): Promise<unknown>;
+    migrateLocalKeys(): Promise<KeyMigrationCounts>;
+    onChange(listener: () => void): () => void;
   };
   readonly databaseRecoveryMessage?: string;
   dispose(): Promise<void>;
@@ -196,15 +211,26 @@ export async function createServices({
   }
   const catalog = await loadCatalog({ now: clock?.now() ?? new Date() });
   const settings = new SettingsRepository(db.client);
+  const eventLogs = new EventLogRepository(db.client);
+  const savedDevice = db.client
+    .prepare("SELECT value_json FROM settings_kv WHERE key='ferry.device_id'")
+    .get() as { value_json?: string } | undefined;
+  const deviceId = savedDevice?.value_json
+    ? (JSON.parse(savedDevice.value_json) as string)
+    : newId('device');
+  if (!savedDevice?.value_json)
+    db.client
+      .prepare('INSERT OR REPLACE INTO settings_kv(key,value_json,updated_at) VALUES(?,?,?)')
+      .run('ferry.device_id', JSON.stringify(deviceId), new Date().toISOString());
   const savedSettings = settings.get('global') as
     { storageMode?: string; captureContent?: boolean } | undefined;
   const cloudMode = savedSettings?.storageMode === 'cloud';
-  const cloudConfig = cloudMode ? loadCloudConfig({ env, ferryHome: home }) : undefined;
-  const cloudConfigured = Boolean(cloudMode && cloudConfig && isCloudConfigured(cloudConfig));
+  const cloudConfig = loadCloudConfig({ env, ferryHome: home });
+  const cloudConfigured = cloudMode && isCloudConfigured(cloudConfig);
   const outbox = cloudConfigured ? new OutboxRepository(db.client) : undefined;
   const localAdapter = createStorageAdapter({ client: db.client, mode: 'local' });
   const cloudRuntime =
-    cloudConfigured && outbox && cloudConfig
+    cloudConfigured && outbox
       ? createCloudRuntime({
           config: cloudConfig,
           outbox,
@@ -227,13 +253,78 @@ export async function createServices({
               'Cloud provider key event',
             );
           },
+          workerOptions: {
+            onError: (message) => {
+              emitAppEvent('sync.error', { error: message }, 'error');
+              notifyCloudStatus();
+            },
+            onFlushed: (at) => {
+              emitAppEvent('sync.flushed', { at });
+              notifyCloudStatus();
+            },
+          },
         })
       : undefined;
+  const emitAppEvent = (
+    event: string,
+    data: Record<string, unknown> = {},
+    level: 'info' | 'warn' | 'error' = 'info',
+  ) => {
+    const id = newId('evt');
+    const record = {
+      id,
+      ts: new Date().toISOString(),
+      device_id: deviceId,
+      level,
+      source: 'app',
+      event,
+      app_version: env.FERRY_RELEASE_VERSION ?? '0.9.0',
+      message: null,
+      data: { ...data, event_id: id },
+    };
+    eventLogs.put(record);
+    logger[level]({ event, ...data }, event);
+    if (cloudConfigured && outbox)
+      outbox.enqueue({
+        opId: `logs:${id}`,
+        target: 'logs',
+        op: 'insert',
+        payload: {
+          ts: record.ts,
+          device_id: deviceId,
+          level,
+          source: 'app',
+          event,
+          app_version: record.app_version,
+          message: null,
+          data: record.data,
+        },
+      });
+  };
+  if (cloudConfigured && outbox)
+    outbox.enqueue({
+      opId: `devices:${deviceId}`,
+      target: 'devices',
+      op: 'upsert',
+      payload: {
+        id: deviceId,
+        name: env.COMPUTERNAME ?? env.HOSTNAME ?? 'Ferry device',
+        client_kind: env.FERRY_CLI_PROCESS === 'true' ? 'cli' : 'desktop',
+        platform: process.platform,
+        app_version: env.FERRY_RELEASE_VERSION ?? '0.9.0',
+        last_seen_at: new Date().toISOString(),
+      },
+    });
   const adapter = cloudRuntime
     ? createStorageAdapter({ client: db.client, mode: 'cloud', mirror: cloudRuntime.mirror })
     : localAdapter;
   const cloudAuth = cloudRuntime?.auth;
   const cloudSync = cloudRuntime?.sync;
+  const cloudStatusListeners = new Set<() => void>();
+  const notifyCloudStatus = () => {
+    for (const listener of cloudStatusListeners) listener();
+  };
+  cloudAuth?.onChange(notifyCloudStatus);
   if (cloudRuntime) await cloudRuntime.initialize();
   if (cloudMode && !cloudConfigured)
     logger.warn(
@@ -385,35 +476,70 @@ export async function createServices({
     quotaObservations,
     handoffs,
     logger,
-    ...(cloudMode
-      ? {
-          cloud: {
-            ...(cloudAuth ? { auth: cloudAuth } : {}),
-            ...(cloudSync ? { sync: cloudSync } : {}),
-            async status() {
-              const auth = cloudAuth
-                ? await cloudAuth
-                    .getStatus()
-                    .catch(() => ({ signedIn: false, email: null, userId: null, isOwner: false }))
-                : { signedIn: false, email: null, userId: null, isOwner: false };
-              return {
-                configured: cloudConfigured,
-                message: cloudConfigured
-                  ? auth.signedIn
-                    ? null
-                    : 'Cloud sign-in required'
-                  : 'Supabase cloud configuration is missing',
-                auth,
-                sync: cloudSync?.status() ?? {
-                  pending: outbox?.counts().pending ?? 0,
-                  lastError: null,
-                  lastFlush: null,
-                },
-              };
-            },
-          },
-        }
-      : {}),
+    eventLogs,
+    deviceId,
+    emitAppEvent,
+    cloud: {
+      ...(cloudAuth ? { auth: cloudAuth } : {}),
+      ...(cloudSync ? { sync: cloudSync } : {}),
+      async status() {
+        const auth = cloudAuth
+          ? await cloudAuth
+              .getStatus()
+              .catch(() => ({ signedIn: false, email: null, userId: null, isOwner: false }))
+          : { signedIn: false, email: null, userId: null, isOwner: false };
+        const currentMode =
+          (settings.get('global') as { storageMode?: string } | undefined)?.storageMode === 'cloud'
+            ? ('cloud' as const)
+            : ('local' as const);
+        return {
+          configured: isCloudConfigured(cloudConfig),
+          storageMode: currentMode,
+          ownerEmail: cloudConfig.ownerEmail ?? null,
+          message: !isCloudConfigured(cloudConfig)
+            ? 'Supabase cloud configuration is missing'
+            : currentMode === 'cloud' && !cloudAuth
+              ? 'Restart Ferry to initialize cloud mode.'
+              : auth.signedIn
+                ? null
+                : 'Cloud sign-in required',
+          auth,
+          sync: cloudSync
+            ? { ...cloudSync.status(), failed: outbox?.counts().failedPermanent ?? 0 }
+            : {
+                pending: outbox?.counts().pending ?? 0,
+                failed: outbox?.counts().failedPermanent ?? 0,
+                lastError: null,
+                lastFlush: null,
+              },
+        };
+      },
+      async syncNow() {
+        if (!cloudSync) throw new Error('Restart Ferry in configured cloud mode to sync.');
+        return cloudSync.flush({ timeoutMs: 20_000 });
+      },
+      async migrateLocalKeys() {
+        if (!cloudRuntime)
+          throw new Error('Restart Ferry in configured cloud mode to migrate keys.');
+        return await migrateLocalKeysToVault({
+          local: localSecretStore,
+          vault: cloudRuntime.secrets,
+          entries: catalog.providers
+            .flatMap(({ provider }) => providerKeyEntries.list(provider))
+            .flatMap((entry) =>
+              entry.keyringRef
+                ? [{ id: entry.id, providerId: entry.providerId, keyringRef: entry.keyringRef }]
+                : [],
+            ),
+        });
+      },
+      onChange(listener) {
+        cloudStatusListeners.add(listener);
+        return () => {
+          cloudStatusListeners.delete(listener);
+        };
+      },
+    },
     ...(databaseRecoveryMessage ? { databaseRecoveryMessage } : {}),
     async dispose() {
       if (disposed) return;

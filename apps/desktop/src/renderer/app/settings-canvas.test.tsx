@@ -43,6 +43,7 @@ describe('SettingsCanvas', () => {
       ['Permissions', 'Permissions'],
       ['Gateway', 'Gateway'],
       ['Data & privacy', 'Data & privacy'],
+      ['Storage & Cloud', 'Storage & Cloud'],
       ['Shortcuts', 'Shortcuts'],
       ['About', 'About'],
     ] as const;

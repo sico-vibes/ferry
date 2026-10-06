@@ -72,7 +72,7 @@ describe('createServices cloud mode selection', () => {
       env: { NODE_ENV: 'test', FERRY_SUPABASE_URL: '', FERRY_SUPABASE_PUBLISHABLE_KEY: '' },
     });
     try {
-      expect(await services.cloud?.status()).toMatchObject({
+      expect(await services.cloud.status()).toMatchObject({
         configured: false,
         message: 'Supabase cloud configuration is missing',
       });

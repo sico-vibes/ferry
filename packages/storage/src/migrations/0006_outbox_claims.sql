@@ -1,0 +1,1 @@
+-- Columns are added conditionally by openDatabase so downgraded local schema versions can be replayed safely.

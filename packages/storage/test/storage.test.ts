@@ -78,6 +78,62 @@ describe('@ferry/storage', () => {
       db.close();
     }
   });
+  it('replaces pending operations when an entity is deleted or recreated', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const outbox = new OutboxRepository(db.client);
+      outbox.enqueue({
+        opId: 'sessions:ses_order',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_order' },
+      });
+      outbox.enqueue({
+        opId: 'sessions:ses_order:delete',
+        target: 'sessions',
+        op: 'delete',
+        payload: { id: 'ses_order' },
+      });
+      expect(outbox.claimDue(10).map(({ op }) => op)).toEqual(['delete']);
+      outbox.enqueue({
+        opId: 'sessions:ses_order',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_order' },
+      });
+      expect(outbox.claimDue(10).map(({ op }) => op)).toEqual(['upsert']);
+    } finally {
+      db.close();
+    }
+  });
+  it('preserves an in-flight opposite operation while queuing its successor', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const outbox = new OutboxRepository(db.client);
+      outbox.enqueue({
+        opId: 'sessions:ses_inflight',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_inflight' },
+      });
+      const claimed = outbox.claimDue(1)[0];
+      if (!claimed) throw new Error('Expected claimed upsert');
+      outbox.enqueue({
+        opId: 'sessions:ses_inflight:delete',
+        target: 'sessions',
+        op: 'delete',
+        payload: { id: 'ses_inflight' },
+      });
+      const successor = outbox.claimDue(10)[0];
+      expect(successor?.op).toBe('delete');
+      outbox.markDone(claimed.id, claimed.generation);
+      if (!successor) throw new Error('Expected pending delete successor');
+      outbox.markDone(successor.id, successor.generation);
+      expect(outbox.counts().pending).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
   it('revives permanent rows when the same op id is queued with a newer payload', async () => {
     const db = await openDatabase(':memory:');
     try {
