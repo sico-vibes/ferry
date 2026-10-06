@@ -4,6 +4,7 @@ import {
   tool,
   type JSONSchema7,
   type ModelMessage,
+  type ProviderMetadata,
   type ToolSet,
 } from 'ai';
 import type { ProviderRequestOverrides } from '@ferry/shared';
@@ -116,6 +117,7 @@ export interface ModelToolCall {
 export interface GeneratedStep {
   text?: string;
   reasoning?: string;
+  reasoningProviderMetadata?: ProviderMetadata;
   reasoningAvailable?: boolean;
   toolCalls?: ModelToolCall[];
   inputTokens?: number;
@@ -1299,7 +1301,7 @@ export class AgentLoop {
               session_id: sessionId,
               turn_id: turnId,
               trace_id: traceId,
-              data: { response: generated.text ?? '', reasoning: generated.reasoning ?? '' },
+              data: { response: generated.text ?? '' },
             });
             if (generated.responseModel && generated.responseModel !== model.ref)
               this.options.telemetry?.log({
@@ -1389,6 +1391,7 @@ export class AgentLoop {
             break;
           } catch (error) {
             const classified = classifyProviderError(errorInput(error));
+            const unsafeSignatureError = isInvalidSignatureOrThinkingError(error);
             this.options.telemetry?.turnUpdated(turnId, {
               status: isSignalAborted(signal)
                 ? 'cancelled'
@@ -1398,7 +1401,9 @@ export class AgentLoop {
               finished_at: new Date().toISOString(),
               latency_ms: Math.round(performance.now() - attemptStartedAt),
               error_kind: classified.family,
-              error_message: redactedProviderMessage(error),
+              error_message: unsafeSignatureError
+                ? 'Provider rejected native reasoning metadata.'
+                : redactedProviderMessage(error),
             });
             this.options.telemetry?.log({
               id: newId('evt'),
@@ -1409,7 +1414,13 @@ export class AgentLoop {
               session_id: sessionId,
               turn_id: turnId,
               trace_id: traceId,
-              data: { error: error instanceof Error ? error.message : String(error) },
+              data: {
+                error: unsafeSignatureError
+                  ? 'Provider rejected native reasoning metadata.'
+                  : error instanceof Error
+                    ? error.message
+                    : String(error),
+              },
             });
             parentTurnId = turnId;
             pendingPaidRelease?.();
@@ -1468,7 +1479,9 @@ export class AgentLoop {
               kind: classified.family,
               status: classified.status,
               latencyMs: Math.max(0, performance.now() - attemptStartedAt),
-              message: redactedProviderMessage(error),
+              message: unsafeSignatureError
+                ? 'Provider rejected native reasoning metadata.'
+                : redactedProviderMessage(error),
             });
             modelAttempts.push({
               model: model.ref,
@@ -1905,10 +1918,18 @@ export class AgentLoop {
             reasoningAvailable: false,
             timestamp: new Date().toISOString(),
           });
-        if (generated.reasoning)
+        if (generated.reasoning || generated.reasoningProviderMetadata)
           parts = [
             ...parts,
-            { type: 'reasoning', id: PartIdSchema.parse(newId('part')), text: generated.reasoning },
+            {
+              type: 'reasoning',
+              id: PartIdSchema.parse(newId('part')),
+              text: generated.reasoning ?? '',
+              producedBy: model.ref,
+              ...(generated.reasoningProviderMetadata
+                ? { providerMetadata: generated.reasoningProviderMetadata }
+                : {}),
+            },
           ];
         if (generated.text && streamedText)
           parts = parts.map((part) =>
@@ -2090,6 +2111,7 @@ export class AgentLoop {
             id: PartIdSchema.parse(newId('part')),
             ...(call.toolCallId || call.id ? { toolCallId: call.toolCallId ?? call.id } : {}),
             ...(call.providerOptions ? { providerOptions: call.providerOptions } : {}),
+            producedBy: model.ref,
             tool: call.name,
             title: definition.title,
             args: parsed.value as Record<string, unknown>,
@@ -2741,132 +2763,153 @@ export function createStepGenerator(
     options.providerFetch ?? globalThis.fetch,
     requestOverrides,
   );
-  return async ({
-    system,
-    messages,
-    tools,
-    signal,
-    onDelta,
-    onReasoning,
-    onProgress,
-    modelHints,
-  }) => {
-    const sdkTools: Record<string, unknown> = Object.fromEntries(
-      tools.map((definition) => [
-        definition.name,
-        tool({
-          description: definition.title,
-          inputSchema: jsonSchema(
-            normalizeToolSchema(
-              toolSchemaForEstimate(definition.schema),
-              model.providerId,
-            ) as JSONSchema7,
-          ),
-        }),
-      ]),
-    );
-    if (options.askUser)
-      sdkTools.ask_user = tool({
-        description: 'Ask the user a question and pause until they answer.',
-        inputSchema: z.object({ question: z.string() }),
-      });
-    const result = streamText({
-      model: createLanguageModel(model.ref, {
-        apiKey: options.apiKeys[model.providerId] ?? '',
-        ...(options.providerBaseUrls?.[model.providerId]
-          ? { baseUrl: options.providerBaseUrls[model.providerId] }
-          : {}),
-        fetch: observationFetch,
-        sessionId,
-      }),
-      system,
-      ...(Object.keys(
-        promptCacheOptions(model.providerId, options.promptCaching?.(model) ?? true, sessionId),
-      ).length
-        ? {
-            providerOptions: {
-              [model.providerId]: promptCacheOptions(
+  return async (input) => {
+    const streamState = { outputStarted: false };
+    const generate = async (dropNativeArtifacts: boolean): Promise<GeneratedStep> => {
+      const { system, messages, tools, signal, onDelta, onReasoning, onProgress, modelHints } =
+        input;
+      const sdkTools: Record<string, unknown> = Object.fromEntries(
+        tools.map((definition) => [
+          definition.name,
+          tool({
+            description: definition.title,
+            inputSchema: jsonSchema(
+              normalizeToolSchema(
+                toolSchemaForEstimate(definition.schema),
                 model.providerId,
-                options.promptCaching?.(model) ?? true,
-                sessionId,
-              ),
-            },
-          }
-        : {}),
-      messages: sanitizeProviderMessages(
-        toModelMessages(messages, model, modelHints.toolProtocol !== 'native'),
-        model.providerId as import('@ferry/providers').MessageNormalizationProvider,
-      ),
-      tools: sdkTools as unknown as ToolSet,
-      abortSignal: signal,
-      maxRetries: 0,
-      onError: () => undefined,
-    });
-    let text = '';
-    let reasoning = '';
-    let reasoningAvailable = false;
-    for await (const part of result.stream) {
-      onProgress?.();
-      if (part.type === 'error') throw part.error;
-      const streamPart = part as unknown as {
-        type: string;
-        text?: string;
-        delta?: string;
-        reasoning?: string;
-        reasoning_content?: string;
-        thought?: boolean;
-      };
-      const exposedReasoning =
-        normalizeReasoningPart(streamPart) ??
-        streamPart.reasoning_content ??
-        (streamPart.type === 'reasoning-delta' ||
-        streamPart.type === 'reasoning' ||
-        streamPart.thought
-          ? (streamPart.delta ?? streamPart.text ?? streamPart.reasoning)
-          : undefined);
-      if (typeof exposedReasoning === 'string' && exposedReasoning) {
-        reasoningAvailable = true;
-        reasoning += exposedReasoning;
-        onReasoning?.(exposedReasoning);
-      } else if (streamPart.type === 'text-delta' && typeof streamPart.text === 'string') {
-        text += streamPart.text;
-        onDelta(streamPart.text);
-      }
-    }
-    const [usage, rawCalls] = await Promise.all([result.usage, result.toolCalls]);
-    const finalStep = await result.finalStep;
-    const providerResponse = finalStep.response;
-    const calls = z
-      .array(
-        z.object({
-          toolCallId: z.string(),
-          toolName: z.string(),
-          input: z.unknown(),
-          providerOptions: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
-          providerMetadata: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+              ) as JSONSchema7,
+            ),
+          }),
+        ]),
+      );
+      if (options.askUser)
+        sdkTools.ask_user = tool({
+          description: 'Ask the user a question and pause until they answer.',
+          inputSchema: z.object({ question: z.string() }),
+        });
+      const result = streamText({
+        model: createLanguageModel(model.ref, {
+          apiKey: options.apiKeys[model.providerId] ?? '',
+          ...(options.providerBaseUrls?.[model.providerId]
+            ? { baseUrl: options.providerBaseUrls[model.providerId] }
+            : {}),
+          fetch: observationFetch,
+          sessionId,
         }),
-      )
-      .parse(rawCalls);
-    return {
-      text,
-      ...(reasoning ? { reasoning } : {}),
-      reasoningAvailable,
-      ...(typeof providerResponse.modelId === 'string'
-        ? { responseModel: providerResponse.modelId }
-        : {}),
-      toolCalls: calls.map((call) => {
-        const providerOptions = call.providerOptions ?? call.providerMetadata;
-        return {
-          id: call.toolCallId,
-          toolCallId: call.toolCallId,
-          name: call.toolName,
-          input: call.input,
-          ...(providerOptions ? { providerOptions } : {}),
+        system,
+        ...(Object.keys(
+          promptCacheOptions(model.providerId, options.promptCaching?.(model) ?? true, sessionId),
+        ).length
+          ? {
+              providerOptions: {
+                [model.providerId]: promptCacheOptions(
+                  model.providerId,
+                  options.promptCaching?.(model) ?? true,
+                  sessionId,
+                ),
+              },
+            }
+          : {}),
+        messages: sanitizeProviderMessages(
+          toModelMessages(
+            messages,
+            model,
+            modelHints.toolProtocol !== 'native',
+            dropNativeArtifacts,
+          ),
+          model.providerId as import('@ferry/providers').MessageNormalizationProvider,
+        ),
+        tools: sdkTools as unknown as ToolSet,
+        abortSignal: signal,
+        maxRetries: 0,
+        onError: () => undefined,
+      });
+      let text = '';
+      let reasoning = '';
+      let reasoningAvailable = false;
+      let reasoningProviderMetadata: ProviderMetadata | undefined;
+      for await (const part of result.stream) {
+        onProgress?.();
+        if (part.type === 'error') throw part.error;
+        const streamPart = part as unknown as {
+          type: string;
+          text?: string;
+          delta?: string;
+          reasoning?: string;
+          reasoning_content?: string;
+          thought?: boolean;
+          providerMetadata?: ProviderMetadata;
         };
-      }),
-      inputTokens: usage.inputTokens ?? 0,
-      outputTokens: usage.outputTokens ?? 0,
+        if (
+          streamPart.type === 'reasoning-start' ||
+          streamPart.type === 'reasoning-delta' ||
+          streamPart.type === 'reasoning-end'
+        )
+          reasoningProviderMetadata = mergeProviderMetadata(
+            reasoningProviderMetadata,
+            streamPart.providerMetadata,
+          );
+        const exposedReasoning =
+          normalizeReasoningPart(streamPart) ??
+          streamPart.reasoning_content ??
+          (streamPart.type === 'reasoning-delta' ||
+          streamPart.type === 'reasoning' ||
+          streamPart.thought
+            ? (streamPart.delta ?? streamPart.text ?? streamPart.reasoning)
+            : undefined);
+        if (typeof exposedReasoning === 'string' && exposedReasoning) {
+          streamState.outputStarted = true;
+          reasoningAvailable = true;
+          reasoning += exposedReasoning;
+          onReasoning?.(exposedReasoning);
+        } else if (streamPart.type === 'text-delta' && typeof streamPart.text === 'string') {
+          streamState.outputStarted = true;
+          text += streamPart.text;
+          onDelta(streamPart.text);
+        }
+      }
+      const [usage, rawCalls] = await Promise.all([result.usage, result.toolCalls]);
+      const finalStep = await result.finalStep;
+      const providerResponse = finalStep.response;
+      const calls = z
+        .array(
+          z.object({
+            toolCallId: z.string(),
+            toolName: z.string(),
+            input: z.unknown(),
+            providerOptions: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+            providerMetadata: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+          }),
+        )
+        .parse(rawCalls);
+      return {
+        text,
+        ...(reasoning ? { reasoning } : {}),
+        ...(reasoningProviderMetadata ? { reasoningProviderMetadata } : {}),
+        reasoningAvailable,
+        ...(typeof providerResponse.modelId === 'string'
+          ? { responseModel: providerResponse.modelId }
+          : {}),
+        toolCalls: calls.map((call) => {
+          const providerOptions = call.providerOptions ?? call.providerMetadata;
+          return {
+            id: call.toolCallId,
+            toolCallId: call.toolCallId,
+            name: call.toolName,
+            input: call.input,
+            ...(providerOptions ? { providerOptions } : {}),
+          };
+        }),
+        inputTokens: usage.inputTokens ?? 0,
+        outputTokens: usage.outputTokens ?? 0,
+      };
     };
+    try {
+      return await generate(false);
+    } catch (error) {
+      if (streamState.outputStarted || !isInvalidSignatureOrThinkingError(error)) throw error;
+      return generate(true);
+    }
   };
 }
 
@@ -2910,6 +2953,7 @@ export function toModelMessages(
   messages: readonly Message[],
   targetModel: ModelInfo | undefined,
   escapeToolResults = false,
+  dropNativeArtifacts = false,
 ): ModelMessage[] {
   const prompt: ModelMessage[] = [];
   for (const message of messages) {
@@ -2927,6 +2971,15 @@ export function toModelMessages(
     for (const part of message.parts) {
       if (part.type === 'text') {
         if (part.text) content.push({ type: 'text', text: part.text });
+      } else if (part.type === 'reasoning') {
+        if (!dropNativeArtifacts && targetModel && part.producedBy === targetModel.ref)
+          content.push({
+            type: 'reasoning',
+            text: part.text,
+            ...(part.providerMetadata
+              ? { providerOptions: part.providerMetadata as ProviderMetadata }
+              : {}),
+          });
       } else if (part.type === 'tool_call') {
         if (part.status === 'succeeded' && JSON.stringify(part.args).length > 1_200) {
           const path = typeof part.args.path === 'string' ? ` for ${part.args.path}` : '';
@@ -2937,11 +2990,14 @@ export function toModelMessages(
           continue;
         }
         const toolCallId = part.toolCallId ?? part.id;
-        const providerOptions = withGemini3ThoughtSignature(
-          part.providerOptions,
-          targetModel,
-          message.modelRef,
-        );
+        const producer = part.producedBy ?? message.modelRef;
+        const providerOptions = dropNativeArtifacts
+          ? undefined
+          : withGemini3ThoughtSignature(
+              producer === targetModel?.ref ? part.providerOptions : undefined,
+              targetModel,
+              message.modelRef,
+            );
         content.push({
           type: 'tool-call',
           toolCallId,
@@ -3273,6 +3329,27 @@ function withGemini3ThoughtSignature(
       thoughtSignature: 'skip_thought_signature_validator',
     },
   };
+}
+
+function mergeProviderMetadata(
+  current: ProviderMetadata | undefined,
+  next: ProviderMetadata | undefined,
+): ProviderMetadata | undefined {
+  if (!next) return current;
+  const merged = { ...current };
+  for (const [provider, metadata] of Object.entries(next)) {
+    merged[provider] = { ...merged[provider], ...metadata };
+  }
+  return Object.keys(merged).length ? merged : undefined;
+}
+
+function isInvalidSignatureOrThinkingError(error: unknown): boolean {
+  if (errorStatus(error) !== 400) return false;
+  const message = providerErrorMessage(error).toLowerCase();
+  return (
+    /(?:invalid|missing|unknown|mismatch|malformed|unsupported)/.test(message) &&
+    /(?:thought.?signature|signature|thinking(?:_block| block|_signature)?)/.test(message)
+  );
 }
 
 function compactToolHistoryText(text: string): string {

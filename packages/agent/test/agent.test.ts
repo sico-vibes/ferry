@@ -36,6 +36,7 @@ import { createFixtureRepo, FakeOpenAIServer } from '@ferry/testkit';
 import { AGENT_EVALS, runAgentEvals } from '../evals/fixtures.js';
 import {
   AgentLoop,
+  createStepGenerator,
   prepareResumeTranscript,
   repairAndValidate,
   toModelMessages,
@@ -175,6 +176,141 @@ describe('@ferry/agent', () => {
       expect(JSON.stringify(converted)).toContain('Visible answer.');
       expect(JSON.stringify(converted)).toContain('call-1');
       expect(JSON.stringify(converted)).toContain('file contents');
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('replays opaque native reasoning only to the model that produced it', async () => {
+    const state = await setup();
+    try {
+      const artifact = {
+        google: { thoughtSignature: 'opaque-signature-fixture' },
+      };
+      const assistant = state.store.appendMessage(
+        state.session.id,
+        'assistant',
+        [
+          {
+            type: 'reasoning',
+            id: PartIdSchema.parse(newId('part')),
+            text: 'private reasoning fixture',
+            producedBy: state.model.ref,
+            providerMetadata: artifact,
+          },
+        ],
+        state.model.ref,
+      );
+      const sameModel = toModelMessages([assistant], state.model);
+      const foreignModel = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'openai/other-model',
+        name: 'Other Model',
+      });
+
+      expect(JSON.stringify(sameModel)).toContain('private reasoning fixture');
+      expect(JSON.stringify(sameModel)).toContain('opaque-signature-fixture');
+      expect(JSON.stringify(toModelMessages([assistant], foreignModel))).not.toContain(
+        'private reasoning fixture',
+      );
+      expect(JSON.stringify(toModelMessages([assistant], foreignModel))).not.toContain(
+        'opaque-signature-fixture',
+      );
+      expect(JSON.stringify(toModelMessages([assistant], state.model, false, true))).not.toContain(
+        'opaque-signature-fixture',
+      );
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('retries one invalid-signature 400 with native artifacts stripped', async () => {
+    const state = await setup();
+    try {
+      const model = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/gemini-3.8-flash',
+        providerId: 'gemini',
+        name: 'Gemini 3.8 Flash',
+      });
+      const user = state.store.appendMessage(
+        state.session.id,
+        'user',
+        [{ type: 'text', id: PartIdSchema.parse(newId('part')), text: 'Calculate the answer.' }],
+        null,
+      );
+      const assistant = state.store.appendMessage(
+        state.session.id,
+        'assistant',
+        [
+          {
+            type: 'reasoning',
+            id: PartIdSchema.parse(newId('part')),
+            text: 'private reasoning fixture',
+            producedBy: model.ref,
+            providerMetadata: { google: { thoughtSignature: 'signature-fixture' } },
+          },
+          {
+            type: 'tool_call',
+            id: PartIdSchema.parse(newId('part')),
+            toolCallId: 'fixture-call',
+            producedBy: model.ref,
+            providerOptions: { google: { thoughtSignature: 'signature-fixture' } },
+            tool: 'read_file',
+            title: 'Read file',
+            args: { path: 'README.md' },
+            status: 'succeeded',
+            output: {
+              text: 'Fixture result',
+              filtered: false,
+              originalTokens: null,
+              filteredTokens: null,
+              recoveryHandle: null,
+            },
+            changes: [],
+            durationMs: 1,
+          },
+        ],
+        model.ref,
+      );
+      const requestBodies: unknown[] = [];
+      const providerFetch: typeof fetch = async (input, init) => {
+        requestBodies.push(await new Request(input, init).json());
+        if (requestBodies.length === 1)
+          return new Response(JSON.stringify({ error: { message: 'Invalid thought signature' } }), {
+            status: 400,
+            headers: { 'content-type': 'application/json' },
+          });
+        return new Response(
+          [
+            'data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"Recovered."},"finish_reason":null}]}',
+            'data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+            'data: [DONE]',
+            '',
+          ].join('\n\n'),
+          { headers: { 'content-type': 'text/event-stream' } },
+        );
+      };
+      const generator = createStepGenerator(
+        { apiKeys: { gemini: 'test-key' }, providerFetch, emit: () => undefined },
+        model,
+        state.session.id,
+      );
+      const generated = await generator({
+        model,
+        system: 'test system',
+        messages: [user, assistant],
+        tools: [],
+        signal: new AbortController().signal,
+        onDelta: () => undefined,
+        modelHints: { toolProtocol: 'native' },
+      });
+
+      expect(generated.text).toBe('Recovered.');
+      expect(requestBodies).toHaveLength(2);
+      expect(JSON.stringify(requestBodies[0])).toContain('signature-fixture');
+      expect(JSON.stringify(requestBodies[1])).not.toContain('private reasoning fixture');
+      expect(JSON.stringify(requestBodies[1])).not.toContain('signature-fixture');
     } finally {
       state.database.close();
     }
