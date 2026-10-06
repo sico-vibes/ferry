@@ -15,8 +15,18 @@ import {
   ProviderIdSchema,
   ProviderSchema,
   WorkspaceIdSchema,
+  newTraceId,
 } from '@ferry/shared';
-import { openDatabase, MessageRepository, SessionRepository, TaskRepository } from '@ferry/storage';
+import {
+  openDatabase,
+  MessageRepository,
+  SessionRepository,
+  TaskRepository,
+  TurnLogRepository,
+  EventLogRepository,
+  ModelSwitchRepository,
+  LocalTelemetrySink,
+} from '@ferry/storage';
 import { BUILTIN_PROFILES } from '@ferry/router';
 import { createFixtureRepo, FakeOpenAIServer } from '@ferry/testkit';
 import { AGENT_EVALS, runAgentEvals } from '../evals/fixtures.js';
@@ -137,6 +147,154 @@ describe('@ferry/agent', () => {
       state.database.close();
     }
   });
+
+  it('propagates one trace through attempts and tool I/O, and uses a fresh trace per request', async () => {
+    const state = await setup();
+    try {
+      const turns = new TurnLogRepository(state.database.client);
+      const logs = new EventLogRepository(state.database.client);
+      const switches = new ModelSwitchRepository(state.database.client);
+      const telemetry = new LocalTelemetrySink(turns, logs, switches, true);
+      const toolSource = {
+        tools: () => [
+          {
+            name: 'record_note',
+            title: 'Record note',
+            schema: z.object({ note: z.string() }),
+            execute: (args: unknown) => `saved ${(args as { note: string }).note}`,
+          },
+        ],
+      };
+      const firstTrace = newTraceId();
+      let calls = 0;
+      const firstLoop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        maxSteps: 3,
+        traceContext: { traceId: firstTrace, sessionId: state.session.id },
+        telemetry,
+        toolSources: [toolSource],
+        generator: async ({ onDelta }) => {
+          calls++;
+          if (calls === 1)
+            return { toolCalls: [{ name: 'record_note', input: { note: 'captured tool input' } }] };
+          onDelta('Captured assistant response');
+          return {
+            text: 'Captured assistant response',
+            reasoning: 'Captured reasoning',
+            responseModel: 'reported-model-id',
+            finishReason: 'stop',
+          };
+        },
+      });
+      await firstLoop.run({ sessionId: state.session.id });
+      const firstTurns = turns.list();
+      expect(firstTurns.length).toBeGreaterThanOrEqual(2);
+      expect(firstTurns.every((turn) => turn.trace_id === firstTrace)).toBe(true);
+      expect(firstTurns.some((turn) => turn.response_model === 'reported-model-id')).toBe(true);
+      expect(firstTurns.some((turn) => typeof turn.ttft_ms === 'number')).toBe(true);
+      expect(firstTurns.some((turn) => turn.finish_reason === 'stop')).toBe(true);
+      expect(
+        logs.list().filter((event) => event.event === 'tool.call' || event.event === 'tool.result'),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ trace_id: firstTrace, event: 'tool.call' }),
+          expect.objectContaining({ trace_id: firstTrace, event: 'tool.result' }),
+        ]),
+      );
+      expect(logs.list().find((event) => event.event === 'tool.call')?.data).toMatchObject({
+        input: { note: 'captured tool input' },
+      });
+      expect(logs.list().find((event) => event.event === 'tool.result')?.data).toMatchObject({
+        output: 'saved captured tool input',
+      });
+
+      const secondTrace = newTraceId();
+      const secondLoop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        maxSteps: 1,
+        traceContext: { traceId: secondTrace, sessionId: state.session.id },
+        telemetry,
+        generator: async () => ({ text: 'Second request response', finishReason: 'stop' }),
+      });
+      await secondLoop.run({ sessionId: state.session.id });
+      expect(turns.list().some((turn) => turn.trace_id === secondTrace)).toBe(true);
+      expect(secondTrace).not.toBe(firstTrace);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('records fallback attempts with stable group ids and a parent turn', async () => {
+    const state = await setup();
+    try {
+      const turns = new TurnLogRepository(state.database.client);
+      const logs = new EventLogRepository(state.database.client);
+      const switches = new ModelSwitchRepository(state.database.client);
+      const telemetry = new LocalTelemetrySink(turns, logs, switches, false);
+      const fallback = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'openai/fallback-model',
+        name: 'Fallback Model',
+      });
+      let calls = 0;
+      const traceId = newTraceId();
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, fallback] },
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        maxSteps: 1,
+        traceContext: { traceId, sessionId: state.session.id },
+        telemetry,
+        generator: async () => {
+          calls++;
+          if (calls === 1) throw Object.assign(new Error('rate limited'), { statusCode: 429 });
+          return { text: 'Fallback answered.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      const attempts = turns.list();
+      expect(attempts).toHaveLength(2);
+      const initialAttempt = attempts.find((attempt) => attempt.attempt === 1);
+      const fallbackAttempt = attempts.find((attempt) => attempt.attempt === 2);
+      expect(fallbackAttempt).toMatchObject({
+        attempt: 2,
+        parent_turn_id: initialAttempt?.id,
+        request_group_id: initialAttempt?.request_group_id,
+      });
+      expect(typeof fallbackAttempt?.routed_model).toBe('string');
+      expect(initialAttempt).toMatchObject({ status: 'fallback', fallback_reason: 'rate_limit' });
+      expect(switches.list()).toContainEqual(
+        expect.objectContaining({ kind: 'router_fallback', reason: 'rate_limit' }),
+      );
+      expect(
+        logs.list().some((event) => event.event === 'turn.fallback' && event.trace_id === traceId),
+      ).toBe(true);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
 
   it('completes a weak-model text tool call with a forgiving edit', async () => {
     const state = await setup();

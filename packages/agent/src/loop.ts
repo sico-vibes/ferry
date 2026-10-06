@@ -433,6 +433,18 @@ export class AgentLoop {
         return output;
       },
       ...(this.options.toolSources ? { sources: this.options.toolSources } : {}),
+      onCheckpointCreated: (checkpointId, label) => {
+        this.options.telemetry?.log({
+          id: newId('evt'),
+          ts: new Date().toISOString(),
+          level: 'info',
+          source: 'agent',
+          event: 'checkpoint.created',
+          session_id: sessionId,
+          trace_id: traceId,
+          data: { checkpoint_id: checkpointId, label },
+        });
+      },
       updateTask: (task) => {
         taskRecord = task;
         this.persistTask(task);
@@ -692,6 +704,27 @@ export class AgentLoop {
         this.activeMessageParts.set(sessionId, streamedParts);
         if (stepCount >= maxSteps)
           return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
+        let activeTurnId: string | null = null;
+        let activeTurnStartedAt = 0;
+        let firstTokenRecorded = false;
+        const recordFirstToken = () => {
+          if (!activeTurnId || firstTokenRecorded) return;
+          firstTokenRecorded = true;
+          this.options.telemetry?.turnUpdated(activeTurnId, {
+            ttft_ms: Math.max(0, Math.round(performance.now() - activeTurnStartedAt)),
+          });
+          this.options.telemetry?.log({
+            id: newId('evt'),
+            ts: new Date().toISOString(),
+            level: 'info',
+            source: 'agent',
+            event: 'turn.first_token',
+            session_id: sessionId,
+            turn_id: activeTurnId,
+            trace_id: traceId,
+            data: {},
+          });
+        };
         const stepRequest = (
           selected: ModelInfo,
           stepSignal: AbortSignal,
@@ -713,10 +746,14 @@ export class AgentLoop {
             editFormat: 'search_replace',
           },
           signal: stepSignal,
-          onProgress,
+          onProgress: () => {
+            onProgress();
+            recordFirstToken();
+          },
           onDelta: (text) => {
             if (isSignalAborted(signal)) return;
             onProgress();
+            recordFirstToken();
             streamedText += text;
             const partial = { type: 'text' as const, id: streamedTextPartId, text: streamedText };
             const previousParts = streamedParts.parts;
@@ -751,6 +788,9 @@ export class AgentLoop {
         while (!generationComplete) {
           const attemptStartedAt = performance.now();
           const turnId = newId('turn');
+          activeTurnId = turnId;
+          activeTurnStartedAt = performance.now();
+          firstTokenRecorded = false;
           traceContext.turnId = turnId;
           traceContext.spanId = newSpanId();
           attemptNumber++;
@@ -843,6 +883,7 @@ export class AgentLoop {
               input_tokens: generated.inputTokens ?? null,
               output_tokens: generated.outputTokens ?? null,
               response_model: generated.responseModel ?? null,
+              finish_reason: generated.finishReason ?? null,
             });
             this.options.telemetry?.log({
               id: newId('evt'),
@@ -933,12 +974,17 @@ export class AgentLoop {
             this.options.onResilienceState?.(this.resilience.snapshot());
             break;
           } catch (error) {
+            const classified = classifyProviderError(errorInput(error));
             this.options.telemetry?.turnUpdated(turnId, {
-              status: isSignalAborted(signal) ? 'cancelled' : 'error',
+              status: isSignalAborted(signal)
+                ? 'cancelled'
+                : classified.family === 'timeout'
+                  ? 'timeout'
+                  : 'error',
               finished_at: new Date().toISOString(),
               latency_ms: Math.round(performance.now() - attemptStartedAt),
-              error_kind: error instanceof Error ? error.name : 'unknown',
-              error_message: error instanceof Error ? error.message : String(error),
+              error_kind: classified.family,
+              error_message: redactedProviderMessage(error),
             });
             this.options.telemetry?.log({
               id: newId('evt'),
@@ -956,7 +1002,6 @@ export class AgentLoop {
             pendingPaidRelease = undefined;
             pendingPaidUsageId = undefined;
             if (executionRole === 'editor') editorFailures += 1;
-            const classified = classifyProviderError(errorInput(error));
             const routing = this.options.routingSettings?.();
             const localQuotaReservation = error instanceof QuotaReservationError;
             if (routing?.smartReliability && !localQuotaReservation) {
@@ -1079,10 +1124,25 @@ export class AgentLoop {
               sameModelRetries < 2
             ) {
               sameModelRetries++;
-              await (this.options.waitForRetry ?? delayForRetry)(
-                retryDelayMs(sameModelRetries - 1, 300, 3_000),
-                signal,
-              );
+              const retryDelayMsValue = retryDelayMs(sameModelRetries - 1, 300, 3_000);
+              this.options.telemetry?.log({
+                id: newId('evt'),
+                ts: new Date().toISOString(),
+                level: 'warn',
+                source: 'agent',
+                event: 'turn.retry',
+                session_id: sessionId,
+                turn_id: turnId,
+                trace_id: traceId,
+                data: {
+                  attempt: attemptNumber,
+                  retry: sameModelRetries,
+                  model: model.ref,
+                  reason: classified.family,
+                  delay_ms: retryDelayMsValue,
+                },
+              });
+              await (this.options.waitForRetry ?? delayForRetry)(retryDelayMsValue, signal);
               continue;
             }
             if (

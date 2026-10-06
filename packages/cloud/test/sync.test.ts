@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { openDatabase, OutboxRepository } from '@ferry/storage';
+import {
+  openDatabase,
+  OutboxRepository,
+  TurnLogRepository,
+  EventLogRepository,
+  ModelSwitchRepository,
+  CloudTelemetrySink,
+} from '@ferry/storage';
 import {
   CloudOutboxMirror,
   CloudSyncWorker,
@@ -190,10 +197,26 @@ describe('cloud mirror and worker', () => {
         op: 'upsert',
         payload: { id: 'ses_retry' },
       });
+      const sink = new CloudTelemetrySink(
+        new TurnLogRepository(db.client),
+        new EventLogRepository(db.client),
+        new ModelSwitchRepository(db.client),
+        outbox,
+      );
+      sink.log({
+        id: 'evt_sync_retry',
+        event: 'turn.failed',
+        source: 'agent',
+        data: { error: 'temporary network failure' },
+      });
       const fake = {
         schema: () => ({
           from: () => ({
             upsert: () =>
+              Promise.resolve({
+                error: fail ? { message: 'network disconnected', code: 'FETCH_ERROR' } : null,
+              }),
+            insert: () =>
               Promise.resolve({
                 error: fail ? { message: 'network disconnected', code: 'FETCH_ERROR' } : null,
               }),
@@ -205,15 +228,19 @@ describe('cloud mirror and worker', () => {
       worker.setSignedIn(true);
       const attemptDeadline = Date.now() + 1_000;
       while (Date.now() < attemptDeadline) {
-        const attempt = db.client
-          .prepare("SELECT attempts FROM cloud_outbox WHERE op_id='retry'")
-          .get() as { attempts: number } | undefined;
-        if ((attempt?.attempts ?? 0) > 0) break;
+        const rows = db.client
+          .prepare(
+            "SELECT op_id, attempts FROM cloud_outbox WHERE op_id IN ('retry', 'logs:evt_sync_retry')",
+          )
+          .all() as { op_id: string; attempts: number }[];
+        if (rows.length === 2 && rows.every((row) => row.attempts > 0)) break;
         await new Promise((resolve) => setTimeout(resolve, 1));
       }
-      expect(outbox.counts().pending).toBe(1);
+      expect(outbox.counts().pending).toBe(2);
       db.client
-        .prepare("UPDATE cloud_outbox SET next_attempt_at=? WHERE op_id='retry'")
+        .prepare(
+          "UPDATE cloud_outbox SET next_attempt_at=? WHERE op_id IN ('retry', 'logs:evt_sync_retry')",
+        )
         .run(new Date(0).toISOString());
       fail = false;
       await worker.flush({ timeoutMs: 500 });

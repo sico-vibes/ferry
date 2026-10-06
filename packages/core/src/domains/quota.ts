@@ -3,6 +3,7 @@ import {
   HandoffStatSchema,
   UsageHistoryPointSchema,
   type UsageHistoryPoint,
+  newId,
 } from '@ferry/shared';
 import { z } from 'zod';
 import type { CoreHost } from '../host.js';
@@ -14,8 +15,16 @@ export function register(host: CoreHost, services: FerryServices): void {
   const emitUpdate = () => {
     host.emit('quota.updated', CapacitySummarySchema.parse(services.quota.capacitySummary()));
   };
-  services.quota.subscribe(() => {
+  services.quota.subscribe((event) => {
     emitUpdate();
+    services.telemetry.log({
+      id: newId('evt'),
+      ts: services.clock.now().toISOString(),
+      level: 'info',
+      source: 'quota',
+      event: 'quota.updated',
+      data: { summary: event.summary },
+    });
   });
   host.registerDomain('quota', {
     capacity() {

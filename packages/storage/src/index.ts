@@ -566,7 +566,7 @@ function capturePolicy(
 ): Record<string, unknown> {
   if (captureContent) return value;
   const contentKey =
-    /^(?:prompt|response|reasoning|tool(?:Input|Output|_input|_output)|content|text)$/i;
+    /^(?:prompt|response|reasoning|input|output|args|arguments|brief|tool(?:Input|Output|_input|_output)|content|text)$/i;
   const walk = (item: unknown, key = ''): unknown => {
     if (
       contentKey.test(key) &&
@@ -597,10 +597,12 @@ export class LocalTelemetrySink implements TelemetrySink {
     protected readonly turns: TurnLogRepository,
     protected readonly logs: EventLogRepository,
     protected readonly switches: ModelSwitchRepository,
-    private readonly captureContent = false,
+    private readonly captureContent: boolean | (() => boolean) = false,
   ) {}
   protected sanitize(event: Record<string, unknown>): Record<string, unknown> {
-    return capturePolicy(event, this.captureContent);
+    const capture =
+      typeof this.captureContent === 'function' ? this.captureContent() : this.captureContent;
+    return redactForTelemetry(capturePolicy(event, capture)) as Record<string, unknown>;
   }
   log(event: Record<string, unknown>): void {
     const id = typeof event.id === 'string' ? event.id : newId('evt');
@@ -616,13 +618,13 @@ export class LocalTelemetrySink implements TelemetrySink {
       id,
       status: 'pending',
       started_at: new Date().toISOString(),
-      ...turn,
+      ...this.sanitize(turn),
     });
   }
   turnUpdated(turnId: string, patch: Record<string, unknown>): void {
     this.turns.put({
       ...(this.turns.get(turnId) ?? { id: turnId }),
-      ...patch,
+      ...this.sanitize(patch),
       id: turnId,
     });
   }
@@ -631,7 +633,7 @@ export class LocalTelemetrySink implements TelemetrySink {
     this.switches.put({
       id,
       created_at: new Date().toISOString(),
-      ...record,
+      ...this.sanitize(record),
     });
   }
   flush(): Promise<void> {
@@ -646,7 +648,7 @@ export class CloudTelemetrySink extends LocalTelemetrySink {
     logs: EventLogRepository,
     switches: ModelSwitchRepository,
     private readonly outbox: OutboxRepository,
-    captureContent = true,
+    captureContent: boolean | (() => boolean) = true,
   ) {
     super(turns, logs, switches, captureContent);
   }

@@ -357,6 +357,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       if (!profile)
         throw rpcDomainError(-32044, 'not_found', `Profile not found: ${session.profileId}`);
       const controller = new AbortController();
+      services.activeTraceContexts.set(session.id, traceContext);
       controllers.set(session.id, controller);
       let resolveRun!: () => void;
       const run = new Promise<void>((resolve) => {
@@ -556,6 +557,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             });
           controllers.delete(session.id);
           runPromises.delete(session.id);
+          services.activeTraceContexts.delete(session.id);
           resolveRun();
           return;
         }
@@ -568,6 +570,16 @@ export function register(host: CoreHost, services: FerryServices): void {
           label: 'Before agent edits',
           createdAt: services.clock.now().toISOString(),
           fileCount: 0,
+        });
+        services.telemetry.log({
+          id: newId('evt'),
+          ts: services.clock.now().toISOString(),
+          level: 'info',
+          source: 'agent',
+          event: 'checkpoint.created',
+          session_id: session.id,
+          trace_id: traceContext.traceId,
+          data: { checkpoint_id: checkpointId, label: 'Before agent edits' },
         });
         const current = services.sessions.get(session.id);
         if (!current) throw rpcDomainError(-32044, 'not_found', `Session not found: ${session.id}`);
@@ -1281,6 +1293,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             });
             controllers.delete(session.id);
             runPromises.delete(session.id);
+            services.activeTraceContexts.delete(session.id);
             if (!shuttingDown) {
               const latest = services.sessions.get(session.id);
               if (latest?.inFlight)
@@ -1300,6 +1313,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       } catch (error) {
         controllers.delete(session.id);
         runPromises.delete(session.id);
+        services.activeTraceContexts.delete(session.id);
         const latest = services.sessions.get(session.id);
         if (latest?.inFlight) updateSession({ ...latest, status: 'error', inFlight: false });
         resolveRun();

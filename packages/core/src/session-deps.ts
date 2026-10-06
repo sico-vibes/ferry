@@ -245,6 +245,7 @@ export function createSessionDependencies(
         request_bytes: observation.requestBytes,
         rate_limit_headers: observation.rateLimitHeaders,
         latency_ms: Math.round(observation.latencyMs),
+        error_kind: observation.errorKind,
         provider_key_id: selectedProviderKeys.get(traceContext.sessionId ?? '')?.keyId ?? null,
       });
       services.telemetry.log({
@@ -275,6 +276,21 @@ export function createSessionDependencies(
     const limits = services.catalog.providers.find((item) => item.provider === providerId);
     const model = services.catalog.models.find((item) => item.ref === observation.modelRef);
     const now = services.clock.now();
+    services.telemetry.log({
+      id: newId('evt'),
+      ts: now.toISOString(),
+      level: 'info',
+      source: 'quota',
+      event: 'quota.updated',
+      session_id: traceContext?.sessionId,
+      trace_id: traceContext?.traceId,
+      data: {
+        provider_id: providerId,
+        model_ref: observation.modelRef,
+        status_code: observation.statusCode,
+        latency_ms: Math.round(observation.latencyMs),
+      },
+    });
     for (const header of Object.entries(observation.rateLimitHeaders)) {
       const [key, value] = header;
       const remaining = key.includes('remaining') ? Number(value) : null;
@@ -320,6 +336,21 @@ export function createSessionDependencies(
         '429',
         retryTimestamp,
       );
+      services.telemetry.log({
+        id: newId('evt'),
+        ts: now.toISOString(),
+        level: 'warn',
+        source: 'quota',
+        event: 'quota.cooldown',
+        session_id: traceContext?.sessionId,
+        trace_id: traceContext?.traceId,
+        data: {
+          provider_id: providerId,
+          model_ref: observation.modelRef,
+          until: cooldown.cooldownUntil,
+          status_code: observation.statusCode,
+        },
+      });
       if (cooldown.cooldownUntil)
         services.cooldowns.put({
           id: providerId,
@@ -688,6 +719,21 @@ export function createSessionDependencies(
           services.providers.put({ ...savedProvider, freeTierUnsupported: true });
         if (isProviderCapacityError(error) && ![429, 503].includes(providerErrorStatus(error))) {
           const cooldown = services.quota.noteFailure(providerId, req.model.ref, providerId, '429');
+          services.telemetry.log({
+            id: newId('evt'),
+            ts: services.clock.now().toISOString(),
+            level: 'warn',
+            source: 'quota',
+            event: 'quota.cooldown',
+            session_id: traceContext?.sessionId,
+            trace_id: traceContext?.traceId,
+            data: {
+              provider_id: providerId,
+              model_ref: req.model.ref,
+              until: cooldown.cooldownUntil,
+              reason: 'provider capacity',
+            },
+          });
           if (cooldown.cooldownUntil)
             services.cooldowns.put({
               id: providerId,

@@ -54,7 +54,7 @@ import {
   type DatabaseConnection,
   type ProviderKeyEntry,
 } from '@ferry/storage';
-import type { TelemetrySink } from '@ferry/shared';
+import type { TelemetrySink, TraceContext } from '@ferry/shared';
 
 export interface FerryClock {
   now(): Date;
@@ -99,6 +99,7 @@ export interface FerryServices {
   readonly logger: Awaited<ReturnType<typeof createLogger>>;
   readonly eventLogs: EventLogRepository;
   readonly telemetry: TelemetrySink;
+  readonly activeTraceContexts: Map<string, TraceContext>;
   readonly deviceId: string;
   emitAppEvent(
     event: string,
@@ -238,14 +239,18 @@ export async function createServices({
   const cloudConfig = loadCloudConfig({ env, ferryHome: home });
   const cloudConfigured = cloudMode && isCloudConfigured(cloudConfig);
   const outbox = cloudConfigured ? new OutboxRepository(db.client) : undefined;
-  const captureTelemetry = resolveCaptureContent({
-    storageMode: cloudMode ? 'cloud' : 'local',
-    captureContent: savedSettings?.captureContent,
-  });
+  const captureTelemetry = () => {
+    const latest = settings.get('global') as { captureContent?: boolean } | undefined;
+    return resolveCaptureContent({
+      storageMode: cloudMode ? 'cloud' : 'local',
+      captureContent: latest?.captureContent,
+    });
+  };
   const telemetry =
     cloudConfigured && outbox
       ? new CloudTelemetrySink(turnLogs, eventLogs, modelSwitches, outbox, captureTelemetry)
       : new LocalTelemetrySink(turnLogs, eventLogs, modelSwitches, captureTelemetry);
+  const activeTraceContexts = new Map<string, TraceContext>();
   const localAdapter = createStorageAdapter({ client: db.client, mode: 'local' });
   const cloudRuntime =
     cloudConfigured && outbox
@@ -504,6 +509,7 @@ export async function createServices({
     logger,
     eventLogs,
     telemetry,
+    activeTraceContexts,
     deviceId,
     emitAppEvent,
     cloud: {

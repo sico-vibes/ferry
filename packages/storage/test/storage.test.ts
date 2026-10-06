@@ -16,6 +16,7 @@ import {
   EventLogRepository,
   ModelSwitchRepository,
   CloudTelemetrySink,
+  LocalTelemetrySink,
 } from '../src/index.js';
 
 const dirs: string[] = [];
@@ -32,6 +33,76 @@ describe('@ferry/storage', () => {
       const logs = new EventLogRepository(db.client);
       const switches = new ModelSwitchRepository(db.client);
       const outbox = new OutboxRepository(db.client);
+      const local = new LocalTelemetrySink(turns, logs, switches);
+      local.log({
+        id: 'evt_local',
+        event: 'request.received',
+        source: 'ui',
+        data: {
+          prompt: 'local private prompt',
+          response: 'assistant output',
+          reasoning: 'private reasoning',
+          input: { tool: 'private input' },
+          output: 'private tool output',
+          inputTokens: 10,
+          outputTokens: 4,
+          cachedTokens: 2,
+          reasoningTokens: 1,
+          maxTokens: 100,
+          tokens: 14,
+          input_tokens: 10,
+          authorization: 'Bearer private-key',
+          nested: { apiKey: 'sk-supersecretcredential' },
+        },
+      });
+      expect(logs.get('evt_local')?.data).toMatchObject({
+        prompt: { omitted: 'capture-off', chars: 20 },
+        response: { omitted: 'capture-off', chars: 16 },
+        reasoning: { omitted: 'capture-off', chars: 17 },
+        input: { omitted: 'capture-off' },
+        output: { omitted: 'capture-off', chars: 19 },
+        inputTokens: 10,
+        outputTokens: 4,
+        cachedTokens: 2,
+        reasoningTokens: 1,
+        maxTokens: 100,
+        tokens: 14,
+        input_tokens: 10,
+        authorization: '[REDACTED]',
+        nested: { apiKey: '[REDACTED]' },
+      });
+      local.turnStarted({
+        id: 'turn_secret',
+        error_message: 'provider echoed sk-supersecretcredential',
+        input_tokens: 9,
+      });
+      expect(turns.get('turn_secret')).toMatchObject({
+        error_message: 'provider echoed [REDACTED]',
+        input_tokens: 9,
+      });
+      local.modelSwitch({
+        session_id: 'ses_test',
+        kind: 'selection_change',
+        from_model: 'openai/a',
+        to_model: 'openai/b',
+        data: { who: 'user', mid_run: true },
+      });
+      local.modelSwitch({
+        session_id: 'ses_test',
+        kind: 'router_fallback',
+        from_model: 'openai/a',
+        to_model: 'openai/b',
+        reason: 'rate_limit',
+      });
+      expect(switches.list()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'selection_change',
+            data: { who: 'user', mid_run: true },
+          }),
+          expect.objectContaining({ kind: 'router_fallback', reason: 'rate_limit' }),
+        ]),
+      );
       const sink = new CloudTelemetrySink(turns, logs, switches, outbox, false);
       sink.log({
         id: 'evt_test',
@@ -51,6 +122,24 @@ describe('@ferry/storage', () => {
       expect(outbox.counts().pending).toBe(1);
       const queued = outbox.claimDue(10).find((entry) => entry.opId === 'logs:evt_test');
       expect(queued?.payloadJson).not.toContain('private prompt');
+      const captureSink = new CloudTelemetrySink(turns, logs, switches, outbox, true);
+      captureSink.log({
+        id: 'evt_capture',
+        event: 'turn.completed',
+        source: 'agent',
+        data: {
+          prompt: 'private prompt sk-abcdefghijk',
+          response: 'assistant text',
+          reasoning: 'reasoning text',
+          outputTokens: 8,
+        },
+      });
+      expect(logs.get('evt_capture')?.data).toMatchObject({
+        prompt: 'private prompt [REDACTED]',
+        response: 'assistant text',
+        reasoning: 'reasoning text',
+        outputTokens: 8,
+      });
     } finally {
       db.close();
     }

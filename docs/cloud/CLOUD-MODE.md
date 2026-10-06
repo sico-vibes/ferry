@@ -37,7 +37,7 @@ Structured telemetry is written to the local SQLite `telemetry_turns`, `telemetr
 
 One 32-character lowercase hexadecimal trace id identifies each submitted request. Provider attempt rows share a request group id and link fallback attempts through `parent_turn_id`; event rows carry trace and span fields where available. The structured event names include request receipt, requested/completed/failed turns, fallbacks, tool calls/results, model switches, and sync errors. Attempt rows hold requested and routed model values separately; response model and upstream model are recorded when the provider boundary exposes them.
 
-`captureContent` defaults to ON in cloud mode and OFF in local mode. When enabled, prompt, response, reasoning, and tool I/O fields may be captured after deep secret redaction. When disabled, those values become omitted markers with character counts. Credential-shaped strings and credential-valued fields are redacted in all telemetry regardless of mode. Local `telemetry_logs` should use a 30-day retention policy; current local telemetry is durable until cleanup is added. The cloud `ferry.logs` table has its existing 30-day retention job.
+`captureContent` defaults to ON in cloud mode and OFF in local mode. When enabled, prompt, response, reasoning, and tool I/O fields may be captured after deep secret redaction. When disabled, those values become omitted markers with character counts. Credential-shaped strings and credential-valued fields are redacted in all telemetry regardless of mode. Local `telemetry_logs` rows are removed after 30 days when services start; the cloud `ferry.logs` table has its existing 30-day retention job.
 
 ### Recommended new tables
 
@@ -46,5 +46,11 @@ These event families currently use `ferry.logs` or kind-scoped `ferry.sync_recor
 - `ferry.tool_events`: `id`, `session_id`, `turn_id`, `trace_id`, `tool_call_id`, `tool_name`, `status`, `input`, `output`, `started_at`, `finished_at`.
 - `ferry.approval_events`: `id`, `session_id`, `trace_id`, `approval_id`, `tool_name`, `decision`, `requested_at`, `resolved_at`.
 - `ferry.delegation_events`: `id`, `session_id`, `trace_id`, `parent_trace_id`, `delegation_id`, `agent`, `status`, `started_at`, `finished_at`, `data`.
+- `ferry.checkpoint_events`: `id`, `session_id`, `checkpoint_id`, `trace_id`, `label`, `created_at`, `file_count`, `data`.
+- `ferry.quota_events`: `id`, `provider_id`, `model_ref`, `session_id`, `trace_id`, `event`, `status_code`, `observed_at`, `cooldown_until`, `data` (metadata only).
+- `ferry.retry_events`: `id`, `session_id`, `turn_id`, `request_group_id`, `trace_id`, `attempt`, `reason`, `delay_ms`, `occurred_at`.
+- `ferry.usage_records`: `id`, `session_id`, `turn_id`, `provider_id`, `model_ref`, `trace_id`, `input_tokens`, `cached_tokens`, `reasoning_tokens`, `output_tokens`, `cost_usd`, `plan_units`, `occurred_at`.
 - `ferry.lifecycle_events`: `id`, `device_id`, `trace_id`, `event`, `occurred_at`, `app_version`, `data`.
 - `ferry.provider_key_events`: `id`, `provider_key_id`, `provider_id`, `event`, `occurred_at`, `trace_id`, `data` (metadata only; never a secret).
+
+These tables would make quota history, retries, checkpoint creation and usage queryable without scanning generic JSON. Until a schema change is approved and applied separately, those records remain in `ferry.logs` or constrained `ferry.sync_records` kinds.
