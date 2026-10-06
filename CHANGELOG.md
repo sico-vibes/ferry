@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- "No profile" option: chats and Gateway keys can skip profiles and use a model you pick.
+- Gateway keys can route across a hand-picked, ordered list of connected models.
+
+### Changed
+
+- Rebuilt Profiles settings: one profile at a time from a dropdown, plain-language sections,
+  read-only built-ins with "Duplicate to customize".
+- The model picker's details card is now a hover tooltip.
+
+### Fixed
+
+- "Get a key" opens the provider's page for every catalog provider.
+- Dialog close buttons work when the dialog sits over the window title area.
+- "Jump to latest" no longer appears when the latest message is already visible.
+
 ### Changed
 
 - Merges to `main` publish a public `0.9.0-beta.N` pre-release. Installed beta
