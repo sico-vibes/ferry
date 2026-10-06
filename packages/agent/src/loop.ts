@@ -190,6 +190,8 @@ export interface AgentOptions {
   maxSteps?: number;
   maxHandoffsPerStep?: number;
   pinnedModelRef?: ModelRef | null;
+  /** Read the user's current pin at step boundaries; when provided it supersedes the snapshot. */
+  getPinnedModelRef?: () => ModelRef | null;
   tokenBudget?: number;
   /** Maximum time without stream progress before this model attempt is abandoned. */
   stepTimeoutMs?: number;
@@ -289,6 +291,7 @@ export class AgentLoop {
   private readonly retiredModels: Set<string>;
   private readonly sessionBadKeys = new Map<string, Set<string>>();
   private readonly pinnedHandoverModels = new Map<string, ModelRef>();
+  private readonly pinnedHandoverSourcePins = new Map<string, ModelRef>();
   private readonly activeMessageParts = new Map<
     string,
     { messageId: Message['id']; parts: MessagePart[] }
@@ -309,6 +312,19 @@ export class AgentLoop {
   }
 
   private pinnedModelRefFor(sessionId: string): ModelRef | null {
+    if (this.options.getPinnedModelRef) {
+      const livePin = this.options.getPinnedModelRef();
+      if (!livePin) {
+        this.pinnedHandoverModels.delete(sessionId);
+        this.pinnedHandoverSourcePins.delete(sessionId);
+        return null;
+      }
+      if (this.pinnedHandoverSourcePins.get(sessionId) !== livePin) {
+        this.pinnedHandoverModels.delete(sessionId);
+        this.pinnedHandoverSourcePins.delete(sessionId);
+      }
+      return this.pinnedHandoverModels.get(sessionId) ?? livePin;
+    }
     return this.pinnedHandoverModels.get(sessionId) ?? this.options.pinnedModelRef ?? null;
   }
 
@@ -498,39 +514,22 @@ export class AgentLoop {
           resumedTranscript = true;
         }
         taskRecord = loaded.taskRecord;
-        const contextWindow =
-          this.options.catalog.models.find((candidate) => candidate.ref === session.modelRef)
-            ?.contextWindow ??
-          Math.max(...this.options.catalog.models.map((candidate) => candidate.contextWindow));
-        const compactedContext = compactConversationMessages(
-          messages,
-          contextWindow,
-          this.estimates,
-          this.recoveryStore,
-          sessionId,
-        );
-        for (const event of compactedContext.events)
-          this.options.emit({ type: 'optimizer.event', ...event });
-        messages = compactedContext.messages;
-        if (compactedContext.summary) {
+        attemptFailures.length = 0;
+        const keepTurns = this.options.pinnedTurns ?? 4;
+        const pinnedMessages = messages.slice(-keepTurns * 2);
+        if (messages.length > pinnedMessages.length) {
+          const omitted = `${String(messages.length - pinnedMessages.length)} older conversation message(s) omitted by the recent-turn window; tool outputs remain recoverable from their handles.`;
           taskRecord = {
             ...taskRecord,
             decisions: [
               ...taskRecord.decisions.filter(
-                (decision) => !decision.text.startsWith('Context compacted:'),
+                (decision) => decision.why !== 'Recent context omitted.',
               ),
-              {
-                text: compactedContext.summary,
-                why: 'Keep the compacted context summary in the task record.',
-                at: new Date().toISOString(),
-              },
+              { text: omitted, why: 'Recent context omitted.', at: new Date().toISOString() },
             ].slice(-12),
           };
           this.persistTask(taskRecord);
         }
-        attemptFailures.length = 0;
-        const keepTurns = this.options.pinnedTurns ?? 4;
-        const pinnedMessages = messages.slice(-keepTurns * 2);
         let system = await assembleSystemPrompt({
           workspace: this.options.workspace,
           sessionId,
@@ -566,7 +565,16 @@ export class AgentLoop {
         const inputTokens = Math.ceil(
           (this.estimates(system) + messageTokens + toolSchemaTokens) * 1.15,
         );
-        const routeEstimate = inputTokens;
+        const minimumContext = Math.min(
+          Math.ceil(
+            (this.estimates(system) +
+              toolSchemaTokens +
+              this.estimates(JSON.stringify(messages.slice(-2)))) *
+              1.15,
+          ),
+          this.contextFitEstimate(inputTokens),
+        );
+        const estimatedInputTokens = inputTokens;
         const stepKind = plannerRepairHint
           ? 'plan'
           : pendingEditPlan
@@ -574,7 +582,7 @@ export class AgentLoop {
             : classifyStep({
                 firstStep: stepCount === 0,
                 pendingEdits: taskRecord.touchedFiles.length > 0,
-                estimatedInputTokens: routeEstimate,
+                estimatedInputTokens,
               });
         let requestedRole =
           rolesEnabled && (stepKind === 'plan' || stepKind === 'edit')
@@ -586,29 +594,102 @@ export class AgentLoop {
           ? this.selectRoleModel(
               requestedRole,
               stepKind,
-              routeEstimate,
+              estimatedInputTokens,
               session.modelRef,
               sessionId,
+              minimumContext,
             )
-          : this.selectModel(stepKind, routeEstimate, session.modelRef, sessionId);
+          : this.selectModel(
+              stepKind,
+              estimatedInputTokens,
+              session.modelRef,
+              sessionId,
+              minimumContext,
+            );
         if (requestedRole === 'planner' && selectedModel) {
           const editor = this.selectRoleModel(
             'editor',
             'edit',
-            routeEstimate,
+            estimatedInputTokens,
             selectedModel.ref,
             sessionId,
+            minimumContext,
           );
           if (!editor || editor.ref === selectedModel.ref) {
             rolesEnabled = false;
             requestedRole = undefined;
-            selectedModel = this.selectModel(stepKind, routeEstimate, session.modelRef, sessionId);
+            selectedModel = this.selectModel(
+              stepKind,
+              estimatedInputTokens,
+              session.modelRef,
+              sessionId,
+              minimumContext,
+            );
           }
         }
         if (!selectedModel) throw new AllCandidatesExhaustedError(this.exhaustedMessage(stepKind));
         let model: ModelInfo = selectedModel;
-        let contextMessages = pinnedMessages;
-        if (inputTokens > model.contextWindow * 0.9) {
+        const targetCompaction = compactConversationMessages(
+          messages,
+          model.contextWindow,
+          this.estimates,
+          this.recoveryStore,
+          sessionId,
+        );
+        for (const event of targetCompaction.events)
+          this.options.emit({ type: 'optimizer.event', ...event });
+        const fittedMessages = targetCompaction.messages.slice(-keepTurns * 2);
+        if (targetCompaction.summary) {
+          taskRecord = {
+            ...taskRecord,
+            decisions: [
+              ...taskRecord.decisions.filter(
+                (decision) => !decision.text.startsWith('Context compacted:'),
+              ),
+              {
+                text: targetCompaction.summary,
+                why: 'Keep the compacted context summary in the task record.',
+                at: new Date().toISOString(),
+              },
+            ].slice(-12),
+          };
+          this.persistTask(taskRecord);
+        }
+        const omittedNote = targetCompaction.summary
+          ? `${targetCompaction.summary} Fitted for ${model.name} (${String(model.contextWindow)} tokens).`
+          : '';
+        if (omittedNote) {
+          taskRecord = {
+            ...taskRecord,
+            decisions: [
+              ...taskRecord.decisions,
+              {
+                text: omittedNote,
+                why: 'Record context omitted during target-model fitting.',
+                at: new Date().toISOString(),
+              },
+            ].slice(-12),
+          };
+          this.persistTask(taskRecord);
+          this.options.telemetry?.log({
+            id: newId('evt'),
+            ts: new Date().toISOString(),
+            level: 'info',
+            source: 'router',
+            event: 'routing.decision',
+            session_id: sessionId,
+            data: { target_model: model.ref, omitted_context: omittedNote },
+          });
+        }
+        const targetMessageTokens = this.estimates(
+          JSON.stringify(toModelMessages(fittedMessages, model)),
+        );
+        const fittedInputTokens = Math.ceil(
+          (this.estimates(system) + targetMessageTokens + toolSchemaTokens) * 1.15,
+        );
+        let routeEstimate = fittedInputTokens;
+        let contextMessages = fittedMessages;
+        if (fittedInputTokens > model.contextWindow * 0.9) {
           if (stepCount >= maxSteps)
             return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
           const summaryModel =
@@ -617,6 +698,7 @@ export class AgentLoop {
               Math.min(routeEstimate, Math.floor(model.contextWindow * 0.6)),
               session.modelRef,
               sessionId,
+              minimumContext,
             ) ?? model;
           const summarize =
             this.options.generator ?? this.createStreamingGenerator(summaryModel, sessionId);
@@ -624,7 +706,7 @@ export class AgentLoop {
             model: summaryModel,
             system:
               'Summarize the conversation for continued coding work. Preserve user requirements, completed actions, key discoveries, file names, constraints, and unresolved next steps. Return only the concise summary.',
-            messages: pinnedMessages,
+            messages: fittedMessages,
             tools: [],
             modelHints: this.options.modelHints?.(summaryModel) ?? {
               toolProtocol: 'native',
@@ -655,8 +737,9 @@ export class AgentLoop {
             (summaryResult.inputTokens ?? routeEstimate) +
             (summaryResult.outputTokens ?? this.estimates(contextSummary));
           stepCount++;
-          contextMessages = pinnedMessages;
+          contextMessages = fittedMessages;
         }
+        const livePinnedRef = this.pinnedModelRefFor(sessionId);
         const previousAssistant = [...messages]
           .reverse()
           .find((message) => message.role === 'assistant');
@@ -667,25 +750,24 @@ export class AgentLoop {
         ) {
           const briefing = buildBriefing(
             taskRecord,
-            messages,
+            fittedMessages,
             model,
             Math.floor(model.contextWindow * 0.25),
             this.estimates,
             {
               from: previousAssistant.modelRef,
               to: model.ref,
-              reason: this.options.pinnedModelRef
-                ? 'manual model selection'
-                : 'automatic routing boundary',
+              reason: livePinnedRef ? 'manual model selection' : 'automatic routing boundary',
+              ...(omittedNote ? { omittedContext: omittedNote } : {}),
             },
           );
-          const handoffReason = this.options.pinnedModelRef ? 'manual' : 'error';
+          const handoffReason = livePinnedRef ? 'manual' : 'error';
           const marker = createHandoffMarker(
             previousAssistant.modelRef,
             model.ref,
             handoffReason,
             briefing,
-            this.options.pinnedModelRef
+            livePinnedRef
               ? `You selected ${model.name} for the next step.`
               : `Automatic routing selected ${model.name} for the next step.`,
           );
@@ -697,14 +779,93 @@ export class AgentLoop {
             reason: marker.reason,
             briefingTokens: marker.briefingTokens,
             explanation: marker.explanation,
-            trigger: this.options.pinnedModelRef ? 'manual' : 'proactive',
+            trigger: livePinnedRef ? 'manual' : 'proactive',
           });
-          this.options.onHandoff?.(
-            this.options.pinnedModelRef ? 'manual' : 'error',
-            marker.from,
-            marker.to,
-          );
+          this.options.onHandoff?.(livePinnedRef ? 'manual' : 'error', marker.from, marker.to);
           system += `\n\n[Ferry handover packet]\n${briefing.text}`;
+          let packetInputTokens = Math.ceil(
+            (this.estimates(system) +
+              this.estimates(JSON.stringify(toModelMessages(contextMessages, model))) +
+              toolSchemaTokens) *
+              1.15,
+          );
+          let packetContextOmitted = false;
+          let fitCursor = 0;
+          while (packetInputTokens > model.contextWindow && fitCursor < contextMessages.length) {
+            const oldest = contextMessages[fitCursor];
+            if (!oldest) break;
+            const compactedOldest = compactMessageToolOutputs(
+              oldest,
+              this.estimates,
+              this.recoveryStore,
+              sessionId,
+              model.name,
+            );
+            if (compactedOldest) {
+              packetContextOmitted = true;
+              contextMessages = contextMessages.map((entry, index) =>
+                index === fitCursor ? compactedOldest : entry,
+              );
+            }
+            fitCursor++;
+            packetInputTokens = Math.ceil(
+              (this.estimates(system) +
+                this.estimates(JSON.stringify(toModelMessages(contextMessages, model))) +
+                toolSchemaTokens) *
+                1.15,
+            );
+          }
+          while (packetInputTokens > model.contextWindow && contextMessages.length > 2) {
+            const latestUserIndex = contextMessages.findLastIndex((entry) => entry.role === 'user');
+            const removeIndex = latestUserIndex === 0 ? 1 : 0;
+            contextMessages = contextMessages.filter((_, index) => index !== removeIndex);
+            packetContextOmitted = true;
+            packetInputTokens = Math.ceil(
+              (this.estimates(system) +
+                this.estimates(JSON.stringify(toModelMessages(contextMessages, model))) +
+                toolSchemaTokens) *
+                1.15,
+            );
+          }
+          if (packetContextOmitted) {
+            const omitted = `Older tool outputs or turns were omitted to fit ${model.name}; compacted tool outputs retain recovery handles.`;
+            system += `\n\nContext omitted: ${omitted}`;
+            taskRecord = {
+              ...taskRecord,
+              decisions: [
+                ...taskRecord.decisions,
+                { text: omitted, why: 'Target context fitting.', at: new Date().toISOString() },
+              ].slice(-12),
+            };
+            this.persistTask(taskRecord);
+            this.options.telemetry?.log({
+              id: newId('evt'),
+              ts: new Date().toISOString(),
+              level: 'info',
+              source: 'router',
+              event: 'routing.decision',
+              session_id: sessionId,
+              data: { target_model: model.ref, omitted_context: omitted },
+            });
+          }
+          if (packetInputTokens > model.contextWindow) {
+            const omitted = `Handover packet and recent context fitted to ${model.name}; older context omitted.`;
+            system += `\n\nContext omitted: ${omitted}`;
+            taskRecord = {
+              ...taskRecord,
+              decisions: [
+                ...taskRecord.decisions,
+                { text: omitted, why: 'Target context fitting.', at: new Date().toISOString() },
+              ].slice(-12),
+            };
+            this.persistTask(taskRecord);
+          }
+          routeEstimate = Math.ceil(
+            (this.estimates(system) +
+              this.estimates(JSON.stringify(toModelMessages(contextMessages, model))) +
+              toolSchemaTokens) *
+              1.15,
+          );
           this.options.emit({
             type: 'toast',
             tone: 'info',
@@ -732,7 +893,7 @@ export class AgentLoop {
         );
         assistant = {
           ...assistant,
-          requestedModelRef: session.pinnedModelRef ?? 'auto',
+          requestedModelRef: this.pinnedModelRefFor(sessionId) ?? 'auto',
         };
         this.options.store.replaceMessage(assistant);
         this.options.emit({ type: 'session.message', message: assistant });
@@ -852,8 +1013,8 @@ export class AgentLoop {
             source: 'agent',
             step_id: `${sessionId}:${String(stepCount + 1)}`,
             step_kind: stepKind,
-            requested_model: this.options.pinnedModelRef ?? 'auto',
-            routing_mode: this.options.pinnedModelRef ? 'pinned' : 'auto',
+            requested_model: this.pinnedModelRefFor(sessionId) ?? 'auto',
+            routing_mode: this.pinnedModelRefFor(sessionId) ? 'pinned' : 'auto',
             routed_provider: model.providerId,
             routed_model: model.ref,
             status: 'pending',
@@ -869,7 +1030,7 @@ export class AgentLoop {
             turn_id: turnId,
             trace_id: traceId,
             data: {
-              requested_model: this.options.pinnedModelRef ?? 'auto',
+              requested_model: this.pinnedModelRefFor(sessionId) ?? 'auto',
               routed_model: model.ref,
             },
           });
@@ -1184,10 +1345,8 @@ export class AgentLoop {
               });
               this.options.emit({ type: 'session.updated', session: waiting });
               const decision = await this.options.requestApproval(approval, signal);
-              if (!signal.aborted) {
-                const resumed = this.options.store.updateSession(sessionId, { status: 'running' });
-                this.options.emit({ type: 'session.updated', session: resumed });
-              }
+              const resumed = this.options.store.updateSession(sessionId, { status: 'running' });
+              this.options.emit({ type: 'session.updated', session: resumed });
               this.replacePart(sessionId, {
                 ...approval,
                 state: decision === 'denied' ? 'denied' : decision,
@@ -1275,13 +1434,10 @@ export class AgentLoop {
               (stopFallback && !approvedPinnedHandover) ||
               isSignalAborted(signal)
             ) {
-              if (
-                stopFallback &&
-                this.pinnedModelRefFor(sessionId) &&
-                routing?.pinnedExhaustion === 'fail'
-              )
+              const currentPin = this.pinnedModelRefFor(sessionId);
+              if (stopFallback && currentPin && routing?.pinnedExhaustion === 'fail')
                 throw new Error(
-                  `Pinned model ${this.pinnedModelRefFor(sessionId)} is unavailable and pinnedExhaustion is set to fail.`,
+                  `Pinned model ${currentPin} is unavailable and pinnedExhaustion is set to fail.`,
                   { cause: error },
                 );
               throw error;
@@ -1321,11 +1477,13 @@ export class AgentLoop {
               attemptedModels,
               sessionId,
               approvedPinnedHandover,
+              minimumContext,
             );
             if (!fallback) {
-              if (this.pinnedModelRefFor(sessionId))
+              const currentPin = this.pinnedModelRefFor(sessionId);
+              if (currentPin)
                 throw new Error(
-                  `Pinned model ${this.pinnedModelRefFor(sessionId)} is unavailable; no eligible handover model is available (pinnedExhaustion: ${routing?.pinnedExhaustion ?? 'handover'}).`,
+                  `Pinned model ${currentPin} is unavailable; no eligible handover model is available (pinnedExhaustion: ${routing?.pinnedExhaustion ?? 'handover'}).`,
                   { cause: error },
                 );
               throw new AllCandidatesExhaustedError(this.exhaustedMessage(stepKind));
@@ -1349,7 +1507,7 @@ export class AgentLoop {
                 session_id: sessionId,
                 turn_id: parentTurnId,
                 kind:
-                  this.options.pinnedModelRef &&
+                  this.pinnedModelRefFor(sessionId) &&
                   (routing?.pinnedExhaustion ?? 'handover') === 'handover'
                     ? 'handoff'
                     : 'router_fallback',
@@ -1373,12 +1531,17 @@ export class AgentLoop {
             }
             attemptedModels.add(fallback.ref);
             handoffsThisStep++;
-            if (this.options.pinnedModelRef) this.pinnedHandoverModels.set(sessionId, fallback.ref);
+            const currentPin =
+              this.options.getPinnedModelRef?.() ?? this.pinnedModelRefFor(sessionId);
+            if (currentPin) {
+              this.pinnedHandoverModels.set(sessionId, fallback.ref);
+              this.pinnedHandoverSourcePins.set(sessionId, currentPin);
+            }
             const visibleHandover =
               streamedText.length > 0 ||
               approvedPinnedHandover ||
               Boolean(
-                this.options.pinnedModelRef &&
+                this.pinnedModelRefFor(sessionId) &&
                 (routing?.pinnedExhaustion ?? 'handover') === 'handover',
               );
             const handoffReason = toolsUnsupported
@@ -1980,15 +2143,16 @@ export class AgentLoop {
     inputTokens: number,
     previous: ModelRef | null,
     sessionId: string,
+    minimumContext = 0,
   ): ModelInfo | undefined {
     // A manual pin applies to every model request, including planner and editor steps.
     if (this.pinnedModelRefFor(sessionId))
-      return this.selectModel(step, inputTokens, previous, sessionId);
+      return this.selectModel(step, inputTokens, previous, sessionId, minimumContext);
     const configured =
       role === 'planner'
         ? this.options.profile.roles.plannerModelRef
         : this.options.profile.roles.editorModelRef;
-    const baseline = this.selectModel(step, inputTokens, previous, sessionId);
+    const baseline = this.selectModel(step, inputTokens, previous, sessionId, minimumContext);
     const candidates = scoreModels({
       models: this.options.catalog.models,
       capacity: this.options.capacity(),
@@ -1997,6 +2161,7 @@ export class AgentLoop {
       estimate: {
         inputTokens,
         contextTokens: this.contextFitEstimate(inputTokens),
+        minimumContext,
         outputTokens: 2048,
         requiresTools: role === 'editor',
       },
@@ -2030,6 +2195,7 @@ export class AgentLoop {
     inputTokens: number,
     previous: ModelRef | null,
     sessionId: string,
+    minimumContext = 0,
   ): ModelInfo | undefined {
     const pinnedModelRef = this.pinnedModelRefFor(sessionId);
     if (pinnedModelRef)
@@ -2051,7 +2217,7 @@ export class AgentLoop {
     if (resolved)
       return this.selectResilient(
         preferStickyAffinity(
-          resolved.filter(eligible),
+          resolved.filter((model) => eligible(model) && model.contextWindow >= minimumContext),
           stickyRoute,
           this.options.profile.affinityMode,
           (providerId) => this.options.providerAffinityKey?.(providerId, sessionId) ?? undefined,
@@ -2065,6 +2231,7 @@ export class AgentLoop {
       estimate: {
         inputTokens,
         contextTokens: this.contextFitEstimate(inputTokens),
+        minimumContext,
         outputTokens: 2048,
         expectedSteps: 1,
         requiresTools: true,
@@ -2101,6 +2268,7 @@ export class AgentLoop {
     attemptedRefs: ReadonlySet<string>,
     sessionId: string,
     allowPinnedHandover = false,
+    minimumContext = 0,
   ): ModelInfo | undefined {
     // Desktop supplies one API key per provider today, so same-model key rotation is unavailable; continue to model fallback.
     const pinnedExhaustion = this.options.routingSettings?.().pinnedExhaustion ?? 'handover';
@@ -2119,6 +2287,7 @@ export class AgentLoop {
           (candidate) =>
             !this.sessionBadKeys.get(sessionId)?.has(candidate.providerId) &&
             !attemptedRefs.has(candidate.ref) &&
+            candidate.contextWindow >= minimumContext &&
             !locked?.has(candidate.ref) &&
             !(retirementEnabled && this.retiredModels.has(candidate.ref)) &&
             (this.requestTooLargeAt.get(candidate.ref) ?? Number.POSITIVE_INFINITY) > inputTokens,
@@ -2133,6 +2302,7 @@ export class AgentLoop {
       estimate: {
         inputTokens,
         contextTokens: this.contextFitEstimate(inputTokens),
+        minimumContext,
         requiresTools: true,
       },
       ...(previousModelRef ? { previousModelRef } : {}),
@@ -2631,6 +2801,38 @@ function isGemini3Model(model: ModelInfo | undefined): boolean {
   return (
     model?.providerId === 'gemini' && /gemini[-/]3(?:[.-]|$)/i.test(`${model.ref} ${model.name}`)
   );
+}
+
+function compactMessageToolOutputs(
+  message: Message,
+  estimate: (text: string) => number,
+  blobStore: InMemoryBlobStore,
+  sessionId: string,
+  modelName: string,
+): Message | null {
+  const parts = message.parts.map((part) => {
+    if (
+      part.type !== 'tool_call' ||
+      !part.output ||
+      part.output.text.startsWith('Older tool output omitted to fit ')
+    )
+      return part;
+    const handle = part.output.recoveryHandle ?? blobStore.put(sessionId, part.output.text);
+    const text = `Older tool output omitted to fit ${modelName}'s context. Recover full output with ${handle}.`;
+    return {
+      ...part,
+      output: {
+        ...part.output,
+        text,
+        filtered: true,
+        originalTokens: part.output.originalTokens ?? estimate(part.output.text),
+        filteredTokens: estimate(text),
+        recoveryHandle: handle,
+      },
+    };
+  });
+  if (parts.every((part, index) => part === message.parts[index])) return null;
+  return { ...message, parts };
 }
 
 function compactConversationMessages(

@@ -84,6 +84,8 @@ export interface StepEstimate {
   inputTokens: number;
   /** Token estimate after compaction for context-window fit only; TPM always uses inputTokens. */
   contextTokens?: number;
+  /** Minimum unprunable context: system rules, the current step, tool schemas and safety state. */
+  minimumContext?: number;
   outputTokens?: number;
   requiresTools?: boolean;
   /** Allow callers to provide a step count estimate for explanations and switching. */
@@ -452,8 +454,7 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       continue;
     const cooldown = provider.cooldownUntil ? Date.parse(provider.cooldownUntil) : 0;
     const coolingUntil = provider.health === 'cooldown' && Number.isFinite(cooldown) ? cooldown : 0;
-    if (model.contextWindow < (input.estimate.contextTokens ?? input.estimate.inputTokens) * 1.2)
-      continue;
+    if (model.contextWindow < (input.estimate.minimumContext ?? 0)) continue;
     const toolsSupported = modelSupportsTools(
       model,
       (input.textToolFallbackEnabled ?? input.routing?.textToolFallbackEnabled) === true,
@@ -681,8 +682,8 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
       if (provider.health === 'cooldown' && (!Number.isFinite(cooldown) || cooldown > now))
         reasons.push('provider cooldown active');
     }
-    if (model.contextWindow < (input.estimate.contextTokens ?? input.estimate.inputTokens) * 1.2)
-      reasons.push(`context ${String(model.contextWindow)} below estimate`);
+    if (model.contextWindow < (input.estimate.minimumContext ?? 0))
+      reasons.push(`context ${String(model.contextWindow)} below minimum context`);
     const toolsSupported = modelSupportsTools(
       model,
       (input.textToolFallbackEnabled ?? input.routing?.textToolFallbackEnabled) === true,
@@ -1064,7 +1065,7 @@ export function buildBriefing(
       ? [
           {
             title: 'Unresolved operations',
-            content: handoff.unresolvedOperations?.join('\n') || 'None recorded.',
+            content: handoff.unresolvedOperations?.join('\n') ?? 'None recorded.',
           },
         ]
       : []),

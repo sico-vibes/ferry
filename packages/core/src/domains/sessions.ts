@@ -699,6 +699,10 @@ export function register(host: CoreHost, services: FerryServices): void {
           profile,
           catalog: sessionCatalog,
           pinnedModelRef: routingMode === 'auto_for_step' ? null : session.pinnedModelRef,
+          getPinnedModelRef: () =>
+            routingMode === 'auto_for_step'
+              ? null
+              : (services.sessions.get(session.id)?.pinnedModelRef ?? null),
           stepTimeoutMs: stepTimeoutFromEnvironment(services.env.FERRY_STEP_TIMEOUT_MS),
           capacity: runtime.capacity,
           apiKeys: runtime.apiKeys,

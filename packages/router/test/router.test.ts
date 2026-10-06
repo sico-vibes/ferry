@@ -160,6 +160,24 @@ const task: TaskRecord = {
 };
 
 describe('step classification and routing', () => {
+  it('uses minimumContext for eligibility after compaction', () => {
+    const small = { ...model, ref: 'groq/small' as ModelInfo['ref'], contextWindow: 1_000 };
+    const large = { ...model, ref: 'groq/large' as ModelInfo['ref'], contextWindow: 8_000 };
+    const input = {
+      models: [small, large],
+      providers: [provider],
+      capacity,
+      profile,
+      step: 'plan' as const,
+      estimate: { inputTokens: 20_000, contextTokens: 500, minimumContext: 1_200 },
+    };
+    expect(scoreModels(input).map(({ ref }) => ref)).toContain(large.ref);
+    expect(scoreModels(input).map(({ ref }) => ref)).not.toContain(small.ref);
+    expect(
+      explainModelRouting(input).find(({ modelRef }) => modelRef === small.ref)?.reasons,
+    ).toContain('context 1000 below minimum context');
+  });
+
   it('only routes Kilo models covered by its sourced plan or priced at zero through Auto-Free', () => {
     const autoFree = BUILTIN_PROFILES.find((item) => item.id === 'profile_builtin_auto_free');
     if (!autoFree) throw new Error('Auto-Free profile fixture is missing');
