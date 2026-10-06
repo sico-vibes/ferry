@@ -13,9 +13,13 @@ import { FakeOpenAIServer } from '../../../packages/testkit/src/fake-servers.ts'
 import { FixtureRepo } from '../../../packages/testkit/src/fixture-repo.ts';
 
 const appDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
-const temporaryDirectory = await mkdtemp(join(tmpdir(), 'ferry-real-domains-e2e-'));
+const temporaryDirectory = realpathSync.native(
+  await mkdtemp(join(tmpdir(), 'ferry-real-domains-e2e-')),
+);
 const agentFixture = await FixtureRepo.create('typescript');
-const fixtureRepo = agentFixture.path;
+// Canonical long path: CI temp folders can surface as 8.3 short names (RUNNER~1), while the engine
+// stores canonical paths, so every comparison and path hash must use the long form.
+const fixtureRepo = realpathSync.native(agentFixture.path);
 const fixtureRepoName = fixtureRepo.split(/[\\/]/).pop();
 const dataDirectory = join(temporaryDirectory, 'ferry-home');
 /** Canonical, case-insensitive form of an existing path (expands 8.3 short names). */
