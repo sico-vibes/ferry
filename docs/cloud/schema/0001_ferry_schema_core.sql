@@ -1,5 +1,5 @@
 -- Ferry cloud mode: core schema, tables, indexes, triggers.
--- Target: Supabase project qsivbxvzxqbzkzsuvztv (shared with the TikTok dashboard).
+-- Target: any Supabase project. Ferry lives in its own `ferry` schema and can share a project.
 -- Only ADDS objects in the dedicated `ferry` schema. Nothing in public/private/storage/auth is altered.
 --
 -- ID strategy: every entity row is keyed by (user_id, id). `id` is Ferry's own local id
@@ -8,7 +8,7 @@
 -- attach rows to another user's parent.
 
 create schema if not exists ferry;
-comment on schema ferry is 'Ferry coding agent cloud mode (sessions, turns, routing, keys, usage, logs). Independent of the TikTok dashboard.';
+comment on schema ferry is 'Ferry coding agent cloud mode (sessions, turns, routing, keys, usage, logs). Independent of other schemas in the project.';
 revoke all on schema ferry from public;
 
 -- ---------------------------------------------------------------- helpers
@@ -35,7 +35,7 @@ create table ferry.admins (
   created_at timestamptz not null default now()
 );
 create unique index admins_single_owner_idx on ferry.admins (role) where role = 'owner';
-comment on table ferry.admins is 'Ferry owner/admin marker. Exactly one owner. Independent of public.profiles.role (TikTok).';
+comment on table ferry.admins is 'Ferry owner/admin marker. Exactly one owner. Independent of other apps'' roles.';
 
 -- ---------------------------------------------------------------- profiles / settings
 create table ferry.profiles (

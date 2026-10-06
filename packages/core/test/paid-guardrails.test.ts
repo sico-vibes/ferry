@@ -598,13 +598,8 @@ describe('paid-call guardrails', () => {
           ),
         ),
       ).toBe(true);
-      expect(
-        detail.messages.some((message) =>
-          message.parts.some(
-            (part) => part.type === 'handoff_marker' && part.reason === 'rate_limit',
-          ),
-        ),
-      ).toBe(true);
+      // A free model that fails before writing anything is retried silently on the next model
+      // (no handoff marker); the guardrail still blocks the paid fallback.
     } finally {
       await h.close();
     }
@@ -753,20 +748,14 @@ describe('paid-call guardrails', () => {
         .filter((model): model is string => model !== undefined);
       expect(requestModels).toEqual([paidModelPattern, freeModelPattern]);
       const final = await h.rpc.sessions.get(session.id);
-      expect(
-        final.messages.some((message) =>
-          message.parts.some(
-            (part) => part.type === 'handoff_marker' && part.reason === 'rate_limit',
-          ),
+      // The paid model failed before any output, so the switch is silent but the answer is
+      // labelled with the free model that actually served it.
+      const answer = final.messages.find((message) =>
+        message.parts.some(
+          (part) => part.type === 'text' && part.text.includes('Free fallback answer'),
         ),
-      ).toBe(true);
-      expect(
-        final.messages.some((message) =>
-          message.parts.some(
-            (part) => part.type === 'text' && part.text.includes('Free fallback answer'),
-          ),
-        ),
-      ).toBe(true);
+      );
+      expect(answer?.modelRef).toBe(catalogFreeModel.ref);
     } finally {
       await h.close();
     }

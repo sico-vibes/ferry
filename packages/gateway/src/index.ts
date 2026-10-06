@@ -305,6 +305,10 @@ function setFerryHeaders(res: ServerResponse, metadata: ReturnType<typeof ferryM
   res.setHeader('x-ferry-attempts', String(metadata.attempts.length));
   res.setHeader('x-ferry-trace-id', metadata.traceId);
 }
+/**
+ * Ferry routing metadata as a named SSE event. Sent only on Anthropic Messages streams, whose SDKs
+ * skip unknown event types; OpenAI-format and Gemini clients get the same data from `x-ferry-*`.
+ */
 function sendFerryMetadata(
   send: (event: string, data: unknown) => void,
   state: FerryRequestState,
@@ -592,11 +596,6 @@ async function handleChat(
       res.write(
         `data: ${JSON.stringify({ ...chatChunk(id, input.model, {}, finishReason), choices: [{ index: 0, delta: {}, finish_reason: finishReason }], usage: { prompt_tokens: result.inputTokens, prompt_tokens_details: { cached_tokens: result.cachedTokens ?? 0 }, completion_tokens: result.outputTokens, total_tokens: result.inputTokens + result.outputTokens } })}\n\n`,
       );
-      sendFerryMetadata(
-        (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
-        ferryState,
-        result,
-      );
       res.end('data: [DONE]\n\n');
     } else {
       const result = await runtime.complete({
@@ -671,10 +670,6 @@ async function handleChat(
     if (res.headersSent) {
       res.write(
         `data: ${JSON.stringify({ error: { message: mapped.message, type: mapped.type, code: mapped.code } })}\n\n`,
-      );
-      sendFerryMetadata(
-        (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
-        ferryState,
       );
       res.end('data: [DONE]\n\n');
     } else json(res, mapped.status, errorBody(mapped.message, mapped.type, mapped.code));
@@ -1340,7 +1335,6 @@ async function handleCanonicalProtocol(
         ...(result.cachedTokens === undefined ? {} : { cachedTokens: result.cachedTokens }),
         outputTokens: result.outputTokens,
       });
-      sendFerryMetadata(responseSend, ferryState, result);
       responseSend('response.completed', {
         type: 'response.completed',
         response: { ...responseBody, status: 'completed', finish_reason: final.finishReason },
@@ -1385,7 +1379,6 @@ async function handleCanonicalProtocol(
       ...(result.cachedTokens === undefined ? {} : { cachedTokens: result.cachedTokens }),
       outputTokens: result.outputTokens,
     });
-    sendFerryMetadata(responseSend, ferryState, result);
     res.write(
       `data: ${JSON.stringify({ candidates: [{ finishReason: 'STOP', index: 0 }], usageMetadata, modelVersion: originalModel, finishReason: final.finishReason })}\n\n`,
     );
@@ -1402,7 +1395,6 @@ async function handleCanonicalProtocol(
         res.write(
           `data: ${JSON.stringify({ error: { code: mapped.status, status: mapped.type, message: mapped.message } })}\n\n`,
         );
-      sendFerryMetadata(responseSend, ferryState);
       res.end();
     } else protocolError(res, protocol, mapped.status, mapped.message);
   }

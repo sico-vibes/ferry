@@ -652,6 +652,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   index,
   top,
   modelName,
+  requestedModelName,
   planSteps,
   timelineEvents,
   sessionId,
@@ -666,6 +667,8 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   index: number;
   top: number;
   modelName: string;
+  /** Display name of the model the user asked for, when it differs from the one that answered. */
+  requestedModelName?: string;
   planSteps: { label: string; status: 'done' | 'active' | 'pending' }[];
   timelineEvents: AgentEvent[];
   sessionId: SessionId;
@@ -882,11 +885,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
           {streamingText !== null && streamingPartIsInMessage && <StreamingCursor />}
           {message.requestedModelRef && message.requestedModelRef !== message.modelRef ? (
             <p className="mt-2 text-meta text-text-3">
-              Requested{' '}
-              {message.requestedModelRef === 'auto'
-                ? 'Auto'
-                : shortModel(message.requestedModelRef, [])}{' '}
-              · served {modelName}
+              Requested {requestedModelName ?? 'Auto'} · served {modelName}
             </p>
           ) : null}
           {message.interrupted ? <InterruptedFooter reason={message.interrupted.reason} /> : null}
@@ -1451,6 +1450,9 @@ export function SessionCanvas() {
                   index={item.index}
                   top={item.start}
                   modelName={shortModel(message.modelRef, models)}
+                  {...(message.requestedModelRef && message.requestedModelRef !== 'auto'
+                    ? { requestedModelName: shortModel(message.requestedModelRef, models) }
+                    : {})}
                   planSteps={planSteps}
                   timelineEvents={timelineByMessage.get(item.index) ?? []}
                   sessionId={sessionId}

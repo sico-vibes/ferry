@@ -209,28 +209,18 @@ describe('Ferry gateway', () => {
       }),
     });
     const stream = await response.text();
-    const metadataFrame = stream
-      .split('\n\n')
-      .find((frame) => frame.startsWith('event: ferry.metadata\n'));
-    const metadataData = metadataFrame?.split('\n').find((line) => line.startsWith('data: '));
-    const metadata = metadataData
-      ? (JSON.parse(metadataData.slice(6)) as Record<string, unknown>)
-      : {};
+    // OpenAI SDKs hand named SSE events to callers as non-chunk objects, so only data frames go out.
+    const frames = stream.split('\n\n').filter(Boolean);
+    expect(frames.every((frame) => frame.startsWith('data: '))).toBe(true);
+    for (const frame of frames.filter((item) => item !== 'data: [DONE]'))
+      expect(JSON.parse(frame.slice(6))).toHaveProperty('choices');
 
     expect(response.headers.get('x-ferry-requested-model')).toBe('ferry/auto-free');
     expect(response.headers.get('x-ferry-served-model')).toBe('groq/served-model');
+    expect(response.headers.get('x-ferry-served-provider')).toBe('groq');
     expect(response.headers.get('x-ferry-attempts')).toBe('2');
-    expect(response.headers.get('x-ferry-trace-id')).toBe(metadata.trace_id);
+    expect(response.headers.get('x-ferry-trace-id')).toBeTruthy();
     expect(stream).toContain('"model":"ferry/auto-free"');
-    expect(metadata).toMatchObject({
-      requested_model: 'ferry/auto-free',
-      served_model: 'groq/served-model',
-      served_provider: 'groq',
-      attempts: [
-        { model: 'openai/gpt-test', status: 'failed', reason: 'rate_limit' },
-        { model: 'groq/served-model', status: 'served' },
-      ],
-    });
   }, 30_000);
 
   it('accepts a no-profile key with concrete model allowlist refs in user order', () => {
@@ -392,9 +382,7 @@ describe('Ferry gateway', () => {
     const responsesEvents = await responsesStream.text();
     expect(responsesStream.headers.get('x-ferry-requested-model')).toBe('ferry/auto-free');
     expect(responsesEvents).toContain('"model":"ferry/auto-free"');
-    expect(responsesEvents.indexOf('event: ferry.metadata')).toBeLessThan(
-      responsesEvents.indexOf('event: response.completed'),
-    );
+    expect(responsesEvents).not.toContain('event: ferry.metadata');
 
     const gemini = await fetch(`${url}/v1beta/models/ferry%2Fauto-free:generateContent`, {
       method: 'POST',
@@ -440,7 +428,7 @@ describe('Ferry gateway', () => {
     expect(geminiStream.headers.get('x-ferry-requested-model')).toBe('ferry/auto-free');
     const geminiEvents = await geminiStream.text();
     expect(geminiEvents).toContain('usageMetadata');
-    expect(geminiEvents).toContain('event: ferry.metadata');
+    expect(geminiEvents).not.toContain('event: ferry.metadata');
     expect(geminiEvents).toContain('"modelVersion":"ferry/auto-free"');
   }, 30_000);
 
@@ -649,10 +637,7 @@ describe('Ferry gateway', () => {
     expect(openai.headers.get('x-ferry-attempts')).toBe('1');
     expect(chunks).toContain('chat.completion.chunk');
     expect(chunks).toContain('tool_calls');
-    expect(chunks.indexOf('event: ferry.metadata')).toBeLessThan(chunks.indexOf('[DONE]'));
-    expect(chunks).toContain('"requested_model":"ferry/fast"');
-    expect(chunks).toContain('"served_model":"openai/gpt-test"');
-    expect(chunks).toContain('"response_model":"gpt-test"');
+    expect(chunks).not.toContain('event: ferry.metadata');
     expect(chunks).toContain('[DONE]');
     const anthropic = await fetch(`${url}/v1/messages`, {
       method: 'POST',

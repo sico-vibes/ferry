@@ -25,6 +25,7 @@ import {
 import type { RoutingSettings } from '@ferry/shared';
 import type { UpdateSnapshot } from '../../main/update-state.js';
 import {
+  Cloud,
   Eye,
   EyeOff,
   Gauge,
@@ -61,7 +62,7 @@ const settingsSectionIcons: Record<SettingsSection, LucideIcon> = {
   Permissions: ShieldCheck,
   Gateway: Network,
   'Data & privacy': LockKeyhole,
-  'Storage & Cloud': Network,
+  'Storage & Cloud': Cloud,
   Shortcuts: Keyboard,
   About: Info,
 };
@@ -789,6 +790,29 @@ export function SettingsCanvas() {
             </div>
           </Group>
           <Group title="Routing behavior">
+            <SettingRow
+              title="When a picked model runs out"
+              helper="If the model you picked hits a usage limit or fails, Ferry can hand the task to the next eligible model with a handover note, ask you first, or stop."
+            >
+              <SegmentedControl
+                label="When a picked model runs out"
+                value={settings?.routing.pinnedExhaustion ?? 'handover'}
+                onValueChange={(value) =>
+                  settings &&
+                  void update({
+                    routing: {
+                      ...settings.routing,
+                      pinnedExhaustion: value as typeof settings.routing.pinnedExhaustion,
+                    },
+                  })
+                }
+                options={[
+                  { value: 'handover', label: 'Hand over' },
+                  { value: 'ask', label: 'Ask me' },
+                  { value: 'fail', label: 'Stop' },
+                ]}
+              />
+            </SettingRow>
             <SettingRow
               title="Planner/editor roles"
               helper="Role model selection uses catalog quality priors, context fit, tool support, and observed reliability."

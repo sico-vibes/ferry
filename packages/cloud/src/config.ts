@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 export const FERRY_CLOUD_SCHEMA = 'ferry';
 export interface CloudConfig {
@@ -25,11 +25,15 @@ export function parseDotEnv(source: string): Record<string, string> {
 }
 export interface CloudConfigOptions {
   env?: NodeJS.ProcessEnv;
-  cwd?: string;
   ferryHome?: string;
   readFile?: (path: string) => string | undefined;
 }
-/** Loads only Ferry cloud settings, with process environment taking precedence. */
+/**
+ * Loads only Ferry cloud settings. Sources, lowest to highest precedence: `<FERRY_HOME>/config/.env`,
+ * `<FERRY_HOME>/cloud.env`, an explicit `FERRY_CLOUD_ENV_FILE`, then the process environment.
+ * The working directory is never searched: a project Ferry opens must not be able to point cloud
+ * mode (sign-in, synced prompts, Vault keys) at a different Supabase project.
+ */
 export function loadCloudConfig(options: CloudConfigOptions = {}): CloudConfig {
   const env = options.env ?? process.env;
   const read =
@@ -41,18 +45,12 @@ export function loadCloudConfig(options: CloudConfigOptions = {}): CloudConfig {
         return undefined;
       }
     });
-  const cwd = resolve(options.cwd ?? process.cwd());
   const home = options.ferryHome ?? env.FERRY_HOME;
-  const files = [join(cwd, 'config', '.env')];
-  let ancestor = cwd;
-  while (dirname(ancestor) !== ancestor) {
-    ancestor = dirname(ancestor);
-    files.push(join(ancestor, 'config', '.env'));
-  }
+  const files: string[] = [];
   if (home) files.push(join(home, 'config', '.env'), join(home, 'cloud.env'));
+  if (env.FERRY_CLOUD_ENV_FILE) files.push(resolve(env.FERRY_CLOUD_ENV_FILE));
   const fileValues: Record<string, string> = {};
-  for (const path of [...new Set(files)].reverse())
-    Object.assign(fileValues, parseDotEnv(read(path) ?? ''));
+  for (const path of files) Object.assign(fileValues, parseDotEnv(read(path) ?? ''));
   const value = (key: string) => env[key] ?? fileValues[key];
   return {
     url: value('FERRY_SUPABASE_URL'),

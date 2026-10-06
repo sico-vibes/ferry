@@ -71,7 +71,10 @@ export function flattenTextParts(parts: unknown): string | null {
   return text || null;
 }
 
-/** Redacts known secrets and common credential shapes from queued data and field names. */
+/**
+ * Redacts known secrets and common credential shapes from queued data and field names. Synced
+ * records are the user's history, so unlike log lines they are never truncated.
+ */
 export function redactCloudPayload(value: unknown): unknown {
-  return redactForTelemetry(value);
+  return redactForTelemetry(value, { maxStringLength: Number.POSITIVE_INFINITY });
 }

@@ -19,4 +19,15 @@ describe('telemetry primitives', () => {
     expect(safe).toMatchObject({ inputTokens: 17, output_tokens: 4, maxTokens: 512 });
     expect(JSON.stringify(safe)).not.toMatch(/abc\.def|sk-or-|sb_secret_|ghp_|AKIA|eyJ/);
   });
+
+  it('truncates long log strings by default but keeps synced records whole', () => {
+    const long = 'x'.repeat(40_000);
+    expect(redactForTelemetry(long)).toMatch(/\[TRUNCATED\]$/);
+    expect(redactForTelemetry({ text: long }, { maxStringLength: Infinity })).toEqual({
+      text: long,
+    });
+    expect(redactForTelemetry('key sk-or-abcdefghijk', { maxStringLength: Infinity })).toBe(
+      'key [REDACTED]',
+    );
+  });
 });

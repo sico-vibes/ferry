@@ -73,7 +73,7 @@ import {
 } from '@ferry/shared';
 import type { Catalog } from '@ferry/catalog';
 import type { RawCallObservation } from '@ferry/providers';
-import { assembleSystemPrompt, type PromptSection } from './prompt.js';
+import { assembleSystemPrompt, withModelIdentity, type PromptSection } from './prompt.js';
 import { SessionStore } from './session.js';
 import { createWorkspaceTools, type AgentTool, type ToolSource } from './tool-registry.js';
 import {
@@ -1138,7 +1138,7 @@ export class AgentLoop {
           onProgress: () => void,
         ): StepGeneratorInput => ({
           model: selected,
-          system:
+          system: withModelIdentity(
             executionRole === 'planner' && stepKind === 'plan'
               ? `${system}\n\nYou are the planner. Do not call tools or edit files. Return only a JSON edit plan matching this shape: {"files":[{"path":"relative/path","intent":"why this file changes"}],"changes":[{"path":"relative/path","instructions":"exact edits or a precise pseudo-diff"}]}. Include every file the editor must change. Paths must be workspace-relative and must not contain parent-directory segments, drive prefixes, or UNC/absolute paths.${plannerRepairHint ? `\n\nRepair required: ${plannerRepairHint}` : ''}`
               : executionRole === 'planner'
@@ -1146,6 +1146,8 @@ export class AgentLoop {
                 : executionRole === 'editor' && pendingEditPlan
                   ? `${system}\n\nExecute this approved planner output with your own tool/edit format. Do not expand scope beyond the listed files and instructions.\n\n${formatEditPlan(pendingEditPlan)}`
                   : system,
+            selected,
+          ),
           messages: contextMessages,
           tools: requestedRole === 'planner' && stepKind === 'plan' ? [] : tools,
           modelHints: this.options.modelHints?.(selected) ?? {
@@ -1649,8 +1651,9 @@ export class AgentLoop {
                 !requestTooLarge &&
                 !badCredentialStatus &&
                 routingFailure.scope === 'none' &&
-                classified.family !== 'offline' &&
                 classified.family !== 'stream_failure') ||
+              // Every provider shares this network; switching models cannot help, so say so.
+              classified.family === 'offline' ||
               pendingBoundaryWork ||
               (stopFallback && !approvedPinnedHandover) ||
               isSignalAborted(signal)

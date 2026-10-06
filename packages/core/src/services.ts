@@ -22,6 +22,7 @@ import {
   loadCloudConfig,
   type CloudAuthStatus,
   migrateLocalKeysToVault,
+  VaultWithLocalFallbackSecretStore,
   type KeyMigrationCounts,
 } from '@ferry/cloud';
 import {
@@ -447,7 +448,9 @@ export async function createServices({
     (testKeyringNamespace && safeMemoryKeyring
       ? new MemorySecretStore(testKeyringNamespace)
       : new KeyringSecretStore(env.FERRY_KEYRING_SERVICE ?? 'Ferry'));
-  const secretStore = cloudRuntime?.secrets ?? localSecretStore;
+  const secretStore = cloudRuntime
+    ? new VaultWithLocalFallbackSecretStore(cloudRuntime.secrets, localSecretStore)
+    : localSecretStore;
   const stopOpenRouterPolling = quota.startOpenRouterPolling(
     async () => {
       const key = await secretStore.get('openrouter');

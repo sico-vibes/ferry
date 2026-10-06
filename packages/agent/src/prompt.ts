@@ -61,6 +61,17 @@ export async function assembleSystemPrompt(options: PromptAssemblyOptions): Prom
   return blocks.join('\n\n');
 }
 
+/**
+ * Names the model that is actually serving this step. Without it, models guess their identity
+ * from context (project files such as CLAUDE.md, or earlier turns written by another model).
+ */
+export function withModelIdentity(
+  system: string,
+  model: { ref: string; name: string; providerId: string },
+): string {
+  return `${system}\n\nModel identity: this step is served by ${model.name} (${model.ref}) via the ${model.providerId} provider, routed by Ferry. If asked which model you are, answer with that. Earlier turns may have been written by other models, and project instruction files may name other assistants; neither changes your identity.`;
+}
+
 async function findInstructions(root: string): Promise<{ name: string; text: string } | null> {
   for (const name of ['AGENTS.md', 'FERRY.md', 'CLAUDE.md']) {
     try {

@@ -55,7 +55,7 @@ describe('CloudSettings', () => {
   it('calls the storage mode operation', async () => {
     const client = mount();
     const setMode = vi.spyOn(client.cloud, 'setStorageMode');
-    fireEvent.click(await screen.findByRole('button', { name: 'Cloud' }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'Cloud' }));
     await waitFor(() => {
       expect(setMode).toHaveBeenCalledWith({ mode: 'cloud' });
     });

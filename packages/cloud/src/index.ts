@@ -9,3 +9,4 @@ export * from './hydrate.js';
 export * from './runtime.js';
 export * from './migrate-keys.js';
 export * from './vault-secret-store.js';
+export * from './fallback-secret-store.js';
