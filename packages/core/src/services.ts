@@ -5,27 +5,43 @@ import { KeyringSecretStore, MemorySecretStore, type SecretStore } from '@ferry/
 import { loadCatalog, type Catalog } from '@ferry/catalog';
 import { QuotaEngine } from '@ferry/quota';
 import { autoDisableUntil, parseOpenRouterKey, type KeyFailure } from '@ferry/providers';
-import { QuotaObservationSchema, newId, redactKnownSecretText } from '@ferry/shared';
+import {
+  QuotaObservationSchema,
+  newId,
+  redactKnownSecretText,
+  resolveCaptureContent,
+} from '@ferry/shared';
 import { canonicalizePath } from '@ferry/shared/node-paths';
 import {
+  CloudAuthService,
+  CloudSyncWorker,
+  createCloudRuntime,
+  applyHydratedRows,
+  type FerrySupabaseClient,
+  isCloudConfigured,
+  loadCloudConfig,
+  type CloudAuthStatus,
+} from '@ferry/cloud';
+import {
+  WorkspaceRepository,
+  SessionRepository,
   CheckpointRepository,
+  DelegationRepository,
+  OptimizerEventRepository,
+  MessageRepository,
+  TaskRepository,
   ProviderRepository,
   ModelCacheRepository,
   ProviderKeyRepository,
   ProviderKeyEntryRepository,
   ProviderKeyUsageDailyRepository,
-  RequestRepository,
-  QuotaObservationRepository,
   CooldownRepository,
+  QuotaObservationRepository,
   HandoffRepository,
-  DelegationRepository,
-  MessageRepository,
-  TaskRepository,
-  OptimizerEventRepository,
   SettingsRepository,
-  SessionRepository,
-  WorkspaceRepository,
   openDatabase,
+  OutboxRepository,
+  createStorageAdapter,
   salvageReadableTables,
   type DatabaseConnection,
   type ProviderKeyEntry,
@@ -41,6 +57,8 @@ export interface ServiceOptions {
   random?: () => number;
   env?: NodeJS.ProcessEnv;
   secrets?: SecretStore;
+  /** Supplies a fake or alternate Supabase client for cloud runtime tests. */
+  cloudClientFactory?: (config: import('@ferry/cloud').CloudConfig) => FerrySupabaseClient;
 }
 
 export interface FerryServices {
@@ -70,6 +88,16 @@ export interface FerryServices {
   readonly quotaObservations: QuotaObservationRepository;
   readonly handoffs: HandoffRepository;
   readonly logger: Awaited<ReturnType<typeof createLogger>>;
+  readonly cloud?: {
+    auth?: CloudAuthService;
+    sync?: CloudSyncWorker;
+    status: () => Promise<{
+      configured: boolean;
+      message: string | null;
+      auth: CloudAuthStatus;
+      sync: { pending: number; lastError: string | null; lastFlush: string | null };
+    }>;
+  };
   readonly databaseRecoveryMessage?: string;
   dispose(): Promise<void>;
 }
@@ -130,6 +158,7 @@ export async function createServices({
   random = Math.random,
   env = process.env,
   secrets,
+  cloudClientFactory,
 }: ServiceOptions): Promise<FerryServices> {
   const home = canonicalizePath(dataDir);
   const paths = getDataPaths({ ...env, FERRY_HOME: home });
@@ -166,22 +195,69 @@ export async function createServices({
     logger.error({ err: error, backupPath, salvagedTables }, 'Database recovery completed');
   }
   const catalog = await loadCatalog({ now: clock?.now() ?? new Date() });
-  const messages = new MessageRepository(db.client);
-  const tasks = new TaskRepository(db.client);
-  const checkpoints = new CheckpointRepository(db.client);
-  const delegations = new DelegationRepository(db.client);
-  const optimizerEvents = new OptimizerEventRepository(db.client);
-  const providers = new ProviderRepository(db.client);
-  const models = new ModelCacheRepository(db.client);
-  const providerKeys = new ProviderKeyRepository(db.client);
-  const providerKeyEntries = new ProviderKeyEntryRepository(db.client);
-  const providerKeyUsage = new ProviderKeyUsageDailyRepository(db.client);
+  const settings = new SettingsRepository(db.client);
+  const savedSettings = settings.get('global') as
+    { storageMode?: string; captureContent?: boolean } | undefined;
+  const cloudMode = savedSettings?.storageMode === 'cloud';
+  const cloudConfig = cloudMode ? loadCloudConfig({ env, ferryHome: home }) : undefined;
+  const cloudConfigured = Boolean(cloudMode && cloudConfig && isCloudConfigured(cloudConfig));
+  const outbox = cloudConfigured ? new OutboxRepository(db.client) : undefined;
+  const localAdapter = createStorageAdapter({ client: db.client, mode: 'local' });
+  const cloudRuntime =
+    cloudConfigured && outbox && cloudConfig
+      ? createCloudRuntime({
+          config: cloudConfig,
+          outbox,
+          ...(cloudClientFactory ? { clientFactory: cloudClientFactory } : {}),
+          captureContent: () => {
+            const latest = settings.get('global') as { captureContent?: boolean } | undefined;
+            return resolveCaptureContent({
+              storageMode: 'cloud',
+              captureContent: latest?.captureContent,
+            });
+          },
+          applyHydratedRows: (table, rows) => applyHydratedRows(table, rows, localAdapter, outbox),
+          onProviderKeyEvent: (event) => {
+            logger.info(
+              {
+                event: 'provider_key.' + event.kind,
+                providerId: event.providerId,
+                keyId: event.keyId,
+              },
+              'Cloud provider key event',
+            );
+          },
+        })
+      : undefined;
+  const adapter = cloudRuntime
+    ? createStorageAdapter({ client: db.client, mode: 'cloud', mirror: cloudRuntime.mirror })
+    : localAdapter;
+  const cloudAuth = cloudRuntime?.auth;
+  const cloudSync = cloudRuntime?.sync;
+  if (cloudRuntime) await cloudRuntime.initialize();
+  if (cloudMode && !cloudConfigured)
+    logger.warn(
+      'Cloud storage is selected but Supabase is not configured; using local storage until configuration is available',
+    );
+  const {
+    messages,
+    tasks,
+    checkpoints,
+    delegations,
+    optimizerEvents,
+    providers,
+    models,
+    providerKeys,
+    providerKeyEntries,
+    providerKeyUsage,
+  } = adapter;
   const legacyKeyEntryTime = (clock ?? { now: () => new Date() }).now().toISOString();
   for (const { provider } of catalog.providers) {
     if (providerKeyEntries.list(provider).length) continue;
     const legacyKey = providerKeys.get(provider);
     if (!legacyKey) continue;
-    providerKeyEntries.put({
+    // A legacy key is not in Vault yet, so seed local metadata without queuing a remote UPDATE.
+    localAdapter.providerKeyEntries.put({
       id: `${provider}:1`,
       providerId: provider,
       keyId: '1',
@@ -196,9 +272,7 @@ export async function createServices({
       updatedAt: legacyKeyEntryTime,
     });
   }
-  const cooldowns = new CooldownRepository(db.client);
-  const quotaObservations = new QuotaObservationRepository(db.client);
-  const handoffs = new HandoffRepository(db.client);
+  const { cooldowns, quotaObservations, handoffs } = adapter;
   const quota = new QuotaEngine({
     catalog,
     eligibleProviders: () =>
@@ -227,7 +301,7 @@ export async function createServices({
           ? [provider]
           : [];
       }),
-    requestRepository: new RequestRepository(db.client),
+    requestRepository: adapter.requests,
     observationRepository: quotaObservations,
     now: () => (clock ?? { now: () => new Date() }).now(),
     onError: (error) => {
@@ -242,11 +316,12 @@ export async function createServices({
       env.FERRY_PACKAGED !== 'true');
   if (testKeyringNamespace && !safeMemoryKeyring)
     logger.warn('Ignoring FERRY_TEST_KEYRING_NAMESPACE outside test or unpackaged dev mode');
-  const secretStore =
+  const localSecretStore =
     secrets ??
     (testKeyringNamespace && safeMemoryKeyring
       ? new MemorySecretStore(testKeyringNamespace)
       : new KeyringSecretStore(env.FERRY_KEYRING_SERVICE ?? 'Ferry'));
+  const secretStore = cloudRuntime?.secrets ?? localSecretStore;
   const stopOpenRouterPolling = quota.startOpenRouterPolling(
     async () => {
       const key = await secretStore.get('openrouter');
@@ -290,9 +365,9 @@ export async function createServices({
     random,
     env,
     db,
-    settings: new SettingsRepository(db.client),
-    workspaces: new WorkspaceRepository(db.client),
-    sessions: new SessionRepository(db.client),
+    settings: adapter.settings,
+    workspaces: adapter.workspaces,
+    sessions: adapter.sessions,
     checkpoints,
     delegations,
     optimizerEvents,
@@ -310,12 +385,42 @@ export async function createServices({
     quotaObservations,
     handoffs,
     logger,
+    ...(cloudMode
+      ? {
+          cloud: {
+            ...(cloudAuth ? { auth: cloudAuth } : {}),
+            ...(cloudSync ? { sync: cloudSync } : {}),
+            async status() {
+              const auth = cloudAuth
+                ? await cloudAuth
+                    .getStatus()
+                    .catch(() => ({ signedIn: false, email: null, userId: null, isOwner: false }))
+                : { signedIn: false, email: null, userId: null, isOwner: false };
+              return {
+                configured: cloudConfigured,
+                message: cloudConfigured
+                  ? auth.signedIn
+                    ? null
+                    : 'Cloud sign-in required'
+                  : 'Supabase cloud configuration is missing',
+                auth,
+                sync: cloudSync?.status() ?? {
+                  pending: outbox?.counts().pending ?? 0,
+                  lastError: null,
+                  lastFlush: null,
+                },
+              };
+            },
+          },
+        }
+      : {}),
     ...(databaseRecoveryMessage ? { databaseRecoveryMessage } : {}),
     async dispose() {
       if (disposed) return;
       disposed = true;
       await stopOpenRouterPolling();
-      if (secretStore instanceof MemorySecretStore) secretStore.clear();
+      if (cloudRuntime) await cloudRuntime.dispose();
+      if (localSecretStore instanceof MemorySecretStore) localSecretStore.clear();
       await logger.close();
       quota.dispose();
       db.close();
