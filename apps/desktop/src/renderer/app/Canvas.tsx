@@ -54,6 +54,7 @@ import { HomeStats } from './HomeStats';
 import { WorkspaceMenu } from './WorkspaceMenu';
 import { greeting } from './usageSummary';
 import { canScroll, isLatestVisible, readTailGeometry } from './transcriptScroll';
+import { ensureWorkspaceTrusted, SendCancelledError, sendMessage } from '../data/sendMessage';
 
 const warnedOAuthRuns = new Set<string>();
 const warnedTrainingSessions = new Set<string>();
@@ -280,6 +281,8 @@ export function HomeCanvas() {
     const workspace = selectedWorkspace;
     if (!text || !workspace) return;
     try {
+      // Ask about an untrusted folder before creating the chat, so declining leaves nothing behind.
+      if (!(await ensureWorkspaceTrusted(client, workspace))) return;
       const profileId = activeProfile?.id;
       const session = await client.sessions.create({
         workspaceId: workspace.id,
@@ -288,11 +291,12 @@ export function HomeCanvas() {
       if (draftModelRef) await client.models.select(session.id, draftModelRef);
       openTab({ id: session.id, title: session.title });
       warnOAuthUseOnce(`app:${session.id}`, draftModelRef ?? session.modelRef, pushToast);
-      await client.sessions.send(session.id, { text });
-      await cache.invalidateQueries({ queryKey: keys.sessions });
+      await sendMessage(client, session.id, { text });
       setPrompt('');
+      await cache.invalidateQueries({ queryKey: keys.sessions });
       await navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
     } catch (error) {
+      if (error instanceof SendCancelledError) return;
       pushToast({
         kind: 'error',
         title: 'Chat could not be started',
@@ -375,7 +379,7 @@ export function PartView({
         .map((item) => item.text)
         .join('\n');
       if (!text) return;
-      await client.sessions.send(sessionId, { text, ...(routingMode ? { routingMode } : {}) });
+      await sendMessage(client, sessionId, { text, ...(routingMode ? { routingMode } : {}) });
       await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
     } catch (error) {
       pushToast({
@@ -712,9 +716,10 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
         .map((part) => part.text)
         .join('\n');
       if (!text) return;
-      await client.sessions.send(sessionId, { text });
+      await sendMessage(client, sessionId, { text });
       await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
     } catch (error) {
+      if (error instanceof SendCancelledError) return;
       useToasts.getState().push({
         kind: 'error',
         title: 'Retry failed',
@@ -1301,9 +1306,10 @@ export function SessionCanvas() {
     }
     warnOAuthUseOnce(`app:${sessionId}`, data.session.modelRef, pushToast);
     try {
-      await client.sessions.send(sessionId, { text });
+      await sendMessage(client, sessionId, { text });
       setPrompt('');
     } catch (error) {
+      if (error instanceof SendCancelledError) return;
       pushToast({
         kind: 'error',
         title: 'Message could not be sent',
@@ -1344,6 +1350,18 @@ export function SessionCanvas() {
       onSend={() => void send()}
       onStop={() => void client.sessions.cancel(sessionId)}
       running={running}
+      banner={
+        data?.session.status === 'running'
+          ? {
+              text:
+                data.session.runPhase === 'preparing'
+                  ? 'Preparing… Ferry is getting this chat ready.'
+                  : 'Working… replies and tool steps appear above as they happen.',
+              actionLabel: 'Stop',
+              onAction: () => void client.sessions.cancel(sessionId),
+            }
+          : null
+      }
       profileName={
         profiles.find((profile) => profile.id === data?.session.profileId)?.name ?? 'Best Available'
       }

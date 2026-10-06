@@ -8,10 +8,19 @@ import { evaluatePermission, classifyDangerousCommand } from '../src/permissions
 import { WorkspaceTools } from '../src/tools.js';
 import { ShadowCheckpoints } from '../src/git.js';
 import { runCommand } from '../src/command.js';
+import { isRiskyWorkspaceRoot } from '../src/roots.js';
 
 const roots: string[] = [];
 const skipCleanup = new Set<string>();
 vi.setConfig({ testTimeout: 30_000 });
+describe('risky workspace roots', () => {
+  it('detects home folders, drive roots, and Windows system folders', () => {
+    expect(isRiskyWorkspaceRoot('C:\\Users\\SicoZ', 'C:\\Users\\SicoZ')).toBe(true);
+    expect(isRiskyWorkspaceRoot('C:\\', 'C:\\Users\\SicoZ')).toBe(true);
+    expect(isRiskyWorkspaceRoot('C:\\Windows\\System32', 'C:\\Users\\SicoZ')).toBe(true);
+    expect(isRiskyWorkspaceRoot('C:\\Users\\SicoZ\\Coding\\Ferry', 'C:\\Users\\SicoZ')).toBe(false);
+  });
+});
 async function tempRoot(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ferry-workspace-'));
   roots.push(root);

@@ -23,6 +23,8 @@ export function createWorkspacesDomain(
           id: stringId<WorkspaceId>('workspace'),
           name: segment,
           path,
+          trusted: false,
+          riskyRoot: false,
           gitBranch: null,
           language: 'other',
           lastOpenedAt: clock.now().toISOString(),
@@ -50,6 +52,13 @@ export function createWorkspacesDomain(
       const w = workspace(id);
       w.settings = { ...w.settings, ...patch };
       WorkspaceSchema.parse(w);
+      persist();
+      return structuredClone(w);
+    },
+    async trust(id) {
+      await before();
+      const w = workspace(id);
+      w.trusted = true;
       persist();
       return structuredClone(w);
     },

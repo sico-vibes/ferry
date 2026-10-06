@@ -86,6 +86,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<CoreHa
   if (!fixtureModel) throw new Error(`No tool-capable fixture model for ${provider}`);
   services.models.put(providerId, fixtureModel);
   const workspace = await rpc.workspaces.open(workspacePath);
+  await rpc.workspaces.trust(workspace.id);
   return {
     root,
     dataDir,

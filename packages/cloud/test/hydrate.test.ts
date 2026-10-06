@@ -7,6 +7,8 @@ const workspace: Workspace = {
   id: 'workspace_1' as Workspace['id'],
   name: 'Local',
   path: '/work/local',
+  trusted: true,
+  riskyRoot: false,
   gitBranch: null,
   language: 'ts' as const,
   lastOpenedAt: '2026-01-01T00:00:00.000Z',

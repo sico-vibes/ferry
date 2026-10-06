@@ -197,9 +197,29 @@ try {
     `PASS failover attempts: ${attempts.map((attempt) => `${attempt.model} ${String(attempt.status)}`).join(' → ')}`,
   );
 
-  console.log(
-    'TODO expected-slow: many-file workspace startup timing is deferred until Phase 1 fixes snapshot scanning.',
+  const manyFiles = join(workspace, 'many-files');
+  await mkdir(manyFiles, { recursive: true });
+  for (let start = 0; start < 20_000; start += 500) {
+    await Promise.all(
+      Array.from({ length: Math.min(500, 20_000 - start) }, (_, offset) => {
+        const index = start + offset;
+        return writeFile(
+          join(manyFiles, `file-${String(index)}.txt`),
+          `fixture ${String(index)}\n`,
+        );
+      }),
+    );
+  }
+  fake.setResponses([completion('many-files-reply')]);
+  const manyFilesStart = Date.now();
+  const manyFilesEvents = await runCli('Reply from the many-file workspace');
+  const manyFilesElapsed = Date.now() - manyFilesStart;
+  assert.ok(deltasContain(manyFilesEvents, 'many-files-reply'));
+  assert.ok(
+    manyFilesElapsed < 5_000,
+    `CLI did not start a run within five seconds in a 20k-file workspace (${String(manyFilesElapsed)} ms)`,
   );
+  console.log(`PASS many-file workspace started and replied in ${String(manyFilesElapsed)} ms`);
 } finally {
   await fake.stop();
   await rm(temporaryDirectory, {

@@ -115,6 +115,7 @@ export interface FerryClient {
     open(path: string): Promise<Workspace>;
     remove(id: WorkspaceId): Promise<void>;
     update(id: WorkspaceId, patch: Partial<WorkspaceSettings>): Promise<Workspace>;
+    trust(id: WorkspaceId): Promise<Workspace>;
   };
   sessions: {
     list(q?: { workspaceId?: WorkspaceId; query?: string }): Promise<Session[]>;

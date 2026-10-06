@@ -109,10 +109,21 @@ export function mapError(error: unknown, method?: string) {
 
 export function rpcDomainError(
   code: number,
-  kind: 'not_found' | 'validation' | 'conflict' | 'permission_denied' | 'unavailable',
+  kind:
+    | 'not_found'
+    | 'validation'
+    | 'conflict'
+    | 'permission_denied'
+    | 'unavailable'
+    | 'workspace_untrusted',
   message: string,
+  details?: unknown,
 ): Error & { code: number; kind: string } {
-  return Object.assign(new Error(message), { code, kind });
+  return Object.assign(new Error(message), {
+    code,
+    kind,
+    ...(details === undefined ? {} : { details }),
+  });
 }
 
 export class CoreHost {

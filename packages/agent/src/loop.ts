@@ -168,6 +168,7 @@ export interface AgentOptions {
   emit(event: AgentEvent): void;
   traceContext?: TraceContext;
   telemetry?: TelemetrySink;
+  onCheckpointCreated?: (checkpointId: string, label: string) => void;
   requestApproval?: (
     part: Extract<MessagePart, { type: 'approval_request' }>,
     signal: AbortSignal,
@@ -491,6 +492,7 @@ export class AgentLoop {
       },
       ...(this.options.toolSources ? { sources: this.options.toolSources } : {}),
       onCheckpointCreated: (checkpointId, label) => {
+        this.options.onCheckpointCreated?.(checkpointId, label);
         this.options.telemetry?.log({
           id: newId('evt'),
           ts: new Date().toISOString(),

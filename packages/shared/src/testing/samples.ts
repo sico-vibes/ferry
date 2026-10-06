@@ -48,6 +48,8 @@ export const sampleWorkspace: Workspace = {
   id: workspaceId,
   name: 'Ferry',
   path: 'C:/dev/ferry',
+  trusted: true,
+  riskyRoot: false,
   gitBranch: 'main',
   language: 'ts',
   lastOpenedAt: '2026-09-23T10:00:00.000Z',

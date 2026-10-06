@@ -47,6 +47,8 @@ export async function runPrompt(
   const settings = await client.settings.get();
   if (options.permission) await client.settings.update({ permissionMode: options.permission });
   const workspace = await client.workspaces.open(cwd);
+  // An explicit CLI run is the user's confirmation to operate in this folder.
+  if (!workspace.trusted) await client.workspaces.trust(workspace.id);
   const profiles = await client.profiles.list();
   const profile = profiles.find((item) => item.name === profileName) ?? profiles[0];
   const session = await client.sessions.create({

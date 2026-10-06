@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AgentEvent } from '@ferry/agent';
-import { WorkspaceJail, ShadowCheckpoints } from '@ferry/workspace';
+import { WorkspaceJail, isRiskyWorkspaceRoot } from '@ferry/workspace';
 import { ProjectConfigSchema } from '@ferry/config';
 import type { AgentTool, ToolSource as AgentToolSource } from '@ferry/agent';
 import type { ToolSource as ExtensionToolSource } from '@ferry/extensions';
@@ -160,9 +160,23 @@ export function register(host: CoreHost, services: FerryServices): void {
       .forEach((message) => services.messages.delete(message.id));
     services.tasks.delete(id);
     services.sessions.delete(id);
+    host.emit('session.removed', { id });
   };
 
+  const cleanEmptySessions = () => {
+    const messageSessionIds = new Set(services.messages.list().map((message) => message.sessionId));
+    const cutoff = services.clock.now().getTime() - 60_000;
+    for (const session of services.sessions.list()) {
+      if (!messageSessionIds.has(session.id) && Date.parse(session.createdAt) < cutoff)
+        deleteSession(session.id);
+    }
+  };
+  cleanEmptySessions();
+  const emptySessionCleanup = setInterval(cleanEmptySessions, 60_000);
+  emptySessionCleanup.unref();
+
   host.onShutdown(async () => {
+    clearInterval(emptySessionCleanup);
     shuttingDown = true;
     const interruptedSessionIds = [...controllers.keys()];
     for (const sessionId of controllers.keys()) {
@@ -193,7 +207,7 @@ export function register(host: CoreHost, services: FerryServices): void {
     for (const sessionId of interruptedSessionIds) {
       const latest = services.sessions.get(sessionId);
       if (latest && (latest.status !== 'interrupted' || latest.inFlight))
-        updateSession({ ...latest, status: 'interrupted', inFlight: false });
+        updateSession({ ...latest, status: 'interrupted', runPhase: undefined, inFlight: false });
     }
   });
   const listSessions = (rawQuery?: unknown) => {
@@ -339,9 +353,29 @@ export function register(host: CoreHost, services: FerryServices): void {
       host.emit('session.status', session);
       return session;
     },
-    async send(rawId: unknown, rawInput: unknown) {
+    send(rawId: unknown, rawInput: unknown) {
       const session = requireSession(rawId);
       const { text, maxSteps, verbose, routingMode, resume } = SendSchema.parse(rawInput);
+      if (controllers.has(session.id) || shuttingDown)
+        throw rpcDomainError(-32010, 'conflict', 'Session is already running', {
+          sessionId: session.id,
+          status: session.status,
+        });
+      const workspace = services.workspaces.get(session.workspaceId);
+      if (!workspace) throw rpcDomainError(-32044, 'not_found', 'Session workspace is unavailable');
+      if (!workspace.trusted)
+        throw rpcDomainError(
+          -32046,
+          'workspace_untrusted',
+          'Trust this workspace before sending a message',
+          {
+            workspaceId: workspace.id,
+            riskyRoot: isRiskyWorkspaceRoot(workspace.path),
+          },
+        );
+      const profile = profileList().find((item) => item.id === session.profileId);
+      if (!profile)
+        throw rpcDomainError(-32044, 'not_found', `Profile not found: ${session.profileId}`);
       const traceId = newTraceId();
       const traceContext = {
         traceId,
@@ -349,14 +383,8 @@ export function register(host: CoreHost, services: FerryServices): void {
         deviceId: services.deviceId,
         appVersion: services.env.FERRY_RELEASE_VERSION ?? '0.9.0',
       };
-      if (controllers.has(session.id) || shuttingDown)
-        throw rpcDomainError(-32010, 'conflict', 'Session is already running');
-      const workspace = services.workspaces.get(session.workspaceId);
-      if (!workspace) throw rpcDomainError(-32044, 'not_found', 'Session workspace is unavailable');
-      const profile = profileList().find((item) => item.id === session.profileId);
-      if (!profile)
-        throw rpcDomainError(-32044, 'not_found', `Profile not found: ${session.profileId}`);
       const controller = new AbortController();
+      const isRunAborted = () => controller.signal.aborted;
       services.activeTraceContexts.set(session.id, traceContext);
       controllers.set(session.id, controller);
       let resolveRun!: () => void;
@@ -364,169 +392,37 @@ export function register(host: CoreHost, services: FerryServices): void {
         resolveRun = resolve;
       });
       runPromises.set(session.id, run);
-      try {
-        services.telemetry.log({
-          id: newId('evt'),
-          ts: services.clock.now().toISOString(),
-          level: 'info',
-          source: 'ui',
-          event: 'request.received',
-          session_id: session.id,
-          trace_id: traceId,
-          device_id: services.deviceId,
-          data: { prompt: text, resume },
-        });
-        if (!resume) {
-          const now = services.clock.now();
-          const userMessage = store.appendMessage(
-            session.id,
-            'user',
-            [{ type: 'text', id: PartIdSchema.parse(newId('part')), text }],
-            session.modelRef,
-            now,
-          );
-          host.emit('session.message', {
-            sessionId: session.id,
-            message: MessageSchema.parse(userMessage),
-          });
-        }
-        const preflight = createSessionDependencies(services, () => undefined);
-        const configuredProviders = services.catalog.providers.filter(
-          ({ provider, key_required }) => {
-            const saved = services.providers.get(provider);
-            const hasKey = hasUsableProviderKey(services, provider);
-            return (saved?.enabled ?? hasKey) && (hasKey || key_required === false);
-          },
+      if (!resume) {
+        const userMessage = store.appendMessage(
+          session.id,
+          'user',
+          [{ type: 'text', id: PartIdSchema.parse(newId('part')), text }],
+          session.modelRef,
+          services.clock.now(),
         );
-        const configuredOauth = oauthModelCatalog.filter((model) => {
-          const saved = services.providers.get(model.providerId);
-          return saved?.enabled && saved.keyStatus === 'valid';
+        host.emit('session.message', {
+          sessionId: session.id,
+          message: MessageSchema.parse(userMessage),
         });
-        const availableModels = preserveCatalogBillingMetadata(
-          [
-            ...(services.env.NODE_ENV === 'test'
-              ? [
-                  ...services.catalog.models,
-                  ...configuredProviders.flatMap(({ provider: id }) => services.models.list(id)),
-                ]
-              : configuredProviders.flatMap(({ provider: id }) => services.models.list(id))),
-            ...configuredOauth,
-          ],
-          services.catalog.models,
-          (id) => services.providers.get(id),
-          (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
-        );
-        const preflightCapacity = preflight.capacity();
-        const verifiedModelRefs = preflightCapacity.providers.flatMap((provider) =>
-          provider.modelsVerifiedAt && provider.availableModels
-            ? provider.availableModels.map((model) => model.ref)
-            : [],
-        );
-        const settingsValue = services.settings.get('global');
-        const routingValue =
-          typeof settingsValue === 'object' && settingsValue !== null && 'routing' in settingsValue
-            ? settingsValue.routing
-            : undefined;
-        const routing = RoutingSettingsSchema.parse(routingValue ?? {});
-        const reliability =
-          z
-            .array(
-              z.object({
-                modelRef: z.string(),
-                outcome: z.enum(['success', 'failure']),
-                at: z.number(),
-              }),
-            )
-            .safeParse(services.settings.get('routing-reliability')).data ?? [];
-        const stickyState =
-          z
-            .record(
-              z.string(),
-              z.object({
-                modelRef: z.string(),
-                providerId: z.string().optional(),
-                providerKeyId: z.string().optional(),
-                expiresAt: z.number(),
-              }),
-            )
-            .safeParse(services.settings.get('routing-sticky-sessions')).data ?? {};
-        const routingInput = {
-          models: availableModels,
-          capacity: preflightCapacity,
-          profile,
-          step: 'plan',
-          estimate: { inputTokens: 1, outputTokens: 2048, expectedSteps: 1, requiresTools: true },
-          verifiedModelRefs,
-          routing,
-          reliability,
-          random: services.random,
-        } as const;
-        const chain = chainForProfile(profile);
-        const chainResult = resolveFallbackChain({
-          chain,
-          models: availableModels,
-          capacity: preflightCapacity,
-          profile,
-          inputTokens: 1,
-          step: 'plan',
-          verifiedModelRefs,
-          avoidTrainingProviders: routing.avoidTrainingProviders,
-          trialOptInProviders: routing.trialOptInProviders,
-          now: services.clock.now().getTime(),
-        });
-        const chainRefs = new Set(chainResult.models.map((model) => model.ref));
-        const routingCandidates = scoreModels({
-          ...routingInput,
-          models: availableModels.filter(
-            (model) =>
-              !chainRefs.has(model.ref) &&
-              (!chain.length || isStrictFallbackNameEligible(model, verifiedModelRefs)),
-          ),
-        });
-        const hasAvailableModel = chainResult.models.length > 0 || routingCandidates.length > 0;
-        if (verbose) {
-          const explainCandidates = scoreModels(routingInput);
-          const selectedRef = chainResult.hit?.modelRef ?? explainCandidates[0]?.ref;
-          if (selectedRef)
-            host.emit('routing.explain', {
-              sessionId: session.id,
-              selected: selectedRef,
-              candidates: explainCandidates.map(({ ref, score, explanation, scoreBreakdown }) => ({
-                ref,
-                score,
-                explanation,
-                scoreBreakdown,
-              })),
-              chain: chainResult.diagnostics,
-              chainHit: chainResult.hit,
-              influences: {
-                sticky:
-                  routing.stickySessions &&
-                  (stickyState[session.id]?.expiresAt ?? 0) > services.clock.now().getTime()
-                    ? `sticky: kept ${String(stickyState[session.id]?.modelRef)}`
-                    : null,
-                smartReliability: routing.smartReliability
-                  ? 'smart reliability: Thompson-sampled recent outcomes'
-                  : null,
-                quotaReservations: routing.quotaReservations
-                  ? 'quota reservations: enabled for provider requests'
-                  : null,
-                cooldownReasons: routing.cooldownReasons
-                  ? 'cooldown reasons: provenance-aware probes enabled'
-                  : null,
-                gentleQuotaRamp: routing.gentleQuotaRamp
-                  ? 'gentle quota ramp: live quota headroom applied'
-                  : null,
-                toolRejectionMemory: routing.toolRejectionMemory
-                  ? 'tool-rejection memory: recent tool failures affect ordering'
-                  : null,
-                carefulModelRetirement: routing.carefulModelRetirement
-                  ? 'careful model retirement: corroborated lifecycle signals applied'
-                  : null,
-              },
-            });
-        }
-        if (!hasAvailableModel && services.env.NODE_ENV !== 'test') {
+      }
+      const accepted = updateSession({
+        ...session,
+        ...(session.title === 'New Chat'
+          ? { title: text.trim().split(/\s+/).slice(0, 6).join(' ').slice(0, 80) }
+          : {}),
+        status: 'running',
+        runPhase: 'preparing',
+        inFlight: true,
+      });
+      let preparingStep = 'routing';
+      let timedOut = false;
+      let backgroundFailed = false;
+      let mcpManager: ReturnType<typeof createMcpManager> | undefined;
+      const watchdog = setTimeout(() => {
+        timedOut = true;
+        controller.abort(new Error(`Preparing the workspace took too long: ${preparingStep}`));
+        const latest = services.sessions.get(session.id);
+        if (latest) {
           const errorMessage = store.appendMessage(
             session.id,
             'assistant',
@@ -534,8 +430,8 @@ export function register(host: CoreHost, services: FerryServices): void {
               {
                 type: 'error',
                 id: PartIdSchema.parse(newId('part')),
-                message: noModelMessage,
-                kind: 'provider',
+                message: `Preparing the workspace took too long: ${preparingStep}`,
+                kind: 'internal',
               },
             ],
             null,
@@ -545,787 +441,1013 @@ export function register(host: CoreHost, services: FerryServices): void {
             sessionId: session.id,
             message: MessageSchema.parse(errorMessage),
           });
-          const latest = services.sessions.get(session.id);
-          if (latest)
-            updateSession({
-              ...latest,
-              title:
-                latest.title === 'New Chat'
-                  ? text.trim().split(/\s+/).slice(0, 6).join(' ').slice(0, 80)
-                  : latest.title,
-              status: 'error',
-            });
-          controllers.delete(session.id);
-          runPromises.delete(session.id);
+          updateSession({ ...latest, status: 'error', runPhase: undefined, inFlight: false });
+        }
+        if (controllers.get(session.id) === controller) controllers.delete(session.id);
+        if (runPromises.get(session.id) === run) runPromises.delete(session.id);
+        if (services.activeTraceContexts.get(session.id) === traceContext)
           services.activeTraceContexts.delete(session.id);
-          resolveRun();
-          return;
-        }
-        const jail = new WorkspaceJail(workspace.path);
-        const shadow = new ShadowCheckpoints(jail, services.paths.home);
-        const checkpointId = await shadow.snapshot(`Before Ferry session ${session.id}`);
-        services.checkpoints.put({
-          id: CheckpointIdSchema.parse(checkpointId),
-          sessionId: session.id,
-          label: 'Before agent edits',
-          createdAt: services.clock.now().toISOString(),
-          fileCount: 0,
-        });
-        services.telemetry.log({
-          id: newId('evt'),
-          ts: services.clock.now().toISOString(),
-          level: 'info',
-          source: 'agent',
-          event: 'checkpoint.created',
-          session_id: session.id,
-          trace_id: traceContext.traceId,
-          data: { checkpoint_id: checkpointId, label: 'Before agent edits' },
-        });
-        const current = services.sessions.get(session.id);
-        if (!current) throw rpcDomainError(-32044, 'not_found', `Session not found: ${session.id}`);
-        updateSession({
-          ...current,
-          ...(current.title === 'New Chat'
-            ? { title: text.trim().split(/\s+/).slice(0, 6).join(' ').slice(0, 80) }
-            : {}),
-          status: 'running',
-          inFlight: true,
-        });
-        const emitAgentEvent = (event: AgentEvent) => {
-          if (event.type === 'session.delta')
-            host.emit('session.delta', {
-              sessionId: event.sessionId,
-              messageId: event.messageId,
-              partId: PartIdSchema.parse(event.partId),
-              textDelta: event.text,
-            });
-          else if (event.type === 'agent.event') host.emit('agent.event', event);
-          else if (event.type === 'session.part') {
-            host.emit('session.part', event);
-            if (event.part.type === 'approval_request' && event.part.state === 'pending')
-              host.emit('approval.request', event);
-          } else if (event.type === 'session.message')
-            host.emit('session.message', { sessionId: session.id, message: event.message });
-          else if (event.type === 'session.updated') {
-            host.emit('session.updated', event.session);
-            host.emit('session.status', event.session);
-          } else if (event.type === 'task.updated') host.emit('task.updated', event.task);
-          else if (event.type === 'quota.updated')
-            host.emit('quota.updated', services.quota.capacitySummary());
-          else if (event.type === 'optimizer.event') {
-            const id = newId('optimizer');
-            const optimizerEvent = {
-              id,
-              sessionId: session.id,
-              kind: event.kind,
-              beforeTokens: event.beforeTokens,
-              afterTokens: event.afterTokens,
-              timestamp: services.clock.now().toISOString(),
-            };
-            services.optimizerEvents.put(optimizerEvent);
-          } else host.emit('toast', { kind: event.tone, title: event.message, body: null });
-        };
-        const runtime = createSessionDependencies(services, emitAgentEvent, traceContext);
-        const sessionCatalogModels = [
-          ...(services.env.NODE_ENV === 'test'
-            ? services.catalog.models
-            : configuredProviders.flatMap(({ provider: id }) => services.models.list(id))),
-          ...configuredOauth,
-        ];
-        const sessionCatalog = {
-          ...services.catalog,
-          models: preserveCatalogBillingMetadata(
-            sessionCatalogModels,
-            services.catalog.models,
-            (id) => services.providers.get(id),
-            (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
-          ),
-        };
-        const rawProjectConfig = await readFile(join(workspace.path, '.ferry', 'config.json'))
-          .then((bytes) => {
-            const source: unknown = JSON.parse(bytes.toString('utf8'));
-            return { bytes, source, parsed: ProjectConfigSchema.safeParse(source) };
-          })
-          .catch(() => null);
-        const projectConfigHash = rawProjectConfig
-          ? createHash('sha256').update(rawProjectConfig.bytes).digest('hex')
-          : null;
-        const projectConfigApproved =
-          projectConfigHash !== null &&
-          services.settings.get(`project-config-approved:${canonicalPathKey(workspace.path)}`) ===
-            projectConfigHash;
-        const globalSettings = services.settings.get('global');
-        const savedToolCallRepair =
-          z
-            .boolean()
-            .safeParse(
-              typeof globalSettings === 'object' && globalSettings !== null
-                ? (globalSettings as { toolCallRepair?: unknown }).toolCallRepair
-                : undefined,
-            ).data ?? true;
-        const savedPermissionMode = z
-          .enum(['ask', 'auto_edit', 'full_auto'])
-          .safeParse(
-            typeof globalSettings === 'object' && globalSettings !== null
-              ? (globalSettings as { permissionMode?: unknown }).permissionMode
-              : undefined,
-          );
-        const userPermissionMode = savedPermissionMode.success ? savedPermissionMode.data : 'ask';
-        const projectPermissionMode =
-          projectConfigApproved &&
-          rawProjectConfig?.parsed.success &&
-          hasOwnProperty(rawProjectConfig.source, 'permissionMode')
-            ? rawProjectConfig.parsed.data.permissionMode
-            : undefined;
-        const effectivePermissionMode = projectPermissionMode
-          ? stricterPermissionMode(userPermissionMode, projectPermissionMode)
-          : userPermissionMode;
-        const skillManager = createSkillManager(services, workspace.path);
-        await skillManager.load();
-        const mcpManager = createMcpManager(services, host, workspace.path);
-        const mcpConfigs = z
-          .array(McpServerConfigSchema)
-          .safeParse(services.settings.get('mcp-servers') ?? []);
-        if (mcpConfigs.success) {
-          await mcpManager.configure(mcpConfigs.data);
-          await mcpManager.connect().catch((error: unknown) => {
-            services.logger.warn({ err: error }, 'MCP tool connection failed');
-          });
-        }
-        const loop = new AgentLoop({
-          store,
-          workspace: workspace.path,
-          dataDir: services.paths.home,
-          profile,
-          catalog: sessionCatalog,
-          pinnedModelRef: routingMode === 'auto_for_step' ? null : session.pinnedModelRef,
-          getPinnedModelRef: () =>
-            routingMode === 'auto_for_step'
-              ? null
-              : (services.sessions.get(session.id)?.pinnedModelRef ?? null),
-          stepTimeoutMs: stepTimeoutFromEnvironment(services.env.FERRY_STEP_TIMEOUT_MS),
-          capacity: runtime.capacity,
-          apiKeys: runtime.apiKeys,
-          repairToolCalls: savedToolCallRepair,
-          permissionMode: effectivePermissionMode,
-          ...(maxSteps === undefined ? {} : { maxSteps }),
-          resilienceState: (() => {
-            const parsed = z
-              .array(ResilienceEntrySchema)
-              .safeParse(services.settings.get('routing-resilience')).data;
-            return (
-              parsed?.map(({ cooldownActive, permanentNonFree, ...entry }) => ({
-                ...entry,
-                ...(cooldownActive === undefined ? {} : { cooldownActive }),
-                ...(permanentNonFree === undefined ? {} : { permanentNonFree }),
-              })) ?? []
-            );
-          })(),
-          onResilienceState: (entries) => {
-            services.settings.put('routing-resilience', entries);
-          },
-          routingSettings: () => {
-            const stored = services.settings.get('global');
-            const routing =
-              typeof stored === 'object' && stored !== null && 'routing' in stored
-                ? stored.routing
-                : undefined;
-            return RoutingSettingsSchema.parse(routing ?? {});
-          },
-          reliabilityState:
-            z
-              .array(
-                z.object({
-                  modelRef: z.string(),
-                  outcome: z.enum(['success', 'failure']),
-                  at: z.number(),
-                }),
-              )
-              .safeParse(services.settings.get('routing-reliability')).data ?? [],
-          onReliabilityState: (entries) => {
-            services.settings.put('routing-reliability', entries);
-          },
-          routingNow: () => services.clock.now().getTime(),
-          stickyState:
-            z
-              .record(
-                z.string(),
-                z.object({
-                  modelRef: z.string(),
-                  providerId: z.string().optional(),
-                  providerKeyId: z.string().optional(),
-                  expiresAt: z.number(),
-                }),
-              )
-              .safeParse(services.settings.get('routing-sticky-sessions')).data ?? {},
-          onStickyState: (state) => {
-            services.settings.put('routing-sticky-sessions', state);
-          },
-          providerAffinityKey: (providerId, sessionId) =>
-            runtime.gateway.providerAffinityKey(providerId, sessionId),
-          providerKeyIds: (providerId) => runtime.gateway.providerKeyIds(providerId),
-          providerUnavailableKeyIds: (providerId, modelRef) =>
-            runtime.gateway.unavailableProviderKeyIds(providerId, modelRef),
-          toolRejectionState:
-            z
-              .array(z.object({ modelRef: z.string(), requestId: z.string(), at: z.number() }))
-              .safeParse(services.settings.get('routing-tool-rejections')).data ?? [],
-          onToolRejectionState: (entries) => {
-            services.settings.put('routing-tool-rejections', entries);
-          },
-          retirementFailureState:
-            z
-              .array(z.object({ modelRef: z.string(), requestId: z.string(), at: z.number() }))
-              .safeParse(services.settings.get('routing-retirement-failures')).data ?? [],
-          onRetirementFailureState: (entries) => {
-            services.settings.put('routing-retirement-failures', entries);
-          },
-          retiredModelRefs:
-            z.array(z.string()).safeParse(services.settings.get('routing-retired-models')).data ??
-            [],
-          onRetiredModelRefs: (entries) => {
-            services.settings.put('routing-retired-models', entries);
-          },
-          acquireQuotaLease: (model, tokens) =>
-            services.quota.acquireLease(model.providerId, model.ref, tokens) ?? null,
-          probeHeuristicCooldowns: () => runtime.gateway.probeHeuristicCooldowns(),
-          permissionRules: [
-            ...(projectConfigApproved &&
-            rawProjectConfig?.parsed.success &&
-            hasOwnProperty(rawProjectConfig.source, 'permissionRules')
-              ? rawProjectConfig.parsed.data.permissionRules.map((rule) => ({
-                  effect: rule.mode,
-                  tool: '*',
-                  level: 'project' as const,
-                  pattern: rule.pattern,
-                }))
-              : []),
-            ...(Array.isArray(services.settings.get(`permission-rules:${session.workspaceId}`))
-              ? (
-                  services.settings.get(`permission-rules:${session.workspaceId}`) as {
-                    pattern: string;
-                    mode: 'allow' | 'ask' | 'deny';
-                  }[]
-                ).map((rule) => ({
-                  effect: rule.mode,
-                  tool: '*',
-                  level: 'user' as const,
-                  pattern: rule.pattern,
-                }))
-              : []),
-          ],
-          toolSources: [
-            adaptExtensionTools(skillManager.toolSource()),
-            adaptExtensionTools(mcpManager.toolSource()),
-          ],
-          generator: (req) => runtime.gateway.streamStep(req, req.signal),
-          authorizePaidCall: async (candidate, estimate, signal) => {
-            const providerRecord = preflightCapacity.providers.find(
-              (item) => item.id === candidate.providerId,
-            );
-            const subscriptionLane =
-              providerRecord?.tag === 'subscription_oauth' ||
-              providerRecord?.tag === 'subscription_cli';
-            const trialLane = providerRecord?.tag === 'trial' || providerRecord?.tag === 'credits';
-            const routerSaysPaid = isPaidAccordingToRouter(
-              candidate,
-              providerRecord,
-              routing.trialOptInProviders,
-            );
-            const laneNeedsConfirmation =
-              routerSaysPaid &&
-              ((subscriptionLane && profile.paidConfirmation.confirmSubscriptions) ||
-                (trialLane && profile.paidConfirmation.confirmTrials));
-            const monetaryPaid =
-              routerSaysPaid &&
-              ((!subscriptionLane && !trialLane) || providerRecord.billingEnabled === true);
-            if (!routerSaysPaid && !laneNeedsConfirmation) return { allowed: true };
-            const usage = services.quota.queryUsage();
-            const byRef = new Map<string, (typeof availableModels)[number]>(
-              availableModels.map((model) => [model.ref, model]),
-            );
-            const paidRows = usage.filter((row) => {
-              const model = byRef.get(row.modelRef);
-              const provider = preflightCapacity.providers.find(
-                (item) => item.id === row.providerId,
-              );
-              const usageModel = model ?? unknownPriceModel(row.modelRef as ModelInfo['ref']);
-              const confirmationOnlyLane =
-                provider?.billingEnabled !== true &&
-                (provider?.tag === 'subscription_oauth' ||
-                  provider?.tag === 'subscription_cli' ||
-                  provider?.tag === 'trial' ||
-                  provider?.tag === 'credits');
-              return (
-                !confirmationOnlyLane &&
-                isPaidAccordingToRouter(usageModel, provider, routing.trialOptInProviders)
-              );
-            });
-            const confirmationOnlyRows = usage.filter((row) => {
-              if (row.sessionId !== session.id) return false;
-              const provider = preflightCapacity.providers.find(
-                (item) => item.id === row.providerId,
-              );
-              const model =
-                byRef.get(row.modelRef) ?? unknownPriceModel(row.modelRef as ModelInfo['ref']);
-              if (
-                !isPaidAccordingToRouter(model, provider, routing.trialOptInProviders) ||
-                provider?.billingEnabled === true
-              )
-                return false;
-              return (
-                (profile.paidConfirmation.confirmSubscriptions &&
-                  (provider?.tag === 'subscription_oauth' ||
-                    provider?.tag === 'subscription_cli')) ||
-                (profile.paidConfirmation.confirmTrials &&
-                  (provider?.tag === 'trial' || provider?.tag === 'credits'))
-              );
-            });
-            const amount = (rows: typeof usage) =>
-              rows.reduce((sum, row) => {
-                if (row.costUsd !== undefined) return sum + row.costUsd;
-                const model = byRef.get(row.modelRef);
-                if (!model) return sum + 0.01;
-                return (
-                  sum +
-                  estimateSpend(
-                    {
-                      inputTokens: row.inputTokens ?? 0,
-                      outputTokens: row.outputTokens ?? 0,
-                      cachedTokens: row.cachedTokens ?? 0,
-                    },
-                    model,
-                    services.providers.get(model.providerId),
-                  ).amountUsd
-                );
-              }, 0);
-            const now = services.clock.now();
-            const today = now.toISOString().slice(0, 10);
-            const thisMonth = today.slice(0, 7);
-            const profileSessionIds = new Set<string>(
-              services.sessions
-                .list()
-                .filter((item) => item.profileId === profile.id)
-                .map((item) => item.id),
-            );
-            const profileRows = paidRows.filter((row) =>
-              row.sessionId ? profileSessionIds.has(row.sessionId) : false,
-            );
-            const sessionRows = paidRows.filter((row) => row.sessionId === session.id);
-            const reservations = [...paidReservations.values()];
-            const sessionReservations = reservations.filter(
-              (item) => item.sessionId === session.id,
-            );
-            const profileReservations = reservations.filter(
-              (item) => item.profileId === profile.id,
-            );
-            const state: SpendState = {
-              sessionUsd:
-                amount(sessionRows) +
-                sessionReservations.reduce((sum, item) => sum + item.amountUsd, 0),
-              dayUsd:
-                amount(paidRows.filter((row) => row.occurredAt.slice(0, 10) === today)) +
-                reservations
-                  .filter((item) => item.day === today)
-                  .reduce((sum, item) => sum + item.amountUsd, 0),
-              monthUsd:
-                amount(paidRows.filter((row) => row.occurredAt.slice(0, 7) === thisMonth)) +
-                reservations
-                  .filter((item) => item.month === thisMonth)
-                  .reduce((sum, item) => sum + item.amountUsd, 0),
-              paidCallsThisSession:
-                sessionRows.length + confirmationOnlyRows.length + sessionReservations.length,
-            };
-            const globalPaidCaps =
-              typeof services.settings.get('global') === 'object' &&
-              services.settings.get('global') !== null &&
-              'paidCaps' in (services.settings.get('global') as object)
-                ? (services.settings.get('global') as { paidCaps?: unknown }).paidCaps
-                : undefined;
-            const storedCaps = PaidCapsSchema.safeParse(globalPaidCaps);
-            const globalCaps = storedCaps.success
-              ? storedCaps.data
-              : { sessionUsd: null, dailyUsd: null, monthlyUsd: null };
-            const estimateSpendResult = monetaryPaid
-              ? estimateSpend(
-                  estimate,
-                  candidate,
-                  preflightCapacity.providers.find((item) => item.id === candidate.providerId),
-                )
-              : { amountUsd: 0, estimated: false };
-            const amountUsd = estimateSpendResult.amountUsd;
-            const profileState: SpendState = {
-              ...state,
-              dayUsd:
-                amount(profileRows.filter((row) => row.occurredAt.slice(0, 10) === today)) +
-                profileReservations
-                  .filter((item) => item.day === today)
-                  .reduce((sum, item) => sum + item.amountUsd, 0),
-              monthUsd:
-                amount(profileRows.filter((row) => row.occurredAt.slice(0, 7) === thisMonth)) +
-                profileReservations
-                  .filter((item) => item.month === thisMonth)
-                  .reduce((sum, item) => sum + item.amountUsd, 0),
-            };
-            const globalOnlyProfile = {
-              ...profile,
-              caps: { sessionUsd: null, dailyUsd: null, monthlyUsd: null },
-            };
-            const sessionCap = tightestCap(profile.caps.sessionUsd ?? null, globalCaps.sessionUsd);
-            const dailyCap = tightestCap(profile.caps.dailyUsd, globalCaps.dailyUsd);
-            const monthlyCap = tightestCap(profile.caps.monthlyUsd, globalCaps.monthlyUsd);
-            const reachedCap = [
-              { used: state.sessionUsd, cap: sessionCap, period: 'this session' },
-              { used: profileState.dayUsd, cap: dailyCap, period: 'today' },
-              { used: profileState.monthUsd, cap: monthlyCap, period: 'this month' },
-            ].find(({ used, cap }) => cap !== null && used + amountUsd > cap);
-            if (
-              monetaryPaid &&
-              (!canSpend(
-                profile,
-                profileState,
-                { sessionUsd: null, dayUsd: null, monthUsd: null },
-                amountUsd,
-              ) ||
-                !canSpend(
-                  globalOnlyProfile,
-                  state,
-                  {
-                    sessionUsd: globalCaps.sessionUsd,
-                    dayUsd: globalCaps.dailyUsd,
-                    monthUsd: globalCaps.monthlyUsd,
-                  },
-                  amountUsd,
-                ))
-            ) {
-              const limit = reachedCap?.cap ?? 0;
-              const used = reachedCap?.used ?? state.sessionUsd;
-              const period = reachedCap?.period ?? 'today';
-              return {
-                allowed: false,
-                message: `Paid cap reached: $${used.toFixed(2)} of $${limit.toFixed(2)} ${period}. Wait for free capacity, raise the cap in Settings, or stop.`,
-              };
-            }
-            const reservationId = monetaryPaid || laneNeedsConfirmation ? newId('usage') : null;
-            if (reservationId)
-              paidReservations.set(reservationId, {
-                sessionId: session.id,
-                profileId: profile.id,
-                modelRef: candidate.ref,
-                amountUsd,
-                day: today,
-                month: thisMonth,
-              });
-            const firstPaidCallNeedsConfirmation =
-              monetaryPaid &&
-              profile.paidAllowed &&
-              !profile.paidConfirmation.preauthorize &&
-              state.paidCallsThisSession === 0;
-            if (
-              firstPaidCallNeedsConfirmation ||
-              (laneNeedsConfirmation &&
-                !profile.paidConfirmation.preauthorize &&
-                state.paidCallsThisSession === 0)
-            ) {
-              const selectedProvider = preflightCapacity.providers.find(
-                (item) => item.id === candidate.providerId,
-              );
-              // This card is only shown for paid calls, so a "free models" provider label is always misleading here.
-              const paidProviderLabel = selectedProvider?.name.replace(/\s+free models?$/i, '');
-              const providerName =
-                paidProviderLabel === undefined || paidProviderLabel === ''
-                  ? candidate.providerId
-                  : paidProviderLabel;
-              const assistant = [...services.messages.list()]
-                .reverse()
-                .find((item) => item.sessionId === session.id && item.role === 'assistant');
-              if (!assistant) {
-                if (reservationId) paidReservations.delete(reservationId);
-                return { allowed: false, message: 'Could not show paid approval.' };
-              }
-              const part: Extract<MessagePart, { type: 'approval_request' }> = {
-                type: 'approval_request',
-                id: PartIdSchema.parse(newId('part')),
-                kind: 'paid_model',
-                summary: `Use ${candidate.name} from ${providerName} for an estimated $${amountUsd.toFixed(4)}?`,
-                detail: estimateSpendResult.estimated
-                  ? 'Estimated with Ferry’s conservative unknown-price allowance.'
-                  : `Estimated cost for ${estimate.inputTokens.toLocaleString()} input and ${estimate.outputTokens.toLocaleString()} output tokens.`,
-                risk: 'medium',
-                state: 'pending',
-              };
-              const key = `${session.id}:${part.id}`;
-              const pendingDecision = new Promise<'allowed_once' | 'allowed_always' | 'denied'>(
-                (resolve) => {
-                  if (signal.aborted) {
-                    resolve('denied');
-                    return;
-                  }
-                  approvals.set(key, resolve);
-                  signal.addEventListener(
-                    'abort',
-                    () => {
-                      approvals.delete(key);
-                      resolve('denied');
-                    },
-                    { once: true },
-                  );
-                },
-              );
-              store.appendPart(session.id, assistant.id, part);
-              host.emit('session.part', { sessionId: session.id, messageId: assistant.id, part });
-              const current = services.sessions.get(session.id);
-              if (current) updateSession({ ...current, status: 'awaiting_approval' });
-              const decision = await pendingDecision;
-              const currentAfterApproval = services.sessions.get(session.id);
-              if (currentAfterApproval?.status === 'awaiting_approval')
-                updateSession({ ...currentAfterApproval, status: 'running' });
-              if (decision === 'denied') {
-                if (reservationId) paidReservations.delete(reservationId);
-                return { allowed: false, message: 'Paid call declined. No paid request was sent.' };
-              }
-            }
-            return {
-              allowed: true,
-              ...(reservationId
-                ? {
-                    usageId: reservationId,
-                    release: () => paidReservations.delete(reservationId),
-                  }
-                : {}),
-            };
-          },
-          onUsage: (record) => {
-            const model = availableModels.find((item) => item.ref === record.modelRef);
-            const usageProvider = preflightCapacity.providers.find(
-              (item) => item.id === record.providerId,
-            );
-            const confirmationOnlyLane =
-              usageProvider?.billingEnabled !== true &&
-              (usageProvider?.tag === 'subscription_oauth' ||
-                usageProvider?.tag === 'subscription_cli' ||
-                usageProvider?.tag === 'trial' ||
-                usageProvider?.tag === 'credits');
-            const usageModel = model ?? unknownPriceModel(record.modelRef as ModelInfo['ref']);
-            const routerSaysPaid = isPaidAccordingToRouter(
-              usageModel,
-              usageProvider,
-              routing.trialOptInProviders,
-            );
-            const monetaryPaid =
-              routerSaysPaid && (!confirmationOnlyLane || usageProvider.billingEnabled === true);
-            const reservation = paidReservations.get(record.id);
-            const calculated =
-              !monetaryPaid || confirmationOnlyLane
-                ? { amountUsd: 0, estimated: false }
-                : model
-                  ? estimateSpend(
-                      {
-                        inputTokens: record.inputTokens ?? 0,
-                        outputTokens: record.outputTokens ?? 0,
-                        cachedTokens: record.cachedTokens ?? 0,
-                      },
-                      model,
-                      usageProvider,
-                    )
-                  : { amountUsd: 0.01, estimated: true };
-            const priced =
-              monetaryPaid && calculated.amountUsd <= 0 && reservation && reservation.amountUsd > 0
-                ? { amountUsd: reservation.amountUsd, estimated: true }
-                : calculated;
-            runtime.usage.record({
-              ...record,
-              costUsd: priced.amountUsd,
-              ...(priced.estimated
-                ? {
-                    headers: {
-                      costEstimate:
-                        calculated.estimated && calculated.amountUsd > 0
-                          ? 'conservative-unknown-price'
-                          : 'approved-preflight-estimate',
-                    },
-                  }
-                : {}),
-            });
-          },
-          onHandoff: (reason, from, to) => {
-            runtime.gateway.recordHandoff(session.id, reason);
-            services.telemetry.modelSwitch({
-              session_id: session.id,
-              kind: 'handoff',
-              from_model: from,
-              to_model: to,
-              reason,
-              data: { trace_id: traceId, who: 'router' },
-            });
+        resolveRun();
+      }, 60_000);
+      setImmediate(() => {
+        void (async () => {
+          try {
+            if (isRunAborted()) return;
             services.telemetry.log({
               id: newId('evt'),
               ts: services.clock.now().toISOString(),
               level: 'info',
-              source: 'router',
-              event: 'model.switch',
+              source: 'ui',
+              event: 'request.received',
               session_id: session.id,
               trace_id: traceId,
-              data: { kind: 'handoff', from_model: from, to_model: to, reason },
+              device_id: services.deviceId,
+              data: { prompt: text, resume },
             });
-          },
-          resolveCandidates: (selectedProfile, stepKind, inputTokens) =>
-            runtime.gateway.resolveCandidates(selectedProfile, stepKind, inputTokens),
-          emit: emitAgentEvent,
-          traceContext,
-          telemetry: services.telemetry,
-          requestApproval: (part, signal) =>
-            new Promise((resolve) => {
-              services.telemetry.log({
-                id: newId('evt'),
-                ts: services.clock.now().toISOString(),
-                level: 'info',
-                source: 'ui',
-                event: 'approval.requested',
-                session_id: session.id,
-                trace_id: traceId,
-                data: { approval_id: part.id, kind: part.kind, summary: part.summary },
+            const preflight = createSessionDependencies(services, () => undefined);
+            const configuredProviders = services.catalog.providers.filter(
+              ({ provider, key_required }) => {
+                const saved = services.providers.get(provider);
+                const hasKey = hasUsableProviderKey(services, provider);
+                return (saved?.enabled ?? hasKey) && (hasKey || key_required === false);
+              },
+            );
+            const configuredOauth = oauthModelCatalog.filter((model) => {
+              const saved = services.providers.get(model.providerId);
+              return saved?.enabled && saved.keyStatus === 'valid';
+            });
+            const availableModels = preserveCatalogBillingMetadata(
+              [
+                ...(services.env.NODE_ENV === 'test'
+                  ? [
+                      ...services.catalog.models,
+                      ...configuredProviders.flatMap(({ provider: id }) =>
+                        services.models.list(id),
+                      ),
+                    ]
+                  : configuredProviders.flatMap(({ provider: id }) => services.models.list(id))),
+                ...configuredOauth,
+              ],
+              services.catalog.models,
+              (id) => services.providers.get(id),
+              (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
+            );
+            const preflightCapacity = preflight.capacity();
+            const verifiedModelRefs = preflightCapacity.providers.flatMap((provider) =>
+              provider.modelsVerifiedAt && provider.availableModels
+                ? provider.availableModels.map((model) => model.ref)
+                : [],
+            );
+            const settingsValue = services.settings.get('global');
+            const routingValue =
+              typeof settingsValue === 'object' &&
+              settingsValue !== null &&
+              'routing' in settingsValue
+                ? settingsValue.routing
+                : undefined;
+            const routing = RoutingSettingsSchema.parse(routingValue ?? {});
+            const reliability =
+              z
+                .array(
+                  z.object({
+                    modelRef: z.string(),
+                    outcome: z.enum(['success', 'failure']),
+                    at: z.number(),
+                  }),
+                )
+                .safeParse(services.settings.get('routing-reliability')).data ?? [];
+            const stickyState =
+              z
+                .record(
+                  z.string(),
+                  z.object({
+                    modelRef: z.string(),
+                    providerId: z.string().optional(),
+                    providerKeyId: z.string().optional(),
+                    expiresAt: z.number(),
+                  }),
+                )
+                .safeParse(services.settings.get('routing-sticky-sessions')).data ?? {};
+            const routingInput = {
+              models: availableModels,
+              capacity: preflightCapacity,
+              profile,
+              step: 'plan',
+              estimate: {
+                inputTokens: 1,
+                outputTokens: 2048,
+                expectedSteps: 1,
+                requiresTools: true,
+              },
+              verifiedModelRefs,
+              routing,
+              reliability,
+              random: services.random,
+            } as const;
+            const chain = chainForProfile(profile);
+            const chainResult = resolveFallbackChain({
+              chain,
+              models: availableModels,
+              capacity: preflightCapacity,
+              profile,
+              inputTokens: 1,
+              step: 'plan',
+              verifiedModelRefs,
+              avoidTrainingProviders: routing.avoidTrainingProviders,
+              trialOptInProviders: routing.trialOptInProviders,
+              now: services.clock.now().getTime(),
+            });
+            const chainRefs = new Set(chainResult.models.map((model) => model.ref));
+            const routingCandidates = scoreModels({
+              ...routingInput,
+              models: availableModels.filter(
+                (model) =>
+                  !chainRefs.has(model.ref) &&
+                  (!chain.length || isStrictFallbackNameEligible(model, verifiedModelRefs)),
+              ),
+            });
+            const hasAvailableModel = chainResult.models.length > 0 || routingCandidates.length > 0;
+            if (verbose) {
+              const explainCandidates = scoreModels(routingInput);
+              const selectedRef = chainResult.hit?.modelRef ?? explainCandidates[0]?.ref;
+              if (selectedRef)
+                host.emit('routing.explain', {
+                  sessionId: session.id,
+                  selected: selectedRef,
+                  candidates: explainCandidates.map(
+                    ({ ref, score, explanation, scoreBreakdown }) => ({
+                      ref,
+                      score,
+                      explanation,
+                      scoreBreakdown,
+                    }),
+                  ),
+                  chain: chainResult.diagnostics,
+                  chainHit: chainResult.hit,
+                  influences: {
+                    sticky:
+                      routing.stickySessions &&
+                      (stickyState[session.id]?.expiresAt ?? 0) > services.clock.now().getTime()
+                        ? `sticky: kept ${String(stickyState[session.id]?.modelRef)}`
+                        : null,
+                    smartReliability: routing.smartReliability
+                      ? 'smart reliability: Thompson-sampled recent outcomes'
+                      : null,
+                    quotaReservations: routing.quotaReservations
+                      ? 'quota reservations: enabled for provider requests'
+                      : null,
+                    cooldownReasons: routing.cooldownReasons
+                      ? 'cooldown reasons: provenance-aware probes enabled'
+                      : null,
+                    gentleQuotaRamp: routing.gentleQuotaRamp
+                      ? 'gentle quota ramp: live quota headroom applied'
+                      : null,
+                    toolRejectionMemory: routing.toolRejectionMemory
+                      ? 'tool-rejection memory: recent tool failures affect ordering'
+                      : null,
+                    carefulModelRetirement: routing.carefulModelRetirement
+                      ? 'careful model retirement: corroborated lifecycle signals applied'
+                      : null,
+                  },
+                });
+            }
+            if (!hasAvailableModel && services.env.NODE_ENV !== 'test') {
+              const errorMessage = store.appendMessage(
+                session.id,
+                'assistant',
+                [
+                  {
+                    type: 'error',
+                    id: PartIdSchema.parse(newId('part')),
+                    message: noModelMessage,
+                    kind: 'provider',
+                  },
+                ],
+                null,
+                services.clock.now(),
+              );
+              host.emit('session.message', {
+                sessionId: session.id,
+                message: MessageSchema.parse(errorMessage),
               });
-              const finish = (decision: 'allowed_once' | 'allowed_always' | 'denied') => {
+              const latest = services.sessions.get(session.id);
+              if (latest)
+                updateSession({
+                  ...latest,
+                  title:
+                    latest.title === 'New Chat'
+                      ? text.trim().split(/\s+/).slice(0, 6).join(' ').slice(0, 80)
+                      : latest.title,
+                  status: 'error',
+                });
+              return;
+            }
+            const emitAgentEvent = (event: AgentEvent) => {
+              if (event.type === 'session.delta')
+                host.emit('session.delta', {
+                  sessionId: event.sessionId,
+                  messageId: event.messageId,
+                  partId: PartIdSchema.parse(event.partId),
+                  textDelta: event.text,
+                });
+              else if (event.type === 'agent.event') host.emit('agent.event', event);
+              else if (event.type === 'session.part') {
+                host.emit('session.part', event);
+                if (event.part.type === 'approval_request' && event.part.state === 'pending')
+                  host.emit('approval.request', event);
+              } else if (event.type === 'session.message')
+                host.emit('session.message', { sessionId: session.id, message: event.message });
+              else if (event.type === 'session.updated') {
+                host.emit('session.updated', event.session);
+                host.emit('session.status', event.session);
+              } else if (event.type === 'task.updated') host.emit('task.updated', event.task);
+              else if (event.type === 'quota.updated')
+                host.emit('quota.updated', services.quota.capacitySummary());
+              else if (event.type === 'optimizer.event') {
+                const id = newId('optimizer');
+                const optimizerEvent = {
+                  id,
+                  sessionId: session.id,
+                  kind: event.kind,
+                  beforeTokens: event.beforeTokens,
+                  afterTokens: event.afterTokens,
+                  timestamp: services.clock.now().toISOString(),
+                };
+                services.optimizerEvents.put(optimizerEvent);
+              } else host.emit('toast', { kind: event.tone, title: event.message, body: null });
+            };
+            const runtime = createSessionDependencies(services, emitAgentEvent, traceContext);
+            const sessionCatalogModels = [
+              ...(services.env.NODE_ENV === 'test'
+                ? services.catalog.models
+                : configuredProviders.flatMap(({ provider: id }) => services.models.list(id))),
+              ...configuredOauth,
+            ];
+            const sessionCatalog = {
+              ...services.catalog,
+              models: preserveCatalogBillingMetadata(
+                sessionCatalogModels,
+                services.catalog.models,
+                (id) => services.providers.get(id),
+                (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
+              ),
+            };
+            preparingStep = 'project configuration';
+            const rawProjectConfig = await readFile(join(workspace.path, '.ferry', 'config.json'))
+              .then((bytes) => {
+                const source: unknown = JSON.parse(bytes.toString('utf8'));
+                return { bytes, source, parsed: ProjectConfigSchema.safeParse(source) };
+              })
+              .catch(() => null);
+            const projectConfigHash = rawProjectConfig
+              ? createHash('sha256').update(rawProjectConfig.bytes).digest('hex')
+              : null;
+            const projectConfigApproved =
+              projectConfigHash !== null &&
+              services.settings.get(
+                `project-config-approved:${canonicalPathKey(workspace.path)}`,
+              ) === projectConfigHash;
+            const globalSettings = services.settings.get('global');
+            const savedToolCallRepair =
+              z
+                .boolean()
+                .safeParse(
+                  typeof globalSettings === 'object' && globalSettings !== null
+                    ? (globalSettings as { toolCallRepair?: unknown }).toolCallRepair
+                    : undefined,
+                ).data ?? true;
+            const savedPermissionMode = z
+              .enum(['ask', 'auto_edit', 'full_auto'])
+              .safeParse(
+                typeof globalSettings === 'object' && globalSettings !== null
+                  ? (globalSettings as { permissionMode?: unknown }).permissionMode
+                  : undefined,
+              );
+            const userPermissionMode = savedPermissionMode.success
+              ? savedPermissionMode.data
+              : 'ask';
+            const projectPermissionMode =
+              projectConfigApproved &&
+              rawProjectConfig?.parsed.success &&
+              hasOwnProperty(rawProjectConfig.source, 'permissionMode')
+                ? rawProjectConfig.parsed.data.permissionMode
+                : undefined;
+            const effectivePermissionMode = projectPermissionMode
+              ? stricterPermissionMode(userPermissionMode, projectPermissionMode)
+              : userPermissionMode;
+            preparingStep = 'skills';
+            const skillManager = createSkillManager(services, workspace.path);
+            await skillManager.load();
+            if (isRunAborted()) throw controller.signal.reason;
+            preparingStep = 'MCP tools';
+            mcpManager = createMcpManager(services, host, workspace.path);
+            const mcpConfigs = z
+              .array(McpServerConfigSchema)
+              .safeParse(services.settings.get('mcp-servers') ?? []);
+            if (mcpConfigs.success) {
+              await mcpManager.configure(mcpConfigs.data);
+              await mcpManager.connect().catch((error: unknown) => {
+                services.logger.warn({ err: error }, 'MCP tool connection failed');
+              });
+            }
+            if (isRunAborted()) throw controller.signal.reason;
+            const loop = new AgentLoop({
+              store,
+              workspace: workspace.path,
+              dataDir: services.paths.home,
+              onCheckpointCreated: (checkpointId, label) => {
+                services.checkpoints.put({
+                  id: CheckpointIdSchema.parse(checkpointId),
+                  sessionId: session.id,
+                  label: 'Before agent edits',
+                  createdAt: services.clock.now().toISOString(),
+                  fileCount: 0,
+                });
                 services.telemetry.log({
                   id: newId('evt'),
                   ts: services.clock.now().toISOString(),
                   level: 'info',
-                  source: 'ui',
-                  event: 'approval.resolved',
+                  source: 'agent',
+                  event: 'checkpoint.created',
+                  session_id: session.id,
+                  trace_id: traceContext.traceId,
+                  data: { checkpoint_id: checkpointId, label },
+                });
+              },
+              profile,
+              catalog: sessionCatalog,
+              pinnedModelRef: routingMode === 'auto_for_step' ? null : session.pinnedModelRef,
+              getPinnedModelRef: () =>
+                routingMode === 'auto_for_step'
+                  ? null
+                  : (services.sessions.get(session.id)?.pinnedModelRef ?? null),
+              stepTimeoutMs: stepTimeoutFromEnvironment(services.env.FERRY_STEP_TIMEOUT_MS),
+              capacity: runtime.capacity,
+              apiKeys: runtime.apiKeys,
+              repairToolCalls: savedToolCallRepair,
+              permissionMode: effectivePermissionMode,
+              ...(maxSteps === undefined ? {} : { maxSteps }),
+              resilienceState: (() => {
+                const parsed = z
+                  .array(ResilienceEntrySchema)
+                  .safeParse(services.settings.get('routing-resilience')).data;
+                return (
+                  parsed?.map(({ cooldownActive, permanentNonFree, ...entry }) => ({
+                    ...entry,
+                    ...(cooldownActive === undefined ? {} : { cooldownActive }),
+                    ...(permanentNonFree === undefined ? {} : { permanentNonFree }),
+                  })) ?? []
+                );
+              })(),
+              onResilienceState: (entries) => {
+                services.settings.put('routing-resilience', entries);
+              },
+              routingSettings: () => {
+                const stored = services.settings.get('global');
+                const routing =
+                  typeof stored === 'object' && stored !== null && 'routing' in stored
+                    ? stored.routing
+                    : undefined;
+                return RoutingSettingsSchema.parse(routing ?? {});
+              },
+              reliabilityState:
+                z
+                  .array(
+                    z.object({
+                      modelRef: z.string(),
+                      outcome: z.enum(['success', 'failure']),
+                      at: z.number(),
+                    }),
+                  )
+                  .safeParse(services.settings.get('routing-reliability')).data ?? [],
+              onReliabilityState: (entries) => {
+                services.settings.put('routing-reliability', entries);
+              },
+              routingNow: () => services.clock.now().getTime(),
+              stickyState:
+                z
+                  .record(
+                    z.string(),
+                    z.object({
+                      modelRef: z.string(),
+                      providerId: z.string().optional(),
+                      providerKeyId: z.string().optional(),
+                      expiresAt: z.number(),
+                    }),
+                  )
+                  .safeParse(services.settings.get('routing-sticky-sessions')).data ?? {},
+              onStickyState: (state) => {
+                services.settings.put('routing-sticky-sessions', state);
+              },
+              providerAffinityKey: (providerId, sessionId) =>
+                runtime.gateway.providerAffinityKey(providerId, sessionId),
+              providerKeyIds: (providerId) => runtime.gateway.providerKeyIds(providerId),
+              providerUnavailableKeyIds: (providerId, modelRef) =>
+                runtime.gateway.unavailableProviderKeyIds(providerId, modelRef),
+              toolRejectionState:
+                z
+                  .array(z.object({ modelRef: z.string(), requestId: z.string(), at: z.number() }))
+                  .safeParse(services.settings.get('routing-tool-rejections')).data ?? [],
+              onToolRejectionState: (entries) => {
+                services.settings.put('routing-tool-rejections', entries);
+              },
+              retirementFailureState:
+                z
+                  .array(z.object({ modelRef: z.string(), requestId: z.string(), at: z.number() }))
+                  .safeParse(services.settings.get('routing-retirement-failures')).data ?? [],
+              onRetirementFailureState: (entries) => {
+                services.settings.put('routing-retirement-failures', entries);
+              },
+              retiredModelRefs:
+                z.array(z.string()).safeParse(services.settings.get('routing-retired-models'))
+                  .data ?? [],
+              onRetiredModelRefs: (entries) => {
+                services.settings.put('routing-retired-models', entries);
+              },
+              acquireQuotaLease: (model, tokens) =>
+                services.quota.acquireLease(model.providerId, model.ref, tokens) ?? null,
+              probeHeuristicCooldowns: () => runtime.gateway.probeHeuristicCooldowns(),
+              permissionRules: [
+                ...(projectConfigApproved &&
+                rawProjectConfig?.parsed.success &&
+                hasOwnProperty(rawProjectConfig.source, 'permissionRules')
+                  ? rawProjectConfig.parsed.data.permissionRules.map((rule) => ({
+                      effect: rule.mode,
+                      tool: '*',
+                      level: 'project' as const,
+                      pattern: rule.pattern,
+                    }))
+                  : []),
+                ...(Array.isArray(services.settings.get(`permission-rules:${session.workspaceId}`))
+                  ? (
+                      services.settings.get(`permission-rules:${session.workspaceId}`) as {
+                        pattern: string;
+                        mode: 'allow' | 'ask' | 'deny';
+                      }[]
+                    ).map((rule) => ({
+                      effect: rule.mode,
+                      tool: '*',
+                      level: 'user' as const,
+                      pattern: rule.pattern,
+                    }))
+                  : []),
+              ],
+              toolSources: [
+                adaptExtensionTools(skillManager.toolSource()),
+                adaptExtensionTools(mcpManager.toolSource()),
+              ],
+              generator: (req) => runtime.gateway.streamStep(req, req.signal),
+              authorizePaidCall: async (candidate, estimate, signal) => {
+                const providerRecord = preflightCapacity.providers.find(
+                  (item) => item.id === candidate.providerId,
+                );
+                const subscriptionLane =
+                  providerRecord?.tag === 'subscription_oauth' ||
+                  providerRecord?.tag === 'subscription_cli';
+                const trialLane =
+                  providerRecord?.tag === 'trial' || providerRecord?.tag === 'credits';
+                const routerSaysPaid = isPaidAccordingToRouter(
+                  candidate,
+                  providerRecord,
+                  routing.trialOptInProviders,
+                );
+                const laneNeedsConfirmation =
+                  routerSaysPaid &&
+                  ((subscriptionLane && profile.paidConfirmation.confirmSubscriptions) ||
+                    (trialLane && profile.paidConfirmation.confirmTrials));
+                const monetaryPaid =
+                  routerSaysPaid &&
+                  ((!subscriptionLane && !trialLane) || providerRecord.billingEnabled === true);
+                if (!routerSaysPaid && !laneNeedsConfirmation) return { allowed: true };
+                const usage = services.quota.queryUsage();
+                const byRef = new Map<string, (typeof availableModels)[number]>(
+                  availableModels.map((model) => [model.ref, model]),
+                );
+                const paidRows = usage.filter((row) => {
+                  const model = byRef.get(row.modelRef);
+                  const provider = preflightCapacity.providers.find(
+                    (item) => item.id === row.providerId,
+                  );
+                  const usageModel = model ?? unknownPriceModel(row.modelRef as ModelInfo['ref']);
+                  const confirmationOnlyLane =
+                    provider?.billingEnabled !== true &&
+                    (provider?.tag === 'subscription_oauth' ||
+                      provider?.tag === 'subscription_cli' ||
+                      provider?.tag === 'trial' ||
+                      provider?.tag === 'credits');
+                  return (
+                    !confirmationOnlyLane &&
+                    isPaidAccordingToRouter(usageModel, provider, routing.trialOptInProviders)
+                  );
+                });
+                const confirmationOnlyRows = usage.filter((row) => {
+                  if (row.sessionId !== session.id) return false;
+                  const provider = preflightCapacity.providers.find(
+                    (item) => item.id === row.providerId,
+                  );
+                  const model =
+                    byRef.get(row.modelRef) ?? unknownPriceModel(row.modelRef as ModelInfo['ref']);
+                  if (
+                    !isPaidAccordingToRouter(model, provider, routing.trialOptInProviders) ||
+                    provider?.billingEnabled === true
+                  )
+                    return false;
+                  return (
+                    (profile.paidConfirmation.confirmSubscriptions &&
+                      (provider?.tag === 'subscription_oauth' ||
+                        provider?.tag === 'subscription_cli')) ||
+                    (profile.paidConfirmation.confirmTrials &&
+                      (provider?.tag === 'trial' || provider?.tag === 'credits'))
+                  );
+                });
+                const amount = (rows: typeof usage) =>
+                  rows.reduce((sum, row) => {
+                    if (row.costUsd !== undefined) return sum + row.costUsd;
+                    const model = byRef.get(row.modelRef);
+                    if (!model) return sum + 0.01;
+                    return (
+                      sum +
+                      estimateSpend(
+                        {
+                          inputTokens: row.inputTokens ?? 0,
+                          outputTokens: row.outputTokens ?? 0,
+                          cachedTokens: row.cachedTokens ?? 0,
+                        },
+                        model,
+                        services.providers.get(model.providerId),
+                      ).amountUsd
+                    );
+                  }, 0);
+                const now = services.clock.now();
+                const today = now.toISOString().slice(0, 10);
+                const thisMonth = today.slice(0, 7);
+                const profileSessionIds = new Set<string>(
+                  services.sessions
+                    .list()
+                    .filter((item) => item.profileId === profile.id)
+                    .map((item) => item.id),
+                );
+                const profileRows = paidRows.filter((row) =>
+                  row.sessionId ? profileSessionIds.has(row.sessionId) : false,
+                );
+                const sessionRows = paidRows.filter((row) => row.sessionId === session.id);
+                const reservations = [...paidReservations.values()];
+                const sessionReservations = reservations.filter(
+                  (item) => item.sessionId === session.id,
+                );
+                const profileReservations = reservations.filter(
+                  (item) => item.profileId === profile.id,
+                );
+                const state: SpendState = {
+                  sessionUsd:
+                    amount(sessionRows) +
+                    sessionReservations.reduce((sum, item) => sum + item.amountUsd, 0),
+                  dayUsd:
+                    amount(paidRows.filter((row) => row.occurredAt.slice(0, 10) === today)) +
+                    reservations
+                      .filter((item) => item.day === today)
+                      .reduce((sum, item) => sum + item.amountUsd, 0),
+                  monthUsd:
+                    amount(paidRows.filter((row) => row.occurredAt.slice(0, 7) === thisMonth)) +
+                    reservations
+                      .filter((item) => item.month === thisMonth)
+                      .reduce((sum, item) => sum + item.amountUsd, 0),
+                  paidCallsThisSession:
+                    sessionRows.length + confirmationOnlyRows.length + sessionReservations.length,
+                };
+                const globalPaidCaps =
+                  typeof services.settings.get('global') === 'object' &&
+                  services.settings.get('global') !== null &&
+                  'paidCaps' in (services.settings.get('global') as object)
+                    ? (services.settings.get('global') as { paidCaps?: unknown }).paidCaps
+                    : undefined;
+                const storedCaps = PaidCapsSchema.safeParse(globalPaidCaps);
+                const globalCaps = storedCaps.success
+                  ? storedCaps.data
+                  : { sessionUsd: null, dailyUsd: null, monthlyUsd: null };
+                const estimateSpendResult = monetaryPaid
+                  ? estimateSpend(
+                      estimate,
+                      candidate,
+                      preflightCapacity.providers.find((item) => item.id === candidate.providerId),
+                    )
+                  : { amountUsd: 0, estimated: false };
+                const amountUsd = estimateSpendResult.amountUsd;
+                const profileState: SpendState = {
+                  ...state,
+                  dayUsd:
+                    amount(profileRows.filter((row) => row.occurredAt.slice(0, 10) === today)) +
+                    profileReservations
+                      .filter((item) => item.day === today)
+                      .reduce((sum, item) => sum + item.amountUsd, 0),
+                  monthUsd:
+                    amount(profileRows.filter((row) => row.occurredAt.slice(0, 7) === thisMonth)) +
+                    profileReservations
+                      .filter((item) => item.month === thisMonth)
+                      .reduce((sum, item) => sum + item.amountUsd, 0),
+                };
+                const globalOnlyProfile = {
+                  ...profile,
+                  caps: { sessionUsd: null, dailyUsd: null, monthlyUsd: null },
+                };
+                const sessionCap = tightestCap(
+                  profile.caps.sessionUsd ?? null,
+                  globalCaps.sessionUsd,
+                );
+                const dailyCap = tightestCap(profile.caps.dailyUsd, globalCaps.dailyUsd);
+                const monthlyCap = tightestCap(profile.caps.monthlyUsd, globalCaps.monthlyUsd);
+                const reachedCap = [
+                  { used: state.sessionUsd, cap: sessionCap, period: 'this session' },
+                  { used: profileState.dayUsd, cap: dailyCap, period: 'today' },
+                  { used: profileState.monthUsd, cap: monthlyCap, period: 'this month' },
+                ].find(({ used, cap }) => cap !== null && used + amountUsd > cap);
+                if (
+                  monetaryPaid &&
+                  (!canSpend(
+                    profile,
+                    profileState,
+                    { sessionUsd: null, dayUsd: null, monthUsd: null },
+                    amountUsd,
+                  ) ||
+                    !canSpend(
+                      globalOnlyProfile,
+                      state,
+                      {
+                        sessionUsd: globalCaps.sessionUsd,
+                        dayUsd: globalCaps.dailyUsd,
+                        monthUsd: globalCaps.monthlyUsd,
+                      },
+                      amountUsd,
+                    ))
+                ) {
+                  const limit = reachedCap?.cap ?? 0;
+                  const used = reachedCap?.used ?? state.sessionUsd;
+                  const period = reachedCap?.period ?? 'today';
+                  return {
+                    allowed: false,
+                    message: `Paid cap reached: $${used.toFixed(2)} of $${limit.toFixed(2)} ${period}. Wait for free capacity, raise the cap in Settings, or stop.`,
+                  };
+                }
+                const reservationId = monetaryPaid || laneNeedsConfirmation ? newId('usage') : null;
+                if (reservationId)
+                  paidReservations.set(reservationId, {
+                    sessionId: session.id,
+                    profileId: profile.id,
+                    modelRef: candidate.ref,
+                    amountUsd,
+                    day: today,
+                    month: thisMonth,
+                  });
+                const firstPaidCallNeedsConfirmation =
+                  monetaryPaid &&
+                  profile.paidAllowed &&
+                  !profile.paidConfirmation.preauthorize &&
+                  state.paidCallsThisSession === 0;
+                if (
+                  firstPaidCallNeedsConfirmation ||
+                  (laneNeedsConfirmation &&
+                    !profile.paidConfirmation.preauthorize &&
+                    state.paidCallsThisSession === 0)
+                ) {
+                  const selectedProvider = preflightCapacity.providers.find(
+                    (item) => item.id === candidate.providerId,
+                  );
+                  // This card is only shown for paid calls, so a "free models" provider label is always misleading here.
+                  const paidProviderLabel = selectedProvider?.name.replace(/\s+free models?$/i, '');
+                  const providerName =
+                    paidProviderLabel === undefined || paidProviderLabel === ''
+                      ? candidate.providerId
+                      : paidProviderLabel;
+                  const assistant = [...services.messages.list()]
+                    .reverse()
+                    .find((item) => item.sessionId === session.id && item.role === 'assistant');
+                  if (!assistant) {
+                    if (reservationId) paidReservations.delete(reservationId);
+                    return { allowed: false, message: 'Could not show paid approval.' };
+                  }
+                  const part: Extract<MessagePart, { type: 'approval_request' }> = {
+                    type: 'approval_request',
+                    id: PartIdSchema.parse(newId('part')),
+                    kind: 'paid_model',
+                    summary: `Use ${candidate.name} from ${providerName} for an estimated $${amountUsd.toFixed(4)}?`,
+                    detail: estimateSpendResult.estimated
+                      ? 'Estimated with Ferry’s conservative unknown-price allowance.'
+                      : `Estimated cost for ${estimate.inputTokens.toLocaleString()} input and ${estimate.outputTokens.toLocaleString()} output tokens.`,
+                    risk: 'medium',
+                    state: 'pending',
+                  };
+                  const key = `${session.id}:${part.id}`;
+                  const pendingDecision = new Promise<'allowed_once' | 'allowed_always' | 'denied'>(
+                    (resolve) => {
+                      if (signal.aborted) {
+                        resolve('denied');
+                        return;
+                      }
+                      approvals.set(key, resolve);
+                      signal.addEventListener(
+                        'abort',
+                        () => {
+                          approvals.delete(key);
+                          resolve('denied');
+                        },
+                        { once: true },
+                      );
+                    },
+                  );
+                  store.appendPart(session.id, assistant.id, part);
+                  host.emit('session.part', {
+                    sessionId: session.id,
+                    messageId: assistant.id,
+                    part,
+                  });
+                  const current = services.sessions.get(session.id);
+                  if (current) updateSession({ ...current, status: 'awaiting_approval' });
+                  const decision = await pendingDecision;
+                  const currentAfterApproval = services.sessions.get(session.id);
+                  if (currentAfterApproval?.status === 'awaiting_approval')
+                    updateSession({ ...currentAfterApproval, status: 'running' });
+                  if (decision === 'denied') {
+                    if (reservationId) paidReservations.delete(reservationId);
+                    return {
+                      allowed: false,
+                      message: 'Paid call declined. No paid request was sent.',
+                    };
+                  }
+                }
+                return {
+                  allowed: true,
+                  ...(reservationId
+                    ? {
+                        usageId: reservationId,
+                        release: () => paidReservations.delete(reservationId),
+                      }
+                    : {}),
+                };
+              },
+              onUsage: (record) => {
+                const model = availableModels.find((item) => item.ref === record.modelRef);
+                const usageProvider = preflightCapacity.providers.find(
+                  (item) => item.id === record.providerId,
+                );
+                const confirmationOnlyLane =
+                  usageProvider?.billingEnabled !== true &&
+                  (usageProvider?.tag === 'subscription_oauth' ||
+                    usageProvider?.tag === 'subscription_cli' ||
+                    usageProvider?.tag === 'trial' ||
+                    usageProvider?.tag === 'credits');
+                const usageModel = model ?? unknownPriceModel(record.modelRef as ModelInfo['ref']);
+                const routerSaysPaid = isPaidAccordingToRouter(
+                  usageModel,
+                  usageProvider,
+                  routing.trialOptInProviders,
+                );
+                const monetaryPaid =
+                  routerSaysPaid &&
+                  (!confirmationOnlyLane || usageProvider.billingEnabled === true);
+                const reservation = paidReservations.get(record.id);
+                const calculated =
+                  !monetaryPaid || confirmationOnlyLane
+                    ? { amountUsd: 0, estimated: false }
+                    : model
+                      ? estimateSpend(
+                          {
+                            inputTokens: record.inputTokens ?? 0,
+                            outputTokens: record.outputTokens ?? 0,
+                            cachedTokens: record.cachedTokens ?? 0,
+                          },
+                          model,
+                          usageProvider,
+                        )
+                      : { amountUsd: 0.01, estimated: true };
+                const priced =
+                  monetaryPaid &&
+                  calculated.amountUsd <= 0 &&
+                  reservation &&
+                  reservation.amountUsd > 0
+                    ? { amountUsd: reservation.amountUsd, estimated: true }
+                    : calculated;
+                runtime.usage.record({
+                  ...record,
+                  costUsd: priced.amountUsd,
+                  ...(priced.estimated
+                    ? {
+                        headers: {
+                          costEstimate:
+                            calculated.estimated && calculated.amountUsd > 0
+                              ? 'conservative-unknown-price'
+                              : 'approved-preflight-estimate',
+                        },
+                      }
+                    : {}),
+                });
+              },
+              onHandoff: (reason, from, to) => {
+                runtime.gateway.recordHandoff(session.id, reason);
+                services.telemetry.modelSwitch({
+                  session_id: session.id,
+                  kind: 'handoff',
+                  from_model: from,
+                  to_model: to,
+                  reason,
+                  data: { trace_id: traceId, who: 'router' },
+                });
+                services.telemetry.log({
+                  id: newId('evt'),
+                  ts: services.clock.now().toISOString(),
+                  level: 'info',
+                  source: 'router',
+                  event: 'model.switch',
                   session_id: session.id,
                   trace_id: traceId,
-                  data: { approval_id: part.id, decision },
+                  data: { kind: 'handoff', from_model: from, to_model: to, reason },
                 });
-                resolve(decision);
-              };
-              const approvalKey = `${session.id}:${part.id}`;
-              if (signal.aborted) {
-                finish('denied');
-                return;
-              }
-              approvals.set(approvalKey, resolve);
-              // The UI can answer as soon as the approval part is emitted, before this
-              // callback registers its waiter. Reconcile the persisted decision to avoid
-              // leaving the agent suspended after a fast Allow click.
-              const persisted = services.messages
-                .list()
-                .flatMap((message) => (message.sessionId === session.id ? message.parts : []))
-                .find((candidate) => candidate.id === part.id);
-              if (persisted?.type === 'approval_request' && persisted.state !== 'pending') {
-                approvals.delete(approvalKey);
-                finish(persisted.state);
-              }
-              signal.addEventListener(
-                'abort',
-                () => {
-                  approvals.delete(approvalKey);
-                  finish('denied');
-                },
-                { once: true },
-              );
-            }),
-          filterOutput: async (name, output, command, sourcePath) => {
-            const { optimizeOutput } = await import('@ferry/optimizer');
-            const result = optimizeOutput(command ?? name, output);
-            if (sourcePath && isProtectedWorkspacePath(sourcePath))
-              return { text: result.output, filtered: result.output !== output };
-            const handle = result.output === output ? undefined : newId('recovery');
-            if (handle)
-              services.db.client
-                .prepare('INSERT INTO optimizer_blobs (id,data_json,updated_at) VALUES (?,?,?)')
-                .run(
-                  handle,
-                  JSON.stringify({
-                    id: handle,
-                    sessionId: session.id,
-                    workspaceId: session.workspaceId,
-                    ...(sourcePath ? { sourcePath } : {}),
-                    ...(command ? { command } : {}),
-                    content: output,
-                  }),
-                  services.clock.now().toISOString(),
-                );
-            return {
-              text: result.output,
-              filtered: result.output !== output,
-              ...(handle ? { recoveryHandle: handle } : {}),
-            };
-          },
-          readRecovery: async (handle) => {
-            const row = services.db.client
-              .prepare('SELECT data_json FROM optimizer_blobs WHERE id=?')
-              .get(handle) as { data_json: string } | undefined;
-            if (!row) return undefined;
-            try {
-              const blob = JSON.parse(row.data_json) as {
-                sessionId?: string;
-                workspaceId?: string;
-                sourcePath?: string;
-                command?: string;
-                content?: string;
-              };
-              if (
-                blob.sessionId !== session.id ||
-                (blob.workspaceId !== undefined && blob.workspaceId !== session.workspaceId) ||
-                isProtectedWorkspacePath(blob.sourcePath ?? '') ||
-                blob.command?.split(/[\s"'`|&;<>()[\]]+/).some(isProtectedWorkspacePath)
-              )
-                return undefined;
-              if (blob.sourcePath !== undefined) {
+              },
+              resolveCandidates: (selectedProfile, stepKind, inputTokens) =>
+                runtime.gateway.resolveCandidates(selectedProfile, stepKind, inputTokens),
+              emit: emitAgentEvent,
+              traceContext,
+              telemetry: services.telemetry,
+              requestApproval: (part, signal) =>
+                new Promise((resolve) => {
+                  services.telemetry.log({
+                    id: newId('evt'),
+                    ts: services.clock.now().toISOString(),
+                    level: 'info',
+                    source: 'ui',
+                    event: 'approval.requested',
+                    session_id: session.id,
+                    trace_id: traceId,
+                    data: { approval_id: part.id, kind: part.kind, summary: part.summary },
+                  });
+                  const finish = (decision: 'allowed_once' | 'allowed_always' | 'denied') => {
+                    services.telemetry.log({
+                      id: newId('evt'),
+                      ts: services.clock.now().toISOString(),
+                      level: 'info',
+                      source: 'ui',
+                      event: 'approval.resolved',
+                      session_id: session.id,
+                      trace_id: traceId,
+                      data: { approval_id: part.id, decision },
+                    });
+                    resolve(decision);
+                  };
+                  const approvalKey = `${session.id}:${part.id}`;
+                  if (signal.aborted) {
+                    finish('denied');
+                    return;
+                  }
+                  approvals.set(approvalKey, resolve);
+                  // The UI can answer as soon as the approval part is emitted, before this
+                  // callback registers its waiter. Reconcile the persisted decision to avoid
+                  // leaving the agent suspended after a fast Allow click.
+                  const persisted = services.messages
+                    .list()
+                    .flatMap((message) => (message.sessionId === session.id ? message.parts : []))
+                    .find((candidate) => candidate.id === part.id);
+                  if (persisted?.type === 'approval_request' && persisted.state !== 'pending') {
+                    approvals.delete(approvalKey);
+                    finish(persisted.state);
+                  }
+                  signal.addEventListener(
+                    'abort',
+                    () => {
+                      approvals.delete(approvalKey);
+                      finish('denied');
+                    },
+                    { once: true },
+                  );
+                }),
+              filterOutput: async (name, output, command, sourcePath) => {
+                const { optimizeOutput } = await import('@ferry/optimizer');
+                const result = optimizeOutput(command ?? name, output);
+                if (sourcePath && isProtectedWorkspacePath(sourcePath))
+                  return { text: result.output, filtered: result.output !== output };
+                const handle = result.output === output ? undefined : newId('recovery');
+                if (handle)
+                  services.db.client
+                    .prepare('INSERT INTO optimizer_blobs (id,data_json,updated_at) VALUES (?,?,?)')
+                    .run(
+                      handle,
+                      JSON.stringify({
+                        id: handle,
+                        sessionId: session.id,
+                        workspaceId: session.workspaceId,
+                        ...(sourcePath ? { sourcePath } : {}),
+                        ...(command ? { command } : {}),
+                        content: output,
+                      }),
+                      services.clock.now().toISOString(),
+                    );
+                return {
+                  text: result.output,
+                  filtered: result.output !== output,
+                  ...(handle ? { recoveryHandle: handle } : {}),
+                };
+              },
+              readRecovery: async (handle) => {
+                const row = services.db.client
+                  .prepare('SELECT data_json FROM optimizer_blobs WHERE id=?')
+                  .get(handle) as { data_json: string } | undefined;
+                if (!row) return undefined;
                 try {
-                  await new WorkspaceJail(workspace.path).resolve(blob.sourcePath);
+                  const blob = JSON.parse(row.data_json) as {
+                    sessionId?: string;
+                    workspaceId?: string;
+                    sourcePath?: string;
+                    command?: string;
+                    content?: string;
+                  };
+                  if (
+                    blob.sessionId !== session.id ||
+                    (blob.workspaceId !== undefined && blob.workspaceId !== session.workspaceId) ||
+                    isProtectedWorkspacePath(blob.sourcePath ?? '') ||
+                    blob.command?.split(/[\s"'`|&;<>()[\]]+/).some(isProtectedWorkspacePath)
+                  )
+                    return undefined;
+                  if (blob.sourcePath !== undefined) {
+                    try {
+                      await new WorkspaceJail(workspace.path).resolve(blob.sourcePath);
+                    } catch {
+                      return undefined;
+                    }
+                  }
+                  return blob.content;
                 } catch {
                   return undefined;
                 }
-              }
-              return blob.content;
-            } catch {
-              return undefined;
-            }
-          },
-        });
-        void loop
-          .run({ sessionId: session.id, signal: controller.signal, resume: resume === true })
-          .catch((error: unknown) => {
-            if (!controller.signal.aborted)
-              services.logger.error(
-                { error: compactAgentError(error), sessionId: session.id },
-                'Agent session failed',
+              },
+            });
+            if (isRunAborted()) throw controller.signal.reason;
+            const setWorking = services.sessions.get(session.id);
+            if (setWorking)
+              updateSession({
+                ...setWorking,
+                status: 'running',
+                runPhase: 'working',
+                inFlight: true,
+              });
+            clearTimeout(watchdog);
+            await loop.run({
+              sessionId: session.id,
+              signal: controller.signal,
+              resume: resume === true,
+            });
+          } catch (error) {
+            backgroundFailed = !controller.signal.aborted;
+            services.logger.error(
+              { error: compactAgentError(error), sessionId: session.id },
+              'Agent session failed',
+            );
+            if (!controller.signal.aborted && !timedOut) {
+              const errorMessage = store.appendMessage(
+                session.id,
+                'assistant',
+                [
+                  {
+                    type: 'error',
+                    id: PartIdSchema.parse(newId('part')),
+                    message: error instanceof Error ? error.message : 'The agent run failed',
+                    kind: 'internal',
+                  },
+                ],
+                null,
+                services.clock.now(),
               );
-          })
-          .finally(async () => {
-            await mcpManager.dispose().catch((error: unknown) => {
+              host.emit('session.message', {
+                sessionId: session.id,
+                message: MessageSchema.parse(errorMessage),
+              });
+            }
+          } finally {
+            clearTimeout(watchdog);
+            await mcpManager?.dispose().catch((error: unknown) => {
               services.logger.warn({ err: error, sessionId: session.id }, 'MCP disposal failed');
             });
-            controllers.delete(session.id);
-            runPromises.delete(session.id);
-            services.activeTraceContexts.delete(session.id);
-            if (!shuttingDown) {
+            const ownsRun = controllers.get(session.id) === controller;
+            if (ownsRun) controllers.delete(session.id);
+            if (runPromises.get(session.id) === run) runPromises.delete(session.id);
+            if (services.activeTraceContexts.get(session.id) === traceContext)
+              services.activeTraceContexts.delete(session.id);
+            if (ownsRun && !shuttingDown) {
               const latest = services.sessions.get(session.id);
-              if (latest?.inFlight)
-                updateSession({
-                  ...latest,
-                  status: latest.status === 'running' ? 'idle' : latest.status,
-                  inFlight: false,
-                });
-              else if (latest?.status === 'running') updateSession({ ...latest, status: 'idle' });
-              else if (latest?.status === 'idle') {
-                host.emit('session.updated', latest);
-                host.emit('session.status', latest);
+              if (latest) {
+                const status =
+                  timedOut || backgroundFailed
+                    ? 'error'
+                    : controller.signal.aborted
+                      ? 'idle'
+                      : latest.status === 'running'
+                        ? 'idle'
+                        : latest.status;
+                updateSession({ ...latest, status, runPhase: undefined, inFlight: false });
               }
             }
             resolveRun();
-          });
-      } catch (error) {
-        controllers.delete(session.id);
-        runPromises.delete(session.id);
-        services.activeTraceContexts.delete(session.id);
-        const latest = services.sessions.get(session.id);
-        if (latest?.inFlight) updateSession({ ...latest, status: 'error', inFlight: false });
-        resolveRun();
-        throw error;
-      }
+          }
+        })();
+      });
+      return Promise.resolve(accepted);
     },
     async resume(rawId: unknown, rawOptions?: unknown) {
       const session = requireSession(rawId);
@@ -1389,7 +1511,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const session = requireSession(rawId);
       const run = runPromises.get(session.id);
       if (!run) {
-        updateSession({ ...session, status: 'idle' });
+        updateSession({ ...session, status: 'idle', runPhase: undefined, inFlight: false });
         return;
       }
       controllers.get(session.id)?.abort();

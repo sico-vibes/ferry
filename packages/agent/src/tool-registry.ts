@@ -113,6 +113,24 @@ const DecisionSchema = z.object({ text: z.string(), why: z.string() });
 const ReadOutputSchema = z.object({ handle: z.string() });
 const RepoMapSchema = z.object({ tokenBudget: z.number().int().min(200).max(1200).optional() });
 
+function touchedPathsForMutation(name: string, args: unknown): string[] {
+  if (typeof args !== 'object' || args === null) return [];
+  const input = args as Record<string, unknown>;
+  if (name === 'apply_patch' && typeof input.patch === 'string') {
+    const paths = new Set<string>();
+    for (const line of input.patch.split(/\r?\n/)) {
+      if (line.startsWith('--- ') && line.slice(4) !== '/dev/null')
+        paths.add(line.slice(4).replace(/^a\//, ''));
+      else if (line.startsWith('+++ ') && line.slice(4) !== '/dev/null')
+        paths.add(line.slice(4).replace(/^b\//, ''));
+    }
+    return [...paths];
+  }
+  return [input.path, input.from, input.to].filter(
+    (candidate): candidate is string => typeof candidate === 'string',
+  );
+}
+
 export function createWorkspaceTools(options: ToolRegistryOptions): {
   tools: AgentTool[];
   workspace: WorkspaceTools;
@@ -320,9 +338,12 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
           };
           return { value: result, output };
         }
-        if (definition.mutates) {
+        if (definition.mutates && definition.name !== 'run_command') {
           const label = `Before ${definition.title}`;
-          const id = await checkpoints.snapshot(label);
+          const id = await checkpoints.snapshot(
+            label,
+            touchedPathsForMutation(definition.name, args),
+          );
           options.onCheckpointCreated?.(id, label);
           options.onPart({
             type: 'checkpoint',

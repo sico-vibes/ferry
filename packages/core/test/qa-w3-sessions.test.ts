@@ -1,6 +1,6 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createRpcFerryClient } from '@ferry/client';
 import { createCoreHost, createMemoryTransportPair } from '../src/index.js';
 import { newId } from '@ferry/shared';
@@ -58,13 +58,82 @@ describe('QA W3 sessions: run lifecycle and races', () => {
       await waitFor(async () => (await sessionStatus(h.rpc, session.id)) === 'running');
       await expect(
         h.rpc.sessions.send(session.id, { text: 'second prompt' }),
-      ).rejects.toMatchObject({ code: -32010, kind: 'conflict' });
+      ).rejects.toMatchObject({
+        code: -32010,
+        kind: 'conflict',
+        details: { sessionId: session.id, status: 'running' },
+      });
       await first;
       await cancelAndSettle(h, session.id);
     } finally {
       await h.close();
     }
   }, 60_000);
+
+  it('returns an accepted send in preparing state before background setup completes', async () => {
+    const h = await startHarness();
+    try {
+      const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      const startedAt = Date.now();
+      await h.rpc.sessions.send(session.id, { text: 'respond quickly' });
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+      const accepted = h.services.sessions.get(session.id);
+      expect(accepted).toMatchObject({ status: 'running', runPhase: 'preparing' });
+      expect((await h.rpc.sessions.get(session.id)).messages.at(-1)?.role).toBe('user');
+      await waitFor(async () => (await sessionStatus(h.rpc, session.id)) === 'idle');
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
+
+  it('rejects untrusted workspaces before adding a prompt, then accepts trust by workspace id', async () => {
+    const h = await startHarness();
+    try {
+      const path = join(h.root, 'untrusted-workspace');
+      await mkdir(path, { recursive: true });
+      const workspace = await h.rpc.workspaces.open(path);
+      expect(workspace).toMatchObject({ trusted: false, riskyRoot: false });
+      const session = await h.rpc.sessions.create({ workspaceId: workspace.id });
+      await expect(
+        h.rpc.sessions.send(session.id, { text: 'do not append yet' }),
+      ).rejects.toMatchObject({
+        code: -32046,
+        kind: 'workspace_untrusted',
+        details: { workspaceId: workspace.id, riskyRoot: false },
+      });
+      expect((await h.rpc.sessions.get(session.id)).messages).toEqual([]);
+      expect(await h.rpc.workspaces.trust(workspace.id)).toMatchObject({ trusted: true });
+      await h.rpc.sessions.send(session.id, { text: 'trusted now' });
+      await waitFor(async () => (await sessionStatus(h.rpc, session.id)) === 'idle');
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
+
+  it('turns background setup failures into an error and releases the session for another send', async () => {
+    const h = await startHarness();
+    try {
+      const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      const log = vi.spyOn(h.services.telemetry, 'log').mockImplementation(() => {
+        throw new Error('injected preparation failure');
+      });
+      await expect(
+        h.rpc.sessions.send(session.id, { text: 'first attempt' }),
+      ).resolves.toMatchObject({
+        status: 'running',
+        runPhase: 'preparing',
+      });
+      await waitFor(async () => (await sessionStatus(h.rpc, session.id)) === 'error');
+      expect((await h.rpc.sessions.get(session.id)).messages.at(-1)?.parts).toContainEqual(
+        expect.objectContaining({ type: 'error', message: 'injected preparation failure' }),
+      );
+      log.mockRestore();
+      await h.rpc.sessions.send(session.id, { text: 'second attempt' });
+      await waitFor(async () => (await sessionStatus(h.rpc, session.id)) === 'idle');
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
 
   it('treats a second cancel as a no-op and settles the run', async () => {
     const h = await startHarness({ turns: [textTurn('slow response', { delayMs: 200 })] });

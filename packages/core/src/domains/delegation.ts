@@ -20,7 +20,12 @@ import {
   type GateResult,
   type TraceContext,
 } from '@ferry/shared';
-import { WorkspaceJail, ShadowCheckpoints, runCommand } from '@ferry/workspace';
+import {
+  WorkspaceJail,
+  ShadowCheckpoints,
+  isRiskyWorkspaceRoot,
+  runCommand,
+} from '@ferry/workspace';
 import { loadProjectConfig } from '@ferry/config';
 import { CheckpointIdSchema } from '@ferry/shared';
 import { canonicalPathKey } from '@ferry/shared/node-paths';
@@ -195,6 +200,12 @@ export function register(host: CoreHost, services: FerryServices): void {
     async start(rawInput: unknown) {
       const input = StartSchema.parse(rawInput);
       const { sessionId, workspace } = workspaceForSession(input.sessionId);
+      if (!workspace.trusted)
+        throw rpcDomainError(
+          -32046,
+          'workspace_untrusted',
+          'Trust this workspace before using tools',
+        );
       const parentTrace = services.activeTraceContexts.get(sessionId);
       const read = await laneRead(workspace.path);
       const lane = read.lanes.find((candidate) => candidate.name === input.lane);
@@ -209,7 +220,14 @@ export function register(host: CoreHost, services: FerryServices): void {
         );
       const jail = new WorkspaceJail(workspace.path);
       const shadow = new ShadowCheckpoints(jail, services.paths.home);
-      const beforeId = await shadow.snapshot(`Before delegation ${input.lane}`);
+      const beforeId = isRiskyWorkspaceRoot(workspace.path)
+        ? null
+        : await shadow.snapshot(`Before delegation ${input.lane}`);
+      if (!beforeId)
+        services.logger.warn(
+          { workspaceId: workspace.id, path: workspace.path },
+          'Skipping delegation checkpoint for a risky workspace root',
+        );
       const gatePlan = await configuredGatePlan(workspace);
       const delegationBrief = briefWithGates(input.brief, gatePlan.commands);
 
@@ -240,18 +258,20 @@ export function register(host: CoreHost, services: FerryServices): void {
         deviceId: services.deviceId,
         appVersion: services.env.FERRY_RELEASE_VERSION ?? '0.9.0',
       });
-      const checkpoint = {
-        id: beforeId,
-        sessionId,
-        label: `Before delegation ${input.lane}`,
-        createdAt: now,
-        fileCount: 0,
-      };
-      services.checkpoints.put({ ...checkpoint, id: CheckpointIdSchema.parse(checkpoint.id) });
-      logTraceEvent(runId, 'checkpoint.created', 'info', {
-        checkpoint_id: checkpoint.id,
-        label: checkpoint.label,
-      });
+      if (beforeId) {
+        const checkpoint = {
+          id: beforeId,
+          sessionId,
+          label: `Before delegation ${input.lane}`,
+          createdAt: now,
+          fileCount: 0,
+        };
+        services.checkpoints.put({ ...checkpoint, id: CheckpointIdSchema.parse(checkpoint.id) });
+        logTraceEvent(runId, 'checkpoint.created', 'info', {
+          checkpoint_id: checkpoint.id,
+          label: checkpoint.label,
+        });
+      }
       publish(initial);
       logTraceEvent(runId, 'delegation.started', 'info', {
         lane: lane.name,
@@ -302,6 +322,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           return handle;
         },
         checkpointDiff: async () => {
+          if (!beforeId) return [];
           const diff = await shadow.diff(beforeId);
           return (diff.match(/^diff --git a\/(.+?) b\//gm) ?? []).map((line) => ({
             path: line.replace(/^diff --git a\/(.+?) b\/.*/, '$1'),

@@ -30,6 +30,7 @@ export const SessionSchema = z.object({
   starred: z.boolean(),
   pinned: z.boolean(),
   status: SessionStatusSchema,
+  runPhase: z.enum(['preparing', 'working']).optional(),
   // Independent of status so startup can recover a run even if an error handler
   // persisted a terminal status immediately before the process died.
   inFlight: z.boolean().optional(),

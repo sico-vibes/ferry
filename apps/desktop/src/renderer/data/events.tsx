@@ -44,6 +44,12 @@ export function useFerryEvents(): void {
         const current = cache.getQueryData<SessionDetail>(key);
         if (current) cache.setQueryData(key, { ...current, session });
       }),
+      client.on('session.removed', ({ id }) => {
+        // Empty chats are cleaned up by the engine; drop them from the sidebar and open tabs.
+        cache.removeQueries({ queryKey: keys.session(id) });
+        void cache.invalidateQueries({ queryKey: keys.sessions });
+        if (useUI.getState().tabs.some((tab) => tab.id === id)) useUI.getState().closeTab(id);
+      }),
       client.on('agent.event', ({ sessionId, event }) => {
         const key = keys.session(sessionId);
         const current = cache.getQueryData<SessionDetail>(key);

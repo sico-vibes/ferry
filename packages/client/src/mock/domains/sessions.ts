@@ -306,6 +306,7 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
       state.taskRecords.delete(id);
       persist();
       syncStore();
+      emit('session.removed', { id });
     },
   };
 }

@@ -30,6 +30,7 @@ import type {
 
 export const FerryEventSchemas = {
   'session.updated': SessionSchema,
+  'session.removed': z.object({ id: SessionIdSchema }),
   'session.status': SessionSchema,
   'approval.request': z
     .object({
@@ -139,6 +140,7 @@ export const FerryEventSchemas = {
 } as const;
 export interface FerryEvents {
   'session.updated': Session;
+  'session.removed': { id: import('@ferry/shared').SessionId };
   'session.status': Session;
   'approval.request': {
     sessionId: import('@ferry/shared').SessionId;

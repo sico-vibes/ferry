@@ -3,7 +3,7 @@ import path from 'node:path';
 import { WorkspaceIdSchema, WorkspaceSchema, newId } from '@ferry/shared';
 import { canonicalPathKey } from '@ferry/shared/node-paths';
 import type { Workspace } from '@ferry/shared';
-import { gitBranch, WorkspaceJail } from '@ferry/workspace';
+import { gitBranch, isRiskyWorkspaceRoot, WorkspaceJail } from '@ferry/workspace';
 import { z } from 'zod';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
@@ -30,7 +30,12 @@ export function register(host: CoreHost, services: FerryServices): void {
   host.registerDomain('workspaces', {
     list() {
       return Promise.resolve(
-        services.workspaces.list().map((workspace) => WorkspaceSchema.parse(workspace)),
+        services.workspaces.list().map((workspace) =>
+          WorkspaceSchema.parse({
+            ...workspace,
+            riskyRoot: isRiskyWorkspaceRoot(workspace.path),
+          }),
+        ),
       );
     },
     async open(rawPath: unknown) {
@@ -69,6 +74,8 @@ export function register(host: CoreHost, services: FerryServices): void {
           id: newId('workspace'),
           name: path.basename(absolutePath) || absolutePath,
           path: absolutePath,
+          trusted: false,
+          riskyRoot: isRiskyWorkspaceRoot(absolutePath),
           gitBranch: branch,
           language: language(entries),
           lastOpenedAt: services.clock.now().toISOString(),
@@ -82,6 +89,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       } else {
         workspace = WorkspaceSchema.parse({
           ...workspace,
+          riskyRoot: isRiskyWorkspaceRoot(absolutePath),
           gitBranch: branch,
           language: language(entries),
           lastOpenedAt: services.clock.now().toISOString(),
@@ -108,6 +116,21 @@ export function register(host: CoreHost, services: FerryServices): void {
         const workspace = WorkspaceSchema.parse({
           ...current,
           settings: { ...current.settings, ...patch },
+        });
+        services.workspaces.put(workspace);
+        host.emit('workspace.updated', workspace);
+        return workspace;
+      });
+    },
+    trust(rawId: unknown) {
+      return Promise.resolve().then(() => {
+        const id = IdSchema.parse(rawId);
+        const current = services.workspaces.get(id);
+        if (!current) throw rpcDomainError(-32044, 'not_found', `Workspace not found: ${id}`);
+        const workspace = WorkspaceSchema.parse({
+          ...current,
+          trusted: true,
+          riskyRoot: isRiskyWorkspaceRoot(current.path),
         });
         services.workspaces.put(workspace);
         host.emit('workspace.updated', workspace);

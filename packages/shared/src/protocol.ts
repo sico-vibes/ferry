@@ -12,12 +12,14 @@ export const DomainErrorKindSchema = z.enum([
   'not_implemented',
   'domain_error',
   'internal',
+  'workspace_untrusted',
 ]);
 export const FERRY_METHODS = [
   'workspaces.list',
   'workspaces.open',
   'workspaces.remove',
   'workspaces.update',
+  'workspaces.trust',
   'sessions.list',
   'sessions.search',
   'sessions.get',
@@ -126,6 +128,7 @@ export const FERRY_METHOD_PARAMS_SCHEMAS: Readonly<
 };
 export const FERRY_EVENTS = [
   'session.updated',
+  'session.removed',
   'session.status',
   'approval.request',
   'mcp.status',

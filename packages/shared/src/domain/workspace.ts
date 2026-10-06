@@ -12,6 +12,8 @@ export const WorkspaceSchema = z.object({
   id: WorkspaceIdSchema,
   name: z.string(),
   path: z.string(),
+  trusted: z.boolean().default(true),
+  riskyRoot: z.boolean().default(false),
   gitBranch: z.string().nullable(),
   language: z.enum(['ts', 'js', 'py', 'go', 'rust', 'other']),
   lastOpenedAt: z.iso.datetime(),

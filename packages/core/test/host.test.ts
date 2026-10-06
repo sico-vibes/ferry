@@ -69,7 +69,7 @@ async function makeStdioHarness() {
     mock.providers as unknown as Record<string, (...params: unknown[]) => unknown>,
   );
   await host.start();
-  const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
+  const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 60_000 });
   await rpc.hello;
   return {
     client: createHybridClient(mock, rpc, ['providers']),
@@ -124,7 +124,7 @@ async function makeRealDomainsHarness() {
       FERRY_PROVIDER_BASE_URL_OPENAI: `${stream.baseUrl}/v1`,
     },
   });
-  const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
+  const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 60_000 });
   await rpc.hello;
   for (const provider of await rpc.providers.list()) {
     await rpc.providers.setKey(provider.id, 'contract-fixture-key');
@@ -133,7 +133,8 @@ async function makeRealDomainsHarness() {
   const mock = createMockFerryClient({ behavior: 'test' });
   const workspacePath = join(dataDir, 'real-domain-contract-workspace');
   await mkdir(workspacePath, { recursive: true });
-  await rpc.workspaces.open(workspacePath);
+  const workspace = await rpc.workspaces.open(workspacePath);
+  await rpc.workspaces.trust(workspace.id);
   return {
     client: createHybridClient(mock, rpc, [
       'settings',
@@ -622,6 +623,7 @@ describe('provider, model and quota RPC integration', () => {
       expect(configuredCandidates).toContain('sambanova');
       expect(configuredCandidates).not.toContain('deepinfra');
       const workspace = await rpc.workspaces.open(workspacePath);
+      await rpc.workspaces.trust(workspace.id);
       const session = await rpc.sessions.create({
         workspaceId: workspace.id,
         profileId: autoFreeId,

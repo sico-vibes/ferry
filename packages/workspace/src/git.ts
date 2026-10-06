@@ -82,10 +82,18 @@ export class ShadowCheckpoints {
         );
     } else if (touchedPaths.length > 0) {
       const paths: string[] = [];
+      const tracked = new Set(
+        (await this.git(['ls-files', '-z'])).stdout.split('\0').filter(Boolean),
+      );
       for (const touched of touchedPaths) {
         if (isProtectedWorkspacePath(touched)) continue;
         const absolute = await this.jail.resolve(touched, { allowMissing: true });
-        paths.push(this.jail.relative(absolute));
+        const relative = this.jail.relative(absolute);
+        const exists = await fs
+          .lstat(absolute)
+          .then(() => true)
+          .catch(() => false);
+        if (exists || tracked.has(relative)) paths.push(relative);
       }
       if (paths.length)
         await this.git(['add', '-A', '--', ...paths.map((relative) => `:(literal)${relative}`)]);

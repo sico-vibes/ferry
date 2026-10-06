@@ -28,6 +28,7 @@ const messageId = sampleMessage.id;
 const partId = sampleMessagePart.id;
 const samples = {
   'session.updated': sampleSession satisfies Session,
+  'session.removed': { id: sessionId },
   'session.status': sampleSession satisfies Session,
   'approval.request': {
     sessionId,

@@ -7,12 +7,13 @@ import { Dialog, UiV2 } from '@ferry/ui';
 import type { SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { useFerryEvents } from '../data/events';
-import { keys, useProfiles, useSessions, useSettings } from '../data/queries';
+import { keys, useSessions, useSettings } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
 import { RightPanel } from './right-panel/RightPanel';
 import { appMounts } from './mounts';
 import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
+import { WorkspaceTrustDialog } from './WorkspaceTrustDialog';
 import { V2Sidebar } from './V2Sidebar';
 import { SettingsDialog } from './SettingsDialog';
 import { V2ChatHeader } from './V2ChatHeader';
@@ -206,7 +207,6 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   }, [cache, client, navigate]);
   const { data: sessions = [] } = useSessions();
   const { data: settings } = useSettings();
-  const { data: profiles = [] } = useProfiles();
   useEffect(() => {
     if (!settings) return;
     const root = document.documentElement;
@@ -300,15 +300,11 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
         });
         return;
       }
-      const profileId = profiles.find((profile) => profile.id === settings?.activeProfileId)?.id;
-      const session = await client.sessions.create({
-        workspaceId: workspace.id,
-        ...(profileId ? { profileId } : {}),
-      });
-      openTab({ id: session.id, title: session.title });
-      await cache.invalidateQueries({ queryKey: keys.sessions });
+      // A chat exists only once its first message is sent (HomeCanvas creates it), so "New chat"
+      // just opens the composer instead of leaving an empty session behind.
+      useUI.getState().setSelectedWorkspace(workspace.id);
       useUI.getState().requestComposerFocus();
-      await navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
+      await navigate({ to: '/' });
     } catch (error) {
       pushToast({
         kind: 'error',
@@ -632,6 +628,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       </Dialog>
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <SettingsDialog />
+      <WorkspaceTrustDialog />
     </div>
   );
 }
