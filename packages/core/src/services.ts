@@ -132,6 +132,7 @@ export function recordProviderKeyFailure(
   entry: ProviderKeyEntry,
   statusCode: number,
   message: string,
+  retryAfter?: string,
 ): void {
   const saved = services.providers.get(entry.providerId);
   const now = services.clock.now().getTime();
@@ -150,9 +151,12 @@ export function recordProviderKeyFailure(
   let cooldownUntil: string | null = null;
   if ((statusCode === 401 || statusCode === 403) && saved?.autoDisableEnabled !== false)
     status = 'invalid';
-  else if (statusCode === 429) {
+  else if (statusCode === 429 || statusCode === 402) {
     status = 'rate_limited';
-    cooldownUntil = new Date(now + 60_000).toISOString();
+    const retryAfterTime = retryAfter ? Date.parse(retryAfter) : Number.NaN;
+    cooldownUntil = new Date(
+      Number.isFinite(retryAfterTime) && retryAfterTime > now ? retryAfterTime : now + 60_000,
+    ).toISOString();
   } else if (saved?.autoDisableEnabled !== false) {
     const disabledUntil = autoDisableUntil(history.slice(0, -1), current, {
       statusCodes: saved?.autoDisableStatusCodes ?? [],

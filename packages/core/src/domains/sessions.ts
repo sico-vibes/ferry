@@ -763,6 +763,9 @@ export function register(host: CoreHost, services: FerryServices): void {
           },
           providerAffinityKey: (providerId, sessionId) =>
             runtime.gateway.providerAffinityKey(providerId, sessionId),
+          providerKeyIds: (providerId) => runtime.gateway.providerKeyIds(providerId),
+          providerUnavailableKeyIds: (providerId, modelRef) =>
+            runtime.gateway.unavailableProviderKeyIds(providerId, modelRef),
           toolRejectionState:
             z
               .array(z.object({ modelRef: z.string(), requestId: z.string(), at: z.number() }))

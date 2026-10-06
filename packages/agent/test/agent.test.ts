@@ -1216,6 +1216,42 @@ describe('@ferry/agent', () => {
     }
   });
 
+  it('does not exclude a provider when one key fails and another key remains', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'openai/alternate-model',
+        name: 'Alternate OpenAI model',
+      });
+      const calls: string[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        providerAffinityKey: () => 'openai:key-1',
+        providerKeyIds: () => ['openai:key-1', 'openai:key-2'],
+        resolveCandidates: () => [state.model, alternate],
+        generator: async ({ model }) => {
+          calls.push(model.ref);
+          if (calls.length === 1)
+            throw Object.assign(new Error('invalid api key'), { statusCode: 401 });
+          return { text: 'Recovered on the same provider.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      expect(calls).toEqual([state.model.ref, alternate.ref]);
+    } finally {
+      state.database.close();
+    }
+  });
+
   it('adds a handover packet when the routed model changes between completed steps', async () => {
     const state = await setup();
     try {

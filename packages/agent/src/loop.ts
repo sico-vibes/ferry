@@ -225,6 +225,9 @@ export interface AgentOptions {
   onReliabilityState?: (entries: ReliabilityObservation[]) => void;
   routingNow?: () => number;
   acquireQuotaLease?: (model: ModelInfo, tokens: number) => (() => void) | null;
+  /** Configured key ids in the same namespace returned by providerAffinityKey. */
+  providerKeyIds?: (providerId: string) => readonly string[];
+  providerUnavailableKeyIds?: (providerId: string, modelRef?: string) => readonly string[];
   stickyState?: Readonly<Record<string, StickyRoute>>;
   onStickyState?: (state: Record<string, StickyRoute>) => void;
   providerAffinityKey?: (providerId: string, sessionId: string) => string | undefined;
@@ -312,6 +315,20 @@ export class AgentLoop {
 
   private now(): number {
     return this.options.routingNow?.() ?? Date.now();
+  }
+
+  private providerKeysExhausted(sessionId: string, providerId: string, modelRef?: string): boolean {
+    const badKeys = this.sessionBadKeys.get(sessionId) ?? new Set<string>();
+    if (badKeys.has(`${providerId}:*`)) return true;
+    const keyIds = this.options.providerKeyIds?.(providerId) ?? [];
+    const unavailable = this.options.providerUnavailableKeyIds?.(providerId, modelRef) ?? [];
+    const effectivelyBad = new Set([
+      ...[...badKeys].filter((key) => key.startsWith(`${providerId}:`)),
+      ...unavailable.map((keyId) => `${providerId}:${keyId}`),
+    ]);
+    return (
+      keyIds.length > 0 && keyIds.every((keyId) => effectivelyBad.has(`${providerId}:${keyId}`))
+    );
   }
 
   private pinnedModelRefFor(sessionId: string): ModelRef | null {
@@ -1501,7 +1518,15 @@ export class AgentLoop {
             const badCredentialStatus =
               [401, 402, 403].includes(classified.status ?? 0) &&
               classified.family !== 'paid_required';
-            if (badCredentialStatus) this.sessionBadKeys.get(sessionId)?.add(model.providerId);
+            if (badCredentialStatus) {
+              const keyId = this.options.providerAffinityKey?.(model.providerId, sessionId);
+              this.sessionBadKeys.get(sessionId)?.add(`${model.providerId}:${keyId ?? '*'}`);
+              for (const unavailable of this.options.providerUnavailableKeyIds?.(
+                model.providerId,
+                model.ref,
+              ) ?? [])
+                this.sessionBadKeys.get(sessionId)?.add(`${model.providerId}:${unavailable}`);
+            }
             if (!localQuotaReservation && !badCredentialStatus && routingFailure.scope !== 'none') {
               this.resilience.recordFailure(routingFailure, model.ref, model.providerId);
             }
@@ -2394,7 +2419,7 @@ export class AgentLoop {
       : undefined;
     const stickyRef = stickyRoute?.modelRef;
     const eligible = (model: ModelInfo) =>
-      !this.sessionBadKeys.get(sessionId)?.has(model.providerId) &&
+      !this.providerKeysExhausted(sessionId, model.providerId, model.ref) &&
       !softBypassed?.has(model.ref) &&
       !dispatchExcluded.has(model.ref) &&
       !locked?.has(model.ref) &&
@@ -2430,13 +2455,9 @@ export class AgentLoop {
     });
     const selected = this.selectResilient(
       candidates.flatMap((item) => {
+        const model = this.options.catalog.models.find((candidate) => candidate.ref === item.ref);
         if (
-          this.sessionBadKeys
-            .get(sessionId)
-            ?.has(
-              this.options.catalog.models.find((candidate) => candidate.ref === item.ref)
-                ?.providerId ?? '',
-            ) ||
+          (model && this.providerKeysExhausted(sessionId, model.providerId, item.ref)) ||
           softBypassed?.has(item.ref) ||
           dispatchExcluded.has(item.ref) ||
           locked?.has(item.ref) ||
@@ -2444,7 +2465,6 @@ export class AgentLoop {
           (this.requestTooLargeAt.get(item.ref) ?? Infinity) <= inputTokens
         )
           return [];
-        const model = this.options.catalog.models.find((candidate) => candidate.ref === item.ref);
         return model ? [model] : [];
       }),
     );
@@ -2459,7 +2479,7 @@ export class AgentLoop {
     allowPinnedHandover = false,
     minimumContext = 0,
   ): ModelInfo | undefined {
-    // Desktop supplies one API key per provider today, so same-model key rotation is unavailable; continue to model fallback.
+    // Session dependencies rotate through provider keys before this model fallback path is reached.
     const pinnedExhaustion = this.options.routingSettings?.().pinnedExhaustion ?? 'handover';
     if (
       this.pinnedModelRefFor(sessionId) &&
@@ -2474,7 +2494,7 @@ export class AgentLoop {
       return this.selectResilient(
         candidates.filter(
           (candidate) =>
-            !this.sessionBadKeys.get(sessionId)?.has(candidate.providerId) &&
+            !this.providerKeysExhausted(sessionId, candidate.providerId, candidate.ref) &&
             !attemptedRefs.has(candidate.ref) &&
             candidate.contextWindow >= minimumContext &&
             !locked?.has(candidate.ref) &&
@@ -2500,7 +2520,7 @@ export class AgentLoop {
     });
     const remaining = ranked.flatMap((candidate) => {
       if (
-        this.sessionBadKeys.get(sessionId)?.has(candidate.ref.split('/')[0] ?? '') ||
+        this.providerKeysExhausted(sessionId, candidate.ref.split('/')[0] ?? '', candidate.ref) ||
         attemptedRefs.has(candidate.ref) ||
         locked?.has(candidate.ref) ||
         (this.requestTooLargeAt.get(candidate.ref) ?? Number.POSITIVE_INFINITY) <= inputTokens
