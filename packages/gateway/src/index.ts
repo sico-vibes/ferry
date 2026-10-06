@@ -71,6 +71,9 @@ export interface GatewayRequest {
 export interface GatewayCompletion {
   id: string;
   model: string;
+  traceId?: string;
+  attempts?: GatewayAttempt[];
+  responseModel?: string | null;
   text: string;
   toolCalls?: { id: string; name: string; arguments: string }[];
   inputTokens: number;
@@ -78,6 +81,19 @@ export interface GatewayCompletion {
   outputTokens: number;
   finishReason: string;
   reasoning?: string;
+}
+export interface GatewayAttempt {
+  model: string;
+  status: 'started' | 'failed' | 'served';
+  reason?: string;
+}
+export interface GatewayAttemptState {
+  servedModel: string;
+  attempts: GatewayAttempt[];
+}
+interface FerryRequestState extends GatewayAttemptState {
+  requestedModel: string;
+  traceId: string;
 }
 
 export {
@@ -121,6 +137,8 @@ export interface GatewayRuntime {
     temperature?: number;
     sessionHint: string;
     signal: AbortSignal;
+    traceId?: string;
+    onAttempt?: (state: GatewayAttemptState) => void;
     onText?: (delta: string) => void;
     onToolCall?: (tool: { id: string; name: string; arguments: string }) => void;
   }): Promise<GatewayCompletion>;
@@ -204,12 +222,104 @@ export function authenticateGatewayKey(token: string, keys: GatewayKey[]): Gatew
   return undefined;
 }
 
-function json(res: ServerResponse, status: number, body: unknown): void {
+function json(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  ferry?: ReturnType<typeof ferryMetadata>,
+): void {
+  if (ferry) setFerryHeaders(res, ferry);
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
   });
   res.end(JSON.stringify(body));
+}
+function createFerryRequestState(requestedModel: string): FerryRequestState {
+  return {
+    requestedModel,
+    traceId: `ferry_${randomBytes(12).toString('hex')}`,
+    servedModel: '',
+    attempts: [],
+  };
+}
+function ferryMetadata(
+  state: FerryRequestState,
+  completion?: GatewayCompletion,
+): {
+  traceId: string;
+  requestedModel: string;
+  servedModel: string | null;
+  attempts: GatewayAttempt[];
+  responseModel: string | null;
+  mismatch: boolean;
+} {
+  const servedModel = completion?.model ?? completion?.attempts?.at(-1)?.model ?? state.servedModel;
+  const attempts = completion?.attempts ?? state.attempts;
+  const responseModel = completion?.responseModel ?? null;
+  const servedModelId = servedModel.split('/').slice(1).join('/');
+  return {
+    traceId: completion?.traceId ?? state.traceId,
+    requestedModel: state.requestedModel,
+    servedModel: servedModel || null,
+    attempts: attempts.length
+      ? attempts
+      : servedModel
+        ? [{ model: servedModel, status: 'served' }]
+        : [],
+    responseModel,
+    mismatch: Boolean(
+      responseModel &&
+      servedModel &&
+      responseModel !== servedModel &&
+      responseModel !== servedModelId,
+    ),
+  };
+}
+function observeAttempt(state: FerryRequestState, attempt: GatewayAttemptState): void {
+  state.servedModel = attempt.servedModel;
+  state.attempts = attempt.attempts;
+}
+function observeCompletion(state: FerryRequestState, completion: GatewayCompletion): void {
+  if (completion.model) state.servedModel = completion.model;
+  if (completion.attempts) state.attempts = completion.attempts;
+}
+function ferryAttemptOptions(state: FerryRequestState): {
+  traceId: string;
+  onAttempt: (attempt: GatewayAttemptState) => void;
+} {
+  return {
+    traceId: state.traceId,
+    onAttempt: (attempt) => {
+      observeAttempt(state, attempt);
+    },
+  };
+}
+function setFerryHeaders(res: ServerResponse, metadata: ReturnType<typeof ferryMetadata>): void {
+  res.setHeader('x-ferry-requested-model', metadata.requestedModel);
+  if (metadata.servedModel) {
+    res.setHeader('x-ferry-served-model', metadata.servedModel);
+    res.setHeader('x-ferry-served-provider', metadata.servedModel.split('/', 1)[0] ?? '');
+  }
+  if (metadata.responseModel) res.setHeader('x-ferry-response-model', metadata.responseModel);
+  res.setHeader('x-ferry-attempts', String(metadata.attempts.length));
+  res.setHeader('x-ferry-trace-id', metadata.traceId);
+}
+function sendFerryMetadata(
+  send: (event: string, data: unknown) => void,
+  state: FerryRequestState,
+  completion?: GatewayCompletion,
+): void {
+  const metadata = ferryMetadata(state, completion);
+  send('ferry.metadata', {
+    trace_id: metadata.traceId,
+    requested_model: metadata.requestedModel,
+    served_model: metadata.servedModel,
+    served_provider: metadata.servedModel?.split('/', 1)[0] ?? null,
+    attempts: metadata.attempts,
+    response_model: metadata.responseModel,
+    mismatch: metadata.mismatch,
+  });
 }
 function errorBody(message: string, type = 'invalid_request_error', code: string | null = null) {
   return { error: { message, type, param: null, code } };
@@ -404,6 +514,7 @@ async function handleChat(
     json(res, 404, errorBody(`Unknown model: ${input.model}`, 'model_not_found'));
     return;
   }
+  const ferryState = createFerryRequestState(input.model);
   const reserved = reserve(
     key,
     Math.ceil(JSON.stringify(input).length / 4) + Math.max(0, input.max_tokens ?? 0),
@@ -430,9 +541,10 @@ async function handleChat(
     const normalized = normalizeMessages(input.messages);
     if (input.stream) {
       let streamStarted = false;
-      const beginStream = () => {
+      const beginStream = (completion?: GatewayCompletion) => {
         if (streamStarted) return;
         streamStarted = true;
+        setFerryHeaders(res, ferryMetadata(ferryState, completion));
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
           'cache-control': 'no-cache',
@@ -456,6 +568,7 @@ async function handleChat(
         ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
         sessionHint,
         signal: controller.signal,
+        ...ferryAttemptOptions(ferryState),
         onText: (delta) => {
           beginStream();
           res.write(`data: ${JSON.stringify(chatChunk(id, input.model, { content: delta }))}\n\n`);
@@ -466,7 +579,8 @@ async function handleChat(
         },
       });
       reserved.release();
-      beginStream();
+      observeCompletion(ferryState, result);
+      beginStream(result);
       usage.inputTokens = result.inputTokens;
       usage.cachedTokens = result.cachedTokens ?? 0;
       usage.outputTokens = result.outputTokens;
@@ -477,6 +591,11 @@ async function handleChat(
       const finishReason = tools.length ? 'tool_calls' : result.finishReason;
       res.write(
         `data: ${JSON.stringify({ ...chatChunk(id, input.model, {}, finishReason), choices: [{ index: 0, delta: {}, finish_reason: finishReason }], usage: { prompt_tokens: result.inputTokens, prompt_tokens_details: { cached_tokens: result.cachedTokens ?? 0 }, completion_tokens: result.outputTokens, total_tokens: result.inputTokens + result.outputTokens } })}\n\n`,
+      );
+      sendFerryMetadata(
+        (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+        ferryState,
+        result,
       );
       res.end('data: [DONE]\n\n');
     } else {
@@ -495,42 +614,49 @@ async function handleChat(
         ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
         sessionHint,
         signal: controller.signal,
+        ...ferryAttemptOptions(ferryState),
       });
       reserved.release();
+      observeCompletion(ferryState, result);
       usage.inputTokens = result.inputTokens;
       usage.cachedTokens = result.cachedTokens ?? 0;
       usage.outputTokens = result.outputTokens;
-      json(res, 200, {
-        id: result.id || id,
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model: input.model,
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: 'assistant',
-              content: result.text || null,
-              ...(result.toolCalls?.length
-                ? {
-                    tool_calls: result.toolCalls.map((tool) => ({
-                      id: tool.id,
-                      type: 'function',
-                      function: { name: tool.name, arguments: tool.arguments },
-                    })),
-                  }
-                : {}),
+      json(
+        res,
+        200,
+        {
+          id: result.id || id,
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: input.model,
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: result.text || null,
+                ...(result.toolCalls?.length
+                  ? {
+                      tool_calls: result.toolCalls.map((tool) => ({
+                        id: tool.id,
+                        type: 'function',
+                        function: { name: tool.name, arguments: tool.arguments },
+                      })),
+                    }
+                  : {}),
+              },
+              finish_reason: result.toolCalls?.length ? 'tool_calls' : result.finishReason,
             },
-            finish_reason: result.toolCalls?.length ? 'tool_calls' : result.finishReason,
+          ],
+          usage: {
+            prompt_tokens: usage.inputTokens,
+            prompt_tokens_details: { cached_tokens: usage.cachedTokens },
+            completion_tokens: usage.outputTokens,
+            total_tokens: usage.inputTokens + usage.outputTokens,
           },
-        ],
-        usage: {
-          prompt_tokens: usage.inputTokens,
-          prompt_tokens_details: { cached_tokens: usage.cachedTokens },
-          completion_tokens: usage.outputTokens,
-          total_tokens: usage.inputTokens + usage.outputTokens,
         },
-      });
+        ferryMetadata(ferryState, result),
+      );
     }
     runtime.store.recordUsage(
       key.id,
@@ -545,6 +671,10 @@ async function handleChat(
     if (res.headersSent) {
       res.write(
         `data: ${JSON.stringify({ error: { message: mapped.message, type: mapped.type, code: mapped.code } })}\n\n`,
+      );
+      sendFerryMetadata(
+        (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+        ferryState,
       );
       res.end('data: [DONE]\n\n');
     } else json(res, mapped.status, errorBody(mapped.message, mapped.type, mapped.code));
@@ -587,6 +717,7 @@ async function handleAnthropic(
     json(res, 404, anthropicError(`Unknown model: ${originalModel}`, 'not_found_error'));
     return;
   }
+  const ferryState = createFerryRequestState(originalModel);
   const reserved = reserve(
     key,
     Math.ceil(JSON.stringify(payload).length / 4) + Math.max(0, Number(payload.max_tokens) || 0),
@@ -635,9 +766,10 @@ async function handleAnthropic(
         res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       let streamStarted = false;
       const textStarted = { value: false };
-      const beginStream = () => {
+      const beginStream = (completion?: GatewayCompletion) => {
         if (streamStarted) return;
         streamStarted = true;
+        setFerryHeaders(res, ferryMetadata(ferryState, completion));
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
           'cache-control': 'no-cache',
@@ -668,6 +800,7 @@ async function handleAnthropic(
         ...(payload.max_tokens ? { maxTokens: Number(payload.max_tokens) } : {}),
         sessionHint,
         signal: controller.signal,
+        ...ferryAttemptOptions(ferryState),
         onText: (delta) => {
           beginStream();
           if (!textStarted.value) {
@@ -690,7 +823,8 @@ async function handleAnthropic(
         },
       });
       reserved.release();
-      beginStream();
+      observeCompletion(ferryState, result);
+      beginStream(result);
       if (textStarted.value) send('content_block_stop', { type: 'content_block_stop', index: 0 });
       for (let i = 0; i < (result.toolCalls?.length ?? 0); i++) {
         const call = result.toolCalls?.[i];
@@ -722,6 +856,7 @@ async function handleAnthropic(
           output_tokens: result.outputTokens,
         },
       });
+      sendFerryMetadata(send, ferryState, result);
       send('message_stop', { type: 'message_stop' });
       res.end();
       runtime.store.recordUsage(
@@ -742,8 +877,10 @@ async function handleAnthropic(
         ...(payload.max_tokens ? { maxTokens: Number(payload.max_tokens) } : {}),
         sessionHint,
         signal: controller.signal,
+        ...ferryAttemptOptions(ferryState),
       });
       reserved.release();
+      observeCompletion(ferryState, result);
       runtime.store.recordUsage(
         key.id,
         result.inputTokens,
@@ -751,28 +888,33 @@ async function handleAnthropic(
         new Date().toISOString(),
         result.cachedTokens,
       );
-      json(res, 200, {
-        id,
-        type: 'message',
-        role: 'assistant',
-        model: originalModel,
-        content: [
-          ...(result.text ? [{ type: 'text', text: result.text }] : []),
-          ...(result.toolCalls ?? []).map((call) => ({
-            type: 'tool_use',
-            id: call.id,
-            name: call.name,
-            input: JSON.parse(call.arguments) as unknown,
-          })),
-        ],
-        stop_reason: result.toolCalls?.length ? 'tool_use' : 'end_turn',
-        stop_sequence: null,
-        usage: {
-          input_tokens: result.inputTokens,
-          cache_read_input_tokens: result.cachedTokens ?? 0,
-          output_tokens: result.outputTokens,
+      json(
+        res,
+        200,
+        {
+          id,
+          type: 'message',
+          role: 'assistant',
+          model: originalModel,
+          content: [
+            ...(result.text ? [{ type: 'text', text: result.text }] : []),
+            ...(result.toolCalls ?? []).map((call) => ({
+              type: 'tool_use',
+              id: call.id,
+              name: call.name,
+              input: JSON.parse(call.arguments) as unknown,
+            })),
+          ],
+          stop_reason: result.toolCalls?.length ? 'tool_use' : 'end_turn',
+          stop_sequence: null,
+          usage: {
+            input_tokens: result.inputTokens,
+            cache_read_input_tokens: result.cachedTokens ?? 0,
+            output_tokens: result.outputTokens,
+          },
         },
-      });
+        ferryMetadata(ferryState, result),
+      );
     }
   } catch (error) {
     reserved.release();
@@ -780,6 +922,10 @@ async function handleAnthropic(
     if (res.headersSent) {
       res.write(
         `event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: mapped.type, message: mapped.message } })}\n\n`,
+      );
+      sendFerryMetadata(
+        (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+        ferryState,
       );
       res.end();
     } else json(res, mapped.status, anthropicError(mapped.message, mapped.type));
@@ -872,6 +1018,7 @@ async function handleCanonicalProtocol(
     protocolError(res, protocol, 404, `Unknown model: ${originalModel}`);
     return;
   }
+  const ferryState = createFerryRequestState(originalModel);
   const estimate =
     Math.ceil(JSON.stringify(payload).length / 4) + Math.max(0, canonical.maxTokens ?? 0);
   const reservation = reserve?.(key, estimate);
@@ -904,7 +1051,11 @@ async function handleCanonicalProtocol(
   const responseSend = (event: string, data: unknown) =>
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   let responseMessageStarted = false;
-  if (stream) {
+  let streamStarted = false;
+  const beginStream = (completion?: GatewayCompletion) => {
+    if (!stream || streamStarted) return;
+    streamStarted = true;
+    setFerryHeaders(res, ferryMetadata(ferryState, completion));
     res.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-cache',
@@ -922,7 +1073,7 @@ async function handleCanonicalProtocol(
       responseSend('response.created', { type: 'response.created', response: started });
       responseSend('response.in_progress', { type: 'response.in_progress', response: started });
     }
-  }
+  };
   try {
     const result = await runtime.complete({
       key,
@@ -935,10 +1086,12 @@ async function handleCanonicalProtocol(
       ...(canonical.temperature !== undefined ? { temperature: canonical.temperature } : {}),
       sessionHint,
       signal: controller.signal,
+      ...ferryAttemptOptions(ferryState),
       ...(stream
         ? {
             onText: (text: string) => {
               deltas.push({ type: 'text_delta', text });
+              beginStream();
               if (protocol === 'responses') {
                 if (!responseMessageStarted) {
                   responseMessageStarted = true;
@@ -977,6 +1130,7 @@ async function handleCanonicalProtocol(
             onToolCall: (call: NonNullable<GatewayCompletion['toolCalls']>[number]) => {
               calls.push(call);
               streamedCallIds.add(call.id);
+              beginStream();
               if (protocol === 'responses') {
                 const outputIndex = (responseMessageStarted ? 1 : 0) + calls.length - 1;
                 responseSend('response.output_item.added', {
@@ -1006,6 +1160,8 @@ async function handleCanonicalProtocol(
           }
         : {}),
     });
+    observeCompletion(ferryState, result);
+    if (stream) beginStream(result);
     reservation?.release();
     runtime.store.recordUsage(
       key.id,
@@ -1065,7 +1221,7 @@ async function handleCanonicalProtocol(
         },
       };
       if (!stream) {
-        json(res, 200, responseBody);
+        json(res, 200, responseBody, ferryMetadata(ferryState, result));
         return;
       }
       if (!deltas.length && result.text) {
@@ -1184,6 +1340,7 @@ async function handleCanonicalProtocol(
         ...(result.cachedTokens === undefined ? {} : { cachedTokens: result.cachedTokens }),
         outputTokens: result.outputTokens,
       });
+      sendFerryMetadata(responseSend, ferryState, result);
       responseSend('response.completed', {
         type: 'response.completed',
         response: { ...responseBody, status: 'completed', finish_reason: final.finishReason },
@@ -1211,7 +1368,12 @@ async function handleCanonicalProtocol(
       totalTokenCount: result.inputTokens + result.outputTokens,
     };
     if (!stream) {
-      json(res, 200, { candidates: [candidate], usageMetadata, modelVersion: originalModel });
+      json(
+        res,
+        200,
+        { candidates: [candidate], usageMetadata, modelVersion: originalModel },
+        ferryMetadata(ferryState, result),
+      );
       return;
     }
     if (!deltas.length && result.text)
@@ -1223,6 +1385,7 @@ async function handleCanonicalProtocol(
       ...(result.cachedTokens === undefined ? {} : { cachedTokens: result.cachedTokens }),
       outputTokens: result.outputTokens,
     });
+    sendFerryMetadata(responseSend, ferryState, result);
     res.write(
       `data: ${JSON.stringify({ candidates: [{ finishReason: 'STOP', index: 0 }], usageMetadata, modelVersion: originalModel, finishReason: final.finishReason })}\n\n`,
     );
@@ -1239,6 +1402,7 @@ async function handleCanonicalProtocol(
         res.write(
           `data: ${JSON.stringify({ error: { code: mapped.status, status: mapped.type, message: mapped.message } })}\n\n`,
         );
+      sendFerryMetadata(responseSend, ferryState);
       res.end();
     } else protocolError(res, protocol, mapped.status, mapped.message);
   }

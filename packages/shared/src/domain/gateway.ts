@@ -13,6 +13,17 @@ export const GatewayRequestRecordSchema = z.object({
   requestedModel: z.string(),
   /** Upstream model that answered; null when every candidate failed. */
   modelRef: z.string().nullable(),
+  servedModel: z.string().nullable().optional(),
+  traceId: z.string().optional(),
+  attempts: z
+    .array(
+      z.object({
+        model: z.string(),
+        status: z.enum(['started', 'failed', 'served']),
+        reason: z.string().optional(),
+      }),
+    )
+    .optional(),
   providerId: z.string().nullable(),
   status: z.enum(['ok', 'error']),
   inputTokens: z.number().int().nonnegative(),
