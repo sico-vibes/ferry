@@ -13,6 +13,7 @@ export type ProviderKeyEvent = (event: {
 /** SecretStore implementation that delegates all key material to Supabase Vault RPCs. */
 export class SupabaseVaultSecretStore implements SecretStore {
   readonly #cache = new Map<string, string>();
+  readonly #lastUseEvent = new Map<string, number>();
   constructor(
     private readonly client: FerrySupabaseClient,
     private readonly schema = FERRY_CLOUD_SCHEMA,
@@ -43,11 +44,7 @@ export class SupabaseVaultSecretStore implements SecretStore {
     if (!this.isSignedIn()) return undefined;
     const cached = this.#cache.get(providerKeyId);
     if (cached) {
-      this.onEvent?.({
-        kind: 'use',
-        providerId: providerKeyId.split(':')[0] ?? providerKeyId,
-        keyId: providerKeyId,
-      });
+      this.emitUse(providerKeyId);
       return cached;
     }
     const { data, error } = (await this.client
@@ -61,11 +58,7 @@ export class SupabaseVaultSecretStore implements SecretStore {
     if (value) {
       this.#cache.set(providerKeyId, value);
       if (!isKnownSecret(value)) rememberSecret(value);
-      this.onEvent?.({
-        kind: 'use',
-        providerId: providerKeyId.split(':')[0] ?? providerKeyId,
-        keyId: providerKeyId,
-      });
+      this.emitUse(providerKeyId);
     }
     return value;
   }
@@ -95,6 +88,21 @@ export class SupabaseVaultSecretStore implements SecretStore {
     if (error) throw new Error(`Cloud key status failed: ${friendlyAuthError(error.message)}`);
     return Boolean(data);
   }
+  clearCache(): void {
+    for (const value of this.#cache.values()) forgetSecret(value);
+    this.#cache.clear();
+    this.#lastUseEvent.clear();
+  }
+  private emitUse(providerKeyId: string): void {
+    const now = Date.now();
+    if (now - (this.#lastUseEvent.get(providerKeyId) ?? 0) < 60_000) return;
+    this.#lastUseEvent.set(providerKeyId, now);
+    this.onEvent?.({
+      kind: 'use',
+      providerId: providerKeyId.split(':')[0] ?? providerKeyId,
+      keyId: providerKeyId,
+    });
+  }
   /** Retrieves a provider's keys through the Vault list RPC and remembers them for redaction. */
   async listProviderSecrets(
     providerId?: string,
@@ -122,7 +130,7 @@ export class SupabaseVaultSecretStore implements SecretStore {
       if (previous && previous !== row.secret) forgetSecret(previous);
       this.#cache.set(row.id, row.secret);
       if (!isKnownSecret(row.secret)) rememberSecret(row.secret);
-      this.onEvent?.({ kind: 'use', providerId: row.provider_id, keyId: row.id });
+      this.emitUse(row.id);
       return [
         {
           id: row.id,

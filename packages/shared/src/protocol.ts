@@ -120,7 +120,7 @@ export const FERRY_METHOD_PARAMS_SCHEMAS: Readonly<
     }),
   ]),
   'providers.probe': z.tuple([ProviderIdSchema, z.string().optional()]),
-  'cloud.signIn': z.tuple([z.object({ email: z.string().email(), password: z.string().min(1) })]),
+  'cloud.signIn': z.tuple([z.object({ email: z.email(), password: z.string().min(1) })]),
   'cloud.setStorageMode': z.tuple([z.object({ mode: z.enum(['local', 'cloud']) })]),
   'cloud.setCaptureContent': z.tuple([z.object({ value: z.boolean().nullable() })]),
 };

@@ -14,6 +14,8 @@ import {
   OutboxRepository,
   TurnLogRepository,
   EventLogRepository,
+  ModelSwitchRepository,
+  CloudTelemetrySink,
 } from '../src/index.js';
 
 const dirs: string[] = [];
@@ -23,6 +25,36 @@ afterEach(async () => {
 });
 
 describe('@ferry/storage', () => {
+  it('stores metadata-only local telemetry and idempotent cloud outbox events', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const turns = new TurnLogRepository(db.client);
+      const logs = new EventLogRepository(db.client);
+      const switches = new ModelSwitchRepository(db.client);
+      const outbox = new OutboxRepository(db.client);
+      const sink = new CloudTelemetrySink(turns, logs, switches, outbox, false);
+      sink.log({
+        id: 'evt_test',
+        event: 'request.received',
+        source: 'ui',
+        data: { prompt: 'private prompt', inputTokens: 18 },
+      });
+      sink.log({
+        id: 'evt_test',
+        event: 'request.received',
+        source: 'ui',
+        data: { prompt: 'private prompt', inputTokens: 18 },
+      });
+      expect(logs.get('evt_test')).toMatchObject({
+        data: { prompt: { omitted: 'capture-off', chars: 14 }, inputTokens: 18 },
+      });
+      expect(outbox.counts().pending).toBe(1);
+      const queued = outbox.claimDue(10).find((entry) => entry.opId === 'logs:evt_test');
+      expect(queued?.payloadJson).not.toContain('private prompt');
+    } finally {
+      db.close();
+    }
+  });
   it('persists idempotent cloud outbox operations across repository instances', async () => {
     const db = await openDatabase(':memory:');
     try {

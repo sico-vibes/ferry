@@ -17,7 +17,7 @@ import type {
   Workspace,
 } from '@ferry/shared';
 import * as schema from './schema.js';
-import { redactKnownSecretText } from '@ferry/shared';
+import { newId, redactForTelemetry, type TelemetrySink } from '@ferry/shared';
 
 export { schema };
 const storageMigrationFiles = [
@@ -325,25 +325,7 @@ export class OutboxRepository {
   }
 }
 function redactStorageText(value: string): string {
-  return redactKnownSecretText(value)
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')
-    .replace(
-      /\b(?:sk-[A-Za-z0-9_-]{8,}|gsk_[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{20,}|sb_secret_[A-Za-z0-9_-]+|sb_publishable_[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b/g,
-      '[REDACTED]',
-    );
-}
-function redactTelemetryValue(value: unknown, key = ''): unknown {
-  if (/authorization|api[-_]?key|password|token|secret/i.test(key)) return '[REDACTED]';
-  if (typeof value === 'string') return redactStorageText(value);
-  if (Array.isArray(value)) return value.map((item) => redactTelemetryValue(item));
-  if (value && typeof value === 'object')
-    return Object.fromEntries(
-      Object.entries(value).map(([childKey, item]) => [
-        childKey,
-        redactTelemetryValue(item, childKey),
-      ]),
-    );
-  return value;
+  return redactForTelemetry(value) as string;
 }
 export interface OutboxEntry {
   id: number;
@@ -519,7 +501,7 @@ class TelemetryRepository<T extends TelemetryRecord> {
     private readonly table: 'telemetry_turns' | 'telemetry_logs' | 'telemetry_model_switches',
   ) {}
   put(value: T): void {
-    const safeValue = redactTelemetryValue(value) as T;
+    const safeValue = redactForTelemetry(value) as T;
     const columns = telemetryColumns[this.table];
     const jsonColumns = new Set(['routing_decision_json', 'rate_limit_headers_json', 'data']);
     const values = columns.map((column) => {
@@ -577,6 +559,173 @@ export class ModelSwitchRepository extends TelemetryRepository<ModelSwitchTeleme
     super(client, 'telemetry_model_switches');
   }
 }
+
+function capturePolicy(
+  value: Record<string, unknown>,
+  captureContent: boolean,
+): Record<string, unknown> {
+  if (captureContent) return value;
+  const contentKey =
+    /^(?:prompt|response|reasoning|tool(?:Input|Output|_input|_output)|content|text)$/i;
+  const walk = (item: unknown, key = ''): unknown => {
+    if (
+      contentKey.test(key) &&
+      item &&
+      typeof item === 'object' &&
+      'omitted' in item &&
+      item.omitted === 'capture-off'
+    )
+      return item;
+    if (contentKey.test(key))
+      return {
+        omitted: 'capture-off',
+        chars: typeof item === 'string' ? item.length : JSON.stringify(item ?? '').length,
+      };
+    if (Array.isArray(item)) return item.map((child) => walk(child));
+    if (item && typeof item === 'object')
+      return Object.fromEntries(
+        Object.entries(item).map(([childKey, child]) => [childKey, walk(child, childKey)]),
+      );
+    return item;
+  };
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, walk(item, key)]));
+}
+
+/** Writes structured telemetry locally, and optionally mirrors it through the durable cloud outbox. */
+export class LocalTelemetrySink implements TelemetrySink {
+  constructor(
+    protected readonly turns: TurnLogRepository,
+    protected readonly logs: EventLogRepository,
+    protected readonly switches: ModelSwitchRepository,
+    private readonly captureContent = false,
+  ) {}
+  protected sanitize(event: Record<string, unknown>): Record<string, unknown> {
+    return capturePolicy(event, this.captureContent);
+  }
+  log(event: Record<string, unknown>): void {
+    const id = typeof event.id === 'string' ? event.id : newId('evt');
+    this.logs.put({
+      id,
+      ts: new Date().toISOString(),
+      ...this.sanitize(event),
+    });
+  }
+  turnStarted(turn: Record<string, unknown>): void {
+    const id = typeof turn.id === 'string' ? turn.id : newId('turn');
+    this.turns.put({
+      id,
+      status: 'pending',
+      started_at: new Date().toISOString(),
+      ...turn,
+    });
+  }
+  turnUpdated(turnId: string, patch: Record<string, unknown>): void {
+    this.turns.put({
+      ...(this.turns.get(turnId) ?? { id: turnId }),
+      ...patch,
+      id: turnId,
+    });
+  }
+  modelSwitch(record: Record<string, unknown>): void {
+    const id = typeof record.id === 'string' ? record.id : globalThis.crypto.randomUUID();
+    this.switches.put({
+      id,
+      created_at: new Date().toISOString(),
+      ...record,
+    });
+  }
+  flush(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+/** Local sink with idempotent outbox mirroring for ferry.turns, ferry.logs and model_switches. */
+export class CloudTelemetrySink extends LocalTelemetrySink {
+  constructor(
+    turns: TurnLogRepository,
+    logs: EventLogRepository,
+    switches: ModelSwitchRepository,
+    private readonly outbox: OutboxRepository,
+    captureContent = true,
+  ) {
+    super(turns, logs, switches, captureContent);
+  }
+  override log(event: Record<string, unknown>): void {
+    const id = typeof event.id === 'string' ? event.id : newId('evt');
+    const normalized = this.sanitize({
+      ...event,
+      id,
+      data: {
+        ...(typeof event.data === 'object' && event.data !== null ? event.data : {}),
+        event_id: id,
+      },
+    });
+    super.log(normalized);
+    const payload = Object.fromEntries(Object.entries(normalized).filter(([key]) => key !== 'id'));
+    this.outbox.enqueue({
+      opId: `logs:${id}`,
+      target: 'logs',
+      op: 'insert',
+      payload: redactForTelemetry(payload),
+    });
+  }
+  override turnStarted(turn: Record<string, unknown>): void {
+    super.turnStarted(turn);
+    const id = typeof turn.id === 'string' ? turn.id : '';
+    if (id)
+      this.outbox.enqueue({
+        opId: `turns:${id}`,
+        target: 'turns',
+        op: 'upsert',
+        payload: redactForTelemetry(turn),
+      });
+  }
+  override turnUpdated(turnId: string, patch: Record<string, unknown>): void {
+    super.turnUpdated(turnId, patch);
+    const turn = { ...(this.turns.get(turnId) ?? { id: turnId }), ...patch, id: turnId };
+    this.outbox.enqueue({
+      opId: `turns:${turnId}`,
+      target: 'turns',
+      op: 'upsert',
+      payload: redactForTelemetry(turn),
+    });
+  }
+  override modelSwitch(record: Record<string, unknown>): void {
+    if (
+      record.kind === 'selection_change' ||
+      record.kind === 'pin' ||
+      record.kind === 'unpin' ||
+      record.kind === 'initial' ||
+      record.kind === 'router_fallback'
+    )
+      return;
+    const id = typeof record.id === 'string' ? record.id : globalThis.crypto.randomUUID();
+    const normalized = {
+      ...record,
+      id,
+      data: {
+        ...(typeof record.data === 'object' && record.data !== null ? record.data : {}),
+        event_id: id,
+      },
+    };
+    super.modelSwitch(normalized);
+    const payload = redactForTelemetry(normalized) as Record<string, unknown>;
+    this.outbox.enqueue({
+      opId: `model_switches:${id}`,
+      target: 'model_switches',
+      op: 'insert',
+      payload,
+    });
+  }
+}
+
+export const NoopStorageTelemetrySink: TelemetrySink = {
+  log: () => undefined,
+  turnStarted: () => undefined,
+  turnUpdated: () => undefined,
+  modelSwitch: () => undefined,
+  flush: () => Promise.resolve(),
+};
 
 export class ProviderRepository extends JsonRepository<Provider> {
   constructor(client: Database.Database, mirror?: StorageMirror) {
@@ -958,26 +1107,7 @@ export interface RequestRecord {
 }
 export function redactHeaders(headers: unknown): string | null {
   if (headers === undefined || headers === null) return null;
-  const clean = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(clean);
-    if (typeof value === 'object' && value !== null)
-      return Object.fromEntries(
-        Object.entries(value).map(([key, item]) =>
-          /authorization|api[-_]?key|token|secret|password/i.test(key)
-            ? [key, '[REDACTED]']
-            : [redactKnownSecretText(key), clean(item)],
-        ),
-      );
-    if (typeof value === 'string')
-      return redactKnownSecretText(value)
-        .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, '$1[REDACTED]')
-        .replace(
-          /\b(?:sk[-_](?:live|test)[-_][A-Za-z0-9_-]{8,}|rk_live_[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9_-]{8,}|gsk_[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
-          '[REDACTED]',
-        );
-    return value;
-  };
-  return JSON.stringify(clean(headers));
+  return JSON.stringify(redactForTelemetry(headers));
 }
 
 export class RequestRepository {
@@ -1029,4 +1159,13 @@ export function runRetention(
     return client.prepare('DELETE FROM requests WHERE ts < ?').run(cutoff).changes;
   });
   return retain();
+}
+
+/** Removes local structured events older than the cloud log retention window. */
+export function runTelemetryRetention(
+  client: Database.Database,
+  before = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+): number {
+  return client.prepare('DELETE FROM telemetry_logs WHERE ts < ?').run(before.toISOString())
+    .changes;
 }

@@ -51,6 +51,7 @@ export function createCloudRuntime(options: CloudRuntimeOptions): CloudRuntime {
   );
   auth.onChange((status) => {
     signedIn = status.signedIn;
+    if (!status.signedIn) secrets.clearCache();
     sync.setSignedIn(status.signedIn);
     if (status.signedIn) void sync.hydrate();
   });

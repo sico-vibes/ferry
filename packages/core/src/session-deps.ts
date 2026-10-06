@@ -6,6 +6,7 @@ import {
   type StepGeneratorInput,
 } from '@ferry/agent';
 import type { RawCallObservation } from '@ferry/providers';
+import type { TraceContext } from '@ferry/shared';
 import {
   probe as probeProvider,
   ProviderKeyRotation,
@@ -76,6 +77,7 @@ export interface UsageSink {
 export function createSessionDependencies(
   services: FerryServices,
   emit: (event: AgentEvent) => void,
+  traceContext?: TraceContext,
 ): {
   gateway: ModelGateway;
   usage: UsageSink;
@@ -232,6 +234,43 @@ export function createSessionDependencies(
   const providerFetch: typeof globalThis.fetch = async (input, init) =>
     globalThis.fetch(input, init);
   const observe = (observation: RawCallObservation) => {
+    const turnId = traceContext?.turnId;
+    if (turnId) {
+      services.telemetry.turnUpdated(turnId, {
+        ...(observation.statusCode !== null && observation.statusCode < 400
+          ? { status: 'streaming' }
+          : {}),
+        http_status: observation.statusCode,
+        routed_upstream_model: observation.upstreamModel ?? null,
+        request_bytes: observation.requestBytes,
+        rate_limit_headers: observation.rateLimitHeaders,
+        latency_ms: Math.round(observation.latencyMs),
+        provider_key_id: selectedProviderKeys.get(traceContext.sessionId ?? '')?.keyId ?? null,
+      });
+      services.telemetry.log({
+        id: newId('evt'),
+        ts: services.clock.now().toISOString(),
+        level: observation.statusCode !== null && observation.statusCode >= 400 ? 'warn' : 'info',
+        source: 'provider',
+        event: 'turn.request_sent',
+        session_id: traceContext.sessionId,
+        turn_id: turnId,
+        trace_id: traceContext.traceId,
+        span_id: traceContext.spanId,
+        parent_span_id: traceContext.parentSpanId,
+        device_id: traceContext.deviceId,
+        app_version: traceContext.appVersion,
+        data: {
+          requested_model: observation.requestedModel ?? observation.modelRef,
+          upstream_model: observation.upstreamModel ?? null,
+          provider: observation.providerId,
+          http_status: observation.statusCode,
+          request_bytes: observation.requestBytes,
+          latency_ms: Math.round(observation.latencyMs),
+          rate_limit_headers: observation.rateLimitHeaders,
+        },
+      });
+    }
     const providerId = ProviderIdSchema.parse(observation.providerId);
     const limits = services.catalog.providers.find((item) => item.provider === providerId);
     const model = services.catalog.models.find((item) => item.ref === observation.modelRef);

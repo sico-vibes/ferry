@@ -19,6 +19,7 @@ import {
   TaskRecordSchema,
   CheckpointIdSchema,
   newId,
+  newTraceId,
   ReadOutputInputSchema,
   readOutputPage,
   isProtectedWorkspacePath,
@@ -317,6 +318,13 @@ export function register(host: CoreHost, services: FerryServices): void {
         updatedAt: now,
       });
       services.sessions.put(session);
+      services.telemetry.modelSwitch({
+        session_id: session.id,
+        kind: 'initial',
+        to_model: session.pinnedModelRef ?? 'auto',
+        reason: 'session created',
+        data: { who: 'system' },
+      });
       services.tasks.put(
         TaskRecordSchema.parse({
           sessionId: session.id,
@@ -334,6 +342,13 @@ export function register(host: CoreHost, services: FerryServices): void {
     async send(rawId: unknown, rawInput: unknown) {
       const session = requireSession(rawId);
       const { text, maxSteps, verbose, routingMode, resume } = SendSchema.parse(rawInput);
+      const traceId = newTraceId();
+      const traceContext = {
+        traceId,
+        sessionId: session.id,
+        deviceId: services.deviceId,
+        appVersion: services.env.FERRY_RELEASE_VERSION ?? '0.9.0',
+      };
       if (controllers.has(session.id) || shuttingDown)
         throw rpcDomainError(-32010, 'conflict', 'Session is already running');
       const workspace = services.workspaces.get(session.workspaceId);
@@ -349,6 +364,17 @@ export function register(host: CoreHost, services: FerryServices): void {
       });
       runPromises.set(session.id, run);
       try {
+        services.telemetry.log({
+          id: newId('evt'),
+          ts: services.clock.now().toISOString(),
+          level: 'info',
+          source: 'ui',
+          event: 'request.received',
+          session_id: session.id,
+          trace_id: traceId,
+          device_id: services.deviceId,
+          data: { prompt: text, resume },
+        });
         if (!resume) {
           const now = services.clock.now();
           const userMessage = store.appendMessage(
@@ -587,7 +613,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             services.optimizerEvents.put(optimizerEvent);
           } else host.emit('toast', { kind: event.tone, title: event.message, body: null });
         };
-        const runtime = createSessionDependencies(services, emitAgentEvent);
+        const runtime = createSessionDependencies(services, emitAgentEvent, traceContext);
         const sessionCatalogModels = [
           ...(services.env.NODE_ENV === 'test'
             ? services.catalog.models
@@ -1103,17 +1129,60 @@ export function register(host: CoreHost, services: FerryServices): void {
                 : {}),
             });
           },
-          onHandoff: (reason) => {
+          onHandoff: (reason, from, to) => {
             runtime.gateway.recordHandoff(session.id, reason);
+            services.telemetry.modelSwitch({
+              session_id: session.id,
+              kind: 'handoff',
+              from_model: from,
+              to_model: to,
+              reason,
+              data: { trace_id: traceId, who: 'router' },
+            });
+            services.telemetry.log({
+              id: newId('evt'),
+              ts: services.clock.now().toISOString(),
+              level: 'info',
+              source: 'router',
+              event: 'model.switch',
+              session_id: session.id,
+              trace_id: traceId,
+              data: { kind: 'handoff', from_model: from, to_model: to, reason },
+            });
           },
           resolveCandidates: (selectedProfile, stepKind, inputTokens) =>
             runtime.gateway.resolveCandidates(selectedProfile, stepKind, inputTokens),
           emit: emitAgentEvent,
+          traceContext,
+          telemetry: services.telemetry,
           requestApproval: (part, signal) =>
             new Promise((resolve) => {
+              services.telemetry.log({
+                id: newId('evt'),
+                ts: services.clock.now().toISOString(),
+                level: 'info',
+                source: 'ui',
+                event: 'approval.requested',
+                session_id: session.id,
+                trace_id: traceId,
+                data: { approval_id: part.id, kind: part.kind, summary: part.summary },
+              });
+              const finish = (decision: 'allowed_once' | 'allowed_always' | 'denied') => {
+                services.telemetry.log({
+                  id: newId('evt'),
+                  ts: services.clock.now().toISOString(),
+                  level: 'info',
+                  source: 'ui',
+                  event: 'approval.resolved',
+                  session_id: session.id,
+                  trace_id: traceId,
+                  data: { approval_id: part.id, decision },
+                });
+                resolve(decision);
+              };
               const approvalKey = `${session.id}:${part.id}`;
               if (signal.aborted) {
-                resolve('denied');
+                finish('denied');
                 return;
               }
               approvals.set(approvalKey, resolve);
@@ -1126,13 +1195,13 @@ export function register(host: CoreHost, services: FerryServices): void {
                 .find((candidate) => candidate.id === part.id);
               if (persisted?.type === 'approval_request' && persisted.state !== 'pending') {
                 approvals.delete(approvalKey);
-                resolve(persisted.state);
+                finish(persisted.state);
               }
               signal.addEventListener(
                 'abort',
                 () => {
                   approvals.delete(approvalKey);
-                  resolve('denied');
+                  finish('denied');
                 },
                 { once: true },
               );

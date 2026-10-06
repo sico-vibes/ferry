@@ -1,4 +1,4 @@
-import { redactKnownSecretText } from '@ferry/shared';
+import { redactForTelemetry } from '@ferry/shared';
 
 export function contentMarker(value: unknown): { redacted: string; chars: number } {
   return {
@@ -73,24 +73,5 @@ export function flattenTextParts(parts: unknown): string | null {
 
 /** Redacts known secrets and common credential shapes from queued data and field names. */
 export function redactCloudPayload(value: unknown): unknown {
-  if (typeof value === 'string') {
-    return redactKnownSecretText(value)
-      .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')
-      .replace(
-        /\b(?:sk-[A-Za-z0-9_-]{8,}|gsk_[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{20,}|sb_secret_[A-Za-z0-9_-]+|sb_publishable_[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b/g,
-        '[REDACTED]',
-      );
-  }
-  if (Array.isArray(value)) return value.map(redactCloudPayload);
-  if (typeof value === 'object' && value !== null) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        redactKnownSecretText(key),
-        /authorization|api[-_]?key|password|token|secret/i.test(key)
-          ? '[REDACTED]'
-          : redactCloudPayload(item),
-      ]),
-    );
-  }
-  return value;
+  return redactForTelemetry(value);
 }

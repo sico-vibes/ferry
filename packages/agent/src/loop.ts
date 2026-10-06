@@ -62,6 +62,10 @@ import {
   type UsageRecord,
   type RoutingSettings,
   type AgentEvent as StructuredAgentEvent,
+  type TraceContext,
+  type TelemetrySink,
+  newTraceId,
+  newSpanId,
   normalizeInlineThinking,
   normalizeReasoningPart,
 } from '@ferry/shared';
@@ -116,6 +120,7 @@ export interface GeneratedStep {
   inputTokens?: number;
   outputTokens?: number;
   finishReason?: string;
+  responseModel?: string;
 }
 export interface StepGeneratorInput {
   model: ModelInfo;
@@ -158,6 +163,8 @@ export interface AgentOptions {
   permissionMode: import('@ferry/shared').PermissionMode;
   permissionRules?: import('@ferry/workspace').PermissionRule[];
   emit(event: AgentEvent): void;
+  traceContext?: TraceContext;
+  telemetry?: TelemetrySink;
   requestApproval?: (
     part: Extract<MessagePart, { type: 'approval_request' }>,
     signal: AbortSignal,
@@ -294,6 +301,21 @@ export class AgentLoop {
   }
 
   async run({ sessionId, signal: outerSignal, resume = false }: RunInput): Promise<RunResult> {
+    const traceContext = this.options.traceContext ?? { traceId: newTraceId() };
+    const traceId = traceContext.traceId;
+    let requestGroupId: string;
+    let parentTurnId: string | null;
+    let attemptNumber: number;
+    this.options.telemetry?.log({
+      id: newId('evt'),
+      ts: new Date().toISOString(),
+      level: 'info',
+      source: 'agent',
+      event: 'request.received',
+      session_id: sessionId,
+      trace_id: traceId,
+      data: {},
+    });
     if (this.options.routingSettings?.().cooldownReasons)
       await this.options.probeHeuristicCooldowns?.();
     const controller = new AbortController();
@@ -427,6 +449,9 @@ export class AgentLoop {
     ];
     try {
       while (stepCount < maxSteps && totalTokens < budget) {
+        requestGroupId = newId('group');
+        parentTurnId = null;
+        attemptNumber = 0;
         if (signal.aborted)
           return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'cancelled');
         loaded = this.options.store.load(sessionId);
@@ -725,6 +750,45 @@ export class AgentLoop {
         let pendingPaidUsageId: string | undefined;
         while (!generationComplete) {
           const attemptStartedAt = performance.now();
+          const turnId = newId('turn');
+          traceContext.turnId = turnId;
+          traceContext.spanId = newSpanId();
+          attemptNumber++;
+          this.options.telemetry?.turnStarted({
+            id: turnId,
+            session_id: sessionId,
+            message_id: assistant.id,
+            user_message_id:
+              messages.filter((message) => message.role === 'user').at(-1)?.id ?? null,
+            trace_id: traceId,
+            device_id: traceContext.deviceId,
+            request_group_id: requestGroupId,
+            attempt: attemptNumber,
+            parent_turn_id: parentTurnId,
+            source: 'agent',
+            step_id: `${sessionId}:${String(stepCount + 1)}`,
+            step_kind: stepKind,
+            requested_model: this.options.pinnedModelRef ?? 'auto',
+            routing_mode: this.options.pinnedModelRef ? 'pinned' : 'auto',
+            routed_provider: model.providerId,
+            routed_model: model.ref,
+            status: 'pending',
+            started_at: new Date().toISOString(),
+          });
+          this.options.telemetry?.log({
+            id: newId('evt'),
+            ts: new Date().toISOString(),
+            level: 'info',
+            source: 'agent',
+            event: 'turn.requested',
+            session_id: sessionId,
+            turn_id: turnId,
+            trace_id: traceId,
+            data: {
+              requested_model: this.options.pinnedModelRef ?? 'auto',
+              routed_model: model.ref,
+            },
+          });
           try {
             const paidDecision = await this.options.authorizePaidCall?.(
               model,
@@ -772,6 +836,41 @@ export class AgentLoop {
               this.options.stepTimeoutMs ?? 120_000,
               releaseOnce,
             );
+            this.options.telemetry?.turnUpdated(turnId, {
+              status: 'success',
+              finished_at: new Date().toISOString(),
+              latency_ms: Math.round(performance.now() - attemptStartedAt),
+              input_tokens: generated.inputTokens ?? null,
+              output_tokens: generated.outputTokens ?? null,
+              response_model: generated.responseModel ?? null,
+            });
+            this.options.telemetry?.log({
+              id: newId('evt'),
+              ts: new Date().toISOString(),
+              level: 'info',
+              source: 'agent',
+              event: 'turn.completed',
+              session_id: sessionId,
+              turn_id: turnId,
+              trace_id: traceId,
+              data: { response: generated.text ?? '', reasoning: generated.reasoning ?? '' },
+            });
+            if (generated.responseModel && generated.responseModel !== model.ref)
+              this.options.telemetry?.log({
+                id: newId('evt'),
+                ts: new Date().toISOString(),
+                level: 'warn',
+                source: 'agent',
+                event: 'turn.model_credit_mismatch',
+                session_id: sessionId,
+                turn_id: turnId,
+                trace_id: traceId,
+                data: {
+                  routed_model: model.ref,
+                  response_model: generated.responseModel,
+                },
+              });
+            parentTurnId = turnId;
             const inlineReasoning = normalizeInlineThinking(generated.text ?? '');
             if (inlineReasoning.thinking) {
               generated.text = inlineReasoning.text;
@@ -834,6 +933,25 @@ export class AgentLoop {
             this.options.onResilienceState?.(this.resilience.snapshot());
             break;
           } catch (error) {
+            this.options.telemetry?.turnUpdated(turnId, {
+              status: isSignalAborted(signal) ? 'cancelled' : 'error',
+              finished_at: new Date().toISOString(),
+              latency_ms: Math.round(performance.now() - attemptStartedAt),
+              error_kind: error instanceof Error ? error.name : 'unknown',
+              error_message: error instanceof Error ? error.message : String(error),
+            });
+            this.options.telemetry?.log({
+              id: newId('evt'),
+              ts: new Date().toISOString(),
+              level: 'error',
+              source: 'agent',
+              event: 'turn.failed',
+              session_id: sessionId,
+              turn_id: turnId,
+              trace_id: traceId,
+              data: { error: error instanceof Error ? error.message : String(error) },
+            });
+            parentTurnId = turnId;
             pendingPaidRelease?.();
             pendingPaidRelease = undefined;
             pendingPaidUsageId = undefined;
@@ -1018,6 +1136,39 @@ export class AgentLoop {
             );
             if (!fallback) {
               throw new AllCandidatesExhaustedError(this.exhaustedMessage(stepKind));
+            }
+            if (parentTurnId) {
+              const fallbackReason = toolsUnsupported
+                ? 'capability'
+                : rateLimited
+                  ? 'rate_limit'
+                  : 'error';
+              this.options.telemetry?.turnUpdated(parentTurnId, {
+                status: 'fallback',
+                fallback_reason: fallbackReason,
+                finished_at: new Date().toISOString(),
+              });
+              this.options.telemetry?.modelSwitch({
+                session_id: sessionId,
+                turn_id: parentTurnId,
+                kind: 'router_fallback',
+                from_model: model.ref,
+                to_model: fallback.ref,
+                to_provider: fallback.providerId,
+                reason: fallbackReason,
+                data: { trace_id: traceId },
+              });
+              this.options.telemetry?.log({
+                id: newId('evt'),
+                ts: new Date().toISOString(),
+                level: 'warn',
+                source: 'router',
+                event: 'turn.fallback',
+                session_id: sessionId,
+                turn_id: parentTurnId,
+                trace_id: traceId,
+                data: { from_model: model.ref, to_model: fallback.ref, reason: fallbackReason },
+              });
             }
             attemptedModels.add(fallback.ref);
             handoffsThisStep++;
@@ -1307,6 +1458,16 @@ export class AgentLoop {
             durationMs: null,
           };
           this.addPart(sessionId, toolPart);
+          this.options.telemetry?.log({
+            id: newId('evt'),
+            ts: new Date().toISOString(),
+            level: 'info',
+            source: 'tool',
+            event: 'tool.call',
+            session_id: sessionId,
+            trace_id: traceId,
+            data: { tool: call.name, input: parsed.value },
+          });
           const start = Date.now();
           const eventCallId = call.toolCallId ?? call.id ?? toolPart.id;
           this.emitStructuredEvent(sessionId, {
@@ -1334,6 +1495,16 @@ export class AgentLoop {
               recoveryHandle: null,
             };
             const value = structured.value ?? result;
+            this.options.telemetry?.log({
+              id: newId('evt'),
+              ts: new Date().toISOString(),
+              level: 'info',
+              source: 'tool',
+              event: 'tool.result',
+              session_id: sessionId,
+              trace_id: traceId,
+              data: { tool: call.name, output: output.text },
+            });
             const changes = Array.isArray(value)
               ? value.filter(isFileChange)
               : isFileChange(value)
@@ -1993,6 +2164,8 @@ export function createStepGenerator(
       }
     }
     const [usage, rawCalls] = await Promise.all([result.usage, result.toolCalls]);
+    const finalStep = await result.finalStep;
+    const providerResponse = finalStep.response;
     const calls = z
       .array(
         z.object({
@@ -2008,6 +2181,9 @@ export function createStepGenerator(
       text,
       ...(reasoning ? { reasoning } : {}),
       reasoningAvailable,
+      ...(typeof providerResponse.modelId === 'string'
+        ? { responseModel: providerResponse.modelId }
+        : {}),
       toolCalls: calls.map((call) => {
         const providerOptions = call.providerOptions ?? call.providerMetadata;
         return {

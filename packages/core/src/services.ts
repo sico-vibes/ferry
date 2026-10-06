@@ -42,13 +42,19 @@ import {
   HandoffRepository,
   SettingsRepository,
   EventLogRepository,
+  TurnLogRepository,
+  ModelSwitchRepository,
+  LocalTelemetrySink,
+  CloudTelemetrySink,
   openDatabase,
   OutboxRepository,
   createStorageAdapter,
   salvageReadableTables,
+  runTelemetryRetention,
   type DatabaseConnection,
   type ProviderKeyEntry,
 } from '@ferry/storage';
+import type { TelemetrySink } from '@ferry/shared';
 
 export interface FerryClock {
   now(): Date;
@@ -92,6 +98,7 @@ export interface FerryServices {
   readonly handoffs: HandoffRepository;
   readonly logger: Awaited<ReturnType<typeof createLogger>>;
   readonly eventLogs: EventLogRepository;
+  readonly telemetry: TelemetrySink;
   readonly deviceId: string;
   emitAppEvent(
     event: string,
@@ -210,8 +217,11 @@ export async function createServices({
     logger.error({ err: error, backupPath, salvagedTables }, 'Database recovery completed');
   }
   const catalog = await loadCatalog({ now: clock?.now() ?? new Date() });
+  runTelemetryRetention(db.client);
   const settings = new SettingsRepository(db.client);
   const eventLogs = new EventLogRepository(db.client);
+  const turnLogs = new TurnLogRepository(db.client);
+  const modelSwitches = new ModelSwitchRepository(db.client);
   const savedDevice = db.client
     .prepare("SELECT value_json FROM settings_kv WHERE key='ferry.device_id'")
     .get() as { value_json?: string } | undefined;
@@ -228,6 +238,14 @@ export async function createServices({
   const cloudConfig = loadCloudConfig({ env, ferryHome: home });
   const cloudConfigured = cloudMode && isCloudConfigured(cloudConfig);
   const outbox = cloudConfigured ? new OutboxRepository(db.client) : undefined;
+  const captureTelemetry = resolveCaptureContent({
+    storageMode: cloudMode ? 'cloud' : 'local',
+    captureContent: savedSettings?.captureContent,
+  });
+  const telemetry =
+    cloudConfigured && outbox
+      ? new CloudTelemetrySink(turnLogs, eventLogs, modelSwitches, outbox, captureTelemetry)
+      : new LocalTelemetrySink(turnLogs, eventLogs, modelSwitches, captureTelemetry);
   const localAdapter = createStorageAdapter({ client: db.client, mode: 'local' });
   const cloudRuntime =
     cloudConfigured && outbox
@@ -244,6 +262,14 @@ export async function createServices({
           },
           applyHydratedRows: (table, rows) => applyHydratedRows(table, rows, localAdapter, outbox),
           onProviderKeyEvent: (event) => {
+            telemetry.log({
+              id: newId('evt'),
+              ts: new Date().toISOString(),
+              level: 'info',
+              source: 'secrets',
+              event: `provider_key.${event.kind === 'use' ? 'used' : event.kind === 'set' ? 'set' : event.kind === 'rotate' ? 'rotated' : 'deleted'}`,
+              data: { provider_id: event.providerId, provider_key_id: event.keyId },
+            });
             logger.info(
               {
                 event: 'provider_key.' + event.kind,
@@ -477,6 +503,7 @@ export async function createServices({
     handoffs,
     logger,
     eventLogs,
+    telemetry,
     deviceId,
     emitAppEvent,
     cloud: {

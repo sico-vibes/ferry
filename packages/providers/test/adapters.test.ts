@@ -6,6 +6,7 @@ import {
   ProbeResultSchema,
   RawCallObservationSchema,
   UsageRecordSchema,
+  ProviderRequestOverridesSchema,
   type RawCallObservation,
 } from '@ferry/shared';
 import { FakeOpenAIServer, FakeProviderServer } from '@ferry/testkit';
@@ -26,6 +27,28 @@ afterEach(async () => {
 });
 
 describe('provider adapters', () => {
+  it('reports the post-override upstream model while retaining the requested model', async () => {
+    const observations: RawCallObservation[] = [];
+    let body = '';
+    const fetcher = createObservedFetch(
+      (value) => observations.push(value),
+      { providerId: 'openai', model: 'requested/model' },
+      (_input, init) => {
+        body = typeof init?.body === 'string' ? init.body : '';
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      },
+      { ...ProviderRequestOverridesSchema.parse({}), forceParams: { model: 'upstream-x' } },
+    );
+    await fetcher('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      body: JSON.stringify({ model: 'original', messages: [] }),
+    });
+    expect(JSON.parse(body)).toMatchObject({ model: 'upstream-x' });
+    expect(observations[0]).toMatchObject({
+      requestedModel: 'requested/model',
+      upstreamModel: 'upstream-x',
+    });
+  });
   it('applies catalog and user request overrides and remaps quota errors for routing', async () => {
     let sentBody: Record<string, unknown> = {};
     let sentHeaders = new Headers();

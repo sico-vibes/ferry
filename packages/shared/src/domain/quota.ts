@@ -48,6 +48,8 @@ export type ProviderErrorKind = z.infer<typeof ProviderErrorKindSchema>;
 export const RawCallObservationSchema = z.object({
   providerId: ProviderIdSchema,
   modelRef: z.string().min(1),
+  requestedModel: z.string().optional(),
+  upstreamModel: z.string().optional(),
   startedAt: z.number().nonnegative(),
   latencyMs: z.number().nonnegative(),
   statusCode: z.number().int().nullable(),

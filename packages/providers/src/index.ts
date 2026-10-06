@@ -449,6 +449,21 @@ export function createObservedFetch(
           // Non-JSON request bodies are passed through unchanged.
         }
       }
+      let upstreamModel: string | undefined;
+      const sentBody =
+        requestInit.body ?? (input instanceof Request ? await input.clone().text() : undefined);
+      if (typeof sentBody === 'string') {
+        try {
+          const parsed: unknown = JSON.parse(sentBody);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const sentModel = (parsed as Record<string, unknown>).model;
+            if (typeof sentModel === 'string') upstreamModel = sentModel;
+          }
+        } catch {
+          /* Non-JSON requests have no observable model field. */
+        }
+      }
+      const requestBytes = requestSize(input, requestInit);
       let response = await fetchImpl(input, requestInit);
       if (!response.ok && overrides.statusRemaps.some((item) => item.from === response.status)) {
         const responseText = await response.clone().text();
@@ -473,10 +488,12 @@ export function createObservedFetch(
         RawCallObservationSchema.parse({
           providerId: ProviderIdSchema.parse(providerId),
           modelRef: model,
+          requestedModel: model,
+          ...(upstreamModel ? { upstreamModel } : {}),
           startedAt,
           latencyMs: Math.max(0, performance.now() - started),
           statusCode: response.status,
-          requestBytes: requestSize(input, init),
+          requestBytes,
           rateLimitHeaders,
           errorKind: response.ok ? null : mapProviderError({ status: response.status }).kind,
         }),
@@ -488,6 +505,7 @@ export function createObservedFetch(
         RawCallObservationSchema.parse({
           providerId: ProviderIdSchema.parse(providerId),
           modelRef: model,
+          requestedModel: model,
           startedAt,
           latencyMs: Math.max(0, performance.now() - started),
           statusCode: null,
