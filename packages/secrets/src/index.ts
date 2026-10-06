@@ -1,6 +1,30 @@
 import { Entry } from '@napi-rs/keyring';
 import { forgetSecret, isKnownSecret, rememberSecret } from '@ferry/shared';
 
+/** Async key/value storage for Supabase Auth, backed by the operating system keychain. */
+export class KeychainAuthStorage {
+  constructor(
+    private readonly projectRef: string,
+    private readonly service = 'Ferry',
+  ) {}
+  getItem(key: string): Promise<string | null> {
+    return Promise.resolve().then(
+      () =>
+        new Entry(this.service, `supabase-auth:${this.projectRef}:${key}`).getPassword() ?? null,
+    );
+  }
+  setItem(key: string, value: string): Promise<void> {
+    return Promise.resolve().then(() => {
+      new Entry(this.service, `supabase-auth:${this.projectRef}:${key}`).setPassword(value);
+    });
+  }
+  removeItem(key: string): Promise<void> {
+    return Promise.resolve().then(() => {
+      new Entry(this.service, `supabase-auth:${this.projectRef}:${key}`).deleteCredential();
+    });
+  }
+}
+
 export interface SecretStore {
   set(providerKeyId: string, value: string): Promise<void>;
   get(providerKeyId: string): Promise<string | undefined>;

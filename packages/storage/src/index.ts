@@ -25,8 +25,22 @@ const storageMigrationFiles = [
   '0002_interrupted_sessions.sql',
   '0003_agent_events.sql',
   '0004_provider_key_entries.sql',
+  '0005_cloud_outbox_and_telemetry.sql',
 ];
 export const STORAGE_SCHEMA_VERSION = storageMigrationFiles.length;
+/** Observes successful local writes so cloud mode can persist them for later sync. */
+export interface StorageMirror {
+  onPut(table: string, value: unknown): void;
+  onDelete(table: string, id: string): void;
+}
+/** No-op observer used by local mode. */
+function ignoreStorageWrite(): void {
+  // Local mode intentionally skips cloud mirroring.
+}
+export const NOOP_STORAGE_MIRROR: StorageMirror = {
+  onPut: ignoreStorageWrite,
+  onDelete: ignoreStorageWrite,
+};
 export interface DatabaseConnection {
   client: Database.Database;
   orm: BetterSQLite3Database<typeof schema>;
@@ -163,6 +177,7 @@ export class JsonRepository<T extends { id: string }> {
   constructor(
     private readonly client: Database.Database,
     private readonly table: AggregateTable,
+    private readonly mirror: StorageMirror = NOOP_STORAGE_MIRROR,
   ) {}
   put(value: T): void {
     this.client
@@ -170,6 +185,7 @@ export class JsonRepository<T extends { id: string }> {
         `INSERT INTO ${this.table} (id, data_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at`,
       )
       .run(value.id, JSON.stringify(value), new Date().toISOString());
+    this.mirror.onPut(this.table, value);
   }
   get(id: string): T | undefined {
     const row = this.client
@@ -184,34 +200,377 @@ export class JsonRepository<T extends { id: string }> {
     return rows.map((row) => JSON.parse(row.data_json) as T);
   }
   delete(id: string): boolean {
-    return this.client.prepare(`DELETE FROM ${this.table} WHERE id = ?`).run(id).changes > 0;
+    const removed =
+      this.client.prepare(`DELETE FROM ${this.table} WHERE id = ?`).run(id).changes > 0;
+    if (removed) this.mirror.onDelete(this.table, id);
+    return removed;
+  }
+}
+
+/** Persistent retry queue for Supabase operations. */
+export class OutboxRepository {
+  constructor(private readonly client: Database.Database) {}
+  enqueue(input: {
+    opId: string;
+    target: string;
+    op: 'upsert' | 'insert' | 'delete' | 'rpc';
+    payload: unknown;
+    now?: string;
+  }): void {
+    const createdAt = input.now ?? new Date().toISOString();
+    this.client
+      .prepare(
+        `INSERT INTO cloud_outbox(op_id,target,op,payload_json,created_at,next_attempt_at,status) VALUES(?,?,?,?,?,?, 'pending') ON CONFLICT(op_id) DO UPDATE SET payload_json=excluded.payload_json,created_at=excluded.created_at,next_attempt_at=excluded.next_attempt_at,attempts=0,last_error=NULL,status='pending',generation=cloud_outbox.generation+1 WHERE cloud_outbox.status IN ('pending','failed_permanent')`,
+      )
+      .run(input.opId, input.target, input.op, JSON.stringify(input.payload), createdAt, createdAt);
+  }
+  claimDue(limit: number, now = new Date().toISOString()): OutboxEntry[] {
+    return this.client
+      .prepare(
+        `SELECT id,op_id AS opId,target,op,payload_json AS payloadJson,created_at AS createdAt,attempts,next_attempt_at AS nextAttemptAt,last_error AS lastError,status,generation FROM cloud_outbox WHERE status='pending' AND next_attempt_at<=? ORDER BY id LIMIT ?`,
+      )
+      .all(now, limit) as OutboxEntry[];
+  }
+  hasPending(target: string, entityId: string): boolean {
+    return Boolean(
+      this.client
+        .prepare(
+          "SELECT 1 FROM cloud_outbox WHERE target=? AND op_id LIKE ? AND status='pending' LIMIT 1",
+        )
+        .get(target, `%:${entityId}`),
+    );
+  }
+  markDone(id: number, generation: number, now = new Date().toISOString()): void {
+    this.client.prepare(`DELETE FROM cloud_outbox WHERE id=? AND generation=?`).run(id, generation);
+    this.client
+      .prepare(
+        "UPDATE cloud_outbox SET next_attempt_at=? WHERE id=? AND generation<>? AND status='pending'",
+      )
+      .run(now, id, generation);
+  }
+  markRetry(
+    id: number,
+    generation: number,
+    error: string,
+    nextAt: string,
+    now = new Date().toISOString(),
+  ): void {
+    this.client
+      .prepare(
+        `UPDATE cloud_outbox SET attempts=attempts+1,last_error=?,next_attempt_at=? WHERE id=? AND generation=?`,
+      )
+      .run(redactStorageText(error), nextAt, id, generation);
+    this.client
+      .prepare(
+        "UPDATE cloud_outbox SET next_attempt_at=? WHERE id=? AND generation<>? AND status='pending'",
+      )
+      .run(now, id, generation);
+  }
+  markPermanent(
+    id: number,
+    generation: number,
+    error: string,
+    now = new Date().toISOString(),
+  ): void {
+    this.client
+      .prepare(
+        `UPDATE cloud_outbox SET attempts=attempts+1,last_error=?,status='failed_permanent' WHERE id=? AND generation=?`,
+      )
+      .run(redactStorageText(error), id, generation);
+    this.client
+      .prepare(
+        "UPDATE cloud_outbox SET next_attempt_at=? WHERE id=? AND generation<>? AND status='pending'",
+      )
+      .run(now, id, generation);
+  }
+  counts(): { pending: number; failedPermanent: number } {
+    const rows = this.client
+      .prepare(`SELECT status,count(*) AS count FROM cloud_outbox GROUP BY status`)
+      .all() as { status: string; count: number }[];
+    return {
+      pending: rows.find((row) => row.status === 'pending')?.count ?? 0,
+      failedPermanent: rows.find((row) => row.status === 'failed_permanent')?.count ?? 0,
+    };
+  }
+}
+function redactStorageText(value: string): string {
+  return redactKnownSecretText(value)
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')
+    .replace(
+      /\b(?:sk-[A-Za-z0-9_-]{8,}|gsk_[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{20,}|sb_secret_[A-Za-z0-9_-]+|sb_publishable_[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b/g,
+      '[REDACTED]',
+    );
+}
+function redactTelemetryValue(value: unknown, key = ''): unknown {
+  if (/authorization|api[-_]?key|password|token|secret/i.test(key)) return '[REDACTED]';
+  if (typeof value === 'string') return redactStorageText(value);
+  if (Array.isArray(value)) return value.map((item) => redactTelemetryValue(item));
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value).map(([childKey, item]) => [
+        childKey,
+        redactTelemetryValue(item, childKey),
+      ]),
+    );
+  return value;
+}
+export interface OutboxEntry {
+  id: number;
+  opId: string;
+  target: string;
+  op: 'upsert' | 'insert' | 'delete' | 'rpc';
+  payloadJson: string;
+  createdAt: string;
+  attempts: number;
+  nextAttemptAt: string;
+  lastError: string | null;
+  status: string;
+  generation: number;
+}
+
+export interface TelemetryRecord extends Record<string, unknown> {
+  id: string;
+}
+export interface TurnTelemetryRecord extends TelemetryRecord {
+  session_id?: string | null;
+  message_id?: string | null;
+  user_message_id?: string | null;
+  device_id?: string | null;
+  trace_id?: string;
+  request_group_id?: string | null;
+  attempt?: number;
+  parent_turn_id?: string | null;
+  source?: string;
+  task_id?: string | null;
+  step_id?: string | null;
+  step_kind?: string | null;
+  agent_role?: string | null;
+  agent_profile_id?: string | null;
+  requested_model?: string | null;
+  routing_mode?: string | null;
+  routed_provider?: string | null;
+  routed_model?: string | null;
+  routed_upstream_model?: string | null;
+  response_model?: string | null;
+  provider_key_id?: string | null;
+  fallback_reason?: string | null;
+  routing_decision?: unknown;
+  routed_differs_from_requested?: boolean;
+  response_differs_from_routed?: boolean;
+  status?: string;
+  http_status?: number | null;
+  error_kind?: string | null;
+  error_message?: string | null;
+  finish_reason?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cached_tokens?: number | null;
+  reasoning_tokens?: number | null;
+  cost_usd?: number | null;
+  plan_units?: number | null;
+  latency_ms?: number | null;
+  ttft_ms?: number | null;
+  request_bytes?: number | null;
+  rate_limit_headers?: unknown;
+  started_at?: string;
+  finished_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+export interface EventTelemetryRecord extends TelemetryRecord {
+  ts?: string;
+  device_id?: string | null;
+  level?: string;
+  source?: string;
+  event?: string;
+  message?: string | null;
+  session_id?: string | null;
+  turn_id?: string | null;
+  trace_id?: string | null;
+  span_id?: string | null;
+  parent_span_id?: string | null;
+  app_version?: string | null;
+  data?: unknown;
+}
+export interface ModelSwitchTelemetryRecord extends TelemetryRecord {
+  session_id?: string;
+  turn_id?: string | null;
+  kind?: string;
+  from_model?: string | null;
+  to_model?: string | null;
+  from_provider?: string | null;
+  to_provider?: string | null;
+  reason?: string | null;
+  data?: unknown;
+  created_at?: string;
+}
+const telemetryColumns: Record<
+  'telemetry_turns' | 'telemetry_logs' | 'telemetry_model_switches',
+  string[]
+> = {
+  telemetry_turns: [
+    'session_id',
+    'message_id',
+    'user_message_id',
+    'device_id',
+    'trace_id',
+    'request_group_id',
+    'attempt',
+    'parent_turn_id',
+    'source',
+    'task_id',
+    'step_id',
+    'step_kind',
+    'agent_role',
+    'agent_profile_id',
+    'requested_model',
+    'routing_mode',
+    'routed_provider',
+    'routed_model',
+    'routed_upstream_model',
+    'response_model',
+    'provider_key_id',
+    'fallback_reason',
+    'routing_decision_json',
+    'routed_differs_from_requested',
+    'response_differs_from_routed',
+    'status',
+    'http_status',
+    'error_kind',
+    'error_message',
+    'finish_reason',
+    'input_tokens',
+    'output_tokens',
+    'cached_tokens',
+    'reasoning_tokens',
+    'cost_usd',
+    'plan_units',
+    'latency_ms',
+    'ttft_ms',
+    'request_bytes',
+    'rate_limit_headers_json',
+    'started_at',
+    'finished_at',
+    'created_at',
+    'updated_at',
+  ],
+  telemetry_logs: [
+    'ts',
+    'device_id',
+    'level',
+    'source',
+    'event',
+    'message',
+    'session_id',
+    'turn_id',
+    'trace_id',
+    'span_id',
+    'parent_span_id',
+    'app_version',
+    'data',
+  ],
+  telemetry_model_switches: [
+    'session_id',
+    'turn_id',
+    'kind',
+    'from_model',
+    'to_model',
+    'from_provider',
+    'to_provider',
+    'reason',
+    'data',
+    'created_at',
+  ],
+};
+class TelemetryRepository<T extends TelemetryRecord> {
+  constructor(
+    private readonly client: Database.Database,
+    private readonly table: 'telemetry_turns' | 'telemetry_logs' | 'telemetry_model_switches',
+  ) {}
+  put(value: T): void {
+    const safeValue = redactTelemetryValue(value) as T;
+    const columns = telemetryColumns[this.table];
+    const jsonColumns = new Set(['routing_decision_json', 'rate_limit_headers_json', 'data']);
+    const values = columns.map((column) => {
+      const key = column.endsWith('_json') ? column.slice(0, -5) : column;
+      const raw = safeValue[column] ?? safeValue[key];
+      if (raw === undefined) return null;
+      if (jsonColumns.has(column)) return JSON.stringify(raw);
+      return typeof raw === 'boolean' ? Number(raw) : raw;
+    });
+    const dataJson = JSON.stringify(safeValue);
+    const insertColumns = ['id', ...columns, 'data_json'];
+    const placeholders = insertColumns.map(() => '?').join(',');
+    const updates = columns
+      .map((column) => `${column}=excluded.${column}`)
+      .concat('data_json=excluded.data_json');
+    const conflict =
+      this.table === 'telemetry_turns'
+        ? `ON CONFLICT(id) DO UPDATE SET ${updates.join(',')}`
+        : 'ON CONFLICT(id) DO NOTHING';
+    this.client
+      .prepare(
+        `INSERT INTO ${this.table}(${insertColumns.join(',')}) VALUES(${placeholders}) ${conflict}`,
+      )
+      .run(safeValue.id, ...values, dataJson);
+  }
+  get(id: string): T | undefined {
+    const row = this.client.prepare(`SELECT data_json FROM ${this.table} WHERE id=?`).get(id) as
+      { data_json: string } | undefined;
+    return row ? (JSON.parse(row.data_json) as T) : undefined;
+  }
+  list(): T[] {
+    const rows = this.client
+      .prepare(
+        `SELECT data_json FROM ${this.table} ORDER BY ${this.table === 'telemetry_logs' ? 'ts' : 'created_at'},id`,
+      )
+      .all() as { data_json: string }[];
+    return rows.map((row) => JSON.parse(row.data_json) as T);
+  }
+}
+/** Stores local provider-attempt telemetry. */
+export class TurnLogRepository extends TelemetryRepository<TurnTelemetryRecord> {
+  constructor(client: Database.Database) {
+    super(client, 'telemetry_turns');
+  }
+}
+/** Stores local structured event telemetry. */
+export class EventLogRepository extends TelemetryRepository<EventTelemetryRecord> {
+  constructor(client: Database.Database) {
+    super(client, 'telemetry_logs');
+  }
+}
+/** Stores local model-selection and routing switch telemetry. */
+export class ModelSwitchRepository extends TelemetryRepository<ModelSwitchTelemetryRecord> {
+  constructor(client: Database.Database) {
+    super(client, 'telemetry_model_switches');
   }
 }
 
 export class ProviderRepository extends JsonRepository<Provider> {
-  constructor(client: Database.Database) {
-    super(client, 'providers');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'providers', mirror);
   }
 }
 export class WorkspaceRepository extends JsonRepository<Workspace> {
-  constructor(client: Database.Database) {
-    super(client, 'workspaces');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'workspaces', mirror);
   }
 }
 export class SessionRepository extends JsonRepository<Session> {
-  constructor(client: Database.Database) {
-    super(client, 'sessions');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'sessions', mirror);
   }
 }
 export class MessageRepository extends JsonRepository<Message> {
-  constructor(client: Database.Database) {
-    super(client, 'messages');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'messages', mirror);
   }
 }
 export class TaskRepository {
   private readonly repository: JsonRepository<TaskRecord & { id: string }>;
-  constructor(client: Database.Database) {
-    this.repository = new JsonRepository(client, 'tasks');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    this.repository = new JsonRepository(client, 'tasks', mirror);
   }
   put(value: TaskRecord): void {
     this.repository.put({ ...value, id: value.sessionId });
@@ -230,18 +589,18 @@ export class TaskRepository {
   }
 }
 export class CheckpointRepository extends JsonRepository<Checkpoint> {
-  constructor(client: Database.Database) {
-    super(client, 'checkpoints');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'checkpoints', mirror);
   }
 }
 export class DelegationRepository extends JsonRepository<DelegationRun> {
-  constructor(client: Database.Database) {
-    super(client, 'delegations');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'delegations', mirror);
   }
 }
 export class QuotaWindowRepository extends JsonRepository<QuotaWindow> {
-  constructor(client: Database.Database) {
-    super(client, 'quota_windows');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'quota_windows', mirror);
   }
 }
 export interface KeyReference {
@@ -265,7 +624,10 @@ export interface ProviderKeyEntry {
   updatedAt: string;
 }
 export class ProviderKeyEntryRepository {
-  constructor(private readonly client: Database.Database) {}
+  constructor(
+    private readonly client: Database.Database,
+    private readonly mirror: StorageMirror = NOOP_STORAGE_MIRROR,
+  ) {}
   list(providerId: string): ProviderKeyEntry[] {
     const rows = this.client
       .prepare(
@@ -280,13 +642,16 @@ export class ProviderKeyEntryRepository {
         `INSERT INTO provider_key_entries (id,provider_id,key_id,label,position,enabled,status,last_error,cooldown_until,keyring_ref,created_at,updated_at) VALUES (@id,@providerId,@keyId,@label,@position,@enabled,@status,@lastError,@cooldownUntil,@keyringRef,@createdAt,@updatedAt) ON CONFLICT(provider_id,key_id) DO UPDATE SET label=excluded.label,position=excluded.position,enabled=excluded.enabled,status=excluded.status,last_error=excluded.last_error,cooldown_until=excluded.cooldown_until,keyring_ref=excluded.keyring_ref,updated_at=excluded.updated_at`,
       )
       .run({ ...entry, enabled: entry.enabled ? 1 : 0 });
+    const { keyringRef: _keyringRef, ...metadata } = entry;
+    this.mirror.onPut('provider_key_entries', metadata);
   }
   delete(providerId: string, keyId: string): boolean {
-    return (
+    const removed =
       this.client
         .prepare('DELETE FROM provider_key_entries WHERE provider_id=? AND key_id=?')
-        .run(providerId, keyId).changes > 0
-    );
+        .run(providerId, keyId).changes > 0;
+    if (removed) this.mirror.onDelete('provider_key_entries', `${providerId}:${keyId}`);
+    return removed;
   }
 }
 export interface ProviderKeyUsage {
@@ -344,10 +709,17 @@ export class ProviderKeyRepository {
   }
 }
 export class ModelCacheRepository {
-  constructor(private readonly client: Database.Database) {}
+  constructor(
+    private readonly client: Database.Database,
+    private readonly mirror: StorageMirror = NOOP_STORAGE_MIRROR,
+  ) {}
   replace(providerId: string, models: ModelInfo[], fetchedAt = new Date().toISOString()): void {
     this.client.transaction(() => {
+      const previous = this.client
+        .prepare('SELECT id FROM models_cache WHERE provider_id=?')
+        .all(providerId) as { id: string }[];
       this.client.prepare('DELETE FROM models_cache WHERE provider_id=?').run(providerId);
+      for (const row of previous) this.mirror.onDelete('models_cache', row.id);
       for (const model of models) this.put(providerId, model, fetchedAt);
     })();
   }
@@ -357,6 +729,7 @@ export class ModelCacheRepository {
         'INSERT INTO models_cache (id,provider_id,data_json,fetched_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,data_json=excluded.data_json,fetched_at=excluded.fetched_at',
       )
       .run(model.ref, providerId, JSON.stringify(model), fetchedAt);
+    this.mirror.onPut('models_cache', { id: model.ref, providerId, model, updatedAt: fetchedAt });
   }
   list(providerId: string): ModelInfo[] {
     return (
@@ -369,8 +742,8 @@ export class ModelCacheRepository {
 export class QuotaObservationRepository extends JsonRepository<
   import('@ferry/shared').QuotaObservation
 > {
-  constructor(client: Database.Database) {
-    super(client, 'quota_observations');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'quota_observations', mirror);
   }
 }
 export class CooldownRepository extends JsonRepository<{
@@ -378,8 +751,8 @@ export class CooldownRepository extends JsonRepository<{
   until: string;
   provenance?: 'heuristic' | 'authoritative' | 'credit' | 'tier';
 }> {
-  constructor(client: Database.Database) {
-    super(client, 'cooldowns');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'cooldowns', mirror);
   }
 }
 export class TaskStepRepository extends JsonRepository<{
@@ -387,8 +760,8 @@ export class TaskStepRepository extends JsonRepository<{
   sessionId: string;
   status: string;
 }> {
-  constructor(client: Database.Database) {
-    super(client, 'task_steps');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'task_steps', mirror);
   }
 }
 export class DecisionRepository extends JsonRepository<{
@@ -398,8 +771,8 @@ export class DecisionRepository extends JsonRepository<{
   why: string;
   at: string;
 }> {
-  constructor(client: Database.Database) {
-    super(client, 'decisions');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'decisions', mirror);
   }
 }
 export class TouchedFileRepository extends JsonRepository<{
@@ -408,8 +781,8 @@ export class TouchedFileRepository extends JsonRepository<{
   path: string;
   purpose: string;
 }> {
-  constructor(client: Database.Database) {
-    super(client, 'touched_files');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'touched_files', mirror);
   }
 }
 export class HandoffRepository extends JsonRepository<{
@@ -420,8 +793,9 @@ export class HandoffRepository extends JsonRepository<{
   constructor(
     client: Database.Database,
     private readonly handoffClient: Database.Database = client,
+    mirror?: StorageMirror,
   ) {
-    super(client, 'handoffs');
+    super(client, 'handoffs', mirror);
   }
   listSince(since: Date): { id: string; sessionId: string; reason: string }[] {
     return (
@@ -436,8 +810,8 @@ export class OptimizerEventRepository extends JsonRepository<{
   sessionId: string;
   kind: string;
 }> {
-  constructor(client: Database.Database) {
-    super(client, 'optimizer_events');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'optimizer_events', mirror);
   }
 }
 export class OptimizerBlobRepository extends JsonRepository<{
@@ -445,18 +819,22 @@ export class OptimizerBlobRepository extends JsonRepository<{
   sessionId: string;
   content: string;
 }> {
-  constructor(client: Database.Database) {
-    super(client, 'optimizer_blobs');
+  constructor(client: Database.Database, mirror?: StorageMirror) {
+    super(client, 'optimizer_blobs', mirror);
   }
 }
 export class SettingsRepository {
-  constructor(private readonly client: Database.Database) {}
+  constructor(
+    private readonly client: Database.Database,
+    private readonly mirror: StorageMirror = NOOP_STORAGE_MIRROR,
+  ) {}
   put(key: string, value: unknown): void {
     this.client
       .prepare(
         'INSERT INTO settings_kv (key,value_json,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at',
       )
       .run(key, JSON.stringify(value), new Date().toISOString());
+    this.mirror.onPut('settings_kv', { id: key, key, value });
   }
   get(key: string): unknown {
     const row = this.client.prepare('SELECT value_json FROM settings_kv WHERE key=?').get(key) as
@@ -464,7 +842,9 @@ export class SettingsRepository {
     return row ? (JSON.parse(row.value_json) as unknown) : undefined;
   }
   delete(key: string): boolean {
-    return this.client.prepare('DELETE FROM settings_kv WHERE key=?').run(key).changes > 0;
+    const removed = this.client.prepare('DELETE FROM settings_kv WHERE key=?').run(key).changes > 0;
+    if (removed) this.mirror.onDelete('settings_kv', key);
+    return removed;
   }
 }
 export interface DailyUsage {
@@ -485,6 +865,44 @@ export class UsageDailyRepository {
       )
       .all() as DailyUsage[];
   }
+}
+
+/** Builds the synchronous repository set for either local or mirrored storage. */
+export function createStorageAdapter(options: {
+  client: Database.Database;
+  mode: 'local' | 'cloud';
+  mirror?: StorageMirror;
+}) {
+  const mirror =
+    options.mode === 'cloud' ? (options.mirror ?? NOOP_STORAGE_MIRROR) : NOOP_STORAGE_MIRROR;
+  return {
+    providers: new ProviderRepository(options.client, mirror),
+    workspaces: new WorkspaceRepository(options.client, mirror),
+    sessions: new SessionRepository(options.client, mirror),
+    messages: new MessageRepository(options.client, mirror),
+    tasks: new TaskRepository(options.client, mirror),
+    checkpoints: new CheckpointRepository(options.client, mirror),
+    delegations: new DelegationRepository(options.client, mirror),
+    quotaWindows: new QuotaWindowRepository(options.client, mirror),
+    quotaObservations: new QuotaObservationRepository(options.client, mirror),
+    cooldowns: new CooldownRepository(options.client, mirror),
+    taskSteps: new TaskStepRepository(options.client, mirror),
+    decisions: new DecisionRepository(options.client, mirror),
+    touchedFiles: new TouchedFileRepository(options.client, mirror),
+    handoffs: new HandoffRepository(options.client, options.client, mirror),
+    optimizerEvents: new OptimizerEventRepository(options.client, mirror),
+    optimizerBlobs: new OptimizerBlobRepository(options.client, mirror),
+    models: new ModelCacheRepository(options.client, mirror),
+    settings: new SettingsRepository(options.client, mirror),
+    providerKeys: new ProviderKeyRepository(options.client),
+    providerKeyEntries: new ProviderKeyEntryRepository(options.client, mirror),
+    providerKeyUsage: new ProviderKeyUsageDailyRepository(options.client),
+    requests: new RequestRepository(options.client, mirror),
+    outbox: new OutboxRepository(options.client),
+    turnLogs: new TurnLogRepository(options.client),
+    eventLogs: new EventLogRepository(options.client),
+    modelSwitches: new ModelSwitchRepository(options.client),
+  };
 }
 
 export interface RequestRecord {
@@ -532,7 +950,10 @@ export function redactHeaders(headers: unknown): string | null {
 }
 
 export class RequestRepository {
-  constructor(private readonly client: Database.Database) {}
+  constructor(
+    private readonly client: Database.Database,
+    private readonly mirror: StorageMirror = NOOP_STORAGE_MIRROR,
+  ) {}
   list(): RequestRecord[] {
     return this.client.prepare('SELECT * FROM requests ORDER BY ts').all() as RequestRecord[];
   }
@@ -557,6 +978,7 @@ export class RequestRepository {
         latency_ms: record.latency_ms ?? null,
         headers_json: redactHeaders(record.headers),
       });
+    this.mirror.onPut('requests', record);
   }
 }
 

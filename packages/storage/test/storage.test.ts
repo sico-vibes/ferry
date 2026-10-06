@@ -11,6 +11,9 @@ import {
   ProviderKeyUsageDailyRepository,
   SessionRepository,
   STORAGE_SCHEMA_VERSION,
+  OutboxRepository,
+  TurnLogRepository,
+  EventLogRepository,
 } from '../src/index.js';
 
 const dirs: string[] = [];
@@ -20,6 +23,117 @@ afterEach(async () => {
 });
 
 describe('@ferry/storage', () => {
+  it('persists idempotent cloud outbox operations across repository instances', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const first = new OutboxRepository(db.client);
+      first.enqueue({
+        opId: 'sessions:ses_test:1',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_test' },
+      });
+      first.enqueue({
+        opId: 'sessions:ses_test:1',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_test', title: 'newer' },
+      });
+      const restarted = new OutboxRepository(db.client);
+      const claimed = restarted.claimDue(10);
+      expect(claimed).toHaveLength(1);
+      expect(claimed[0]?.payloadJson).toContain('newer');
+      expect(restarted.counts()).toEqual({ pending: 1, failedPermanent: 0 });
+      const firstClaim = claimed[0];
+      if (!firstClaim) throw new Error('Expected one claimed outbox row');
+      restarted.markDone(firstClaim.id, firstClaim.generation);
+      expect(restarted.counts()).toEqual({ pending: 0, failedPermanent: 0 });
+    } finally {
+      db.close();
+    }
+  });
+  it('keeps a coalesced payload when an older generation completes in flight', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const outbox = new OutboxRepository(db.client);
+      outbox.enqueue({
+        opId: 'sessions:ses_race',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_race', title: 'old' },
+      });
+      const claimed = outbox.claimDue(1)[0];
+      if (!claimed) throw new Error('Expected a claimed row');
+      outbox.enqueue({
+        opId: 'sessions:ses_race',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_race', title: 'new' },
+      });
+      outbox.markDone(claimed.id, claimed.generation);
+      const retry = outbox.claimDue(1)[0];
+      expect(retry?.payloadJson).toContain('new');
+      expect(retry?.generation).toBeGreaterThan(claimed.generation);
+    } finally {
+      db.close();
+    }
+  });
+  it('revives permanent rows when the same op id is queued with a newer payload', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const outbox = new OutboxRepository(db.client);
+      outbox.enqueue({
+        opId: 'sessions:ses_repair',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_repair' },
+      });
+      const row = outbox.claimDue(1)[0];
+      if (!row) throw new Error('Expected a claimed row');
+      outbox.markPermanent(row.id, row.generation, 'constraint');
+      expect(outbox.counts().failedPermanent).toBe(1);
+      outbox.enqueue({
+        opId: 'sessions:ses_repair',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_repair', title: 'repaired' },
+      });
+      expect(outbox.claimDue(1)[0]?.payloadJson).toContain('repaired');
+      expect(outbox.counts()).toEqual({ pending: 1, failedPermanent: 0 });
+    } finally {
+      db.close();
+    }
+  });
+  it('upserts turn status changes but keeps append-only event ids idempotent', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const turns = new TurnLogRepository(db.client);
+      turns.put({
+        id: 'turn_1',
+        status: 'pending',
+        session_id: 'session_1',
+        trace_id: 'a'.repeat(32),
+      });
+      turns.put({
+        id: 'turn_1',
+        status: 'success',
+        session_id: 'session_1',
+        trace_id: 'a'.repeat(32),
+      });
+      expect(turns.get('turn_1')?.status).toBe('success');
+      const events = new EventLogRepository(db.client);
+      events.put({ id: 'event_1', event: 'turn.done', ts: '2026-01-01T00:00:00.000Z' });
+      events.put({ id: 'event_1', event: 'turn.overwritten', ts: '2026-01-02T00:00:00.000Z' });
+      expect(events.get('event_1')?.event).toBe('turn.done');
+      const columns = db.client.prepare('PRAGMA table_info(telemetry_turns)').all() as {
+        name: string;
+      }[];
+      expect(columns.map((column) => column.name)).toContain('trace_id');
+      expect(columns.map((column) => column.name)).toContain('data_json');
+    } finally {
+      db.close();
+    }
+  });
   it('migrates a legacy provider credential into key 1 without changing its keyring reference', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ferry-key-migration-'));
     dirs.push(dir);
