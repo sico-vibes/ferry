@@ -204,7 +204,7 @@ export interface AgentOptions {
     signal: AbortSignal,
   ) => Promise<{ allowed: boolean; message?: string; usageId?: string; release?: () => void }>;
   onHandoff?: (
-    reason: 'quota' | 'rate_limit' | 'error' | 'capability',
+    reason: 'quota' | 'rate_limit' | 'error' | 'capability' | 'manual',
     from: string,
     to: string,
   ) => void;
@@ -288,6 +288,7 @@ export class AgentLoop {
   private readonly retirementFailures: RetirementFailure[];
   private readonly retiredModels: Set<string>;
   private readonly sessionBadKeys = new Map<string, Set<string>>();
+  private readonly pinnedHandoverModels = new Map<string, ModelRef>();
   private readonly activeMessageParts = new Map<
     string,
     { messageId: Message['id']; parts: MessagePart[] }
@@ -305,6 +306,10 @@ export class AgentLoop {
 
   private now(): number {
     return this.options.routingNow?.() ?? Date.now();
+  }
+
+  private pinnedModelRefFor(sessionId: string): ModelRef | null {
+    return this.pinnedHandoverModels.get(sessionId) ?? this.options.pinnedModelRef ?? null;
   }
 
   private emitStructuredEvent(sessionId: string, event: StructuredAgentEvent): void {
@@ -652,20 +657,37 @@ export class AgentLoop {
           stepCount++;
           contextMessages = pinnedMessages;
         }
-        if (session.modelRef && session.modelRef !== model.ref && activeRole === requestedRole) {
+        const previousAssistant = [...messages]
+          .reverse()
+          .find((message) => message.role === 'assistant');
+        if (
+          previousAssistant?.modelRef &&
+          previousAssistant.modelRef !== model.ref &&
+          activeRole === requestedRole
+        ) {
           const briefing = buildBriefing(
             taskRecord,
             messages,
             model,
             Math.floor(model.contextWindow * 0.25),
             this.estimates,
+            {
+              from: previousAssistant.modelRef,
+              to: model.ref,
+              reason: this.options.pinnedModelRef
+                ? 'manual model selection'
+                : 'automatic routing boundary',
+            },
           );
+          const handoffReason = this.options.pinnedModelRef ? 'manual' : 'error';
           const marker = createHandoffMarker(
-            session.modelRef,
+            previousAssistant.modelRef,
             model.ref,
-            'quota',
+            handoffReason,
             briefing,
-            'The router selected another eligible model.',
+            this.options.pinnedModelRef
+              ? `You selected ${model.name} for the next step.`
+              : `Automatic routing selected ${model.name} for the next step.`,
           );
           this.addPart(sessionId, {
             type: 'handoff_marker',
@@ -675,8 +697,14 @@ export class AgentLoop {
             reason: marker.reason,
             briefingTokens: marker.briefingTokens,
             explanation: marker.explanation,
+            trigger: this.options.pinnedModelRef ? 'manual' : 'proactive',
           });
-          this.options.onHandoff?.('quota', marker.from, marker.to);
+          this.options.onHandoff?.(
+            this.options.pinnedModelRef ? 'manual' : 'error',
+            marker.from,
+            marker.to,
+          );
+          system += `\n\n[Ferry handover packet]\n${briefing.text}`;
           this.options.emit({
             type: 'toast',
             tone: 'info',
@@ -708,7 +736,7 @@ export class AgentLoop {
         };
         this.options.store.replaceMessage(assistant);
         this.options.emit({ type: 'session.message', message: assistant });
-        const streamedTextPartId = PartIdSchema.parse(newId('part'));
+        let streamedTextPartId = PartIdSchema.parse(newId('part'));
         let streamedText = '';
         const streamedParts = {
           messageId: assistant.id,
@@ -1116,12 +1144,12 @@ export class AgentLoop {
             const unsupportedFreeTier = classified.family === 'unsupported_free_tier';
             const requestTooLarge = classified.family === 'request_too_large';
             const timedOut = error instanceof StepWatchdogError || classified.family === 'timeout';
-            const safeToSwitch = streamedText.length === 0;
             const providerPolicy = this.options
               .capacity()
               .providers.find((item) => item.id === model.providerId);
             const stopFallback = shouldStopFallback({
-              pinnedModelRef: this.options.pinnedModelRef ?? null,
+              pinnedModelRef: this.pinnedModelRefFor(sessionId),
+              pinnedExhaustion: routing?.pinnedExhaustion ?? 'handover',
               attemptedModelRef: model.ref,
               avoidTrainingProviders: routing?.avoidTrainingProviders ?? false,
               providerDataUse: providerPolicy?.dataUse ?? null,
@@ -1132,6 +1160,45 @@ export class AgentLoop {
             if (badCredentialStatus) this.sessionBadKeys.get(sessionId)?.add(model.providerId);
             if (!localQuotaReservation && !badCredentialStatus && routingFailure.scope !== 'none') {
               this.resilience.recordFailure(routingFailure, model.ref, model.providerId);
+            }
+            let approvedPinnedHandover = false;
+            if (
+              stopFallback &&
+              this.pinnedModelRefFor(sessionId) &&
+              routing?.pinnedExhaustion === 'ask' &&
+              (rateLimited || badCredentialStatus || timedOut || routingFailure.scope !== 'none') &&
+              this.options.requestApproval
+            ) {
+              const approval: Extract<MessagePart, { type: 'approval_request' }> = {
+                type: 'approval_request',
+                id: PartIdSchema.parse(newId('part')),
+                kind: 'model_handover',
+                summary: `Switch from ${model.name} after it became unavailable?`,
+                detail: 'Ferry will continue this step with another eligible model.',
+                risk: 'medium',
+                state: 'pending',
+              };
+              this.addPart(sessionId, approval);
+              const waiting = this.options.store.updateSession(sessionId, {
+                status: 'awaiting_approval',
+              });
+              this.options.emit({ type: 'session.updated', session: waiting });
+              const decision = await this.options.requestApproval(approval, signal);
+              if (!signal.aborted) {
+                const resumed = this.options.store.updateSession(sessionId, { status: 'running' });
+                this.options.emit({ type: 'session.updated', session: resumed });
+              }
+              this.replacePart(sessionId, {
+                ...approval,
+                state: decision === 'denied' ? 'denied' : decision,
+              });
+              if (decision === 'allowed_once' || decision === 'allowed_always')
+                approvedPinnedHandover = true;
+              else
+                throw new Error(
+                  `Pinned model ${model.ref} is unavailable; handover was declined.`,
+                  { cause: error },
+                );
             }
             if (
               !localQuotaReservation &&
@@ -1155,6 +1222,7 @@ export class AgentLoop {
               classified.family === 'timeout' ||
               classified.family === 'stream_failure';
             if (
+              streamedText.length === 0 &&
               !requestTooLarge &&
               !rateLimited &&
               !badCredentialStatus &&
@@ -1184,6 +1252,14 @@ export class AgentLoop {
               await (this.options.waitForRetry ?? delayForRetry)(retryDelayMsValue, signal);
               continue;
             }
+            const pendingBoundaryWork = (this.options.store.load(sessionId)?.messages ?? []).some(
+              (entry) =>
+                entry.parts.some(
+                  (part) =>
+                    (part.type === 'tool_call' && ['pending', 'running'].includes(part.status)) ||
+                    (part.type === 'approval_request' && part.state === 'pending'),
+                ),
+            );
             if (
               (!rateLimited &&
                 !modelUnavailable &&
@@ -1191,12 +1267,25 @@ export class AgentLoop {
                 !unsupportedFreeTier &&
                 !timedOut &&
                 !requestTooLarge &&
-                routingFailure.scope === 'none') ||
-              !safeToSwitch ||
-              stopFallback ||
+                !badCredentialStatus &&
+                routingFailure.scope === 'none' &&
+                classified.family !== 'offline' &&
+                classified.family !== 'stream_failure') ||
+              pendingBoundaryWork ||
+              (stopFallback && !approvedPinnedHandover) ||
               isSignalAborted(signal)
-            )
+            ) {
+              if (
+                stopFallback &&
+                this.pinnedModelRefFor(sessionId) &&
+                routing?.pinnedExhaustion === 'fail'
+              )
+                throw new Error(
+                  `Pinned model ${this.pinnedModelRefFor(sessionId)} is unavailable and pinnedExhaustion is set to fail.`,
+                  { cause: error },
+                );
               throw error;
+            }
             if (
               executionRole === 'editor' &&
               editorFailures >= this.options.profile.roles.editorFailureThreshold
@@ -1231,16 +1320,26 @@ export class AgentLoop {
               routeEstimate,
               attemptedModels,
               sessionId,
+              approvedPinnedHandover,
             );
             if (!fallback) {
+              if (this.pinnedModelRefFor(sessionId))
+                throw new Error(
+                  `Pinned model ${this.pinnedModelRefFor(sessionId)} is unavailable; no eligible handover model is available (pinnedExhaustion: ${routing?.pinnedExhaustion ?? 'handover'}).`,
+                  { cause: error },
+                );
               throw new AllCandidatesExhaustedError(this.exhaustedMessage(stepKind));
             }
             if (parentTurnId) {
               const fallbackReason = toolsUnsupported
                 ? 'capability'
-                : rateLimited
-                  ? 'rate_limit'
-                  : 'error';
+                : requestTooLarge
+                  ? 'context'
+                  : classified.family === 'quota_exhausted'
+                    ? 'quota'
+                    : rateLimited
+                      ? 'rate_limit'
+                      : 'error';
               this.options.telemetry?.turnUpdated(parentTurnId, {
                 status: 'fallback',
                 fallback_reason: fallbackReason,
@@ -1249,7 +1348,11 @@ export class AgentLoop {
               this.options.telemetry?.modelSwitch({
                 session_id: sessionId,
                 turn_id: parentTurnId,
-                kind: 'router_fallback',
+                kind:
+                  this.options.pinnedModelRef &&
+                  (routing?.pinnedExhaustion ?? 'handover') === 'handover'
+                    ? 'handoff'
+                    : 'router_fallback',
                 from_model: model.ref,
                 to_model: fallback.ref,
                 to_provider: fallback.providerId,
@@ -1270,41 +1373,101 @@ export class AgentLoop {
             }
             attemptedModels.add(fallback.ref);
             handoffsThisStep++;
+            if (this.options.pinnedModelRef) this.pinnedHandoverModels.set(sessionId, fallback.ref);
+            const visibleHandover =
+              streamedText.length > 0 ||
+              approvedPinnedHandover ||
+              Boolean(
+                this.options.pinnedModelRef &&
+                (routing?.pinnedExhaustion ?? 'handover') === 'handover',
+              );
+            const handoffReason = toolsUnsupported
+              ? 'capability'
+              : requestTooLarge
+                ? 'context'
+                : classified.family === 'quota_exhausted'
+                  ? 'quota'
+                  : rateLimited
+                    ? 'rate_limit'
+                    : 'error';
+            const interruptedAt = new Date().toISOString();
+            const interruptedMessage: Message = {
+              ...assistant,
+              modelRef: model.ref,
+              ...(streamedText.length > 0
+                ? {
+                    interrupted: {
+                      reason: formatClassifiedFailure(classified.family, error),
+                      at: interruptedAt,
+                    },
+                    modelAttempts,
+                    parts: streamedParts.parts,
+                  }
+                : {}),
+            };
+            if (visibleHandover) this.options.store.replaceMessage(interruptedMessage);
             const briefing = buildBriefing(
               taskRecord,
-              messages,
+              visibleHandover ? [...messages, interruptedMessage] : messages,
               fallback,
               Math.floor(fallback.contextWindow * 0.25),
               this.estimates,
+              {
+                from: model.ref,
+                to: fallback.ref,
+                reason: handoffReason,
+                failed: true,
+                omittedContext:
+                  'This packet summarizes Ferry task records and recent turns; older turns may be outside the target model’s retained history.',
+                ...(visibleHandover ? { partialText: streamedText } : {}),
+              },
             );
-            const marker = createHandoffMarker(
-              model.ref,
-              fallback.ref,
-              toolsUnsupported ? 'capability' : rateLimited ? 'rate_limit' : 'error',
-              briefing,
-              toolsUnsupported
-                ? `${model.name} rejected tool calling (${formatClassifiedFailure(classified.family, error)}); continuing with ${fallback.name}.`
-                : rateLimited
-                  ? `${model.name} returned ${formatClassifiedFailure(classified.family, error)}; continuing with ${fallback.name}.`
-                  : `${model.name} failed with ${formatClassifiedFailure(classified.family, error)}; continuing with ${fallback.name}.`,
-            );
-            this.addPart(sessionId, {
-              type: 'handoff_marker',
-              id: PartIdSchema.parse(newId('part')),
-              from: marker.from as ModelRef,
-              to: marker.to as ModelRef,
-              reason: marker.reason,
-              briefingTokens: marker.briefingTokens,
-              explanation: marker.explanation,
-            });
-            this.options.onHandoff?.(
-              toolsUnsupported ? 'capability' : rateLimited ? 'rate_limit' : 'error',
-              marker.from,
-              marker.to,
-            );
+            if (visibleHandover) {
+              contextMessages = [...contextMessages, interruptedMessage];
+              assistant = this.options.store.appendMessage(
+                sessionId,
+                'assistant',
+                [],
+                fallback.ref,
+                new Date(),
+                executionRole,
+              );
+              this.options.emit({ type: 'session.message', message: assistant });
+              streamedText = '';
+              streamedTextPartId = PartIdSchema.parse(newId('part'));
+              streamedParts.messageId = assistant.id;
+              streamedParts.parts = [];
+              const explanation =
+                classified.family === 'quota_exhausted'
+                  ? `${model.name} reached its usage limit; continuing with ${fallback.name}.`
+                  : badCredentialStatus
+                    ? `${model.name} could not continue because of a credentials error; continuing with ${fallback.name}.`
+                    : toolsUnsupported
+                      ? `${model.name} rejected tool calling; continuing with ${fallback.name}.`
+                      : `${model.name} failed with ${formatClassifiedFailure(classified.family, error)}; continuing with ${fallback.name}.`;
+              const marker = createHandoffMarker(
+                model.ref,
+                fallback.ref,
+                handoffReason,
+                briefing,
+                explanation,
+              );
+              this.addPart(sessionId, {
+                type: 'handoff_marker',
+                id: PartIdSchema.parse(newId('part')),
+                from: marker.from as ModelRef,
+                to: marker.to as ModelRef,
+                reason: marker.reason,
+                briefingTokens: marker.briefingTokens,
+                explanation: marker.explanation,
+                trigger: 'reactive',
+              });
+              system += `\n\n[Ferry handover packet]\n${briefing.text}`;
+            } else {
+              system += `\n\n[Ferry retry attribution] ${model.name} produced no visible output; ${fallback.name} is answering this step after ${handoffReason}.`;
+            }
             model = fallback;
             sameModelRetries = 0;
-            system += `\n\nHandoff briefing:\n${briefing.text}`;
           }
         }
         this.activeMessageParts.delete(sessionId);
@@ -1729,9 +1892,13 @@ export class AgentLoop {
       const poolExhausted =
         error instanceof AllCandidatesExhaustedError ||
         (error instanceof Error && error.message.startsWith('All free candidates exhausted.'));
+      const pinnedPolicyFailure =
+        error instanceof Error && error.message.startsWith('Pinned model ');
       const message = poolExhausted
         ? error.message
-        : formatAttemptSummary(attemptFailures, providerDetail);
+        : pinnedPolicyFailure
+          ? error.message
+          : formatAttemptSummary(attemptFailures, providerDetail);
       this.emitStructuredEvent(sessionId, {
         id: newId('event'),
         type: 'error',
@@ -1775,6 +1942,7 @@ export class AgentLoop {
       throw error;
     } finally {
       this.sessionBadKeys.delete(sessionId);
+      this.pinnedHandoverModels.delete(sessionId);
       outerSignal?.removeEventListener('abort', relayAbort);
     }
   }
@@ -1814,7 +1982,7 @@ export class AgentLoop {
     sessionId: string,
   ): ModelInfo | undefined {
     // A manual pin applies to every model request, including planner and editor steps.
-    if (this.options.pinnedModelRef)
+    if (this.pinnedModelRefFor(sessionId))
       return this.selectModel(step, inputTokens, previous, sessionId);
     const configured =
       role === 'planner'
@@ -1863,8 +2031,9 @@ export class AgentLoop {
     previous: ModelRef | null,
     sessionId: string,
   ): ModelInfo | undefined {
-    if (this.options.pinnedModelRef)
-      return this.options.catalog.models.find((model) => model.ref === this.options.pinnedModelRef);
+    const pinnedModelRef = this.pinnedModelRefFor(sessionId);
+    if (pinnedModelRef)
+      return this.options.catalog.models.find((model) => model.ref === pinnedModelRef);
     const locked = this.sessionModelLocks.get(sessionId);
     const withinFailedSize = (model: ModelInfo) =>
       (this.requestTooLargeAt.get(model.ref) ?? Number.POSITIVE_INFINITY) <= inputTokens;
@@ -1931,8 +2100,16 @@ export class AgentLoop {
     inputTokens: number,
     attemptedRefs: ReadonlySet<string>,
     sessionId: string,
+    allowPinnedHandover = false,
   ): ModelInfo | undefined {
-    if (this.options.pinnedModelRef) return undefined;
+    // Desktop supplies one API key per provider today, so same-model key rotation is unavailable; continue to model fallback.
+    const pinnedExhaustion = this.options.routingSettings?.().pinnedExhaustion ?? 'handover';
+    if (
+      this.pinnedModelRefFor(sessionId) &&
+      pinnedExhaustion !== 'handover' &&
+      !allowPinnedHandover
+    )
+      return undefined;
     const locked = this.sessionModelLocks.get(sessionId);
     const candidates = this.options.resolveCandidates?.(this.options.profile, step, inputTokens);
     const retirementEnabled = this.options.routingSettings?.().carefulModelRetirement;
@@ -2322,7 +2499,7 @@ function toolSchemaForEstimate(schema: z.ZodType): unknown {
   }
 }
 
-function prepareResumeTranscript(messages: readonly Message[]): Message[] {
+export function prepareResumeTranscript(messages: readonly Message[]): Message[] {
   let lastUserIndex = -1;
   let lastAssistantIndex = -1;
   for (let index = 0; index < messages.length; index += 1) {
@@ -2333,16 +2510,24 @@ function prepareResumeTranscript(messages: readonly Message[]): Message[] {
   const lastAssistant = messages[lastAssistantIndex];
   if (!lastAssistant) return [...messages];
   const tools = lastAssistant.parts.filter((part) => part.type === 'tool_call');
-  if (!tools.length) return messages.filter((_message, index) => index !== lastAssistantIndex);
+  if (!tools.length && !lastAssistant.interrupted)
+    return messages.filter((_message, index) => index !== lastAssistantIndex);
+  if (!tools.length) return [...messages];
   if (tools.every((part) => !['pending', 'running'].includes(part.status))) return [...messages];
   const durableTools = tools.filter((part) => !['pending', 'running'].includes(part.status));
+  if (!durableTools.length && lastAssistant.interrupted)
+    return messages.map((message, index) =>
+      index === lastAssistantIndex
+        ? { ...message, parts: message.parts.filter((part) => part.type !== 'tool_call') }
+        : message,
+    );
   if (!durableTools.length)
     return messages.filter((_message, index) => index !== lastAssistantIndex);
   return messages.map((message, index) =>
     index === lastAssistantIndex ? { ...message, parts: durableTools } : message,
   );
 }
-function toModelMessages(
+export function toModelMessages(
   messages: readonly Message[],
   targetModel: ModelInfo | undefined,
   escapeToolResults = false,
@@ -2361,7 +2546,7 @@ function toModelMessages(
     const content: Exclude<Extract<ModelMessage, { role: 'assistant' }>['content'], string> = [];
     const toolResults: Extract<ModelMessage, { role: 'tool' }>['content'] = [];
     for (const part of message.parts) {
-      if (part.type === 'text' || part.type === 'reasoning') {
+      if (part.type === 'text') {
         if (part.text) content.push({ type: 'text', text: part.text });
       } else if (part.type === 'tool_call') {
         if (part.status === 'succeeded' && JSON.stringify(part.args).length > 1_200) {
@@ -2373,7 +2558,11 @@ function toModelMessages(
           continue;
         }
         const toolCallId = part.toolCallId ?? part.id;
-        const providerOptions = withGemini3ThoughtSignature(part.providerOptions, targetModel);
+        const providerOptions = withGemini3ThoughtSignature(
+          part.providerOptions,
+          targetModel,
+          message.modelRef,
+        );
         content.push({
           type: 'tool-call',
           toolCallId,
@@ -2660,8 +2849,12 @@ function hasThoughtSignature(
 function withGemini3ThoughtSignature(
   providerOptions: Record<string, Record<string, unknown>> | undefined,
   targetModel: ModelInfo | undefined,
+  sourceModelRef: ModelRef | null,
 ): Record<string, Record<string, unknown>> | undefined {
-  if (!isGemini3Model(targetModel) || hasThoughtSignature(providerOptions)) return providerOptions;
+  if (!targetModel || !isGemini3Model(targetModel) || hasThoughtSignature(providerOptions))
+    return providerOptions;
+  // Gemini's skip sentinel is only valid for calls whose signature belongs to another model.
+  if (sourceModelRef === targetModel.ref) return providerOptions;
   return {
     ...providerOptions,
     google: {
@@ -2699,7 +2892,7 @@ function rootErrorCause(error: unknown): unknown {
 }
 
 function summarizeMessagePart(part: MessagePart): string {
-  if (part.type === 'handoff_marker') return `Model handoff: ${part.explanation}`;
+  if (part.type === 'handoff_marker') return '';
   if (part.type === 'approval_request') return `Approval ${part.state}: ${part.summary}`;
   if (part.type === 'error') return `Error (${part.kind}): ${part.message}`;
   if (part.type === 'checkpoint') return `Checkpoint created: ${part.label}`;

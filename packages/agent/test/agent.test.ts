@@ -10,12 +10,16 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  DEFAULT_ROUTING_SETTINGS,
   ModelInfoSchema,
   ProfileIdSchema,
   ProviderIdSchema,
   ProviderSchema,
   WorkspaceIdSchema,
   newTraceId,
+  type Message,
+  PartIdSchema,
+  newId,
 } from '@ferry/shared';
 import {
   openDatabase,
@@ -30,7 +34,13 @@ import {
 import { BUILTIN_PROFILES } from '@ferry/router';
 import { createFixtureRepo, FakeOpenAIServer } from '@ferry/testkit';
 import { AGENT_EVALS, runAgentEvals } from '../evals/fixtures.js';
-import { AgentLoop, repairAndValidate, type AgentEvent } from '../src/loop.js';
+import {
+  AgentLoop,
+  prepareResumeTranscript,
+  repairAndValidate,
+  toModelMessages,
+  type AgentEvent,
+} from '../src/loop.js';
 import { SessionStore } from '../src/session.js';
 
 const tempDirs: string[] = [];
@@ -114,6 +124,83 @@ describe('@ferry/agent', () => {
       value: { path: 'README.md' },
     });
     expect(repairAndValidate(schema, '{broken')).toMatchObject({ ok: false });
+  });
+
+  it('drops reasoning and handoff speech while preserving complete tool call pairs', async () => {
+    const state = await setup();
+    try {
+      const assistant = state.store.appendMessage(
+        state.session.id,
+        'assistant',
+        [
+          {
+            type: 'reasoning',
+            id: PartIdSchema.parse(newId('part')),
+            text: 'private chain of thought',
+          },
+          { type: 'text', id: PartIdSchema.parse(newId('part')), text: 'Visible answer.' },
+          {
+            type: 'tool_call',
+            id: PartIdSchema.parse(newId('part')),
+            toolCallId: 'call-1',
+            tool: 'read_file',
+            title: 'Read file',
+            args: { path: 'README.md' },
+            status: 'succeeded',
+            output: {
+              text: 'file contents',
+              filtered: false,
+              originalTokens: null,
+              filteredTokens: null,
+              recoveryHandle: null,
+            },
+            changes: [],
+            durationMs: 1,
+          },
+          {
+            type: 'handoff_marker',
+            id: PartIdSchema.parse(newId('part')),
+            from: state.model.ref,
+            to: state.model.ref,
+            reason: 'manual',
+            briefingTokens: 0,
+            explanation: 'Model handoff: do not serialize this as speech.',
+          },
+        ],
+        state.model.ref,
+      );
+      const converted = toModelMessages([assistant], state.model);
+      expect(JSON.stringify(converted)).not.toContain('private chain of thought');
+      expect(JSON.stringify(converted)).not.toContain('Model handoff:');
+      expect(converted).toEqual([
+        expect.objectContaining({
+          role: 'assistant',
+          content: expect.arrayContaining([
+            expect.objectContaining({ type: 'text', text: 'Visible answer.' }),
+            expect.objectContaining({ type: 'tool-call', toolCallId: 'call-1' }),
+          ]),
+        }),
+        expect.objectContaining({
+          role: 'tool',
+          content: [expect.objectContaining({ type: 'tool-result', toolCallId: 'call-1' })],
+        }),
+      ]);
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('keeps an interrupted text-only assistant message in the resume transcript', () => {
+    const message = {
+      id: 'message_assistant' as Message['id'],
+      sessionId: 'session_test' as Message['sessionId'],
+      role: 'assistant' as const,
+      createdAt: new Date().toISOString(),
+      modelRef: 'openai/test-model' as Message['modelRef'],
+      interrupted: { reason: 'rate limit', at: new Date().toISOString() },
+      parts: [{ type: 'text' as const, id: PartIdSchema.parse(newId('part')), text: 'Cut off.' }],
+    } satisfies Message;
+    expect(prepareResumeTranscript([message])).toEqual([message]);
   });
 
   it('runs a single model step and persists the assistant response', async () => {
@@ -430,6 +517,7 @@ describe('@ferry/agent', () => {
         profile: BUILTIN_PROFILES[0]!,
         catalog: { ...state.catalog, models: [state.model, fallback] },
         pinnedModelRef: state.model.ref,
+        routingSettings: () => ({ ...DEFAULT_ROUTING_SETTINGS, pinnedExhaustion: 'fail' }),
         capacity: () => ({ providers: [state.provider] }),
         apiKeys: {},
         permissionMode: 'full_auto',
@@ -441,7 +529,7 @@ describe('@ferry/agent', () => {
         waitForRetry: async () => {},
       });
       await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
-        'upstream unavailable',
+        /Pinned model openai\/test-model is unavailable and pinnedExhaustion is set to fail/,
       );
       expect(attempts).toEqual([state.model.ref, state.model.ref, state.model.ref]);
       expect(state.store.load(state.session.id)?.session.modelRef).toBeNull();
@@ -450,6 +538,7 @@ describe('@ferry/agent', () => {
         ?.messages.flatMap((message) => message.parts)
         .find((part) => part.type === 'error');
       if (failure?.type !== 'error') throw new Error('Missing pinned-model failure part');
+      expect(failure.message).toContain('pinnedExhaustion is set to fail');
       expect(failure.message).not.toContain('scoreBreakdown');
       expect(failure.details?.attempts).toMatchObject(
         Array.from({ length: 3 }, () => ({ model: state.model.ref, kind: 'server', status: 503 })),
@@ -682,7 +771,7 @@ describe('@ferry/agent', () => {
     }
   });
 
-  it('emits and records a rate-limit handoff before continuing on another provider', async () => {
+  it('silently retries a pre-output rate limit in one message labelled with the serving model', async () => {
     const state = await setup();
     try {
       const alternate = ModelInfoSchema.parse({
@@ -726,29 +815,215 @@ describe('@ferry/agent', () => {
 
       await loop.run({ sessionId: state.session.id });
 
-      const marker = state.store
+      const assistantMessages = state.store
         .load(state.session.id)
-        ?.messages.flatMap((message) => message.parts)
-        .find((part) => part.type === 'handoff_marker');
-      expect(marker).toMatchObject({
-        type: 'handoff_marker',
-        from: state.model.ref,
-        to: alternate.ref,
-        reason: 'rate_limit',
+        ?.messages.filter((message) => message.role === 'assistant');
+      expect(assistantMessages).toHaveLength(1);
+      expect(assistantMessages?.[0]).toMatchObject({
+        modelRef: alternate.ref,
+        parts: [{ type: 'text', text: 'Continued after the rate limit.' }],
+        modelAttempts: [
+          { model: state.model.ref, status: 429, errorKind: 'rate_limit', outputStarted: false },
+          { model: alternate.ref, status: 200 },
+        ],
       });
-      if (marker?.type !== 'handoff_marker') throw new Error('Rate-limit marker was not saved');
-      expect(marker.briefingTokens).toBeGreaterThanOrEqual(0);
-      expect(marker.explanation).toContain('rate_limit (HTTP 429)');
-      expect(marker.explanation).toContain('Bearer [redacted]');
-      expect(marker.explanation).not.toContain('top-secret-fixture');
+      expect(assistantMessages?.[0]?.parts.some((part) => part.type === 'handoff_marker')).toBe(
+        false,
+      );
+      expect(handoffs).toEqual([]);
       expect(
         events.some(
           (event) => event.type === 'session.part' && event.part.type === 'handoff_marker',
         ),
+      ).toBe(false);
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('keeps partial output on A and starts a warned, labelled B handover', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/test-model',
+        providerId: 'gemini',
+        name: 'Gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: 'gemini',
+        name: 'Gemini',
+      });
+      const prompts: { model: string; system: string; messages: readonly Message[] }[] = [];
+      let calls = 0;
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        capacity: () => ({ providers: [state.provider, alternateProvider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        resolveCandidates: () => [state.model, alternate],
+        generator: async ({ model, system, messages, onDelta }) => {
+          prompts.push({ model: model.ref, system, messages });
+          calls++;
+          if (calls === 1) {
+            onDelta('I inspected the file and began an unverified claim');
+            throw Object.assign(new Error('rate limit'), { statusCode: 429 });
+          }
+          expect(model.ref).toBe(alternate.ref);
+          return { text: 'I will verify the claim first.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+
+      const assistants = state.store
+        .load(state.session.id)
+        ?.messages.filter((message) => message.role === 'assistant');
+      expect(assistants).toHaveLength(2);
+      expect(assistants?.[0]).toMatchObject({
+        modelRef: state.model.ref,
+        interrupted: { reason: expect.any(String), at: expect.any(String) },
+        parts: [{ type: 'text', text: 'I inspected the file and began an unverified claim' }],
+      });
+      expect(assistants?.[1]).toMatchObject({ modelRef: alternate.ref });
+      expect(assistants?.[1]?.parts[0]?.type).toBe('handoff_marker');
+      expect(
+        prompts[1]?.messages.some(
+          (message) =>
+            message.role === 'assistant' &&
+            message.parts.some(
+              (part) => part.type === 'text' && part.text.includes('unverified claim'),
+            ),
+        ),
       ).toBe(true);
-      expect(handoffs).toEqual([
-        { reason: 'rate_limit', from: state.model.ref, to: alternate.ref },
-      ]);
+      expect(prompts[1]?.system).toContain('unfinished and unverified');
+      expect(prompts[1]?.system).toContain('Do not repeat it');
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('applies pinned exhaustion fail, ask, and handover policies', async () => {
+    for (const policy of ['fail', 'ask', 'handover'] as const) {
+      const state = await setup();
+      try {
+        const alternate = ModelInfoSchema.parse({
+          ...state.model,
+          ref: 'gemini/test-model',
+          providerId: 'gemini',
+          name: 'Gemini',
+        });
+        const alternateProvider = ProviderSchema.parse({
+          ...state.provider,
+          id: 'gemini',
+          name: 'Gemini',
+        });
+        let calls = 0;
+        const approvals: string[] = [];
+        const loop = new AgentLoop({
+          store: state.store,
+          workspace: state.root,
+          dataDir: state.root,
+          profile: BUILTIN_PROFILES[0]!,
+          catalog: { ...state.catalog, models: [state.model, alternate] },
+          capacity: () => ({ providers: [state.provider, alternateProvider] }),
+          apiKeys: {},
+          permissionMode: 'full_auto',
+          emit: () => {},
+          pinnedModelRef: state.model.ref,
+          routingSettings: () => ({ ...DEFAULT_ROUTING_SETTINGS, pinnedExhaustion: policy }),
+          resolveCandidates: () => [state.model, alternate],
+          requestApproval: async (part) => {
+            approvals.push(part.kind);
+            return 'allowed_once';
+          },
+          generator: async ({ model }) => {
+            calls++;
+            if (calls === 1) throw Object.assign(new Error('usage limit'), { statusCode: 429 });
+            expect(model.ref).toBe(alternate.ref);
+            return { text: 'Continued.', finishReason: 'stop' };
+          },
+        });
+
+        if (policy === 'fail') {
+          await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
+            /pinnedExhaustion is set to fail/,
+          );
+          expect(calls).toBe(1);
+        } else {
+          await loop.run({ sessionId: state.session.id });
+          expect(calls).toBe(2);
+          const assistants = state.store
+            .load(state.session.id)
+            ?.messages.filter((message) => message.role === 'assistant');
+          expect(assistants).toHaveLength(2);
+          expect(assistants?.[1]?.modelRef).toBe(alternate.ref);
+          expect(assistants?.[1]?.parts.some((part) => part.type === 'handoff_marker')).toBe(true);
+          expect(approvals).toEqual(policy === 'ask' ? ['model_handover'] : []);
+        }
+      } finally {
+        state.database.close();
+      }
+    }
+  });
+
+  it('adds a handover packet when the routed model changes between completed steps', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/test-model',
+        providerId: 'gemini',
+        name: 'Gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: 'gemini',
+        name: 'Gemini',
+      });
+      let candidates = [state.model];
+      let calls = 0;
+      let secondSystem = '';
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        capacity: () => ({ providers: [state.provider, alternateProvider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        resolveCandidates: () => candidates,
+        generator: async ({ model, system }) => {
+          calls++;
+          if (calls === 1) {
+            expect(model.ref).toBe(state.model.ref);
+            candidates = [alternate];
+            return {
+              toolCalls: [{ name: 'read_file', input: { path: 'README.md' } }],
+              finishReason: 'tool-calls',
+            };
+          }
+          secondSystem = system;
+          expect(model.ref).toBe(alternate.ref);
+          return { text: 'Finished the next step.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      const assistants = state.store
+        .load(state.session.id)
+        ?.messages.filter((message) => message.role === 'assistant');
+      expect(assistants?.[0]?.parts.some((part) => part.type === 'handoff_marker')).toBe(true);
+      expect(secondSystem).toContain('completed its step');
+      expect(secondSystem).toContain('Plan');
+      expect(secondSystem).toContain('Files touched');
+      expect(calls).toBe(2);
     } finally {
       state.database.close();
     }
@@ -819,9 +1094,8 @@ describe('@ferry/agent', () => {
       expect(
         state.store
           .load(state.session.id)
-          ?.messages.flatMap((message) => message.parts)
-          .some((part) => part.type === 'handoff_marker' && part.reason === 'rate_limit'),
-      ).toBe(true);
+          ?.messages.filter((message) => message.role === 'assistant'),
+      ).toHaveLength(1);
     } finally {
       await fake.stop();
       state.database.close();
@@ -880,9 +1154,8 @@ describe('@ferry/agent', () => {
       expect(
         state.store
           .load(state.session.id)
-          ?.messages.flatMap((message) => message.parts)
-          .some((part) => part.type === 'handoff_marker' && part.reason === 'error'),
-      ).toBe(true);
+          ?.messages.filter((message) => message.role === 'assistant'),
+      ).toHaveLength(1);
 
       const failedSession = state.store.create({
         workspaceId: state.session.workspaceId,

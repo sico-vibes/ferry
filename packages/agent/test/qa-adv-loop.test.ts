@@ -634,7 +634,7 @@ describe('QA adv: request_too_large and pinned models', () => {
       const beta = state.catalog.models[1]!;
       const calls: string[] = [];
       const onHandoff = vi.fn();
-      const loop = makeLoop(state, routedSettings(), {
+      const loop = makeLoop(state, routedSettings({ pinnedExhaustion: 'fail' }), {
         pinnedModelRef: alpha.ref,
         resolveCandidates: () => [alpha, beta],
         onHandoff,
