@@ -1,0 +1,22 @@
+{
+  "name": "@ferry/cloud",
+  "version": "0.0.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ferry/secrets": "workspace:*",
+    "@ferry/shared": "workspace:*",
+    "@ferry/storage": "workspace:*",
+    "@supabase/supabase-js": "2.117.2",
+    "zod": "4.6.5"
+  }
+}
