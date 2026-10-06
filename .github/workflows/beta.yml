@@ -44,6 +44,11 @@ jobs:
           "FERRY_RELEASE_TAG=v$version" >> $env:GITHUB_ENV
           pnpm --filter @ferry/desktop dist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run packaged golden-path E2E
+        run: node apps/desktop/scripts/e2e-real-domains.mjs
+        env:
+          FERRY_E2E_ONLY: golden-path
+          FERRY_E2E_EXECUTABLE: apps/desktop/release/win-unpacked/Ferry.exe
       - name: Generate notes since the previous beta
         id: release-notes
         uses: actions/github-script@v7

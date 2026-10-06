@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMockFerryClient } from '@ferry/client';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FerryProvider } from '../data/client';
@@ -197,7 +197,7 @@ describe('SettingsCanvas', () => {
     );
   });
 
-  it('shows the connected core details and disables domains with no registered handlers', async () => {
+  it('shows the connected core details and no mock domain routing in the desktop app', async () => {
     useUI.setState({ settingsSection: 'About' });
     window.ferryHost = {
       versions: { app: '0.9.0', electron: '40.0.0' },
@@ -235,10 +235,8 @@ describe('SettingsCanvas', () => {
     expect(
       (await screen.findByText('better-sqlite3: failed: MODULE_NOT_FOUND')).textContent,
     ).toContain('MODULE_NOT_FOUND');
-    // Domains without a registered core handler cannot be switched to Real.
-    const providerRoute = screen.getByRole('radiogroup', { name: 'providers route' });
-    expect(
-      within(providerRoute).getByRole('radio', { name: 'Real' }).hasAttribute('disabled'),
-    ).toBe(true);
+    // The desktop app always uses the engine, so the web-preview mock routing is not offered.
+    expect(screen.queryByText('Domain routing')).toBeNull();
+    expect(screen.queryByRole('radiogroup', { name: 'providers route' })).toBeNull();
   });
 });

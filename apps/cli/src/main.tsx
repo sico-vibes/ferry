@@ -181,6 +181,18 @@ export async function runPrompt(
     if (options.permission)
       await client.settings.update({ permissionMode: settings.permissionMode });
   }
+  if (json && !options.quiet) {
+    const detail = await client.sessions.get(session.id);
+    const lastAssistant = detail.messages.findLast((message) => message.role === 'assistant');
+    process.stdout.write(
+      `${JSON.stringify({
+        type: 'run.completed',
+        sessionId: session.id,
+        servedModel: lastAssistant?.modelRef ?? detail.session.modelRef,
+        attempts: lastAssistant?.modelAttempts ?? [],
+      })}\n`,
+    );
+  }
   if (stepLimitExceeded) {
     if (!options.quiet)
       process.stderr.write(

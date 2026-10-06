@@ -2,12 +2,13 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { RingGauge, ResetsTimeline, ShowMoreList, UsageChart } from '@ferry/ui';
 import { useFerryClient } from '../../data/client';
+import { usesRealDomain } from '../../data/realDomains';
 
 const number = (value: number) => new Intl.NumberFormat().format(value);
 
 export function UsageTab() {
   const client = useFerryClient();
-  const realQuota = window.ferryHybrid?.getRealDomains().includes('quota') ?? false;
+  const realQuota = usesRealDomain('quota');
   const { data: providers = [] } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),

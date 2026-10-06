@@ -244,48 +244,54 @@ export function register(host: CoreHost, services: FerryServices): void {
     scheduleHealthRecovery();
   });
   host.onStart(async () => {
-    const testProviderId = services.env.FERRY_E2E_PROVIDER_ID;
+    const testProviderIds =
+      services.env.FERRY_E2E_PROVIDER_IDS?.split(',')
+        .map((id) => id.trim())
+        .filter(Boolean) ??
+      (services.env.FERRY_E2E_PROVIDER_ID ? [services.env.FERRY_E2E_PROVIDER_ID] : []);
     const testProviderKey = services.env.FERRY_E2E_PROVIDER_KEY;
-    if (services.env.FERRY_E2E_USER_DATA_DIR && testProviderId && testProviderKey) {
-      const id = ProviderIdInput.parse(testProviderId);
-      await services.secrets.set(id, testProviderKey);
-      services.providerKeys.put({
-        id,
-        providerId: id,
-        keyringRef: id,
-        createdAt: services.clock.now().toISOString(),
-      });
-      services.providerKeyEntries.put({
-        id: `${id}:1`,
-        providerId: id,
-        keyId: '1',
-        label: 'Key 1',
-        position: 0,
-        enabled: true,
-        status: 'ok',
-        lastError: null,
-        cooldownUntil: null,
-        keyringRef: id,
-        createdAt: services.clock.now().toISOString(),
-        updatedAt: services.clock.now().toISOString(),
-      });
-      const current = providerRecord(services, id);
-      saveProvider(services, {
-        ...current,
-        enabled: true,
-        availableModels: [],
-        modelsVerifiedAt: null,
-        discoveryFailedAt: null,
-        discoveryFailures: 0,
-        discoveryErrorClass: null,
-        discoveryUnsupported: false,
-        freeTierUnsupported: false,
-        excludedModelRefs: [],
-      });
-      invalidateSessionProviderKeyCache(services, id);
-      // The bundled CLI integration fixture must be routable before its first request.
-      // The base URL is restricted to loopback while NODE_ENV=test in model discovery.
-      await modelDiscovery.refresh(id);
+    if (services.env.FERRY_E2E_USER_DATA_DIR && testProviderIds.length && testProviderKey) {
+      for (const rawId of testProviderIds) {
+        const id = ProviderIdInput.parse(rawId);
+        await services.secrets.set(id, testProviderKey);
+        services.providerKeys.put({
+          id,
+          providerId: id,
+          keyringRef: id,
+          createdAt: services.clock.now().toISOString(),
+        });
+        services.providerKeyEntries.put({
+          id: `${id}:1`,
+          providerId: id,
+          keyId: '1',
+          label: 'Key 1',
+          position: 0,
+          enabled: true,
+          status: 'ok',
+          lastError: null,
+          cooldownUntil: null,
+          keyringRef: id,
+          createdAt: services.clock.now().toISOString(),
+          updatedAt: services.clock.now().toISOString(),
+        });
+        const current = providerRecord(services, id);
+        saveProvider(services, {
+          ...current,
+          enabled: true,
+          availableModels: [],
+          modelsVerifiedAt: null,
+          discoveryFailedAt: null,
+          discoveryFailures: 0,
+          discoveryErrorClass: null,
+          discoveryUnsupported: false,
+          freeTierUnsupported: false,
+          excludedModelRefs: [],
+        });
+        invalidateSessionProviderKeyCache(services, id);
+        // The bundled CLI integration fixture must be routable before its first request.
+        // The base URL is restricted to loopback while NODE_ENV=test in model discovery.
+        await modelDiscovery.refresh(id);
+      }
     }
     services.catalog.providers.forEach(({ provider: id }) => {
       const saved = services.providers.get(id);

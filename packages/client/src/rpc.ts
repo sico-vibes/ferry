@@ -351,6 +351,17 @@ export interface HybridFerryClient extends FerryClient {
   setRealDomains(domains: readonly string[]): void;
   getRealDomains(): string[];
 }
+
+/** Select the renderer client while keeping Electron entirely on the engine RPC transport. */
+export function createRendererFerryClient(
+  mock: FerryClient,
+  rpc: FerryClient,
+  isElectron: boolean,
+  realDomains: readonly string[],
+): FerryClient {
+  return isElectron ? rpc : createHybridClient(mock, rpc, realDomains);
+}
+
 export function createHybridClient(
   mock: FerryClient,
   rpc: FerryClient,

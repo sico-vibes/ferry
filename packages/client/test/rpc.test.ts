@@ -3,6 +3,7 @@ import { MessageChannel } from 'node:worker_threads';
 import { createMockFerryClient } from '../src/index.js';
 import {
   createHybridClient,
+  createRendererFerryClient,
   createMessagePortTransport,
   createRpcFerryClient,
   RpcError,
@@ -327,6 +328,31 @@ describe('RPC client', () => {
     expect((await hybrid.workspaces.list()).length).toBeGreaterThan(0);
     hybrid.setRealDomains([]);
     expect(hybrid.getRealDomains()).toEqual([]);
+    rpc.close();
+  });
+
+  it('routes every Electron domain to RPC when saved realDomains are stale', async () => {
+    const mock = createMockFerryClient({ behavior: 'test' });
+    const fake = fakeTransport();
+    const rpc = createRpcFerryClient(fake.transport);
+    const hello = fake.requests[0] as { id: number };
+    fake.receive({
+      jsonrpc: '2.0',
+      id: hello.id,
+      result: {
+        protocol: 'ferry/1',
+        capabilities: [],
+        realDomains: ['cloud'],
+        implementedMethods: ['cloud.setStorageMode'],
+      },
+    });
+    await rpc.hello;
+    const renderer = createRendererFerryClient(mock, rpc, true, ['settings']);
+    const pending = renderer.cloud.setStorageMode({ mode: 'cloud' });
+    const call = fake.requests.at(-1) as { id: number; method: string; params: unknown[] };
+    expect(call).toMatchObject({ method: 'cloud.setStorageMode', params: [{ mode: 'cloud' }] });
+    fake.receive({ jsonrpc: '2.0', id: call.id, result: { mode: 'cloud', restartRequired: true } });
+    await expect(pending).resolves.toEqual({ mode: 'cloud', restartRequired: true });
     rpc.close();
   });
 });

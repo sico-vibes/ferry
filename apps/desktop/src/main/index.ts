@@ -403,7 +403,11 @@ function openMainWindow(): void {
 ipcMain.handle('ferry:open-folder', async (event, ...args: unknown[]) => {
   if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
   EmptyIpcArgsSchema.parse(args);
-  if (!app.isPackaged && process.env.FERRY_E2E_USER_DATA_DIR && process.env.FERRY_E2E_OPEN_FOLDER)
+  if (
+    (!app.isPackaged || process.env.FERRY_E2E_PACKAGED === '1') &&
+    process.env.FERRY_E2E_USER_DATA_DIR &&
+    process.env.FERRY_E2E_OPEN_FOLDER
+  )
     return OpenFolderResultSchema.parse(process.env.FERRY_E2E_OPEN_FOLDER);
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {

@@ -7,6 +7,7 @@ import { useFerryClient } from '../data/client';
 import { useSettings } from '../data/queries';
 import { ProviderStatusBadge } from './ProviderStatusBadge';
 import { ConfirmDialog } from './ConfirmDialog';
+import { usesRealDomain } from '../data/realDomains';
 
 const numberFormat = new Intl.NumberFormat();
 
@@ -29,7 +30,7 @@ export function ProviderKeyDialog({
     queryFn: async () => (provider ? client.providers.listKeys(provider.id) : []),
   });
   const cache = useQueryClient();
-  const realProviders = window.ferryHybrid?.getRealDomains().includes('providers') ?? false;
+  const realProviders = usesRealDomain('providers');
   const [value, setValue] = useState('');
   const [accountId, setAccountId] = useState('');
   const [keyLabel, setKeyLabel] = useState('');

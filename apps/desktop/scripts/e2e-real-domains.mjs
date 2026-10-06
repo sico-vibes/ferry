@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, expect } from '@playwright/test';
 import { FakeOpenAIServer } from '../../../packages/testkit/src/fake-servers.ts';
@@ -34,7 +34,8 @@ let fakeProvider;
 let activePage;
 let failureStep = 'startup';
 const phase = process.env.FERRY_E2E_ONLY?.trim() || 'core-flows';
-const phases = ['core-flows', 'crash-resume', 'paid-guardrails'];
+const phases = ['core-flows', 'crash-resume', 'paid-guardrails', 'golden-path'];
+const goldenPathComplete = new Error('Golden path completed');
 
 async function captureFailureArtifacts(error) {
   if (!activePage || activePage.isClosed()) return;
@@ -207,8 +208,11 @@ async function startEmbeddedCore() {
   await new Promise((resolve, reject) =>
     debuggingServer.close((error) => (error ? reject(error) : resolve())),
   );
+  const packagedExecutable = process.env.FERRY_E2E_EXECUTABLE
+    ? resolve(process.cwd(), process.env.FERRY_E2E_EXECUTABLE)
+    : undefined;
   application = spawn(
-    electronBinary,
+    packagedExecutable || electronBinary,
     [
       `--remote-debugging-port=${String(debuggingPort)}`,
       '--no-proxy-server',
@@ -216,7 +220,7 @@ async function startEmbeddedCore() {
       '--disable-gpu',
       '--in-process-gpu',
       '--use-gl=swiftshader',
-      appDirectory,
+      ...(packagedExecutable ? [] : [appDirectory]),
     ],
     {
       cwd: appDirectory,
@@ -227,6 +231,7 @@ async function startEmbeddedCore() {
         FERRY_E2E_USER_DATA_DIR: userDataDirectory,
         FERRY_E2E_OPEN_FOLDER: fixtureRepo,
         FERRY_HOME: dataDirectory,
+        ...(packagedExecutable ? { FERRY_E2E_PACKAGED: '1', FERRY_DATA_DIR: dataDirectory } : {}),
         FERRY_REAL_DOMAINS:
           'settings,workspaces,checkpoints,providers,oauth,models,quota,sessions,approvals,profiles,skills,mcp,optimizer,delegation',
         FERRY_PROVIDER_BASE_URL_OPENROUTER: `${fakeProvider.baseUrl}/openrouter/v1`,
@@ -319,9 +324,7 @@ async function startEmbeddedCore() {
     });
     await page.waitForFunction(
       () =>
-        Boolean(window.ferryRpcClient) &&
-        Boolean(window.ferryHybrid) &&
-        (window.ferryEngineHello?.realDomains.length ?? 0) > 0,
+        Boolean(window.ferryRpcClient) && (window.ferryEngineHello?.realDomains.length ?? 0) > 0,
       undefined,
       { timeout: 15_000 },
     );
@@ -493,8 +496,8 @@ async function selectWorkspaceViaComposer(page, workspaceName) {
     state: 'visible',
     timeout: 15_000,
   });
-  await page.getByRole('button', { name: workspaceName, exact: true }).click();
-  await page.getByRole('menuitem', { name: workspaceName, exact: true }).click();
+  await page.getByRole('button', { name: `Project: ${workspaceName}`, exact: true }).click();
+  await page.getByRole('menuitem', { name: workspaceName }).click();
 }
 
 async function createSessionViaUi(
@@ -629,6 +632,79 @@ try {
     await expect(page.getByText('fixture/restore', { exact: true })).toBeVisible();
     console.log('e2e real domains: folder dialog, selected Library workspace, and git branch OK');
 
+    if (phase === 'golden-path') {
+      failureStep = 'golden-chat';
+      await page.evaluate(async () => {
+        await window.ferryRpcClient.providers.setKey('openrouter', 'fixture-key');
+        await window.ferryRpcClient.models.list('openrouter');
+      });
+      await expect
+        .poll(
+          () =>
+            page.evaluate(async () =>
+              (await window.ferryRpcClient.models.list('openrouter')).some((model) =>
+                model.ref.endsWith('cohere/north-mini-code:free'),
+              ),
+            ),
+          { timeout: 15_000 },
+        )
+        .toBe(true);
+      fakeProvider.setResponses([textTurn('golden-reply-one'), textTurn('golden-reply-two')]);
+      const modelRef = 'openrouter/cohere/north-mini-code:free';
+      const session = await createSessionViaUi(page, 'Packaged golden path', 'Auto-Free', modelRef);
+      await page.evaluate((id) => {
+        window.location.hash = `/s/${id}`;
+      }, session.id);
+      await page.waitForURL((url) => url.hash === `#/s/${session.id}`, { timeout: 15_000 });
+      const composer = page.getByRole('textbox', { name: 'Message Ferry' });
+      const sendAndWait = async (prompt, reply) => {
+        const startedAt = Date.now();
+        await composer.fill(prompt);
+        await composer.press('Enter');
+        await expect
+          .poll(
+            () =>
+              page.evaluate(
+                async ({ id, expectedReply }) => {
+                  const detail = await window.ferryRpcClient.sessions.get(id);
+                  return detail.messages.some(
+                    (message) =>
+                      message.role === 'assistant' &&
+                      message.parts.some(
+                        (part) => part.type === 'text' && part.text.includes(expectedReply),
+                      ),
+                  );
+                },
+                { id: session.id, expectedReply: reply },
+              ),
+            { timeout: 10_000 },
+          )
+          .toBe(true);
+        assert.ok(
+          Date.now() - startedAt <= 10_000,
+          `${reply} exceeded the 10 second response limit`,
+        );
+      };
+      await sendAndWait('Reply with golden-reply-one', 'golden-reply-one');
+      await sendAndWait('Reply with golden-reply-two', 'golden-reply-two');
+
+      failureStep = 'golden-cloud';
+      await page.getByRole('button', { name: 'User menu' }).click();
+      await page.getByRole('menuitem', { name: 'Settings' }).click();
+      await page.getByRole('button', { name: 'Storage & Cloud', exact: true }).click();
+      await page.getByRole('radio', { name: 'Cloud', exact: true }).click();
+      await expect
+        .poll(() => page.evaluate(() => window.ferryRpcClient.cloud.status()), { timeout: 10_000 })
+        .toMatchObject({ storageMode: 'cloud' });
+      assert.equal(
+        (await page.evaluate(() => window.ferryRpcClient.settings.get())).storageMode,
+        'cloud',
+      );
+      console.log(
+        'PASS packaged golden path: two replies and Cloud storage persisted through engine RPC',
+      );
+      throw goldenPathComplete;
+    }
     if (phase === 'core-flows') {
       await page.evaluate(async () => {
         await window.ferryRpcClient.settings.update({ theme: 'dark' });
@@ -1402,7 +1478,11 @@ try {
             );
           return {
             sendResult: window.e2ePaidSendResult ?? { state: 'missing' },
-            session: { status: detail.session.status, modelRef: detail.session.modelRef, messages },
+            session: {
+              status: detail.session.status,
+              modelRef: detail.session.modelRef,
+              messages,
+            },
             paidApprovalId: paidApproval?.id ?? null,
           };
         }, livePaidSessionId);
@@ -1576,8 +1656,10 @@ try {
     }
     await stopEmbeddedCore(core);
   } catch (error) {
-    await captureFailureArtifacts(error);
-    throw error;
+    if (error !== goldenPathComplete) {
+      await captureFailureArtifacts(error);
+      throw error;
+    }
   } finally {
     if (application) {
       application.kill();

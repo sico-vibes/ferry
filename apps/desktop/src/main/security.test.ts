@@ -220,7 +220,7 @@ describe('Electron security boundary', () => {
 
   it('limits the E2E folder hook to un-packaged runs with an isolated user-data directory', () => {
     expect(mainSource).toMatch(
-      /!app\.isPackaged && process\.env\.FERRY_E2E_USER_DATA_DIR && process\.env\.FERRY_E2E_OPEN_FOLDER/,
+      /\(!app\.isPackaged \|\| process\.env\.FERRY_E2E_PACKAGED === '1'\)[\s\S]*process\.env\.FERRY_E2E_USER_DATA_DIR[\s\S]*process\.env\.FERRY_E2E_OPEN_FOLDER/,
     );
   });
 

@@ -49,5 +49,25 @@ export function buildCoreEnvironment(
     }
   }
 
+  if (isPackaged && source.FERRY_E2E_PACKAGED === '1') {
+    for (const [name, value] of Object.entries(source)) {
+      if (
+        name.startsWith('FERRY_PROVIDER_BASE_URL_') &&
+        value !== undefined &&
+        isLoopbackUrl(value)
+      )
+        result[name] = value;
+    }
+  }
+
   return result;
+}
+
+function isLoopbackUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return ['127.0.0.1', '::1', 'localhost'].includes(url.hostname);
+  } catch {
+    return false;
+  }
 }

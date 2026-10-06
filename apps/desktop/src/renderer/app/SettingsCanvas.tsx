@@ -1989,40 +1989,42 @@ function DeveloperSettings({
           {engine?.status ?? 'connecting'}
         </span>
       </SettingRow>
-      <SettingRow
-        title="Domain routing"
-        helper="Domains stay on mock until the core reports an implementation."
-      >
-        <div className="setting-inline-stack domain-routing-grid">
-          {FERRY_DOMAINS.map((domain) => {
-            const selectable = availableDomains.includes(domain);
-            const route = realDomains.includes(domain) && selectable ? 'real' : 'mock';
-            return (
-              <label className="domain-route-control" key={domain}>
-                <span>{domain}</span>
-                <SegmentedControl
-                  label={`${domain} route`}
-                  value={route}
-                  options={[
-                    { value: 'mock', label: 'Mock' },
-                    { value: 'real', label: 'Real', disabled: !selectable },
-                  ]}
-                  onValueChange={(value) => {
-                    const next =
-                      value === 'real'
-                        ? [...new Set([...realDomains, domain])]
-                        : realDomains.filter((name) => name !== domain);
-                    window.ferryHybrid?.setRealDomains(
-                      next.filter((name) => availableDomains.includes(name)),
-                    );
-                    update({ realDomains: next });
-                  }}
-                />
-              </label>
-            );
-          })}
-        </div>
-      </SettingRow>
+      {window.ferryHost ? null : (
+        <SettingRow
+          title="Domain routing"
+          helper="Web preview only: domains stay on mock until the core reports an implementation."
+        >
+          <div className="setting-inline-stack domain-routing-grid">
+            {FERRY_DOMAINS.map((domain) => {
+              const selectable = availableDomains.includes(domain);
+              const route = realDomains.includes(domain) && selectable ? 'real' : 'mock';
+              return (
+                <label className="domain-route-control" key={domain}>
+                  <span>{domain}</span>
+                  <SegmentedControl
+                    label={`${domain} route`}
+                    value={route}
+                    options={[
+                      { value: 'mock', label: 'Mock' },
+                      { value: 'real', label: 'Real', disabled: !selectable },
+                    ]}
+                    onValueChange={(value) => {
+                      const next =
+                        value === 'real'
+                          ? [...new Set([...realDomains, domain])]
+                          : realDomains.filter((name) => name !== domain);
+                      window.ferryHybrid?.setRealDomains(
+                        next.filter((name) => availableDomains.includes(name)),
+                      );
+                      update({ realDomains: next });
+                    }}
+                  />
+                </label>
+              );
+            })}
+          </div>
+        </SettingRow>
+      )}
       <SettingRow
         title="Native module self-test"
         helper="Loaded inside the Electron utility process."

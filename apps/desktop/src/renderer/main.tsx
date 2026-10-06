@@ -5,12 +5,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   createDemoFerryClient,
   createHybridClient,
+  createRendererFerryClient,
   createMessagePortTransport,
   createRpcFerryClient,
   createWebSocketRpcTransport,
 } from '@ferry/client';
 import type { FerryClient } from '@ferry/client';
-import { FERRY_DOMAINS } from '@ferry/shared';
 import { FerryProvider } from './data/client';
 import { AppRouter } from './router';
 import { isExpectedCorePortOrigin } from '../shared/core-port-origin';
@@ -128,18 +128,17 @@ const bootstrapClient = async () => {
   }
   const hello = await rpc.hello;
   window.ferryEngineHello = hello;
-  const settings = await rpc.settings.get();
-  const configuredDomains = settings.developer.realDomains;
-  const domains = [
-    ...new Set(configuredDomains.length ? configuredDomains : hello.realDomains),
-  ].filter((domain) => hello.realDomains.includes(domain));
-  const demoDomains = FERRY_DOMAINS.filter((domain) => !domains.includes(domain));
-  if (window.ferryHost && demoDomains.length)
-    console.warn(`Ferry is using mock data for domains: ${demoDomains.join(', ')}`);
-  const hybrid = createHybridClient(mock, rpc, domains);
-  window.ferryHybrid = hybrid;
   window.ferryRpcClient = rpc;
-  return hybrid;
+  if (window.ferryHost) return createRendererFerryClient(mock, rpc, true, hello.realDomains);
+  const settings = await rpc.settings.get();
+  const domains = [
+    ...new Set(
+      settings.developer.realDomains.length ? settings.developer.realDomains : hello.realDomains,
+    ),
+  ].filter((domain) => hello.realDomains.includes(domain));
+  const client = createRendererFerryClient(mock, rpc, false, domains);
+  window.ferryHybrid = createHybridClient(mock, rpc, domains);
+  return client;
 };
 const mountApp = (currentClient: FerryClient) => {
   if (import.meta.env.DEV && new URLSearchParams(location.search).has('perf-render'))
@@ -171,7 +170,10 @@ const showEngineConnectionError = (error: unknown) => {
   );
 };
 const demoMode = new URLSearchParams(location.search).get('demo');
-if (demoMode === 'long' || demoMode === 'exhausted' || demoMode === 'explore-perf') {
+if (
+  !window.ferryHost &&
+  (demoMode === 'long' || demoMode === 'exhausted' || demoMode === 'explore-perf')
+) {
   void import('./perf-demo').then(
     ({ seedExhaustedSession, seedLongTranscript, seedExploreModels }) => {
       if (demoMode === 'long') seedLongTranscript(mock);
