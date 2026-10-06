@@ -94,6 +94,37 @@ describe('ComposerModelChip', () => {
     expect(chipOption.querySelector('.model-row-check')).toBeFalsy();
   });
 
+  it('shows the pinned model as unavailable and names the model serving now', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const models = await client.models.list();
+    const pinnedModel = models[0];
+    const servedModel = models.find((model) => model.ref !== pinnedModel?.ref);
+    if (!pinnedModel || !servedModel) throw new Error('Expected two model fixtures');
+
+    render(
+      <FerryProvider client={client}>
+        <QueryClientProvider
+          client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        >
+          <ComposerModelChip
+            sessionId={null}
+            modelName={servedModel.name}
+            modelRef={pinnedModel.ref}
+            servedModelRef={servedModel.ref}
+            pinnedUnavailable
+            mode="manual"
+          />
+        </QueryClientProvider>
+      </FerryProvider>,
+    );
+
+    expect(
+      await screen.findByRole('button', {
+        name: `Pinned: ${pinnedModel.name} (unavailable) · now ${servedModel.name}`,
+      }),
+    ).toBeTruthy();
+  });
+
   it('switches profiles from the picker and updates the profile chip', async () => {
     const client = createMockFerryClient({ behavior: 'test' });
     const session = (await client.sessions.list())[0];
