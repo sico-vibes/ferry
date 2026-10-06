@@ -1029,7 +1029,6 @@ describe('@ferry/agent', () => {
     }
   });
 
-
   it('does not hand over while a prior tool call is still running', async () => {
     const state = await setup();
     try {
@@ -1269,6 +1268,140 @@ describe('@ferry/agent', () => {
       expect(secondSystem).toContain('Plan');
       expect(secondSystem).toContain('Files touched');
       expect(calls).toBe(2);
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('bypasses a soft quota candidate at the next step boundary and keeps it bypassed', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/test-model',
+        providerId: 'gemini',
+        name: 'Gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: 'gemini',
+        name: 'Gemini',
+      });
+      const windows = [
+        {
+          id: 'openai-daily-tokens',
+          scope: 'provider' as const,
+          modelRef: null,
+          metric: 'tokens' as const,
+          kind: 'fixed_daily' as const,
+          periodLabel: 'daily',
+          used: 7_500,
+          limit: 10_000,
+          remaining: 2_500,
+          resetAt: '2026-06-02T00:00:00.000Z',
+          confidence: 'exact' as const,
+          observedAt: new Date().toISOString(),
+          durationMs: 24 * 60 * 60_000,
+        },
+      ];
+      let quotaIsLow = false;
+      const used: string[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        capacity: () => ({
+          providers: [
+            {
+              ...state.provider,
+              windows: quotaIsLow ? windows : [],
+              // Soft via stepsLeft < 2 with remaining still above one-step hard exhaustion.
+              stepsLeftToday: quotaIsLow ? 1 : 5,
+            },
+            alternateProvider,
+          ],
+        }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        resolveCandidates: () => [state.model, alternate],
+        generator: async ({ model }) => {
+          used.push(model.ref);
+          if (used.length === 1) {
+            quotaIsLow = true;
+            return {
+              toolCalls: [{ name: 'read_file', input: { path: 'README.md' } }],
+              finishReason: 'tool-calls',
+            };
+          }
+          if (used.length === 2)
+            return {
+              toolCalls: [{ name: 'read_file', input: { path: 'README.md' } }],
+              finishReason: 'tool-calls',
+            };
+          return { text: 'Done.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      expect(used).toEqual([state.model.ref, alternate.ref, alternate.ref]);
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('excludes a candidate with fresh hard quota exhaustion before dispatch', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/test-model',
+        providerId: 'gemini',
+        name: 'Gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: 'gemini',
+        name: 'Gemini',
+      });
+      const now = new Date().toISOString();
+      const exhaustedWindow = {
+        id: 'openai-daily-tokens',
+        scope: 'provider' as const,
+        modelRef: null,
+        metric: 'tokens' as const,
+        kind: 'fixed_daily' as const,
+        periodLabel: 'daily',
+        used: 10_000,
+        limit: 10_000,
+        remaining: 0,
+        resetAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+        confidence: 'exact' as const,
+        observedAt: now,
+        durationMs: 24 * 60 * 60_000,
+      };
+      const used: string[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        capacity: () => ({
+          providers: [{ ...state.provider, windows: [exhaustedWindow] }, alternateProvider],
+        }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        resolveCandidates: () => [state.model, alternate],
+        generator: async ({ model }) => {
+          used.push(model.ref);
+          return { text: 'Done.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      expect(used).toEqual([alternate.ref]);
     } finally {
       state.database.close();
     }

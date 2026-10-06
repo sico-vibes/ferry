@@ -48,6 +48,7 @@ import {
   type ToolRejection,
   type StickyRoute,
 } from '@ferry/router';
+import { evaluateProactiveQuota } from '@ferry/quota';
 import {
   newId,
   PartIdSchema,
@@ -289,6 +290,8 @@ export class AgentLoop {
   private readonly toolRejections: ToolRejection[];
   private readonly retirementFailures: RetirementFailure[];
   private readonly retiredModels: Set<string>;
+  private readonly softQuotaBypasses = new Map<string, Set<string>>();
+  private readonly proactiveHandoverSteps = new Map<string, number>();
   private readonly sessionBadKeys = new Map<string, Set<string>>();
   private readonly pinnedHandoverModels = new Map<string, ModelRef>();
   private readonly pinnedHandoverSourcePins = new Map<string, ModelRef>();
@@ -360,6 +363,8 @@ export class AgentLoop {
     let loaded = this.options.store.load(sessionId);
     if (!loaded) throw new Error(`Unknown session ${sessionId}`);
     this.sessionBadKeys.set(sessionId, new Set());
+    this.softQuotaBypasses.set(sessionId, new Set());
+    this.proactiveHandoverSteps.delete(sessionId);
     let { session, messages, taskRecord } = loaded;
     let resumedTranscript = false;
     const resumedToolResults = new Map<string, Extract<MessagePart, { type: 'tool_call' }>>();
@@ -627,7 +632,185 @@ export class AgentLoop {
             );
           }
         }
-        if (!selectedModel) throw new AllCandidatesExhaustedError(this.exhaustedMessage(stepKind));
+        if (selectedModel) {
+          const quotaProvider = this.options
+            .capacity()
+            .providers.find((provider) => provider.id === selectedModel?.providerId);
+          const quotaSignal = evaluateProactiveQuota({
+            windows: quotaProvider?.windows ?? [],
+            stepsLeft: quotaProvider?.stepsLeftToday ?? null,
+            inputTokens: estimatedInputTokens,
+            outputTokens: 2048,
+            now: this.now(),
+          });
+          const cooldownActive = Boolean(
+            quotaProvider?.health === 'cooldown' &&
+            quotaProvider.cooldownUntil &&
+            Date.parse(quotaProvider.cooldownUntil) > this.now(),
+          );
+          if (cooldownActive) quotaSignal.signal = 'hard';
+          const pinned = Boolean(this.pinnedModelRefFor(sessionId));
+          const lastHandover = this.proactiveHandoverSteps.get(sessionId) ?? -Infinity;
+          const maySoftHandover = !pinned && stepCount - lastHandover >= 3;
+          if (quotaSignal.signal === 'soft' && !pinned && maySoftHandover) {
+            this.softQuotaBypasses.get(sessionId)?.add(selectedModel.ref);
+            const previous = selectedModel;
+            const rerouted = this.selectModel(
+              stepKind,
+              estimatedInputTokens,
+              session.modelRef,
+              sessionId,
+              minimumContext,
+            );
+            if (rerouted && rerouted.ref !== previous.ref) {
+              selectedModel = rerouted;
+              this.proactiveHandoverSteps.set(sessionId, stepCount);
+              this.options.telemetry?.log({
+                id: newId('evt'),
+                ts: new Date().toISOString(),
+                level: 'info',
+                source: 'router',
+                event: 'routing.decision',
+                session_id: sessionId,
+                trace_id: traceId,
+                data: {
+                  signal: 'soft',
+                  excluded_model: previous.ref,
+                  selected_model: rerouted.ref,
+                  steps_left: quotaProvider?.stepsLeftToday ?? null,
+                },
+              });
+            }
+          } else if (quotaSignal.signal === 'hard') {
+            if (pinned) {
+              const pin = this.pinnedModelRefFor(sessionId);
+              const pinnedExhaustion =
+                this.options.routingSettings?.().pinnedExhaustion ?? 'handover';
+              let approved = pinnedExhaustion === 'handover';
+              if (pinnedExhaustion === 'ask' && this.options.requestApproval) {
+                const approval: Extract<MessagePart, { type: 'approval_request' }> = {
+                  type: 'approval_request',
+                  id: PartIdSchema.parse(newId('part')),
+                  kind: 'model_handover',
+                  summary: `Switch from ${selectedModel.name} because its quota is nearly exhausted?`,
+                  detail: 'Ferry will continue this step with another eligible model.',
+                  risk: 'medium',
+                  state: 'pending',
+                };
+                this.addPart(sessionId, approval);
+                const waiting = this.options.store.updateSession(sessionId, {
+                  status: 'awaiting_approval',
+                });
+                this.options.emit({ type: 'session.updated', session: waiting });
+                const decision = await this.options.requestApproval(approval, signal);
+                const resumed = this.options.store.updateSession(sessionId, { status: 'running' });
+                this.options.emit({ type: 'session.updated', session: resumed });
+                this.replacePart(sessionId, {
+                  ...approval,
+                  state: decision === 'denied' ? 'denied' : decision,
+                });
+                approved = decision === 'allowed_once' || decision === 'allowed_always';
+              }
+              const fallback =
+                approved && pin
+                  ? this.selectFallback(
+                      stepKind,
+                      estimatedInputTokens,
+                      new Set([selectedModel.ref]),
+                      sessionId,
+                      true,
+                      minimumContext,
+                    )
+                  : undefined;
+              if (fallback && pin) {
+                this.pinnedHandoverSourcePins.set(sessionId, pin);
+                this.pinnedHandoverModels.set(sessionId, fallback.ref);
+                selectedModel = fallback;
+                this.options.telemetry?.log({
+                  id: newId('evt'),
+                  ts: new Date().toISOString(),
+                  level: 'info',
+                  source: 'router',
+                  event: 'routing.decision',
+                  session_id: sessionId,
+                  trace_id: traceId,
+                  data: {
+                    signal: 'hard',
+                    excluded_model: pin,
+                    selected_model: fallback.ref,
+                    window_id: quotaSignal.windowId,
+                    pinned_exhaustion: pinnedExhaustion,
+                  },
+                });
+              } else {
+                selectedModel = undefined;
+              }
+            } else {
+              const previous = selectedModel;
+              const hardWindow = quotaProvider?.windows.find(
+                (window) => window.id === quotaSignal.windowId,
+              );
+              const excludedRefs =
+                cooldownActive || hardWindow?.scope === 'provider'
+                  ? this.options.catalog.models
+                      .filter((candidate) => candidate.providerId === previous.providerId)
+                      .map((candidate) => candidate.ref)
+                  : [previous.ref];
+              const rerouted = this.selectModel(
+                stepKind,
+                estimatedInputTokens,
+                session.modelRef,
+                sessionId,
+                minimumContext,
+                new Set(excludedRefs),
+              );
+              if (rerouted && rerouted.ref !== previous.ref) {
+                selectedModel = rerouted;
+                this.options.telemetry?.log({
+                  id: newId('evt'),
+                  ts: new Date().toISOString(),
+                  level: 'info',
+                  source: 'router',
+                  event: 'routing.decision',
+                  session_id: sessionId,
+                  trace_id: traceId,
+                  data: {
+                    signal: 'hard',
+                    excluded_model: previous.ref,
+                    selected_model: rerouted.ref,
+                    window_id: quotaSignal.windowId,
+                  },
+                });
+              } else {
+                selectedModel = undefined;
+              }
+            }
+          } else if (quotaSignal.signal === 'soft' && pinned) {
+            this.options.telemetry?.log({
+              id: newId('evt'),
+              ts: new Date().toISOString(),
+              level: 'info',
+              source: 'router',
+              event: 'routing.decision',
+              session_id: sessionId,
+              trace_id: traceId,
+              data: {
+                signal: 'soft',
+                model: selectedModel.ref,
+                steps_left: quotaProvider?.stepsLeftToday ?? null,
+                reset_at: quotaSignal.resetAt ?? null,
+              },
+            });
+          }
+        }
+        if (!selectedModel) {
+          const pin = this.pinnedModelRefFor(sessionId);
+          if (pin)
+            throw new Error(
+              `Pinned model ${pin} is unavailable; no eligible handover model is available (pinnedExhaustion: ${this.options.routingSettings?.().pinnedExhaustion ?? 'handover'}).`,
+            );
+          throw new AllCandidatesExhaustedError(this.exhaustedMessage(stepKind));
+        }
         let model: ModelInfo = selectedModel;
         const targetCompaction = compactConversationMessages(
           messages,
@@ -2196,11 +2379,13 @@ export class AgentLoop {
     previous: ModelRef | null,
     sessionId: string,
     minimumContext = 0,
+    dispatchExcluded: ReadonlySet<string> = new Set(),
   ): ModelInfo | undefined {
     const pinnedModelRef = this.pinnedModelRefFor(sessionId);
     if (pinnedModelRef)
       return this.options.catalog.models.find((model) => model.ref === pinnedModelRef);
     const locked = this.sessionModelLocks.get(sessionId);
+    const softBypassed = this.softQuotaBypasses.get(sessionId);
     const withinFailedSize = (model: ModelInfo) =>
       (this.requestTooLargeAt.get(model.ref) ?? Number.POSITIVE_INFINITY) <= inputTokens;
     const routing = this.options.routingSettings?.();
@@ -2210,6 +2395,8 @@ export class AgentLoop {
     const stickyRef = stickyRoute?.modelRef;
     const eligible = (model: ModelInfo) =>
       !this.sessionBadKeys.get(sessionId)?.has(model.providerId) &&
+      !softBypassed?.has(model.ref) &&
+      !dispatchExcluded.has(model.ref) &&
       !locked?.has(model.ref) &&
       !(routing?.carefulModelRetirement && this.retiredModels.has(model.ref)) &&
       !withinFailedSize(model);
@@ -2250,6 +2437,8 @@ export class AgentLoop {
               this.options.catalog.models.find((candidate) => candidate.ref === item.ref)
                 ?.providerId ?? '',
             ) ||
+          softBypassed?.has(item.ref) ||
+          dispatchExcluded.has(item.ref) ||
           locked?.has(item.ref) ||
           (routing?.carefulModelRetirement && this.retiredModels.has(item.ref)) ||
           (this.requestTooLargeAt.get(item.ref) ?? Infinity) <= inputTokens

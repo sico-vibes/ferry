@@ -29,6 +29,51 @@ const confidence: Record<Source, QuotaWindow['confidence']> = {
 };
 const rank: Record<Source, number> = { catalog: 0, learned: 1, header: 2, endpoint: 3 };
 
+export interface ProactiveQuotaSignal {
+  signal: 'hard' | 'soft' | 'none';
+  windowId?: string;
+  resetAt?: string | null;
+}
+
+/** Classifies only fresh authoritative/learned observations; estimates never cause early reroutes. */
+export function evaluateProactiveQuota(input: {
+  windows: readonly QuotaWindow[];
+  stepsLeft: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  now: number;
+}): ProactiveQuotaSignal {
+  const trusted = input.windows.filter((window) => {
+    if (
+      (window.confidence !== 'exact' && window.confidence !== 'learned') ||
+      !window.observedAt ||
+      !window.durationMs
+    )
+      return false;
+    const age = input.now - Date.parse(window.observedAt);
+    return age >= 0 && age <= window.durationMs;
+  });
+  const expectedTokens = input.inputTokens + input.outputTokens;
+  const hard = trusted.find(
+    (window) =>
+      window.remaining !== null &&
+      (window.metric === 'requests'
+        ? window.remaining < 1
+        : window.metric === 'tokens' && window.remaining < expectedTokens),
+  );
+  if (hard) return { signal: 'hard', windowId: hard.id, resetAt: hard.resetAt };
+  if (trusted.length && input.stepsLeft !== null && input.stepsLeft < 2) {
+    const resetAt = trusted.find((window) => window.resetAt)?.resetAt;
+    return { signal: 'soft', ...(resetAt === undefined ? {} : { resetAt }) };
+  }
+  const soft = trusted.find((window) => {
+    if (window.remaining === null || window.limit === null) return false;
+    const expected = window.metric === 'requests' ? 1 : expectedTokens;
+    return window.remaining < Math.max(expected, window.limit * 0.2);
+  });
+  return soft ? { signal: 'soft', windowId: soft.id, resetAt: soft.resetAt } : { signal: 'none' };
+}
+
 interface ExtendedWindow {
   kind: WindowSpec['kind'];
   tz?: string;
@@ -363,6 +408,8 @@ export class QuotaEngine {
         remaining: null,
         resetAt: null,
         confidence: 'unknown',
+        observedAt: null,
+        durationMs: null,
       };
     const spec = asWindowSpec(window);
     const now = this.now();
@@ -443,6 +490,18 @@ export class QuotaEngine {
         : learned
           ? 'learned'
           : 'estimated',
+      observedAt:
+        validSnapshot?.observedAt ?? (learned ? new Date(learned.observedAt).toISOString() : null),
+      durationMs:
+        window.kind === 'rolling'
+          ? (window.length ?? 60) * 60_000
+          : window.kind === 'dynamic_5h'
+            ? 5 * 60 * 60_000
+            : window.kind === 'fixed_daily'
+              ? 24 * 60 * 60_000
+              : window.kind === 'weekly_fixed' || window.kind === 'weekly_from_first_use'
+                ? 7 * 24 * 60 * 60_000
+                : 31 * 24 * 60 * 60_000,
     };
   }
   getWindows(providerId: string): QuotaWindow[] {
