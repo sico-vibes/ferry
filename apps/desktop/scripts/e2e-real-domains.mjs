@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
@@ -17,6 +18,8 @@ const agentFixture = await FixtureRepo.create('typescript');
 const fixtureRepo = agentFixture.path;
 const fixtureRepoName = fixtureRepo.split(/[\\/]/).pop();
 const dataDirectory = join(temporaryDirectory, 'ferry-home');
+/** Canonical, case-insensitive form of an existing path (expands 8.3 short names). */
+const samePath = (path) => (path ? realpathSync.native(path).toLowerCase() : path);
 const userDataDirectory = join(temporaryDirectory, 'electron-user-data');
 const sourcePath = join(fixtureRepo, 'index.js');
 const originalSource = 'export const answer = 42;\n';
@@ -295,7 +298,8 @@ async function startEmbeddedCore() {
         'delegation',
       ].every((domain) => details.realDomains.includes(domain)),
     );
-    assert.equal(details.dataDir, dataDirectory);
+    // Compare canonical paths: CI temp folders can be reported in 8.3 short form (RUNNER~1).
+    assert.equal(samePath(details.dataDir), samePath(dataDirectory));
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
       if (application.exitCode !== null)
@@ -605,12 +609,12 @@ try {
     await expect(page.getByText('Demo data', { exact: true })).toHaveCount(0);
 
     const selectedFolder = await page.evaluate(() => window.ferryHost?.openFolder());
-    assert.equal(selectedFolder?.toLowerCase(), fixtureRepo.toLowerCase());
+    assert.equal(samePath(selectedFolder), samePath(fixtureRepo));
     const openedWorkspace = await page.evaluate(
       (folder) => window.ferryRpcClient.workspaces.open(folder),
       selectedFolder,
     );
-    assert.equal(openedWorkspace.path.toLowerCase(), fixtureRepo.toLowerCase());
+    assert.equal(samePath(openedWorkspace.path), samePath(fixtureRepo));
 
     await page.getByRole('button', { name: 'Open folder', exact: true }).first().click();
     await expect
