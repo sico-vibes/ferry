@@ -274,6 +274,22 @@ describe('@ferry/agent', () => {
         },
       });
       await loop.run({ sessionId: state.session.id });
+      const finalMessage = state.store.load(state.session.id)?.messages.at(-1);
+      expect(finalMessage?.modelAttempts?.map((attempt) => attempt.model)).toEqual([
+        fallback.ref,
+        state.model.ref,
+      ]);
+      expect(finalMessage).toMatchObject({
+        modelRef: state.model.ref,
+        requestedModelRef: 'auto',
+        providerReportedModelId: null,
+      });
+      expect(finalMessage?.turnId).toBeTruthy();
+      expect(finalMessage?.modelAttempts).toMatchObject([
+        { model: fallback.ref, outputStarted: false, fallbackReason: 'rate_limit' },
+        { model: state.model.ref, outputStarted: true },
+      ]);
+      expect(state.store.load(state.session.id)?.session.modelRef).toBe(state.model.ref);
       const attempts = turns.list();
       expect(attempts).toHaveLength(2);
       const initialAttempt = attempts.find((attempt) => attempt.attempt === 1);
@@ -428,6 +444,7 @@ describe('@ferry/agent', () => {
         'upstream unavailable',
       );
       expect(attempts).toEqual([state.model.ref, state.model.ref, state.model.ref]);
+      expect(state.store.load(state.session.id)?.session.modelRef).toBeNull();
       const failure = state.store
         .load(state.session.id)
         ?.messages.flatMap((message) => message.parts)

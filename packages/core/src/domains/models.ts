@@ -165,7 +165,6 @@ export function register(host: CoreHost, services: FerryServices): void {
       const updated = SessionSchema.parse({
         ...session,
         pinnedModelRef: modelRef === 'auto' ? null : modelRef,
-        ...(modelRef === 'auto' ? {} : { modelRef }),
         updatedAt: services.clock.now().toISOString(),
       });
       const previousModel = session.pinnedModelRef ?? 'auto';

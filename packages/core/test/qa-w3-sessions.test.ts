@@ -22,16 +22,21 @@ describe('QA W3 sessions: run lifecycle and races', () => {
       const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
       const model = h.services.models.list('openrouter').find((candidate) => candidate.toolCalling);
       if (!model) throw new Error('OpenRouter fixture has no tool-capable model');
+      const servedModel = h.services.models
+        .list('openrouter')
+        .find((candidate) => candidate.ref !== model.ref);
+      if (!servedModel) throw new Error('OpenRouter fixture needs a second model');
+      h.services.sessions.put({ ...session, modelRef: servedModel.ref });
 
       await h.rpc.models.select(session.id, model.ref);
       expect((await h.rpc.sessions.get(session.id)).session).toMatchObject({
         pinnedModelRef: model.ref,
-        modelRef: model.ref,
+        modelRef: servedModel.ref,
       });
       await h.rpc.models.select(session.id, 'auto');
       expect((await h.rpc.sessions.get(session.id)).session).toMatchObject({
         pinnedModelRef: null,
-        modelRef: model.ref,
+        modelRef: servedModel.ref,
       });
     } finally {
       await h.close();

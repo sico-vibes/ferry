@@ -237,6 +237,11 @@ export interface AgentOptions {
 interface AttemptFailure {
   model: ModelRef;
   provider: string;
+  id?: string;
+  attempt?: number;
+  providerKeyId?: string;
+  outputStarted?: boolean;
+  fallbackReason?: string;
   kind: ProviderFailureFamily;
   status: number | null;
   latencyMs: number;
@@ -246,6 +251,13 @@ interface AttemptFailure {
 interface ModelAttempt {
   model: ModelRef;
   provider: string;
+  id?: string;
+  attempt?: number;
+  providerKeyId?: string;
+  outputStarted?: boolean;
+  fallbackReason?: string;
+  upstreamModel?: string;
+  responseModel?: string;
   status: number | null;
   latencyMs: number;
   errorKind: ProviderFailureFamily | null;
@@ -678,7 +690,6 @@ export class AgentLoop {
         }
         const selectedRef = model.ref;
         session = this.options.store.updateSession(sessionId, {
-          modelRef: selectedRef,
           status: 'running',
         });
         this.options.emit({ type: 'session.updated', session });
@@ -691,6 +702,11 @@ export class AgentLoop {
           new Date(),
           executionRole,
         );
+        assistant = {
+          ...assistant,
+          requestedModelRef: session.pinnedModelRef ?? 'auto',
+        };
+        this.options.store.replaceMessage(assistant);
         this.options.emit({ type: 'session.message', message: assistant });
         const streamedTextPartId = PartIdSchema.parse(newId('part'));
         let streamedText = '';
@@ -935,9 +951,18 @@ export class AgentLoop {
                 timestamp: new Date().toISOString(),
               });
             generationComplete = true;
+            const attemptProviderKeyId = this.options.providerAffinityKey?.(
+              model.providerId,
+              sessionId,
+            );
             modelAttempts.push({
               model: model.ref,
               provider: model.providerId,
+              id: turnId,
+              attempt: modelAttempts.length + 1,
+              ...(attemptProviderKeyId ? { providerKeyId: attemptProviderKeyId } : {}),
+              outputStarted: Boolean(streamedText || generated.text),
+              ...(generated.responseModel ? { responseModel: generated.responseModel } : {}),
               status: 200,
               latencyMs: Math.max(0, performance.now() - attemptStartedAt),
               errorKind: null,
@@ -1039,9 +1064,18 @@ export class AgentLoop {
               this.retirementFailures.push({ modelRef: model.ref, requestId, at: this.now() });
               this.options.onRetirementFailureState?.([...this.retirementFailures]);
             }
+            const attemptProviderKeyId = this.options.providerAffinityKey?.(
+              model.providerId,
+              sessionId,
+            );
             attemptFailures.push({
               model: model.ref,
               provider: model.providerId,
+              id: turnId,
+              attempt: modelAttempts.length + 1,
+              ...(attemptProviderKeyId ? { providerKeyId: attemptProviderKeyId } : {}),
+              outputStarted: Boolean(streamedText),
+              fallbackReason: classified.family,
               kind: classified.family,
               status: classified.status,
               latencyMs: Math.max(0, performance.now() - attemptStartedAt),
@@ -1050,6 +1084,11 @@ export class AgentLoop {
             modelAttempts.push({
               model: model.ref,
               provider: model.providerId,
+              id: turnId,
+              attempt: modelAttempts.length + 1,
+              ...(attemptProviderKeyId ? { providerKeyId: attemptProviderKeyId } : {}),
+              outputStarted: Boolean(streamedText),
+              fallbackReason: classified.family,
               status: classified.status,
               latencyMs: Math.max(0, performance.now() - attemptStartedAt),
               errorKind: classified.family,
@@ -1173,9 +1212,8 @@ export class AgentLoop {
                 attemptedModels.add(planner.ref);
                 executionRole = 'planner';
                 model = planner;
-                assistant = { ...assistant, agentRole: 'planner', modelRef: planner.ref };
+                assistant = { ...assistant, agentRole: 'planner' };
                 this.options.store.replaceMessage(assistant);
-                this.options.store.updateSession(sessionId, { modelRef: planner.ref });
                 sameModelRetries = 0;
                 continue;
               }
@@ -1267,7 +1305,6 @@ export class AgentLoop {
             model = fallback;
             sameModelRetries = 0;
             system += `\n\nHandoff briefing:\n${briefing.text}`;
-            this.options.store.updateSession(sessionId, { modelRef: fallback.ref });
           }
         }
         this.activeMessageParts.delete(sessionId);
@@ -1348,7 +1385,17 @@ export class AgentLoop {
             ...parts,
             { type: 'text', id: PartIdSchema.parse(newId('part')), text: generated.text },
           ];
-        this.options.store.replaceMessage({ ...assistant, parts, modelAttempts });
+        assistant = {
+          ...assistant,
+          modelRef: model.ref,
+          turnId: activeTurnId ?? undefined,
+          providerReportedModelId: generated.responseModel ?? null,
+          parts,
+          modelAttempts,
+        };
+        this.options.store.replaceMessage(assistant);
+        session = this.options.store.updateSession(sessionId, { modelRef: model.ref });
+        this.options.emit({ type: 'session.updated', session });
         for (const part of parts)
           this.options.emit({
             type: 'session.part',
@@ -1708,6 +1755,13 @@ export class AgentLoop {
           modelAttempts: attemptFailures.map((attempt) => ({
             model: attempt.model,
             provider: attempt.provider,
+            ...(attempt.id ? { id: attempt.id } : {}),
+            ...(attempt.attempt ? { attempt: attempt.attempt } : {}),
+            ...(attempt.providerKeyId ? { providerKeyId: attempt.providerKeyId } : {}),
+            ...(attempt.outputStarted !== undefined
+              ? { outputStarted: attempt.outputStarted }
+              : {}),
+            ...(attempt.fallbackReason ? { fallbackReason: attempt.fallbackReason } : {}),
             status: attempt.status,
             latencyMs: attempt.latencyMs,
             errorKind: attempt.kind,

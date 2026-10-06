@@ -289,6 +289,7 @@ export function HomeCanvas() {
               profiles={profiles}
               mode={draftModelRef ? 'manual' : 'auto'}
               modelName={draftModel?.name ?? activeModel}
+              modelRef={draftModelRef}
               onProfileSelect={setDraftProfileId}
               onModelSelect={(ref) => {
                 setDraftModelRef(ref === 'auto' ? null : ref);
@@ -1297,6 +1298,7 @@ export function SessionCanvas() {
           }
           mode={data?.session.pinnedModelRef ? 'manual' : 'auto'}
           modelName={currentModel}
+          modelRef={data?.session.pinnedModelRef ?? null}
           open={modelPickerOpen}
           onOpenChange={setModelPickerOpen}
           profiles={profiles}
