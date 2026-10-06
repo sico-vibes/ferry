@@ -79,7 +79,6 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
       if (ref === 'auto') state.selections.delete(sessionId);
       else state.selections.set(sessionId, ref);
       s.pinnedModelRef = ref === 'auto' ? null : ref;
-      if (ref !== 'auto') s.modelRef = ref;
       updateSession(s);
       persist();
     },

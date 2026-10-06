@@ -446,6 +446,9 @@ export function ComposerModelChip({
   profileName = 'Profile',
   activeProfileId,
   modelName,
+  modelRef,
+  servedModelRef = null,
+  pinnedUnavailable = false,
   mode,
   open: controlledOpen,
   onOpenChange,
@@ -457,6 +460,9 @@ export function ComposerModelChip({
   profileName?: string;
   activeProfileId?: ProfileId;
   modelName: string;
+  modelRef: ModelRef | null;
+  servedModelRef?: ModelRef | null;
+  pinnedUnavailable?: boolean;
   mode: 'auto' | 'manual';
   profiles?: { id: ProfileId; name: string; pinned: boolean; description?: string }[];
   onProfileSelect?: (profileId: ProfileId) => void;
@@ -531,7 +537,14 @@ export function ComposerModelChip({
   const autoRef = visibleCandidates[0]?.ref;
   const autoInfo = models.find((model) => model.ref === autoRef);
   const autoModel = autoInfo?.name ?? modelName;
-  const chipModel = mode === 'auto' ? autoInfo : models.find((model) => model.name === modelName);
+  const pinnedModel = models.find((model) => model.ref === modelRef);
+  const servedModel = models.find((model) => model.ref === servedModelRef);
+  const chipModel = pinnedUnavailable ? servedModel : mode === 'auto' ? autoInfo : pinnedModel;
+  const chipLabel = pinnedUnavailable
+    ? `Pinned: ${pinnedModel?.name ?? modelRef ?? 'model'} (unavailable) · now ${modelName}`
+    : mode === 'auto'
+      ? `Auto · ${autoModel}`
+      : modelName;
   const configuredProviderIds = new Set(
     providers
       .filter(
@@ -587,7 +600,7 @@ export function ComposerModelChip({
       <PopoverPrimitive.Trigger asChild>
         <button
           aria-controls={dialogId}
-          aria-label={mode === 'auto' ? `Auto · ${autoModel}` : modelName}
+          aria-label={chipLabel}
           className="v2-composer-chip inline-flex items-center gap-2 rounded-pill px-2 py-1 text-body font-medium text-text-1 hover:bg-icon-circle"
           type="button"
         >
@@ -607,7 +620,9 @@ export function ComposerModelChip({
             />
           ) : null}
           <span className="v2-chip-model">
-            {mode === 'auto' ? (
+            {pinnedUnavailable ? (
+              chipLabel
+            ) : mode === 'auto' ? (
               <>
                 <span className="v2-chip-auto">Auto</span>
                 {autoModel}
@@ -745,7 +760,7 @@ export function ComposerModelChip({
                         renderList={(children) => <>{children}</>}
                         renderItem={(model) => {
                           const candidate = candidateByRef.get(model.ref);
-                          const selected = mode === 'manual' && model.name === modelName;
+                          const selected = mode === 'manual' && model.ref === modelRef;
                           return (
                             <ModelCommand.Item
                               className="model-candidate"
@@ -788,7 +803,7 @@ export function ComposerModelChip({
                                   <span className="model-paid-pill">Paid</span>
                                 )}
                               </span>
-                              {selected || candidate?.selected ? (
+                              {selected || (mode === 'auto' && candidate?.selected) ? (
                                 <Check aria-hidden="true" className="model-row-check" size={14} />
                               ) : null}
                             </ModelCommand.Item>

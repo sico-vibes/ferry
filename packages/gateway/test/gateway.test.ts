@@ -104,6 +104,8 @@ const runtime: GatewayRuntime = {
       : ['openai/gpt-test', 'gpt-test-logical'],
   complete: (input) => {
     received.push(input);
+    const startedAttempt = { model: 'openai/gpt-test', status: 'started' as const };
+    input.onAttempt?.({ servedModel: startedAttempt.model, attempts: [startedAttempt] });
     if (input.messages.some((message) => message.content === 'quota'))
       return Promise.reject(
         Object.assign(new Error('provider quota exhausted'), { statusCode: 429 }),
@@ -111,9 +113,14 @@ const runtime: GatewayRuntime = {
     input.onText?.('Hello');
     if (input.tools?.length)
       input.onToolCall?.({ id: 'call_1', name: 'lookup', arguments: '{"q":"x"}' });
+    const servedAttempt = { model: 'openai/gpt-test', status: 'served' as const };
+    input.onAttempt?.({ servedModel: servedAttempt.model, attempts: [servedAttempt] });
     return Promise.resolve({
       id: 'response-1',
       model: 'openai/gpt-test',
+      responseModel: 'gpt-test',
+      ...(input.traceId ? { traceId: input.traceId } : {}),
+      attempts: [servedAttempt],
       text: 'Hello',
       inputTokens: 4,
       outputTokens: 2,
@@ -124,10 +131,12 @@ const runtime: GatewayRuntime = {
     });
   },
 };
+const defaultComplete = runtime.complete.bind(runtime);
 let stop: (() => Promise<void>) | undefined;
 afterEach(async () => {
   await stop?.();
   stop = undefined;
+  runtime.complete = defaultComplete;
   entries.splice(0, entries.length, created.key);
   created.key.profile = 'auto-free';
   created.key.revokedAt = null;
@@ -166,6 +175,53 @@ describe('Ferry gateway', () => {
     created.key.revokedAt = new Date().toISOString();
     expect(authenticateGatewayKey(created.secret, entries)).toBeUndefined();
   });
+
+  it('reports the fallback model in headers and final metadata while echoing the requested model', async () => {
+    const url = await server();
+    runtime.complete = (input) => {
+      const failed = { model: 'openai/gpt-test', status: 'failed' as const, reason: 'rate_limit' };
+      const started = { model: 'groq/served-model', status: 'started' as const };
+      const served = { model: 'groq/served-model', status: 'served' as const };
+      input.onAttempt?.({ servedModel: failed.model, attempts: [failed] });
+      input.onAttempt?.({ servedModel: started.model, attempts: [failed, started] });
+      input.onText?.('Fallback answer');
+      input.onAttempt?.({ servedModel: served.model, attempts: [failed, served] });
+      return Promise.resolve({
+        id: 'response-fallback',
+        model: served.model,
+        responseModel: 'served-model',
+        ...(input.traceId ? { traceId: input.traceId } : {}),
+        attempts: [failed, served],
+        text: 'Fallback answer',
+        inputTokens: 2,
+        outputTokens: 3,
+        finishReason: 'stop',
+      });
+    };
+
+    const response = await fetch(`${url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        stream: true,
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+    });
+    const stream = await response.text();
+    // OpenAI SDKs hand named SSE events to callers as non-chunk objects, so only data frames go out.
+    const frames = stream.split('\n\n').filter(Boolean);
+    expect(frames.every((frame) => frame.startsWith('data: '))).toBe(true);
+    for (const frame of frames.filter((item) => item !== 'data: [DONE]'))
+      expect(JSON.parse(frame.slice(6))).toHaveProperty('choices');
+
+    expect(response.headers.get('x-ferry-requested-model')).toBe('ferry/auto-free');
+    expect(response.headers.get('x-ferry-served-model')).toBe('groq/served-model');
+    expect(response.headers.get('x-ferry-served-provider')).toBe('groq');
+    expect(response.headers.get('x-ferry-attempts')).toBe('2');
+    expect(response.headers.get('x-ferry-trace-id')).toBeTruthy();
+    expect(stream).toContain('"model":"ferry/auto-free"');
+  }, 30_000);
 
   it('accepts a no-profile key with concrete model allowlist refs in user order', () => {
     const direct = createGatewayKey({
@@ -248,11 +304,18 @@ describe('Ferry gateway', () => {
       }),
     });
     expect(response.status).toBe(200);
+    expect(response.headers.get('x-ferry-requested-model')).toBe('ferry/auto-free');
+    expect(response.headers.get('x-ferry-served-model')).toBe('openai/gpt-test');
+    expect(response.headers.get('x-ferry-response-model')).toBe('gpt-test');
+    expect(response.headers.get('x-ferry-attempts')).toBe('1');
+    expect(response.headers.get('x-ferry-trace-id')).toBeTruthy();
     const payload = (await response.json()) as {
+      model: string;
       choices: { message: { content: string } }[];
       usage: { total_tokens: number };
     };
     expect(payload.choices[0]?.message.content).toBe('Hello');
+    expect(payload.model).toBe('ferry/auto-free');
     expect(payload.usage.total_tokens).toBe(6);
     expect(runtime.store.usage(created.key.id).requests).toBe(1);
     expect(received.at(-1)?.model).toBe('@profile:auto-free');
@@ -271,6 +334,7 @@ describe('Ferry gateway', () => {
     });
     expect(responses.status).toBe(200);
     expect(await responses.json()).toMatchObject({
+      model: 'ferry/auto-free',
       object: 'response',
       status: 'completed',
       output_text: 'Hello',
@@ -315,7 +379,10 @@ describe('Ferry gateway', () => {
       headers,
       body: JSON.stringify({ model: 'ferry/auto-free', input: 'hello', stream: true }),
     });
-    expect(await responsesStream.text()).toContain('event: response.completed');
+    const responsesEvents = await responsesStream.text();
+    expect(responsesStream.headers.get('x-ferry-requested-model')).toBe('ferry/auto-free');
+    expect(responsesEvents).toContain('"model":"ferry/auto-free"');
+    expect(responsesEvents).not.toContain('event: ferry.metadata');
 
     const gemini = await fetch(`${url}/v1beta/models/ferry%2Fauto-free:generateContent`, {
       method: 'POST',
@@ -358,7 +425,11 @@ describe('Ferry gateway', () => {
       },
     );
     expect(geminiStream.headers.get('content-type')).toContain('text/event-stream');
-    expect(await geminiStream.text()).toContain('usageMetadata');
+    expect(geminiStream.headers.get('x-ferry-requested-model')).toBe('ferry/auto-free');
+    const geminiEvents = await geminiStream.text();
+    expect(geminiEvents).toContain('usageMetadata');
+    expect(geminiEvents).not.toContain('event: ferry.metadata');
+    expect(geminiEvents).toContain('"modelVersion":"ferry/auto-free"');
   }, 30_000);
 
   it('advertises OpenAI and Gemini model-list shapes from the same key-filtered aliases', async () => {
@@ -561,8 +632,12 @@ describe('Ferry gateway', () => {
       }),
     });
     const chunks = await openai.text();
+    expect(openai.headers.get('x-ferry-requested-model')).toBe('ferry/fast');
+    expect(openai.headers.get('x-ferry-served-model')).toBe('openai/gpt-test');
+    expect(openai.headers.get('x-ferry-attempts')).toBe('1');
     expect(chunks).toContain('chat.completion.chunk');
     expect(chunks).toContain('tool_calls');
+    expect(chunks).not.toContain('event: ferry.metadata');
     expect(chunks).toContain('[DONE]');
     const anthropic = await fetch(`${url}/v1/messages`, {
       method: 'POST',
@@ -581,9 +656,14 @@ describe('Ferry gateway', () => {
       }),
     });
     const events = await anthropic.text();
+    expect(anthropic.headers.get('x-ferry-requested-model')).toBe('ferry/best');
+    expect(anthropic.headers.get('x-ferry-served-model')).toBe('openai/gpt-test');
     expect(events).toContain('event: message_start');
     expect(events).toContain('event: content_block_delta');
     expect(events).toContain('event: message_stop');
+    expect(events.indexOf('event: ferry.metadata')).toBeLessThan(
+      events.indexOf('event: message_stop'),
+    );
     expect(events).toContain('tool_use');
     expect(runtime.store.usage(created.key.id).requests).toBe(2);
   }, 30_000);

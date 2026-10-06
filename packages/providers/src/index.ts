@@ -369,7 +369,11 @@ export async function streamProviderChat(input: ProviderChatInput) {
       throw part.error;
     }
   }
-  const [usage, finishReason] = await Promise.all([result.usage, result.finishReason]);
+  const [usage, finishReason, finalStep] = await Promise.all([
+    result.usage,
+    result.finishReason,
+    result.finalStep,
+  ]);
   const usageDetails = usage as unknown as { inputTokenDetails?: unknown };
   const inputTokenDetails = usageDetails.inputTokenDetails;
   const cachedTokens =
@@ -386,6 +390,9 @@ export async function streamProviderChat(input: ProviderChatInput) {
     ...(cachedTokens == null ? {} : { cachedTokens }),
     outputTokens: usage.outputTokens ?? 0,
     finishReason: finishReason === 'tool-calls' ? 'tool_calls' : finishReason,
+    ...(typeof finalStep.response.modelId === 'string'
+      ? { responseModel: finalStep.response.modelId }
+      : {}),
   };
 }
 
@@ -449,6 +456,21 @@ export function createObservedFetch(
           // Non-JSON request bodies are passed through unchanged.
         }
       }
+      let upstreamModel: string | undefined;
+      const sentBody =
+        requestInit.body ?? (input instanceof Request ? await input.clone().text() : undefined);
+      if (typeof sentBody === 'string') {
+        try {
+          const parsed: unknown = JSON.parse(sentBody);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const sentModel = (parsed as Record<string, unknown>).model;
+            if (typeof sentModel === 'string') upstreamModel = sentModel;
+          }
+        } catch {
+          /* Non-JSON requests have no observable model field. */
+        }
+      }
+      const requestBytes = requestSize(input, requestInit);
       let response = await fetchImpl(input, requestInit);
       if (!response.ok && overrides.statusRemaps.some((item) => item.from === response.status)) {
         const responseText = await response.clone().text();
@@ -473,10 +495,12 @@ export function createObservedFetch(
         RawCallObservationSchema.parse({
           providerId: ProviderIdSchema.parse(providerId),
           modelRef: model,
+          requestedModel: model,
+          ...(upstreamModel ? { upstreamModel } : {}),
           startedAt,
           latencyMs: Math.max(0, performance.now() - started),
           statusCode: response.status,
-          requestBytes: requestSize(input, init),
+          requestBytes,
           rateLimitHeaders,
           errorKind: response.ok ? null : mapProviderError({ status: response.status }).kind,
         }),
@@ -488,6 +512,7 @@ export function createObservedFetch(
         RawCallObservationSchema.parse({
           providerId: ProviderIdSchema.parse(providerId),
           modelRef: model,
+          requestedModel: model,
           startedAt,
           latencyMs: Math.max(0, performance.now() - started),
           statusCode: null,

@@ -5,6 +5,7 @@ import {
   ProviderIdSchema,
   SessionIdSchema,
   SessionSchema,
+  newId,
 } from '@ferry/shared';
 import { oauthModelCatalog } from '@ferry/oauth';
 import { modelSupportsTools } from '@ferry/router';
@@ -164,9 +165,38 @@ export function register(host: CoreHost, services: FerryServices): void {
       const updated = SessionSchema.parse({
         ...session,
         pinnedModelRef: modelRef === 'auto' ? null : modelRef,
-        ...(modelRef === 'auto' ? {} : { modelRef }),
         updatedAt: services.clock.now().toISOString(),
       });
+      const previousModel = session.pinnedModelRef ?? 'auto';
+      if (previousModel !== modelRef) {
+        const midRun = services.sessions.get(sessionId)?.status === 'running';
+        services.telemetry.modelSwitch({
+          session_id: sessionId,
+          kind: 'selection_change',
+          from_model: previousModel,
+          to_model: modelRef,
+          reason: 'user selection',
+          data: { who: 'user', mid_run: midRun },
+        });
+        services.telemetry.log({
+          id: newId('evt'),
+          ts: services.clock.now().toISOString(),
+          level: 'info',
+          source: 'ui',
+          event: 'model.switch',
+          session_id: sessionId,
+          data: { who: 'user', from_model: previousModel, to_model: modelRef, mid_run: midRun },
+        });
+        if (session.pinnedModelRef !== updated.pinnedModelRef)
+          services.telemetry.modelSwitch({
+            session_id: sessionId,
+            kind: updated.pinnedModelRef ? 'pin' : 'unpin',
+            from_model: session.pinnedModelRef,
+            to_model: updated.pinnedModelRef,
+            reason: 'user selection',
+            data: { who: 'user', mid_run: midRun },
+          });
+      }
       services.sessions.put(updated);
       host.emit('session.updated', updated);
       host.emit('session.status', updated);

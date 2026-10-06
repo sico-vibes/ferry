@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@ferry/client": "workspace:*",
+    "@ferry/cloud": "workspace:*",
     "@ferry/core": "workspace:*",
     "@ferry/delegate": "workspace:*",
     "@ferry/gateway": "workspace:*",

@@ -60,6 +60,7 @@ describe('domain schemas', () => {
       stickySessions: true,
       smartReliability: true,
       quotaReservations: true,
+      pinnedExhaustion: 'handover',
       cooldownReasons: true,
       gentleQuotaRamp: true,
       toolRejectionMemory: true,
@@ -71,6 +72,13 @@ describe('domain schemas', () => {
       providerOverrides: {},
     });
     expect(() => domain.RoutingSettingsSchema.parse({ stickyTtlMinutes: 0 })).toThrow();
+    expect(() => domain.RoutingSettingsSchema.parse({ pinnedExhaustion: 'switch' })).toThrow();
+    expect(() =>
+      domain.SettingsPatchSchema.parse({ routing: { pinnedExhaustion: 'switch' } }),
+    ).toThrow();
+    expect(
+      domain.SettingsPatchSchema.parse({ routing: { pinnedExhaustion: 'ask' } }).routing,
+    ).toEqual({ pinnedExhaustion: 'ask' });
     expect(() =>
       domain.LogicalModelMappingSchema.parse({
         logicalName: 'ferry/auto-free',
@@ -87,6 +95,57 @@ describe('domain schemas', () => {
   }
   it('rejects a malformed model reference', () => {
     expect(domain.ModelRefSchema.safeParse('invalid').success).toBe(false);
+  });
+  it('parses interrupted assistant messages and expanded attempt details', () => {
+    expect(domain.MessageSchema.parse(samples.sampleMessage)).toMatchObject(samples.sampleMessage);
+    expect(
+      domain.MessageSchema.parse({
+        ...samples.sampleMessage,
+        requestedModelRef: 'auto',
+        turnId: 'turn_1',
+        providerReportedModelId: null,
+        interrupted: { reason: 'usage limit reached', at: '2026-10-06T12:00:00.000Z' },
+        modelAttempts: [
+          {
+            model: 'openai/gpt-5',
+            provider: 'openai',
+            id: 'turn_1',
+            attempt: 1,
+            providerKeyId: 'key_1',
+            outputStarted: true,
+            fallbackReason: 'quota_exhausted',
+            upstreamModel: 'gpt-5-upstream',
+            responseModel: 'gpt-5-2026-01',
+            status: 429,
+            latencyMs: 20,
+            errorKind: 'quota_exhausted',
+          },
+        ],
+      }),
+    ).toMatchObject({ interrupted: { reason: 'usage limit reached' }, requestedModelRef: 'auto' });
+    expect(
+      domain.MessagePartSchema.parse({
+        type: 'handoff_marker',
+        id: 'part_00000000000000000001',
+        from: 'openai/gpt-5',
+        to: 'openai/gpt-5',
+        reason: 'quota',
+        briefingTokens: 10,
+        explanation: 'Usage limit reached',
+        trigger: 'reactive',
+      }),
+    ).toMatchObject({ trigger: 'reactive' });
+    expect(
+      domain.MessagePartSchema.parse({
+        type: 'approval_request',
+        id: 'part_00000000000000000002',
+        kind: 'model_handover',
+        summary: 'Switch models?',
+        detail: 'The selected model is unavailable.',
+        risk: 'low',
+        state: 'pending',
+      }),
+    ).toMatchObject({ kind: 'model_handover' });
   });
   it('creates prefixed ids with 20 base36 characters', () => {
     expect(domain.newId('session')).toMatch(/^session_[0-9a-z]{20}$/);

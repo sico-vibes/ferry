@@ -25,6 +25,7 @@ import {
 import type { RoutingSettings } from '@ferry/shared';
 import type { UpdateSnapshot } from '../../main/update-state.js';
 import {
+  Cloud,
   Eye,
   EyeOff,
   Gauge,
@@ -47,6 +48,7 @@ import { ProviderKeyDialog } from './ProviderKeyDialog';
 import { ProfilesSettings } from './ProfilesSettings';
 import { ProvidersTable } from './ProvidersTable';
 import { OAuthProviderRows } from './OAuthProviderRows';
+import { CloudSettings } from './CloudSettings';
 import { ConfirmDialog } from './ConfirmDialog';
 import { saveKeybindings, useKeybindings } from '../state/keybindings';
 import type { SettingsSection } from '../state/ui.types';
@@ -60,6 +62,7 @@ const settingsSectionIcons: Record<SettingsSection, LucideIcon> = {
   Permissions: ShieldCheck,
   Gateway: Network,
   'Data & privacy': LockKeyhole,
+  'Storage & Cloud': Cloud,
   Shortcuts: Keyboard,
   About: Info,
 };
@@ -73,6 +76,7 @@ const settingsSectionKeywords: Record<SettingsSection, string[]> = {
   Permissions: ['permission', 'approval', 'rules', 'auto-edit'],
   Gateway: ['gateway', 'api', 'port', 'lan', 'openai', 'anthropic'],
   'Data & privacy': ['data', 'privacy', 'logs', 'retention', 'mcp', 'skills', 'integrations'],
+  'Storage & Cloud': ['storage', 'cloud', 'sync', 'account', 'capture'],
   Shortcuts: ['shortcut', 'keybinding', 'keyboard'],
   About: ['about', 'version', 'update', 'license', 'notices'],
 };
@@ -107,6 +111,10 @@ const settingsPageCopy: Record<string, { title: string; description: string }> =
   'Data & privacy': {
     title: 'Data & privacy',
     description: 'Review local storage and provider data handling.',
+  },
+  'Storage & Cloud': {
+    title: 'Storage & Cloud',
+    description: 'Choose where Ferry stores data and manage cloud sync.',
   },
   About: { title: 'About', description: 'Ferry version and project information.' },
 };
@@ -297,6 +305,10 @@ export function SettingsCanvas() {
     };
   }, [section]);
   const { data: settingsData } = useSettings();
+  const { data: cloudStatus } = useQuery({
+    queryKey: ['cloud-status'],
+    queryFn: () => client.cloud.status(),
+  });
   const [pendingBySection, setPendingBySection] = useState<
     Partial<Record<SettingsSection, Parameters<typeof client.settings.update>[0]>>
   >({});
@@ -587,6 +599,7 @@ export function SettingsCanvas() {
         </>
       );
     if (section === 'Profiles') return <ProfilesSettings />;
+    if (section === 'Storage & Cloud') return <CloudSettings />;
     if (section === 'Providers & keys')
       return (
         <Group>
@@ -777,6 +790,29 @@ export function SettingsCanvas() {
             </div>
           </Group>
           <Group title="Routing behavior">
+            <SettingRow
+              title="When a picked model runs out"
+              helper="If the model you picked hits a usage limit or fails, Ferry can hand the task to the next eligible model with a handover note, ask you first, or stop."
+            >
+              <SegmentedControl
+                label="When a picked model runs out"
+                value={settings?.routing.pinnedExhaustion ?? 'handover'}
+                onValueChange={(value) =>
+                  settings &&
+                  void update({
+                    routing: {
+                      ...settings.routing,
+                      pinnedExhaustion: value as typeof settings.routing.pinnedExhaustion,
+                    },
+                  })
+                }
+                options={[
+                  { value: 'handover', label: 'Hand over' },
+                  { value: 'ask', label: 'Ask me' },
+                  { value: 'fail', label: 'Stop' },
+                ]}
+              />
+            </SettingRow>
             <SettingRow
               title="Planner/editor roles"
               helper="Role model selection uses catalog quality priors, context fit, tool support, and observed reliability."
@@ -1441,6 +1477,23 @@ export function SettingsCanvas() {
         >
           <X aria-hidden="true" />
         </UiV2.Button>
+        {cloudStatus?.storageMode === 'cloud' && !cloudStatus.auth.signedIn && (
+          <div
+            className="mb-4 flex items-center justify-between gap-3 rounded-lg bg-muted p-3"
+            role="status"
+          >
+            <span>Cloud sync is paused until you sign in.</span>
+            <UiV2.Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                useUI.getState().setSettingsSection('Storage & Cloud');
+              }}
+            >
+              Sign in to Cloud
+            </UiV2.Button>
+          </div>
+        )}
         <PageHeader
           className="v2-settings-header"
           level={2}

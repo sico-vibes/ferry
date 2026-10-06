@@ -18,6 +18,8 @@ import {
   type GatewayKey,
   type GatewayHandle,
   type GatewayMessage,
+  type GatewayAttempt,
+  type GatewayAttemptState,
 } from '@ferry/gateway';
 import type { FerryServices } from './services.js';
 import { hasUsableProviderKey, recordProviderKeyFailure } from './services.js';
@@ -336,12 +338,22 @@ export function createGatewayController(
           ? `ferry/${input.model.slice('@profile:'.length)}`
           : input.model,
       };
+      const traceId = input.traceId ?? base.id;
+      const attemptState: GatewayAttemptState = { servedModel: '', attempts: [] };
+      const onAttempt = (state: GatewayAttemptState) => {
+        attemptState.servedModel = state.servedModel;
+        attemptState.attempts = state.attempts;
+        input.onAttempt?.(state);
+      };
       const latencyMs = () => Math.max(0, services.clock.now().getTime() - started.getTime());
       try {
-        const result = await routeCompletion(input);
+        const result = await routeCompletion({ ...input, traceId, onAttempt });
         logRequest({
           ...base,
+          traceId,
           modelRef: result.model,
+          servedModel: result.model,
+          attempts: result.attempts ?? attemptState.attempts,
           providerId: result.model.includes('/')
             ? result.model.slice(0, result.model.indexOf('/'))
             : null,
@@ -351,11 +363,15 @@ export function createGatewayController(
           latencyMs: latencyMs(),
           error: null,
         });
-        return result;
+        return { ...result, traceId, attempts: result.attempts ?? attemptState.attempts };
       } catch (error) {
         logRequest({
           ...base,
+          traceId,
           modelRef: null,
+          servedModel:
+            attemptState.attempts.at(-1)?.status === 'served' ? attemptState.servedModel : null,
+          attempts: attemptState.attempts,
           providerId: null,
           status: 'error',
           inputTokens: 0,
@@ -471,6 +487,7 @@ export function createGatewayController(
         ).length;
       return Array.from({ length: Math.max(1, count) }, () => model);
     });
+    const lastAttemptHistory: GatewayAttempt[] = [];
     for (const model of withKeyFallback) {
       const providerId = model.providerId;
       const entries = services.providerKeyEntries.list(providerId);
@@ -498,6 +515,9 @@ export function createGatewayController(
       if (!key) continue;
       const envName = `FERRY_PROVIDER_BASE_URL_${providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
       const outputState = { started: false };
+      const attempts = lastAttemptHistory;
+      attempts.push({ model: model.ref, status: 'started' });
+      input.onAttempt?.({ servedModel: model.ref, attempts: [...attempts] });
       try {
         const routedMessages = toGatewayModelMessages(
           compressedMessages(input.messages, input.key.compressToolResults),
@@ -600,7 +620,15 @@ export function createGatewayController(
           ...(providerKey?.id ? { providerKeyId: providerKey.id } : {}),
           expiresAt: services.clock.now().getTime() + 30 * 60 * 1000,
         });
-        return { id: `gw-${String(Date.now())}`, model: model.ref, ...result };
+        attempts[attempts.length - 1] = { model: model.ref, status: 'served' };
+        input.onAttempt?.({ servedModel: model.ref, attempts: [...attempts] });
+        return {
+          id: `gw-${String(Date.now())}`,
+          model: model.ref,
+          ...result,
+          ...(input.traceId ? { traceId: input.traceId } : {}),
+          attempts,
+        };
       } catch (error) {
         const errorName =
           error && typeof error === 'object' && 'name' in error && typeof error.name === 'string'
@@ -628,6 +656,12 @@ export function createGatewayController(
             ? { headers: providerError.response.headers }
             : {}),
         });
+        attempts[attempts.length - 1] = {
+          model: model.ref,
+          status: 'failed',
+          reason: typed.family,
+        };
+        input.onAttempt?.({ servedModel: model.ref, attempts: [...attempts] });
         const providerStatus = Number(
           providerError.statusCode ??
             providerError.status ??

@@ -2,7 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ProfileIdSchema, SessionIdSchema, WorkspaceIdSchema } from '@ferry/shared';
+import {
+  MessageIdSchema,
+  ModelRefSchema,
+  ProfileIdSchema,
+  SessionIdSchema,
+  WorkspaceIdSchema,
+} from '@ferry/shared';
 import {
   openDatabase,
   runRetention,
@@ -10,7 +16,14 @@ import {
   ProviderKeyEntryRepository,
   ProviderKeyUsageDailyRepository,
   SessionRepository,
+  MessageRepository,
   STORAGE_SCHEMA_VERSION,
+  OutboxRepository,
+  TurnLogRepository,
+  EventLogRepository,
+  ModelSwitchRepository,
+  CloudTelemetrySink,
+  LocalTelemetrySink,
 } from '../src/index.js';
 
 const dirs: string[] = [];
@@ -20,6 +33,291 @@ afterEach(async () => {
 });
 
 describe('@ferry/storage', () => {
+  it('stores metadata-only local telemetry and idempotent cloud outbox events', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const turns = new TurnLogRepository(db.client);
+      const logs = new EventLogRepository(db.client);
+      const switches = new ModelSwitchRepository(db.client);
+      const outbox = new OutboxRepository(db.client);
+      const local = new LocalTelemetrySink(turns, logs, switches);
+      local.log({
+        id: 'evt_local',
+        event: 'request.received',
+        source: 'ui',
+        data: {
+          prompt: 'local private prompt',
+          response: 'assistant output',
+          reasoning: 'private reasoning',
+          input: { tool: 'private input' },
+          output: 'private tool output',
+          inputTokens: 10,
+          outputTokens: 4,
+          cachedTokens: 2,
+          reasoningTokens: 1,
+          maxTokens: 100,
+          tokens: 14,
+          input_tokens: 10,
+          authorization: 'Bearer private-key',
+          nested: { apiKey: 'sk-supersecretcredential' },
+        },
+      });
+      expect(logs.get('evt_local')?.data).toMatchObject({
+        prompt: { omitted: 'capture-off', chars: 20 },
+        response: { omitted: 'capture-off', chars: 16 },
+        reasoning: { omitted: 'capture-off', chars: 17 },
+        input: { omitted: 'capture-off' },
+        output: { omitted: 'capture-off', chars: 19 },
+        inputTokens: 10,
+        outputTokens: 4,
+        cachedTokens: 2,
+        reasoningTokens: 1,
+        maxTokens: 100,
+        tokens: 14,
+        input_tokens: 10,
+        authorization: '[REDACTED]',
+        nested: { apiKey: '[REDACTED]' },
+      });
+      local.turnStarted({
+        id: 'turn_secret',
+        error_message: 'provider echoed sk-supersecretcredential',
+        input_tokens: 9,
+      });
+      expect(turns.get('turn_secret')).toMatchObject({
+        error_message: 'provider echoed [REDACTED]',
+        input_tokens: 9,
+      });
+      local.modelSwitch({
+        session_id: 'ses_test',
+        kind: 'selection_change',
+        from_model: 'openai/a',
+        to_model: 'openai/b',
+        data: { who: 'user', mid_run: true },
+      });
+      local.modelSwitch({
+        session_id: 'ses_test',
+        kind: 'router_fallback',
+        from_model: 'openai/a',
+        to_model: 'openai/b',
+        reason: 'rate_limit',
+      });
+      expect(switches.list()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'selection_change',
+            data: { who: 'user', mid_run: true },
+          }),
+          expect.objectContaining({ kind: 'router_fallback', reason: 'rate_limit' }),
+        ]),
+      );
+      const sink = new CloudTelemetrySink(turns, logs, switches, outbox, false);
+      sink.log({
+        id: 'evt_test',
+        event: 'request.received',
+        source: 'ui',
+        data: { prompt: 'private prompt', inputTokens: 18 },
+      });
+      sink.log({
+        id: 'evt_test',
+        event: 'request.received',
+        source: 'ui',
+        data: { prompt: 'private prompt', inputTokens: 18 },
+      });
+      expect(logs.get('evt_test')).toMatchObject({
+        data: { prompt: { omitted: 'capture-off', chars: 14 }, inputTokens: 18 },
+      });
+      expect(outbox.counts().pending).toBe(1);
+      const queued = outbox.claimDue(10).find((entry) => entry.opId === 'logs:evt_test');
+      expect(queued?.payloadJson).not.toContain('private prompt');
+      const captureSink = new CloudTelemetrySink(turns, logs, switches, outbox, true);
+      captureSink.log({
+        id: 'evt_capture',
+        event: 'turn.completed',
+        source: 'agent',
+        data: {
+          prompt: 'private prompt sk-abcdefghijk',
+          response: 'assistant text',
+          reasoning: 'reasoning text',
+          outputTokens: 8,
+        },
+      });
+      expect(logs.get('evt_capture')?.data).toMatchObject({
+        prompt: 'private prompt [REDACTED]',
+        response: 'assistant text',
+        reasoning: 'reasoning text',
+        outputTokens: 8,
+      });
+    } finally {
+      db.close();
+    }
+  });
+  it('persists idempotent cloud outbox operations across repository instances', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const first = new OutboxRepository(db.client);
+      first.enqueue({
+        opId: 'sessions:ses_test:1',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_test' },
+      });
+      first.enqueue({
+        opId: 'sessions:ses_test:1',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_test', title: 'newer' },
+      });
+      const restarted = new OutboxRepository(db.client);
+      const claimed = restarted.claimDue(10);
+      expect(claimed).toHaveLength(1);
+      expect(claimed[0]?.payloadJson).toContain('newer');
+      expect(restarted.counts()).toEqual({ pending: 1, failedPermanent: 0 });
+      const firstClaim = claimed[0];
+      if (!firstClaim) throw new Error('Expected one claimed outbox row');
+      restarted.markDone(firstClaim.id, firstClaim.generation);
+      expect(restarted.counts()).toEqual({ pending: 0, failedPermanent: 0 });
+    } finally {
+      db.close();
+    }
+  });
+  it('keeps a coalesced payload when an older generation completes in flight', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const outbox = new OutboxRepository(db.client);
+      outbox.enqueue({
+        opId: 'sessions:ses_race',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_race', title: 'old' },
+      });
+      const claimed = outbox.claimDue(1)[0];
+      if (!claimed) throw new Error('Expected a claimed row');
+      outbox.enqueue({
+        opId: 'sessions:ses_race',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_race', title: 'new' },
+      });
+      outbox.markDone(claimed.id, claimed.generation);
+      const retry = outbox.claimDue(1)[0];
+      expect(retry?.payloadJson).toContain('new');
+      expect(retry?.generation).toBeGreaterThan(claimed.generation);
+    } finally {
+      db.close();
+    }
+  });
+  it('replaces pending operations when an entity is deleted or recreated', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const outbox = new OutboxRepository(db.client);
+      outbox.enqueue({
+        opId: 'sessions:ses_order',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_order' },
+      });
+      outbox.enqueue({
+        opId: 'sessions:ses_order:delete',
+        target: 'sessions',
+        op: 'delete',
+        payload: { id: 'ses_order' },
+      });
+      expect(outbox.claimDue(10).map(({ op }) => op)).toEqual(['delete']);
+      outbox.enqueue({
+        opId: 'sessions:ses_order',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_order' },
+      });
+      expect(outbox.claimDue(10).map(({ op }) => op)).toEqual(['upsert']);
+    } finally {
+      db.close();
+    }
+  });
+  it('preserves an in-flight opposite operation while queuing its successor', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const outbox = new OutboxRepository(db.client);
+      outbox.enqueue({
+        opId: 'sessions:ses_inflight',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_inflight' },
+      });
+      const claimed = outbox.claimDue(1)[0];
+      if (!claimed) throw new Error('Expected claimed upsert');
+      outbox.enqueue({
+        opId: 'sessions:ses_inflight:delete',
+        target: 'sessions',
+        op: 'delete',
+        payload: { id: 'ses_inflight' },
+      });
+      const successor = outbox.claimDue(10)[0];
+      expect(successor?.op).toBe('delete');
+      outbox.markDone(claimed.id, claimed.generation);
+      if (!successor) throw new Error('Expected pending delete successor');
+      outbox.markDone(successor.id, successor.generation);
+      expect(outbox.counts().pending).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+  it('revives permanent rows when the same op id is queued with a newer payload', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const outbox = new OutboxRepository(db.client);
+      outbox.enqueue({
+        opId: 'sessions:ses_repair',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_repair' },
+      });
+      const row = outbox.claimDue(1)[0];
+      if (!row) throw new Error('Expected a claimed row');
+      outbox.markPermanent(row.id, row.generation, 'constraint');
+      expect(outbox.counts().failedPermanent).toBe(1);
+      outbox.enqueue({
+        opId: 'sessions:ses_repair',
+        target: 'sessions',
+        op: 'upsert',
+        payload: { id: 'ses_repair', title: 'repaired' },
+      });
+      expect(outbox.claimDue(1)[0]?.payloadJson).toContain('repaired');
+      expect(outbox.counts()).toEqual({ pending: 1, failedPermanent: 0 });
+    } finally {
+      db.close();
+    }
+  });
+  it('upserts turn status changes but keeps append-only event ids idempotent', async () => {
+    const db = await openDatabase(':memory:');
+    try {
+      const turns = new TurnLogRepository(db.client);
+      turns.put({
+        id: 'turn_1',
+        status: 'pending',
+        session_id: 'session_1',
+        trace_id: 'a'.repeat(32),
+      });
+      turns.put({
+        id: 'turn_1',
+        status: 'success',
+        session_id: 'session_1',
+        trace_id: 'a'.repeat(32),
+      });
+      expect(turns.get('turn_1')?.status).toBe('success');
+      const events = new EventLogRepository(db.client);
+      events.put({ id: 'event_1', event: 'turn.done', ts: '2026-01-01T00:00:00.000Z' });
+      events.put({ id: 'event_1', event: 'turn.overwritten', ts: '2026-01-02T00:00:00.000Z' });
+      expect(events.get('event_1')?.event).toBe('turn.done');
+      const columns = db.client.prepare('PRAGMA table_info(telemetry_turns)').all() as {
+        name: string;
+      }[];
+      expect(columns.map((column) => column.name)).toContain('trace_id');
+      expect(columns.map((column) => column.name)).toContain('data_json');
+    } finally {
+      db.close();
+    }
+  });
   it('migrates a legacy provider credential into key 1 without changing its keyring reference', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ferry-key-migration-'));
     dirs.push(dir);
@@ -111,6 +409,7 @@ describe('@ferry/storage', () => {
     try {
       expect(db.client.pragma('user_version', { simple: true })).toBe(STORAGE_SCHEMA_VERSION);
       const repo = new SessionRepository(db.client);
+      const messageRepo = new MessageRepository(db.client);
       const session = {
         id: 's1',
         workspaceId: WorkspaceIdSchema.parse('w1'),
@@ -135,6 +434,32 @@ describe('@ferry/storage', () => {
       );
       expect(repo.list()).toHaveLength(8);
       expect(repo.get('s1')?.title).toBe('test');
+      const message = {
+        id: MessageIdSchema.parse('message_00000000000000000000'),
+        sessionId: SessionIdSchema.parse('s1'),
+        role: 'assistant' as const,
+        createdAt: new Date().toISOString(),
+        modelRef: ModelRefSchema.parse('openai/gpt-5'),
+        requestedModelRef: 'auto' as const,
+        turnId: 'turn_1',
+        providerReportedModelId: null,
+        interrupted: { reason: 'stopped', at: new Date().toISOString() },
+        modelAttempts: [
+          {
+            model: ModelRefSchema.parse('openai/gpt-5'),
+            provider: 'openai',
+            id: 'turn_1',
+            attempt: 1,
+            outputStarted: true,
+            status: 429,
+            latencyMs: 5,
+            errorKind: 'quota_exhausted' as const,
+          },
+        ],
+        parts: [],
+      };
+      messageRepo.put(message);
+      expect(messageRepo.get(message.id)).toEqual(message);
     } finally {
       db.close();
     }

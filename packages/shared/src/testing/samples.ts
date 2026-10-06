@@ -307,6 +307,7 @@ export const sampleOptimizerStats: OptimizerStats = {
   byOptimizer: [{ id: 'terse', name: 'Terse', enabled: true, savedTokens: 100, percent: 5 }],
 };
 export const sampleSettings: Settings = {
+  storageMode: 'local',
   theme: 'dark',
   homeStyle: 'auto',
   fontScale: 1,
@@ -326,6 +327,7 @@ export const sampleSettings: Settings = {
     qualityWeight: 4,
     textToolFallbackEnabled: false,
     quotaReservations: true,
+    pinnedExhaustion: 'handover',
     cooldownReasons: true,
     gentleQuotaRamp: true,
     toolRejectionMemory: true,

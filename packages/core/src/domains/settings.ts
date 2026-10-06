@@ -81,6 +81,15 @@ export function register(host: CoreHost, services: FerryServices): void {
           routing: { ...current.routing, ...patch.routing },
         });
         services.settings.put('global', settings);
+        services.emitAppEvent('settings.changed', {
+          keys: Object.keys(patch),
+          values: patch,
+        });
+        if (patch.storageMode && patch.storageMode !== current.storageMode)
+          services.emitAppEvent('storage.mode_changed', {
+            from: current.storageMode,
+            to: patch.storageMode,
+          });
         host.emit('settings.updated', settings);
         return settings;
       });

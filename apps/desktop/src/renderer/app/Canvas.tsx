@@ -101,6 +101,41 @@ function warnTrainingUseOnce(
   });
 }
 
+function handoffReasonLabel(reason: string): string {
+  switch (reason) {
+    case 'quota':
+      return 'usage limit';
+    case 'rate_limit':
+      return 'rate limit';
+    case 'context':
+      return 'context limit';
+    case 'capability':
+      return 'tool capability';
+    case 'manual':
+      return 'manual model choice';
+    default:
+      return 'provider error';
+  }
+}
+
+export function InterruptedFooter({ reason }: { reason: string }) {
+  const rawSummary = reason.split(':', 1)[0]?.replaceAll('_', ' ').trim() ?? '';
+  const normalized = rawSummary.toLocaleLowerCase();
+  const summary =
+    normalized === 'quota' ||
+    normalized.startsWith('quota exhausted') ||
+    normalized.includes('usage limit')
+      ? 'usage limit'
+      : normalized.startsWith('rate limit')
+        ? 'rate limit'
+        : rawSummary;
+  return (
+    <p className="mt-2 text-meta text-text-3" role="status">
+      Stopped: {summary || 'provider error'}
+    </p>
+  );
+}
+
 function shortModel(
   ref: string | null | undefined,
   models: { ref: string; name: string }[],
@@ -289,6 +324,7 @@ export function HomeCanvas() {
               profiles={profiles}
               mode={draftModelRef ? 'manual' : 'auto'}
               modelName={draftModel?.name ?? activeModel}
+              modelRef={draftModelRef}
               onProfileSelect={setDraftProfileId}
               onModelSelect={(ref) => {
                 setDraftModelRef(ref === 'auto' ? null : ref);
@@ -409,7 +445,7 @@ export function PartView({
         <HandoffMarker
           from={part.from}
           to={part.to}
-          reason={part.reason}
+          reason={handoffReasonLabel(part.reason)}
           briefingTokens={part.briefingTokens}
           explanation={part.explanation}
         />
@@ -616,6 +652,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   index,
   top,
   modelName,
+  requestedModelName,
   planSteps,
   timelineEvents,
   sessionId,
@@ -630,6 +667,8 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   index: number;
   top: number;
   modelName: string;
+  /** Display name of the model the user asked for, when it differs from the one that answered. */
+  requestedModelName?: string;
   planSteps: { label: string; status: 'done' | 'active' | 'pending' }[];
   timelineEvents: AgentEvent[];
   sessionId: SessionId;
@@ -740,7 +779,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
                     to={to}
                     fromRef={part.from}
                     toRef={part.to}
-                    reason={part.reason}
+                    reason={handoffReasonLabel(part.reason)}
                     briefingTokens={part.briefingTokens}
                     explanation={part.explanation}
                   />,
@@ -844,6 +883,12 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
             </div>
           )}
           {streamingText !== null && streamingPartIsInMessage && <StreamingCursor />}
+          {message.requestedModelRef && message.requestedModelRef !== message.modelRef ? (
+            <p className="mt-2 text-meta text-text-3">
+              Requested {requestedModelName ?? 'Auto'} · served {modelName}
+            </p>
+          ) : null}
+          {message.interrupted ? <InterruptedFooter reason={message.interrupted.reason} /> : null}
         </AssistantMessage>
       )}
       <div className="v2-message-actions">
@@ -1166,6 +1211,20 @@ export function SessionCanvas() {
   const running =
     data?.session.status === 'running' || data?.session.status === 'awaiting_approval';
   const currentModel = shortModel(data?.session.modelRef, models);
+  const pinnedUnavailable = Boolean(
+    data?.session.pinnedModelRef &&
+    data.session.modelRef &&
+    data.session.pinnedModelRef !== data.session.modelRef &&
+    messages.some((message) =>
+      message.parts.some(
+        (part) =>
+          part.type === 'handoff_marker' &&
+          part.from === data.session.pinnedModelRef &&
+          part.to === data.session.modelRef &&
+          part.reason !== 'manual',
+      ),
+    ),
+  );
   const workspace = workspaces.find((item) => item.id === data?.session.workspaceId);
   const activateProfile = async (profileId: (typeof profiles)[number]['id']) => {
     await client.profiles.activate(profileId, sessionId);
@@ -1297,6 +1356,9 @@ export function SessionCanvas() {
           }
           mode={data?.session.pinnedModelRef ? 'manual' : 'auto'}
           modelName={currentModel}
+          modelRef={data?.session.pinnedModelRef ?? null}
+          servedModelRef={data?.session.modelRef ?? null}
+          pinnedUnavailable={pinnedUnavailable}
           open={modelPickerOpen}
           onOpenChange={setModelPickerOpen}
           profiles={profiles}
@@ -1388,6 +1450,9 @@ export function SessionCanvas() {
                   index={item.index}
                   top={item.start}
                   modelName={shortModel(message.modelRef, models)}
+                  {...(message.requestedModelRef && message.requestedModelRef !== 'auto'
+                    ? { requestedModelName: shortModel(message.requestedModelRef, models) }
+                    : {})}
                   planSteps={planSteps}
                   timelineEvents={timelineByMessage.get(item.index) ?? []}
                   sessionId={sessionId}

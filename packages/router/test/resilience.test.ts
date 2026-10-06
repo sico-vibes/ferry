@@ -13,7 +13,28 @@ describe('routing resilience primitives', () => {
     expect(retryDelayMs(20, 300, 1_000, () => 1)).toBe(1_000);
     expect(
       shouldStopFallback({ pinnedModelRef: 'groq/model', attemptedModelRef: 'groq/model' }),
+    ).toBe(false);
+    expect(
+      shouldStopFallback({
+        pinnedModelRef: 'groq/model',
+        pinnedExhaustion: 'ask',
+        attemptedModelRef: 'groq/model',
+      }),
     ).toBe(true);
+    expect(
+      shouldStopFallback({
+        pinnedModelRef: 'groq/model',
+        pinnedExhaustion: 'fail',
+        attemptedModelRef: 'groq/model',
+      }),
+    ).toBe(true);
+    expect(
+      shouldStopFallback({
+        pinnedModelRef: 'groq/model',
+        pinnedExhaustion: 'handover',
+        attemptedModelRef: 'groq/model',
+      }),
+    ).toBe(false);
     expect(
       shouldStopFallback({
         attemptedModelRef: 'gemini/model',

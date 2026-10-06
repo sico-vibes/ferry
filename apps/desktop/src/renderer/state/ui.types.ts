@@ -12,6 +12,7 @@ export const settingsSections = [
   'Permissions',
   'Gateway',
   'Data & privacy',
+  'Storage & Cloud',
   'Shortcuts',
   'About',
 ] as const;

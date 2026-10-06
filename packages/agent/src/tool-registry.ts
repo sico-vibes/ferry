@@ -51,6 +51,7 @@ export interface ToolRegistryOptions {
   permissionMode: PermissionMode;
   permissionRules?: PermissionRule[];
   onPart(part: MessagePart): void;
+  onCheckpointCreated?(checkpointId: string, label: string): void;
   onOptimizerEvent?(event: {
     kind: string;
     beforeTokens: number;
@@ -320,12 +321,14 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
           return { value: result, output };
         }
         if (definition.mutates) {
-          const id = await checkpoints.snapshot(`Before ${definition.title}`);
+          const label = `Before ${definition.title}`;
+          const id = await checkpoints.snapshot(label);
+          options.onCheckpointCreated?.(id, label);
           options.onPart({
             type: 'checkpoint',
             id: PartIdSchema.parse(newId('part')),
             checkpointId: CheckpointIdSchema.parse(id),
-            label: `Before ${definition.title}`,
+            label,
           });
         }
         const value = await original(args, context);

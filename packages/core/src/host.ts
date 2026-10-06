@@ -23,6 +23,32 @@ import { performance } from 'node:perf_hooks';
 
 const lockRecoveryGraceMs = 5_000;
 
+interface LifecycleRuntime {
+  emitAppEvent?: (
+    event: string,
+    data?: Record<string, unknown>,
+    level?: 'info' | 'warn' | 'error',
+  ) => void;
+  env?: NodeJS.ProcessEnv;
+  deviceId?: string;
+  settings?: { get?: (key: string) => unknown };
+}
+
+function lifecycleRuntime(
+  services: import('./services.js').FerryServices | undefined,
+): LifecycleRuntime | undefined {
+  return services;
+}
+
+function emitLifecycle(
+  services: import('./services.js').FerryServices | undefined,
+  event: string,
+  data: Record<string, unknown>,
+  level: 'info' | 'warn' | 'error' = 'info',
+): void {
+  lifecycleRuntime(services)?.emitAppEvent?.(event, data, level);
+}
+
 export type RpcHandler = (...params: unknown[]) => unknown;
 export interface CoreTransport {
   send(message: unknown): void;
@@ -105,6 +131,27 @@ export class CoreHost {
   #eventLoopLagMs = 0;
   #lagTimer: ReturnType<typeof setTimeout> | undefined;
   #lagWarningIssued = false;
+  #onUncaughtException = (error: Error) => {
+    emitLifecycle(
+      this.options.services,
+      'app.crash',
+      { error: redactKnownSecretText(error.message), kind: 'uncaughtException' },
+      'error',
+    );
+    process.exitCode = 1;
+  };
+  #onUnhandledRejection = (reason: unknown) => {
+    emitLifecycle(
+      this.options.services,
+      'app.crash',
+      {
+        error: redactKnownSecretText(reason instanceof Error ? reason.message : String(reason)),
+        kind: 'unhandledRejection',
+      },
+      'error',
+    );
+    process.exitCode = 1;
+  };
 
   constructor(readonly options: CoreOptions) {
     this.dataDir = canonicalizePath(options.dataDir);
@@ -192,6 +239,17 @@ export class CoreHost {
       }
     };
     this.#started = true;
+    process.on('uncaughtException', this.#onUncaughtException);
+    process.on('unhandledRejection', this.#onUnhandledRejection);
+    const lifecycle = lifecycleRuntime(this.options.services);
+    const savedSettings = lifecycle?.settings?.get?.('global') as
+      { storageMode?: string } | undefined;
+    emitLifecycle(this.options.services, 'app.start', {
+      version: lifecycle?.env?.FERRY_RELEASE_VERSION ?? '0.9.0',
+      platform: process.platform,
+      storageMode: savedSettings?.storageMode ?? 'local',
+      deviceId: lifecycle?.deviceId ?? null,
+    });
     this.#startLagMonitor();
     if (this.options.transport) this.#attachTransport(this.options.transport);
     if (this.options.services?.databaseRecoveryMessage)
@@ -231,6 +289,11 @@ export class CoreHost {
   async stop(): Promise<void> {
     if (!this.#started) return;
     this.#started = false;
+    process.off('uncaughtException', this.#onUncaughtException);
+    process.off('unhandledRejection', this.#onUnhandledRejection);
+    emitLifecycle(this.options.services, 'app.stop', {
+      deviceId: lifecycleRuntime(this.options.services)?.deviceId ?? null,
+    });
     if (this.#lagTimer) clearTimeout(this.#lagTimer);
     this.#lagTimer = undefined;
     await Promise.allSettled(

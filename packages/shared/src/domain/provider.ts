@@ -47,6 +47,8 @@ export const QuotaWindowSchema = z.object({
   remaining: z.number().nonnegative().nullable(),
   resetAt: z.iso.datetime().nullable(),
   confidence: z.enum(['exact', 'estimated', 'learned', 'unknown']),
+  observedAt: z.iso.datetime().nullable().optional(),
+  durationMs: z.number().positive().nullable().optional(),
 });
 export type QuotaWindow = z.infer<typeof QuotaWindowSchema>;
 export const ProviderSchema = z.object({

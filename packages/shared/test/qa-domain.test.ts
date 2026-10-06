@@ -15,6 +15,21 @@ describe('QA domain edge cases', () => {
     }
     expect(MessagePartSchema.safeParse({ type: 'nope', id: 'part_5' }).success).toBe(false);
     expect(MessagePartSchema.safeParse({ type: 'text', id: 'part_6' }).success).toBe(false);
+    expect(
+      MessagePartSchema.parse({ type: 'reasoning', id: 'part_7', text: 'legacy reasoning' }),
+    ).toMatchObject({ type: 'reasoning', text: 'legacy reasoning' });
+    const nativeReasoning = MessagePartSchema.parse({
+      type: 'reasoning',
+      id: 'part_8',
+      text: 'native reasoning',
+      producedBy: 'gemini/model',
+      providerMetadata: { google: { thoughtSignature: 'opaque-fixture-value' } },
+    });
+    expect(nativeReasoning).toMatchObject({ producedBy: 'gemini/model' });
+    if (nativeReasoning.type === 'reasoning')
+      expect(nativeReasoning.providerMetadata?.google?.thoughtSignature).toBe(
+        'opaque-fixture-value',
+      );
   });
 
   it('keeps the testing samples referentially consistent', () => {

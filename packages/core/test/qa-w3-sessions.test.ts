@@ -22,16 +22,26 @@ describe('QA W3 sessions: run lifecycle and races', () => {
       const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
       const model = h.services.models.list('openrouter').find((candidate) => candidate.toolCalling);
       if (!model) throw new Error('OpenRouter fixture has no tool-capable model');
+      // The fixture lists one OpenRouter model; borrow a second from the catalog as the served one.
+      const servedModel = h.services.catalog.models.find(
+        (candidate) => candidate.providerId === 'openrouter' && candidate.ref !== model.ref,
+      );
+      if (!servedModel) throw new Error('Catalog needs a second OpenRouter model');
+      h.services.models.replace('openrouter', [
+        ...h.services.models.list('openrouter'),
+        servedModel,
+      ]);
+      h.services.sessions.put({ ...session, modelRef: servedModel.ref });
 
       await h.rpc.models.select(session.id, model.ref);
       expect((await h.rpc.sessions.get(session.id)).session).toMatchObject({
         pinnedModelRef: model.ref,
-        modelRef: model.ref,
+        modelRef: servedModel.ref,
       });
       await h.rpc.models.select(session.id, 'auto');
       expect((await h.rpc.sessions.get(session.id)).session).toMatchObject({
         pinnedModelRef: null,
-        modelRef: model.ref,
+        modelRef: servedModel.ref,
       });
     } finally {
       await h.close();

@@ -5,31 +5,57 @@ import { KeyringSecretStore, MemorySecretStore, type SecretStore } from '@ferry/
 import { loadCatalog, type Catalog } from '@ferry/catalog';
 import { QuotaEngine } from '@ferry/quota';
 import { autoDisableUntil, parseOpenRouterKey, type KeyFailure } from '@ferry/providers';
-import { QuotaObservationSchema, newId, redactKnownSecretText } from '@ferry/shared';
+import {
+  QuotaObservationSchema,
+  newId,
+  redactKnownSecretText,
+  resolveCaptureContent,
+} from '@ferry/shared';
 import { canonicalizePath } from '@ferry/shared/node-paths';
 import {
+  CloudAuthService,
+  CloudSyncWorker,
+  createCloudRuntime,
+  applyHydratedRows,
+  type FerrySupabaseClient,
+  isCloudConfigured,
+  loadCloudConfig,
+  type CloudAuthStatus,
+  migrateLocalKeysToVault,
+  VaultWithLocalFallbackSecretStore,
+  type KeyMigrationCounts,
+} from '@ferry/cloud';
+import {
+  WorkspaceRepository,
+  SessionRepository,
   CheckpointRepository,
+  DelegationRepository,
+  OptimizerEventRepository,
+  MessageRepository,
+  TaskRepository,
   ProviderRepository,
   ModelCacheRepository,
   ProviderKeyRepository,
   ProviderKeyEntryRepository,
   ProviderKeyUsageDailyRepository,
-  RequestRepository,
-  QuotaObservationRepository,
   CooldownRepository,
+  QuotaObservationRepository,
   HandoffRepository,
-  DelegationRepository,
-  MessageRepository,
-  TaskRepository,
-  OptimizerEventRepository,
   SettingsRepository,
-  SessionRepository,
-  WorkspaceRepository,
+  EventLogRepository,
+  TurnLogRepository,
+  ModelSwitchRepository,
+  LocalTelemetrySink,
+  CloudTelemetrySink,
   openDatabase,
+  OutboxRepository,
+  createStorageAdapter,
   salvageReadableTables,
+  runTelemetryRetention,
   type DatabaseConnection,
   type ProviderKeyEntry,
 } from '@ferry/storage';
+import type { TelemetrySink, TraceContext } from '@ferry/shared';
 
 export interface FerryClock {
   now(): Date;
@@ -41,6 +67,8 @@ export interface ServiceOptions {
   random?: () => number;
   env?: NodeJS.ProcessEnv;
   secrets?: SecretStore;
+  /** Supplies a fake or alternate Supabase client for cloud runtime tests. */
+  cloudClientFactory?: (config: import('@ferry/cloud').CloudConfig) => FerrySupabaseClient;
 }
 
 export interface FerryServices {
@@ -70,6 +98,30 @@ export interface FerryServices {
   readonly quotaObservations: QuotaObservationRepository;
   readonly handoffs: HandoffRepository;
   readonly logger: Awaited<ReturnType<typeof createLogger>>;
+  readonly eventLogs: EventLogRepository;
+  readonly telemetry: TelemetrySink;
+  readonly activeTraceContexts: Map<string, TraceContext>;
+  readonly deviceId: string;
+  emitAppEvent(
+    event: string,
+    data?: Record<string, unknown>,
+    level?: 'info' | 'warn' | 'error',
+  ): void;
+  readonly cloud: {
+    auth?: CloudAuthService;
+    sync?: CloudSyncWorker;
+    status: () => Promise<{
+      configured: boolean;
+      message: string | null;
+      auth: CloudAuthStatus;
+      storageMode: 'local' | 'cloud';
+      ownerEmail: string | null;
+      sync: { pending: number; failed: number; lastError: string | null; lastFlush: string | null };
+    }>;
+    syncNow(): Promise<unknown>;
+    migrateLocalKeys(): Promise<KeyMigrationCounts>;
+    onChange(listener: () => void): () => void;
+  };
   readonly databaseRecoveryMessage?: string;
   dispose(): Promise<void>;
 }
@@ -81,6 +133,7 @@ export function recordProviderKeyFailure(
   entry: ProviderKeyEntry,
   statusCode: number,
   message: string,
+  retryAfter?: string,
 ): void {
   const saved = services.providers.get(entry.providerId);
   const now = services.clock.now().getTime();
@@ -99,9 +152,12 @@ export function recordProviderKeyFailure(
   let cooldownUntil: string | null = null;
   if ((statusCode === 401 || statusCode === 403) && saved?.autoDisableEnabled !== false)
     status = 'invalid';
-  else if (statusCode === 429) {
+  else if (statusCode === 429 || statusCode === 402) {
     status = 'rate_limited';
-    cooldownUntil = new Date(now + 60_000).toISOString();
+    const retryAfterTime = retryAfter ? Date.parse(retryAfter) : Number.NaN;
+    cooldownUntil = new Date(
+      Number.isFinite(retryAfterTime) && retryAfterTime > now ? retryAfterTime : now + 60_000,
+    ).toISOString();
   } else if (saved?.autoDisableEnabled !== false) {
     const disabledUntil = autoDisableUntil(history.slice(0, -1), current, {
       statusCodes: saved?.autoDisableStatusCodes ?? [],
@@ -130,6 +186,7 @@ export async function createServices({
   random = Math.random,
   env = process.env,
   secrets,
+  cloudClientFactory,
 }: ServiceOptions): Promise<FerryServices> {
   const home = canonicalizePath(dataDir);
   const paths = getDataPaths({ ...env, FERRY_HOME: home });
@@ -166,22 +223,168 @@ export async function createServices({
     logger.error({ err: error, backupPath, salvagedTables }, 'Database recovery completed');
   }
   const catalog = await loadCatalog({ now: clock?.now() ?? new Date() });
-  const messages = new MessageRepository(db.client);
-  const tasks = new TaskRepository(db.client);
-  const checkpoints = new CheckpointRepository(db.client);
-  const delegations = new DelegationRepository(db.client);
-  const optimizerEvents = new OptimizerEventRepository(db.client);
-  const providers = new ProviderRepository(db.client);
-  const models = new ModelCacheRepository(db.client);
-  const providerKeys = new ProviderKeyRepository(db.client);
-  const providerKeyEntries = new ProviderKeyEntryRepository(db.client);
-  const providerKeyUsage = new ProviderKeyUsageDailyRepository(db.client);
+  runTelemetryRetention(db.client);
+  const settings = new SettingsRepository(db.client);
+  const eventLogs = new EventLogRepository(db.client);
+  const turnLogs = new TurnLogRepository(db.client);
+  const modelSwitches = new ModelSwitchRepository(db.client);
+  const savedDevice = db.client
+    .prepare("SELECT value_json FROM settings_kv WHERE key='ferry.device_id'")
+    .get() as { value_json?: string } | undefined;
+  const deviceId = savedDevice?.value_json
+    ? (JSON.parse(savedDevice.value_json) as string)
+    : newId('device');
+  if (!savedDevice?.value_json)
+    db.client
+      .prepare('INSERT OR REPLACE INTO settings_kv(key,value_json,updated_at) VALUES(?,?,?)')
+      .run('ferry.device_id', JSON.stringify(deviceId), new Date().toISOString());
+  const savedSettings = settings.get('global') as
+    { storageMode?: string; captureContent?: boolean } | undefined;
+  const cloudMode = savedSettings?.storageMode === 'cloud';
+  const cloudConfig = loadCloudConfig({ env, ferryHome: home });
+  const cloudConfigured = cloudMode && isCloudConfigured(cloudConfig);
+  const outbox = cloudConfigured ? new OutboxRepository(db.client) : undefined;
+  const captureTelemetry = () => {
+    const latest = settings.get('global') as { captureContent?: boolean } | undefined;
+    return resolveCaptureContent({
+      storageMode: cloudMode ? 'cloud' : 'local',
+      captureContent: latest?.captureContent,
+    });
+  };
+  const telemetry =
+    cloudConfigured && outbox
+      ? new CloudTelemetrySink(turnLogs, eventLogs, modelSwitches, outbox, captureTelemetry)
+      : new LocalTelemetrySink(turnLogs, eventLogs, modelSwitches, captureTelemetry);
+  const activeTraceContexts = new Map<string, TraceContext>();
+  const localAdapter = createStorageAdapter({ client: db.client, mode: 'local' });
+  const cloudRuntime =
+    cloudConfigured && outbox
+      ? createCloudRuntime({
+          config: cloudConfig,
+          outbox,
+          ...(cloudClientFactory ? { clientFactory: cloudClientFactory } : {}),
+          captureContent: () => {
+            const latest = settings.get('global') as { captureContent?: boolean } | undefined;
+            return resolveCaptureContent({
+              storageMode: 'cloud',
+              captureContent: latest?.captureContent,
+            });
+          },
+          applyHydratedRows: (table, rows) => applyHydratedRows(table, rows, localAdapter, outbox),
+          onProviderKeyEvent: (event) => {
+            telemetry.log({
+              id: newId('evt'),
+              ts: new Date().toISOString(),
+              level: 'info',
+              source: 'secrets',
+              event: `provider_key.${event.kind === 'use' ? 'used' : event.kind === 'set' ? 'set' : event.kind === 'rotate' ? 'rotated' : 'deleted'}`,
+              data: { provider_id: event.providerId, provider_key_id: event.keyId },
+            });
+            logger.info(
+              {
+                event: 'provider_key.' + event.kind,
+                providerId: event.providerId,
+                keyId: event.keyId,
+              },
+              'Cloud provider key event',
+            );
+          },
+          workerOptions: {
+            onError: (message) => {
+              emitAppEvent('sync.error', { error: message }, 'error');
+              notifyCloudStatus();
+            },
+            onFlushed: (at) => {
+              emitAppEvent('sync.flushed', { at });
+              notifyCloudStatus();
+            },
+          },
+        })
+      : undefined;
+  const emitAppEvent = (
+    event: string,
+    data: Record<string, unknown> = {},
+    level: 'info' | 'warn' | 'error' = 'info',
+  ) => {
+    const id = newId('evt');
+    const record = {
+      id,
+      ts: new Date().toISOString(),
+      device_id: deviceId,
+      level,
+      source: 'app',
+      event,
+      app_version: env.FERRY_RELEASE_VERSION ?? '0.9.0',
+      message: null,
+      data: { ...data, event_id: id },
+    };
+    eventLogs.put(record);
+    logger[level]({ event, ...data }, event);
+    if (cloudConfigured && outbox)
+      outbox.enqueue({
+        opId: `logs:${id}`,
+        target: 'logs',
+        op: 'insert',
+        payload: {
+          ts: record.ts,
+          device_id: deviceId,
+          level,
+          source: 'app',
+          event,
+          app_version: record.app_version,
+          message: null,
+          data: record.data,
+        },
+      });
+  };
+  if (cloudConfigured && outbox)
+    outbox.enqueue({
+      opId: `devices:${deviceId}`,
+      target: 'devices',
+      op: 'upsert',
+      payload: {
+        id: deviceId,
+        name: env.COMPUTERNAME ?? env.HOSTNAME ?? 'Ferry device',
+        client_kind: env.FERRY_CLI_PROCESS === 'true' ? 'cli' : 'desktop',
+        platform: process.platform,
+        app_version: env.FERRY_RELEASE_VERSION ?? '0.9.0',
+        last_seen_at: new Date().toISOString(),
+      },
+    });
+  const adapter = cloudRuntime
+    ? createStorageAdapter({ client: db.client, mode: 'cloud', mirror: cloudRuntime.mirror })
+    : localAdapter;
+  const cloudAuth = cloudRuntime?.auth;
+  const cloudSync = cloudRuntime?.sync;
+  const cloudStatusListeners = new Set<() => void>();
+  const notifyCloudStatus = () => {
+    for (const listener of cloudStatusListeners) listener();
+  };
+  cloudAuth?.onChange(notifyCloudStatus);
+  if (cloudRuntime) await cloudRuntime.initialize();
+  if (cloudMode && !cloudConfigured)
+    logger.warn(
+      'Cloud storage is selected but Supabase is not configured; using local storage until configuration is available',
+    );
+  const {
+    messages,
+    tasks,
+    checkpoints,
+    delegations,
+    optimizerEvents,
+    providers,
+    models,
+    providerKeys,
+    providerKeyEntries,
+    providerKeyUsage,
+  } = adapter;
   const legacyKeyEntryTime = (clock ?? { now: () => new Date() }).now().toISOString();
   for (const { provider } of catalog.providers) {
     if (providerKeyEntries.list(provider).length) continue;
     const legacyKey = providerKeys.get(provider);
     if (!legacyKey) continue;
-    providerKeyEntries.put({
+    // A legacy key is not in Vault yet, so seed local metadata without queuing a remote UPDATE.
+    localAdapter.providerKeyEntries.put({
       id: `${provider}:1`,
       providerId: provider,
       keyId: '1',
@@ -196,9 +399,7 @@ export async function createServices({
       updatedAt: legacyKeyEntryTime,
     });
   }
-  const cooldowns = new CooldownRepository(db.client);
-  const quotaObservations = new QuotaObservationRepository(db.client);
-  const handoffs = new HandoffRepository(db.client);
+  const { cooldowns, quotaObservations, handoffs } = adapter;
   const quota = new QuotaEngine({
     catalog,
     eligibleProviders: () =>
@@ -227,7 +428,7 @@ export async function createServices({
           ? [provider]
           : [];
       }),
-    requestRepository: new RequestRepository(db.client),
+    requestRepository: adapter.requests,
     observationRepository: quotaObservations,
     now: () => (clock ?? { now: () => new Date() }).now(),
     onError: (error) => {
@@ -242,11 +443,14 @@ export async function createServices({
       env.FERRY_PACKAGED !== 'true');
   if (testKeyringNamespace && !safeMemoryKeyring)
     logger.warn('Ignoring FERRY_TEST_KEYRING_NAMESPACE outside test or unpackaged dev mode');
-  const secretStore =
+  const localSecretStore =
     secrets ??
     (testKeyringNamespace && safeMemoryKeyring
       ? new MemorySecretStore(testKeyringNamespace)
       : new KeyringSecretStore(env.FERRY_KEYRING_SERVICE ?? 'Ferry'));
+  const secretStore = cloudRuntime
+    ? new VaultWithLocalFallbackSecretStore(cloudRuntime.secrets, localSecretStore)
+    : localSecretStore;
   const stopOpenRouterPolling = quota.startOpenRouterPolling(
     async () => {
       const key = await secretStore.get('openrouter');
@@ -290,9 +494,9 @@ export async function createServices({
     random,
     env,
     db,
-    settings: new SettingsRepository(db.client),
-    workspaces: new WorkspaceRepository(db.client),
-    sessions: new SessionRepository(db.client),
+    settings: adapter.settings,
+    workspaces: adapter.workspaces,
+    sessions: adapter.sessions,
     checkpoints,
     delegations,
     optimizerEvents,
@@ -310,12 +514,79 @@ export async function createServices({
     quotaObservations,
     handoffs,
     logger,
+    eventLogs,
+    telemetry,
+    activeTraceContexts,
+    deviceId,
+    emitAppEvent,
+    cloud: {
+      ...(cloudAuth ? { auth: cloudAuth } : {}),
+      ...(cloudSync ? { sync: cloudSync } : {}),
+      async status() {
+        const auth = cloudAuth
+          ? await cloudAuth
+              .getStatus()
+              .catch(() => ({ signedIn: false, email: null, userId: null, isOwner: false }))
+          : { signedIn: false, email: null, userId: null, isOwner: false };
+        const currentMode =
+          (settings.get('global') as { storageMode?: string } | undefined)?.storageMode === 'cloud'
+            ? ('cloud' as const)
+            : ('local' as const);
+        return {
+          configured: isCloudConfigured(cloudConfig),
+          storageMode: currentMode,
+          ownerEmail: cloudConfig.ownerEmail ?? null,
+          message: !isCloudConfigured(cloudConfig)
+            ? 'Supabase cloud configuration is missing'
+            : currentMode === 'cloud' && !cloudAuth
+              ? 'Restart Ferry to initialize cloud mode.'
+              : auth.signedIn
+                ? null
+                : 'Cloud sign-in required',
+          auth,
+          sync: cloudSync
+            ? { ...cloudSync.status(), failed: outbox?.counts().failedPermanent ?? 0 }
+            : {
+                pending: outbox?.counts().pending ?? 0,
+                failed: outbox?.counts().failedPermanent ?? 0,
+                lastError: null,
+                lastFlush: null,
+              },
+        };
+      },
+      async syncNow() {
+        if (!cloudSync) throw new Error('Restart Ferry in configured cloud mode to sync.');
+        return cloudSync.flush({ timeoutMs: 20_000 });
+      },
+      async migrateLocalKeys() {
+        if (!cloudRuntime)
+          throw new Error('Restart Ferry in configured cloud mode to migrate keys.');
+        return await migrateLocalKeysToVault({
+          local: localSecretStore,
+          vault: cloudRuntime.secrets,
+          entries: catalog.providers
+            .flatMap(({ provider }) => providerKeyEntries.list(provider))
+            .flatMap((entry) =>
+              entry.keyringRef
+                ? [{ id: entry.id, providerId: entry.providerId, keyringRef: entry.keyringRef }]
+                : [],
+            ),
+        });
+      },
+      onChange(listener) {
+        cloudStatusListeners.add(listener);
+        return () => {
+          cloudStatusListeners.delete(listener);
+        };
+      },
+    },
     ...(databaseRecoveryMessage ? { databaseRecoveryMessage } : {}),
     async dispose() {
       if (disposed) return;
       disposed = true;
       await stopOpenRouterPolling();
-      if (secretStore instanceof MemorySecretStore) secretStore.clear();
+      if (cloudRuntime) await cloudRuntime.dispose();
+      if (localSecretStore instanceof MemorySecretStore) localSecretStore.clear();
       await logger.close();
       quota.dispose();
       db.close();

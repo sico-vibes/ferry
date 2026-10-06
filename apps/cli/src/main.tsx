@@ -305,6 +305,8 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       engine,
       ...(dataDir ? { dataDir } : {}),
     });
+    if (command === 'cloud')
+      return await cloudCommand(client, flags.positionals.slice(1), flags.values, json);
     if (command === 'gateway')
       return await gatewayCommand(flags.positionals.slice(1), json, client, dataDir, flags.values);
     if (!command) {
@@ -434,6 +436,118 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
   }
 }
 
+async function cloudCommand(
+  client: FerryClient,
+  args: string[],
+  flags: Record<string, string | boolean>,
+  json: boolean,
+): Promise<number> {
+  const [action, mode] = args;
+  if (action === 'status') {
+    const status = await client.cloud.status();
+    writeResult(
+      json,
+      status,
+      `Storage: ${status.storageMode}\nCloud configured: ${status.configured ? 'yes' : 'no'}\nSigned in: ${status.auth.signedIn ? (status.auth.email ?? 'yes') : 'no'}\nPending sync: ${status.sync.pending}\nFailed sync: ${status.sync.failed}\n`,
+    );
+    return 0;
+  }
+  if (action === 'mode' && (mode === 'local' || mode === 'cloud')) {
+    const result = await client.cloud.setStorageMode({ mode });
+    writeResult(json, result, `Storage mode set to ${mode}. Restart Ferry to apply.\n`);
+    return 0;
+  }
+  if (action === 'sync') {
+    await client.cloud.syncNow();
+    writeResult(json, { synced: true }, 'Cloud sync finished.\n');
+    return 0;
+  }
+  if (action === 'logout') {
+    await client.cloud.signOut();
+    writeResult(json, { signedOut: true }, 'Signed out of Ferry Cloud.\n');
+    return 0;
+  }
+  if (action === 'migrate-keys') {
+    const counts = await client.cloud.migrateLocalKeys();
+    writeResult(
+      json,
+      counts,
+      `Copied ${counts.migrated} keys; ${counts.missing} missing; ${counts.failed} failed.\n`,
+    );
+    return counts.failed ? 1 : 0;
+  }
+  if (action === 'login') {
+    if (Object.hasOwn(flags, 'password'))
+      throw new CliError(2, 'Passwords cannot be passed as command-line arguments.');
+    const cloudStatus = await client.cloud.status();
+    const email =
+      stringFlag(flags.email) ??
+      process.env.FERRY_CLOUD_OWNER_EMAIL ??
+      cloudStatus.ownerEmail ??
+      '';
+    if (!email)
+      throw new CliError(2, 'Provide --email or set FERRY_CLOUD_OWNER_EMAIL before login.');
+    let password = process.env.FERRY_CLOUD_PASSWORD;
+    if (process.stdin.isTTY && process.stdout.isTTY) password = await readHiddenPassword();
+    if (!password)
+      throw new CliError(
+        2,
+        'Use an interactive terminal or set FERRY_CLOUD_PASSWORD for non-interactive login.',
+      );
+    try {
+      const auth = await client.cloud.signIn({ email, password });
+      writeResult(json, auth, 'Signed in to Ferry Cloud.\n');
+      return 0;
+    } catch (error) {
+      const safe =
+        error instanceof Error
+          ? error.message.split(password).join('[REDACTED]')
+          : 'Cloud sign-in failed.';
+      throw new CliError(1, safe);
+    }
+  }
+  throw new CliError(
+    2,
+    'Usage: ferry cloud status|login [--email <email>]|logout|mode <local|cloud>|sync|migrate-keys',
+  );
+}
+
+async function readHiddenPassword(): Promise<string> {
+  process.stderr.write('Cloud password: ');
+  const input = process.stdin;
+  if (!input.isTTY || !input.setRawMode)
+    throw new CliError(2, 'A TTY is required to prompt for a password.');
+  const wasRaw = input.isRaw;
+  input.setRawMode(true);
+  input.resume();
+  return await new Promise<string>((resolve, reject) => {
+    let value = '';
+    const cleanup = () => {
+      input.setRawMode?.(wasRaw ?? false);
+      input.pause();
+      input.removeListener('data', onData);
+    };
+    const onData = (chunk: Buffer) => {
+      for (const byte of chunk) {
+        if (byte === 3) {
+          cleanup();
+          reject(new CliError(130, 'Login cancelled.'));
+          return;
+        }
+        if (byte === 13 || byte === 10) {
+          cleanup();
+          process.stderr.write('\n');
+          resolve(value);
+          return;
+        }
+        if (byte === 127 || byte === 8) value = value.slice(0, -1);
+        else value += String.fromCharCode(byte);
+      }
+    };
+    input.on('data', onData);
+  });
+}
+
 class CliError extends Error {
   constructor(
     readonly code: number,
@@ -487,6 +601,7 @@ export async function main(): Promise<void> {
         'Commands:',
         '  run <prompt> [--model-ref ref] [--yes-paid]  Run a task with an optional explicit model',
         '  status                                        Show engine and provider status',
+        '  cloud status|login|logout|mode|sync|migrate-keys  Manage Ferry Cloud storage and account',
         '  serve --gateway                              Run Ferry core and Gateway in the foreground',
         '  gateway start|stop|status                    Manage the local Gateway',
         '  gateway keys create <name> [profile]         Create a Gateway key (shown once)',
@@ -530,6 +645,7 @@ const CLI_COMMANDS = new Set([
   'doctor',
   'keys',
   'settings',
+  'cloud',
   'init',
   'models',
   'status',
@@ -930,6 +1046,8 @@ export async function providerOverridesCommand(
 function commandHelp(positionals: string[]): string {
   const key = positionals.slice(0, 3).join(' ');
   const helps: Record<string, string> = {
+    cloud:
+      'Usage: ferry cloud status|login [--email <email>]|logout|mode <local|cloud>|sync|migrate-keys\nManage cloud account, storage mode, synchronization, and key migration.\n',
     gateway: 'Usage: ferry gateway start|stop|status|keys ...\nManage the local Gateway.\n',
     'gateway keys':
       'Usage: ferry gateway keys create <name> [profile] [limits] | show <id> | update <id> [limits] | list | revoke <id>\nCreate and manage Gateway keys and budgets.\n',
@@ -989,6 +1107,7 @@ const VALUE_FLAGS = new Set([
   'priority',
   'weight',
   'affinity',
+  'email',
 ]);
 function readFlags(argv: string[]): Flags {
   const positionals: string[] = [];

@@ -1448,15 +1448,7 @@ describe('QA agent: real SDK against a scripted fake server', () => {
             part.type === 'handoff_marker' && part.from === geminiModel.ref,
         )
         .at(-1);
-      expect(handoff?.type === 'handoff_marker' ? handoff.explanation : '').toContain(
-        'request_scoped_client (HTTP 400)',
-      );
-      expect(handoff?.type === 'handoff_marker' ? handoff.explanation : '').toContain(
-        'Function call is missing thought_signature',
-      );
-      expect(handoff?.type === 'handoff_marker' ? handoff.explanation : '').not.toContain(
-        'fixture-secret-value',
-      );
+      expect(handoff).toBeUndefined();
     } finally {
       state.database.close();
     }

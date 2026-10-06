@@ -190,8 +190,19 @@ describe('core host dispatcher and lifecycle', () => {
     const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
     try {
       const hello = await rpc.hello;
+      expect(host.options.services?.eventLogs.list().some((row) => row.event === 'app.start')).toBe(
+        true,
+      );
+      expect((await rpc.cloud.status()).storageMode).toBe('local');
+      await expect(rpc.cloud.setStorageMode({ mode: 'cloud' })).resolves.toMatchObject({
+        mode: 'cloud',
+        restartRequired: true,
+      });
+      expect((await rpc.cloud.status()).storageMode).toBe('cloud');
+      await rpc.cloud.setStorageMode({ mode: 'local' });
       expect(hello.realDomains).toEqual([
         'settings',
+        'cloud',
         'workspaces',
         'checkpoints',
         'providers',

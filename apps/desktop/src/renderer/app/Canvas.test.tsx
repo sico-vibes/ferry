@@ -14,7 +14,7 @@ import { FerryProvider } from '../data/client';
 import { useFerryEvents } from '../data/events';
 import { keys } from '../data/queries';
 import { useUI } from '../state/ui';
-import { HomeCanvas, PartView } from './Canvas';
+import { HomeCanvas, InterruptedFooter, PartView } from './Canvas';
 import { sampleDelegationRun, sampleSession } from '@ferry/shared/testing';
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -107,6 +107,15 @@ describe('Home and session canvases', () => {
         explanation: 'The current provider is rate limited.',
       },
       {
+        type: 'handoff_marker',
+        id: 'part_quota_handoff' as MessagePart['id'],
+        from: 'openai/gpt-5' as ModelRef,
+        to: 'anthropic/claude-sonnet' as ModelRef,
+        reason: 'quota',
+        briefingTokens: 1200,
+        explanation: 'The current model reached its usage limit.',
+      },
+      {
         type: 'delegation',
         id: 'part_delegation' as MessagePart['id'],
         runId: delegated.id,
@@ -148,10 +157,25 @@ describe('Home and session canvases', () => {
     expect(screen.getByText('Reasoning survives')).toBeTruthy();
     expect(screen.getByText('Run checks')).toBeTruthy();
     expect(screen.getByText('Approve command')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Switched from .*rate_limit/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /because of rate limit/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /because of usage limit/ })).toBeTruthy();
     expect(await screen.findByText('Structured event summary')).toBeTruthy();
     expect(screen.getByText('Checkpoint · Before edits')).toBeTruthy();
     expect(screen.getByRole('alert').textContent).toContain('Tool failed safely');
+  });
+
+  it('shows an interrupted footer with concise quota and rate-limit reasons', () => {
+    const { container } = render(
+      <>
+        <InterruptedFooter reason="rate_limit (HTTP 429): provider detail should stay hidden" />
+        <InterruptedFooter reason="quota_exhausted (HTTP 429): provider detail should stay hidden" />
+      </>,
+    );
+    expect(screen.getAllByRole('status').map((status) => status.textContent)).toEqual([
+      'Stopped: rate limit',
+      'Stopped: usage limit',
+    ]);
+    expect(container.textContent).not.toContain('provider detail');
   });
 
   it('patches a sent message into cached session detail without refetching the transcript', async () => {

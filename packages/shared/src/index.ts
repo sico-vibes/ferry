@@ -14,6 +14,7 @@ export * from './domain/optimizer.js';
 export * from './domain/settings.js';
 export * from './domain/gateway.js';
 export * from './security/secrets.js';
+export * from './telemetry.js';
 export * from './security/credential-path.js';
 export * from './security/desktop-ipc.js';
 export * from './protocol.js';

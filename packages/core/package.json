@@ -16,6 +16,7 @@
     "@ferry/agent": "workspace:*",
     "@ferry/catalog": "workspace:*",
     "@ferry/client": "workspace:*",
+    "@ferry/cloud": "workspace:*",
     "@ferry/config": "workspace:*",
     "@ferry/delegate": "workspace:*",
     "@ferry/extensions": "workspace:*",

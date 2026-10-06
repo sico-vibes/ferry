@@ -27,7 +27,12 @@ describe('ComposerModelChip', () => {
         <QueryClientProvider
           client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
         >
-          <ComposerModelChip sessionId={session.id} modelName={model.name} mode="manual" />
+          <ComposerModelChip
+            sessionId={session.id}
+            modelName={model.name}
+            modelRef={model.ref}
+            mode="manual"
+          />
         </QueryClientProvider>
       </FerryProvider>,
     );
@@ -39,6 +44,85 @@ describe('ComposerModelChip', () => {
     expect(picker.style.maxHeight).toBe(
       'min(560px, var(--radix-popover-content-available-height))',
     );
+  });
+
+  it('marks the pinned model by ref even when the chip name points to another model', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const [models, providers] = await Promise.all([client.models.list(), client.providers.list()]);
+    const configuredProviders = new Set(
+      providers
+        .filter(
+          (provider) =>
+            provider.enabled &&
+            ['valid', 'unchecked', 'not_applicable'].includes(provider.keyStatus),
+        )
+        .map((provider) => provider.id),
+    );
+    const candidates = await client.models.candidates(null);
+    const autoRef = candidates[0]?.ref;
+    const selectableModels = models.filter(
+      (model) => configuredProviders.has(model.providerId) && model.ref !== autoRef,
+    );
+    const selectedModel = selectableModels[0];
+    const otherModel = selectableModels.find((model) => model.ref !== selectedModel?.ref);
+    if (!selectedModel || !otherModel) throw new Error('Expected two selectable models');
+    render(
+      <FerryProvider client={client}>
+        <QueryClientProvider
+          client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        >
+          <ComposerModelChip
+            sessionId={null}
+            modelName={otherModel.name}
+            modelRef={selectedModel.ref}
+            mode="manual"
+          />
+        </QueryClientProvider>
+      </FerryProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: otherModel.name }));
+    const dialog = await screen.findByRole('dialog', { name: 'Choose model' });
+    const options = within(dialog).getAllByRole('option');
+    const pinnedOption = options.find((option) =>
+      option.getAttribute('data-value')?.includes(selectedModel.ref),
+    );
+    const chipOption = options.find((option) =>
+      option.getAttribute('data-value')?.includes(otherModel.ref),
+    );
+    if (!pinnedOption || !chipOption) throw new Error('Expected both model rows');
+    expect(pinnedOption.querySelector('.model-row-check')).toBeTruthy();
+    expect(chipOption.querySelector('.model-row-check')).toBeFalsy();
+  });
+
+  it('shows the pinned model as unavailable and names the model serving now', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const models = await client.models.list();
+    const pinnedModel = models[0];
+    const servedModel = models.find((model) => model.ref !== pinnedModel?.ref);
+    if (!pinnedModel || !servedModel) throw new Error('Expected two model fixtures');
+
+    render(
+      <FerryProvider client={client}>
+        <QueryClientProvider
+          client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        >
+          <ComposerModelChip
+            sessionId={null}
+            modelName={servedModel.name}
+            modelRef={pinnedModel.ref}
+            servedModelRef={servedModel.ref}
+            pinnedUnavailable
+            mode="manual"
+          />
+        </QueryClientProvider>
+      </FerryProvider>,
+    );
+
+    expect(
+      await screen.findByRole('button', {
+        name: `Pinned: ${pinnedModel.name} (unavailable) · now ${servedModel.name}`,
+      }),
+    ).toBeTruthy();
   });
 
   it('switches profiles from the picker and updates the profile chip', async () => {
@@ -73,6 +157,7 @@ describe('ComposerModelChip', () => {
         <ComposerModelChip
           sessionId={fixtureSession.id}
           modelName="GLM-5.3"
+          modelRef={null}
           mode="auto"
           profiles={profiles}
           activeProfileId={activeProfileId}
@@ -177,7 +262,12 @@ describe('ComposerModelChip', () => {
           client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
         >
           <EventBridge>
-            <ComposerModelChip sessionId={session.id} modelName={model.name} mode="manual" />
+            <ComposerModelChip
+              sessionId={session.id}
+              modelName={model.name}
+              modelRef={model.ref}
+              mode="manual"
+            />
           </EventBridge>
         </QueryClientProvider>
       </FerryProvider>,
@@ -245,6 +335,7 @@ describe('ComposerModelChip', () => {
           activeProfileId={activeProfileId}
           profileName={activeProfileName}
           modelName={selectedModel.name}
+          modelRef={currentSession.pinnedModelRef}
           mode={currentSession.pinnedModelRef ? 'manual' : 'auto'}
         />
       );

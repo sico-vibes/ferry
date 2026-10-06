@@ -84,6 +84,8 @@ export interface StepEstimate {
   inputTokens: number;
   /** Token estimate after compaction for context-window fit only; TPM always uses inputTokens. */
   contextTokens?: number;
+  /** Minimum unprunable context: system rules, the current step, tool schemas and safety state. */
+  minimumContext?: number;
   outputTokens?: number;
   requiresTools?: boolean;
   /** Allow callers to provide a step count estimate for explanations and switching. */
@@ -452,8 +454,7 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       continue;
     const cooldown = provider.cooldownUntil ? Date.parse(provider.cooldownUntil) : 0;
     const coolingUntil = provider.health === 'cooldown' && Number.isFinite(cooldown) ? cooldown : 0;
-    if (model.contextWindow < (input.estimate.contextTokens ?? input.estimate.inputTokens) * 1.2)
-      continue;
+    if (model.contextWindow < (input.estimate.minimumContext ?? 0)) continue;
     const toolsSupported = modelSupportsTools(
       model,
       (input.textToolFallbackEnabled ?? input.routing?.textToolFallbackEnabled) === true,
@@ -681,8 +682,8 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
       if (provider.health === 'cooldown' && (!Number.isFinite(cooldown) || cooldown > now))
         reasons.push('provider cooldown active');
     }
-    if (model.contextWindow < (input.estimate.contextTokens ?? input.estimate.inputTokens) * 1.2)
-      reasons.push(`context ${String(model.contextWindow)} below estimate`);
+    if (model.contextWindow < (input.estimate.minimumContext ?? 0))
+      reasons.push(`context ${String(model.contextWindow)} below minimum context`);
     const toolsSupported = modelSupportsTools(
       model,
       (input.textToolFallbackEnabled ?? input.routing?.textToolFallbackEnabled) === true,
@@ -926,11 +927,17 @@ export function retryDelayMs(
 
 export function shouldStopFallback(input: {
   pinnedModelRef?: string | null;
+  pinnedExhaustion?: 'handover' | 'ask' | 'fail';
   attemptedModelRef: string;
   avoidTrainingProviders?: boolean;
   providerDataUse?: string | null;
 }): boolean {
-  if (input.pinnedModelRef && input.pinnedModelRef === input.attemptedModelRef) return true;
+  if (
+    input.pinnedModelRef &&
+    input.pinnedModelRef === input.attemptedModelRef &&
+    (input.pinnedExhaustion ?? 'handover') !== 'handover'
+  )
+    return true;
   return Boolean(input.avoidTrainingProviders && mayUsePromptsForTraining(input.providerDataUse));
 }
 
@@ -952,6 +959,15 @@ export interface HandoffMarker {
   briefingTokens: number;
   explanation: string;
 }
+export interface HandoffPacketContext {
+  from: string;
+  to: string;
+  reason: string;
+  failed?: boolean;
+  partialText?: string;
+  omittedContext?: string;
+  unresolvedOperations?: readonly string[];
+}
 export type TokenEstimator = (text: string) => number;
 /** Conservative portable estimator; injectable so the core can pass its canonical shared estimator. */
 export const estimateTextTokens: TokenEstimator = (text) => Math.ceil(text.length / 4);
@@ -962,6 +978,7 @@ export function buildBriefing(
   targetModel: ModelInfo,
   budgetTokens: number,
   estimateTokens: TokenEstimator = estimateTextTokens,
+  handoff?: HandoffPacketContext,
 ): HandoffBriefing {
   const limitTokens = Math.max(
     0,
@@ -982,7 +999,32 @@ export function buildBriefing(
         .join('\n'),
     )
     .filter(Boolean);
+  const toolResults = recentTurns
+    .flatMap((message) => message.parts)
+    .filter((part) => part.type === 'tool_call')
+    .slice(-8)
+    .map((part) => {
+      const result = part.output?.text ?? `Tool ended with status ${part.status}.`;
+      const safeResult = result
+        .replace(/<\|([^|]+)\|>/g, '‹|$1|›')
+        .replace(/<tool_call>/gi, '&lt;tool_call&gt;')
+        .replace(/--- (BEGIN|END) UNTRUSTED TOOL RESULT ---/g, '— $1 UNTRUSTED TOOL RESULT —')
+        .replace(/`{3,}/g, (fence) => 'ˋ'.repeat(fence.length));
+      return `- ${part.tool} ${JSON.stringify(part.args)} → ${part.status}:\n--- BEGIN UNTRUSTED TOOL RESULT ---\n${safeResult.slice(0, 300)}\n--- END UNTRUSTED TOOL RESULT ---`;
+    });
   const sections: BriefingSection[] = [
+    ...(handoff
+      ? [
+          {
+            title: 'Handover',
+            content: handoff.partialText
+              ? `You are continuing with ${handoff.to}, after ${handoff.from} stopped (${handoff.reason}). The prior model's cut-off output is unfinished and unverified. Do not repeat it or present it as completed work.`
+              : handoff.failed
+                ? `You are continuing with ${handoff.to}, after ${handoff.from} failed before providing visible output (${handoff.reason}). Do not treat that step as completed.`
+                : `You are continuing with ${handoff.to}, after ${handoff.from} completed its step (${handoff.reason}). Its earlier self-descriptions refer to that model, not you.`,
+          },
+        ]
+      : []),
     { title: 'Goal', content: taskRecord.goal },
     {
       title: 'Plan',
@@ -1011,6 +1053,33 @@ export function buildBriefing(
         'None recorded.',
     },
     { title: 'Next step', content: taskRecord.nextStep ?? 'Continue from the current plan.' },
+    ...(handoff?.partialText
+      ? [
+          {
+            title: 'Continuation anchor',
+            content: `The previous model's interrupted reply ended with: “${handoff.partialText.slice(-400)}”. Continue from there without repeating it; verify any claims before relying on them.`,
+          },
+        ]
+      : []),
+    ...(handoff
+      ? [
+          {
+            title: 'Unresolved operations',
+            content: handoff.unresolvedOperations?.join('\n') ?? 'None recorded.',
+          },
+        ]
+      : []),
+    ...(handoff?.omittedContext
+      ? [{ title: 'Context omitted for your window', content: handoff.omittedContext }]
+      : []),
+    ...(handoff
+      ? [
+          {
+            title: 'Tool results so far (most recent first)',
+            content: toolResults.reverse().join('\n') || 'No tool results recorded.',
+          },
+        ]
+      : []),
     { title: 'Recent turns (verbatim)', content: turns.join('\n\n') || 'No recent text turns.' },
     { title: 'Relevant excerpts', content: '' },
   ];

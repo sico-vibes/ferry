@@ -111,6 +111,24 @@ export const FerryEventSchemas = {
   'workspace.updated': WorkspaceSchema,
   'workspace.removed': z.object({ id: WorkspaceIdSchema }),
   'settings.updated': SettingsSchema,
+  'cloud.status': z.object({
+    storageMode: z.enum(['local', 'cloud']),
+    configured: z.boolean(),
+    ownerEmail: z.string().nullable(),
+    message: z.string().nullable(),
+    auth: z.object({
+      signedIn: z.boolean(),
+      email: z.string().nullable(),
+      userId: z.string().nullable(),
+      isOwner: z.boolean(),
+    }),
+    sync: z.object({
+      pending: z.number(),
+      failed: z.number(),
+      lastError: z.string().nullable(),
+      lastFlush: z.string().nullable(),
+    }),
+  }),
   toast: z.object({
     kind: z.enum(['info', 'success', 'warning', 'error']),
     title: z.string(),
@@ -190,6 +208,7 @@ export interface FerryEvents {
   'workspace.updated': import('@ferry/shared').Workspace;
   'workspace.removed': { id: import('@ferry/shared').WorkspaceId };
   'settings.updated': import('@ferry/shared').Settings;
+  'cloud.status': import('./ferry-client.js').CloudStatus;
   toast: { kind: 'info' | 'success' | 'warning' | 'error'; title: string; body: string | null };
   'oauth.progress': import('@ferry/shared').OAuthLoginProgress;
   'gateway.request': import('@ferry/shared').GatewayRequestRecord;

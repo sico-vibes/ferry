@@ -31,6 +31,7 @@ const RoutingSettingsFieldsSchema = z.object({
   stickySessions: z.boolean(),
   smartReliability: z.boolean(),
   quotaReservations: z.boolean(),
+  pinnedExhaustion: z.enum(['handover', 'ask', 'fail']),
   cooldownReasons: z.boolean(),
   gentleQuotaRamp: z.boolean(),
   toolRejectionMemory: z.boolean(),
@@ -50,6 +51,7 @@ export const RoutingSettingsSchema = RoutingSettingsFieldsSchema.extend({
   qualityWeight: z.number().min(0).max(20).default(4),
   textToolFallbackEnabled: z.boolean().default(false),
   quotaReservations: z.boolean().default(true),
+  pinnedExhaustion: z.enum(['handover', 'ask', 'fail']).default('handover'),
   cooldownReasons: z.boolean().default(true),
   gentleQuotaRamp: z.boolean().default(true),
   toolRejectionMemory: z.boolean().default(true),
@@ -73,6 +75,8 @@ export const PaidCapsSchema = z.object({
 });
 export type PaidCaps = z.infer<typeof PaidCapsSchema>;
 export const SettingsSchema = z.object({
+  storageMode: z.enum(['local', 'cloud']).default('local'),
+  captureContent: z.boolean().optional(),
   theme: ThemeSchema,
   homeStyle: z.enum(['auto', 'hero', 'compact']).default('auto'),
   fontScale: z.number().min(0.85).max(1.3),
@@ -94,6 +98,12 @@ export const SettingsSchema = z.object({
     realDomains: z.array(z.string()).default([]),
   }),
 });
+/** Resolves content capture using the mode-specific defaults. */
+export function resolveCaptureContent(
+  settings: Pick<Settings, 'storageMode' | 'captureContent'>,
+): boolean {
+  return settings.captureContent ?? settings.storageMode === 'cloud';
+}
 export const SettingsPatchSchema = SettingsSchema.partial().extend({
   paidCaps: PaidCapsSchema.partial().optional(),
   optimizers: OptimizerTogglesSchema.partial().optional(),

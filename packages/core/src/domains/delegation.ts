@@ -11,11 +11,14 @@ import {
   RunIdSchema,
   SessionIdSchema,
   newId,
+  newTraceId,
+  newSpanId,
   isProtectedWorkspacePath,
   type DelegationRun,
   type RunId,
   type Workspace,
   type GateResult,
+  type TraceContext,
 } from '@ferry/shared';
 import { WorkspaceJail, ShadowCheckpoints, runCommand } from '@ferry/workspace';
 import { loadProjectConfig } from '@ferry/config';
@@ -37,6 +40,43 @@ const DecisionSchema = z.enum(['accepted', 'rejected', 'rework']);
 
 export function register(host: CoreHost, services: FerryServices): void {
   const handles = new Map<string, DelegationHandle>();
+  const traceByRun = new Map<string, TraceContext>();
+  const finishedTraceStatuses = new Map<string, Set<string>>();
+  const logTraceEvent = (
+    runId: string,
+    event: string,
+    level: 'info' | 'warn' | 'error',
+    data: Record<string, unknown>,
+  ) => {
+    const trace = traceByRun.get(runId);
+    if (!trace) return;
+    services.telemetry.log({
+      id: newId('evt'),
+      ts: services.clock.now().toISOString(),
+      level,
+      source: 'delegate',
+      event,
+      session_id: trace.sessionId,
+      trace_id: trace.traceId,
+      span_id: trace.spanId,
+      parent_span_id: trace.parentSpanId,
+      device_id: trace.deviceId,
+      app_version: trace.appVersion,
+      data: { delegation_id: runId, ...data },
+    });
+  };
+  const logFinished = (run: DelegationRun) => {
+    if (run.status === 'running') return;
+    const seen = finishedTraceStatuses.get(run.id) ?? new Set<string>();
+    if (seen.has(run.status)) return;
+    seen.add(run.status);
+    finishedTraceStatuses.set(run.id, seen);
+    logTraceEvent(run.id, 'delegation.finished', run.status === 'failed' ? 'error' : 'info', {
+      status: run.status,
+      response: run.finalMessage ?? '',
+      decision: run.decision,
+    });
+  };
   const workspaceForSession = (raw: unknown) => {
     const sessionId = SessionIdSchema.parse(raw);
     const session = services.sessions.get(sessionId);
@@ -155,6 +195,7 @@ export function register(host: CoreHost, services: FerryServices): void {
     async start(rawInput: unknown) {
       const input = StartSchema.parse(rawInput);
       const { sessionId, workspace } = workspaceForSession(input.sessionId);
+      const parentTrace = services.activeTraceContexts.get(sessionId);
       const read = await laneRead(workspace.path);
       const lane = read.lanes.find((candidate) => candidate.name === input.lane);
       if (!lane) throw rpcDomainError(-32044, 'not_found', `Lane not found: ${input.lane}`);
@@ -191,6 +232,14 @@ export function register(host: CoreHost, services: FerryServices): void {
         usage: null,
         decision: null,
       });
+      traceByRun.set(runId, {
+        traceId: parentTrace?.traceId ?? newTraceId(),
+        spanId: newSpanId(),
+        ...(parentTrace?.spanId ? { parentSpanId: parentTrace.spanId } : {}),
+        sessionId,
+        deviceId: services.deviceId,
+        appVersion: services.env.FERRY_RELEASE_VERSION ?? '0.9.0',
+      });
       const checkpoint = {
         id: beforeId,
         sessionId,
@@ -199,7 +248,16 @@ export function register(host: CoreHost, services: FerryServices): void {
         fileCount: 0,
       };
       services.checkpoints.put({ ...checkpoint, id: CheckpointIdSchema.parse(checkpoint.id) });
+      logTraceEvent(runId, 'checkpoint.created', 'info', {
+        checkpoint_id: checkpoint.id,
+        label: checkpoint.label,
+      });
       publish(initial);
+      logTraceEvent(runId, 'delegation.started', 'info', {
+        lane: lane.name,
+        implementer: lane.implementer,
+        prompt: delegationBrief,
+      });
       const handle = startDelegation({
         runId,
         sessionId,
@@ -271,9 +329,14 @@ export function register(host: CoreHost, services: FerryServices): void {
             ...(gateResults.some((result) => !result.ok) ? { status: 'failed' } : {}),
           });
           publish(updated);
+          logFinished(updated);
         })
         .catch((error: unknown) => {
           services.logger.error({ err: error, runId }, 'Delegation completion failed');
+          logTraceEvent(runId, 'delegation.finished', 'error', {
+            status: 'failed',
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
       return initial;
     },
@@ -321,7 +384,9 @@ export function register(host: CoreHost, services: FerryServices): void {
           },
         },
       );
-      return publish(updated);
+      const published = publish(updated);
+      logFinished(published);
+      return published;
     },
   });
 }

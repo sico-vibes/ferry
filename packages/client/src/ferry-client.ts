@@ -40,6 +40,17 @@ import type {
 import type { FerryEvents } from './events.js';
 
 export interface FerryClient {
+  cloud: {
+    status(): Promise<CloudStatus>;
+    signIn(input: { email: string; password: string }): Promise<unknown>;
+    signOut(): Promise<void>;
+    setStorageMode(input: {
+      mode: 'local' | 'cloud';
+    }): Promise<{ mode: 'local' | 'cloud'; restartRequired: boolean }>;
+    syncNow(): Promise<unknown>;
+    setCaptureContent(input: { value: boolean | null }): Promise<boolean | undefined>;
+    migrateLocalKeys(): Promise<{ migrated: number; missing: number; failed: number }>;
+  };
   gateway: {
     settings(): Promise<{
       enabled: boolean;
@@ -213,6 +224,15 @@ export interface FerryClient {
   };
   system: { info(): Promise<SystemInfo> };
   on<E extends keyof FerryEvents>(event: E, handler: (payload: FerryEvents[E]) => void): () => void;
+}
+
+export interface CloudStatus {
+  storageMode: 'local' | 'cloud';
+  configured: boolean;
+  ownerEmail: string | null;
+  message: string | null;
+  auth: { signedIn: boolean; email: string | null; userId: string | null; isOwner: boolean };
+  sync: { pending: number; failed: number; lastError: string | null; lastFlush: string | null };
 }
 
 export async function listAllModels(client: FerryClient): Promise<ModelInfo[]> {

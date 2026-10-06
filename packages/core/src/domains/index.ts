@@ -14,10 +14,12 @@ import { register as registerSettings } from './settings.js';
 import { register as registerWorkspaces } from './workspaces.js';
 import { register as registerOAuth } from './oauth.js';
 import { register as registerGateway } from './gateway.js';
+import { register as registerCloud } from './cloud.js';
 
 export type DomainRegistrar = (host: CoreHost, services: FerryServices) => void;
 export const domainRegistrars: DomainRegistrar[] = [
   registerSettings,
+  registerCloud,
   registerWorkspaces,
   registerCheckpoints,
   registerProviders,

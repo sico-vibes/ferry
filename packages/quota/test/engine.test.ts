@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, QuotaObservationRepository, RequestRepository } from '@ferry/storage';
 import type { ModelRef, UsageRecord } from '@ferry/shared';
 import type { Catalog } from '@ferry/catalog';
-import { QuotaEngine } from '../src/engine.js';
+import { evaluateProactiveQuota, QuotaEngine } from '../src/engine.js';
 
 const provider = {
   provider: 'gemini',
@@ -43,6 +43,60 @@ const getWindow = (engine: QuotaEngine, providerId: string) => {
 
 describe('QuotaEngine', () => {
   afterEach(() => vi.useRealTimers());
+
+  it('classifies only fresh exact or learned windows as proactive signals', () => {
+    const base = {
+      id: 'daily-tokens',
+      scope: 'provider' as const,
+      modelRef: null,
+      metric: 'tokens' as const,
+      kind: 'fixed_daily' as const,
+      periodLabel: 'daily',
+      used: 9_500,
+      limit: 10_000,
+      remaining: 500,
+      resetAt: '2026-06-02T00:00:00.000Z',
+      observedAt: '2026-06-01T10:00:00.000Z',
+      durationMs: 24 * 60 * 60_000,
+    };
+    const now = Date.parse('2026-06-01T10:01:00.000Z');
+    expect(
+      evaluateProactiveQuota({
+        windows: [{ ...base, confidence: 'exact' }],
+        stepsLeft: 3,
+        inputTokens: 400,
+        outputTokens: 200,
+        now,
+      }).signal,
+    ).toBe('hard');
+    expect(
+      evaluateProactiveQuota({
+        windows: [{ ...base, confidence: 'learned', remaining: 1_000 }],
+        stepsLeft: 3,
+        inputTokens: 400,
+        outputTokens: 200,
+        now,
+      }).signal,
+    ).toBe('soft');
+    expect(
+      evaluateProactiveQuota({
+        windows: [{ ...base, confidence: 'estimated', remaining: 0 }],
+        stepsLeft: 0,
+        inputTokens: 400,
+        outputTokens: 200,
+        now,
+      }).signal,
+    ).toBe('none');
+    expect(
+      evaluateProactiveQuota({
+        windows: [{ ...base, confidence: 'exact', observedAt: '2026-05-01T10:00:00.000Z' }],
+        stepsLeft: 0,
+        inputTokens: 400,
+        outputTokens: 200,
+        now,
+      }).signal,
+    ).toBe('none');
+  });
 
   it('logs quota.updated callback failures without an unhandled throw', async () => {
     vi.useFakeTimers();

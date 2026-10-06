@@ -117,7 +117,6 @@ function expectedEligible(flags: {
   if (!flags.enabled) return false;
   if (flags.health === 'down') return false;
   if (flags.keyStatus === 'missing' || flags.keyStatus === 'invalid') return false;
-  if (flags.contextWindow < flags.inputTokens * 1.2) return false;
   if (flags.requiresTools && !flags.toolCalling) return false;
   if (!['T2', 'T3'].includes(flags.tier)) return false;
   if (flags.stepsLeftToday !== null && flags.stepsLeftToday < 1) return false;

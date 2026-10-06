@@ -6,6 +6,7 @@ import {
   type StepGeneratorInput,
 } from '@ferry/agent';
 import type { RawCallObservation } from '@ferry/providers';
+import type { TraceContext } from '@ferry/shared';
 import {
   probe as probeProvider,
   ProviderKeyRotation,
@@ -65,6 +66,8 @@ function hasProviderKey(services: FerryServices, providerId: string): boolean {
 export interface ModelGateway {
   streamStep(req: StepGeneratorInput, signal: AbortSignal): Promise<GeneratedStep>;
   providerAffinityKey(providerId: string, sessionId: string): string | undefined;
+  providerKeyIds(providerId: string): readonly string[];
+  unavailableProviderKeyIds(providerId: string, modelRef?: string): readonly string[];
   resolveCandidates(profile: Profile, stepKind: StepKind, inputTokens?: number): ModelInfo[];
   recordHandoff(sessionId: string, reason: string): void;
   probeHeuristicCooldowns(): Promise<void>;
@@ -76,6 +79,7 @@ export interface UsageSink {
 export function createSessionDependencies(
   services: FerryServices,
   emit: (event: AgentEvent) => void,
+  traceContext?: TraceContext,
 ): {
   gateway: ModelGateway;
   usage: UsageSink;
@@ -88,6 +92,7 @@ export function createSessionDependencies(
   const apiKeys: Record<string, string> = {};
   const providerKeyRotation = new ProviderKeyRotation();
   const selectedProviderKeys = new Map<string, { providerId: string; keyId: string }>();
+  const keyRetryAfter = new Map<string, string>();
   const providerBaseUrls = Object.fromEntries(
     services.catalog.providers.flatMap(({ provider }) => {
       const envName = `FERRY_PROVIDER_BASE_URL_${provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
@@ -232,10 +237,63 @@ export function createSessionDependencies(
   const providerFetch: typeof globalThis.fetch = async (input, init) =>
     globalThis.fetch(input, init);
   const observe = (observation: RawCallObservation) => {
+    const turnId = traceContext?.turnId;
+    if (turnId) {
+      services.telemetry.turnUpdated(turnId, {
+        ...(observation.statusCode !== null && observation.statusCode < 400
+          ? { status: 'streaming' }
+          : {}),
+        http_status: observation.statusCode,
+        routed_upstream_model: observation.upstreamModel ?? null,
+        request_bytes: observation.requestBytes,
+        rate_limit_headers: observation.rateLimitHeaders,
+        latency_ms: Math.round(observation.latencyMs),
+        error_kind: observation.errorKind,
+        provider_key_id: selectedProviderKeys.get(traceContext.sessionId ?? '')?.keyId ?? null,
+      });
+      services.telemetry.log({
+        id: newId('evt'),
+        ts: services.clock.now().toISOString(),
+        level: observation.statusCode !== null && observation.statusCode >= 400 ? 'warn' : 'info',
+        source: 'provider',
+        event: 'turn.request_sent',
+        session_id: traceContext.sessionId,
+        turn_id: turnId,
+        trace_id: traceContext.traceId,
+        span_id: traceContext.spanId,
+        parent_span_id: traceContext.parentSpanId,
+        device_id: traceContext.deviceId,
+        app_version: traceContext.appVersion,
+        data: {
+          requested_model: observation.requestedModel ?? observation.modelRef,
+          upstream_model: observation.upstreamModel ?? null,
+          provider: observation.providerId,
+          http_status: observation.statusCode,
+          request_bytes: observation.requestBytes,
+          latency_ms: Math.round(observation.latencyMs),
+          rate_limit_headers: observation.rateLimitHeaders,
+        },
+      });
+    }
     const providerId = ProviderIdSchema.parse(observation.providerId);
     const limits = services.catalog.providers.find((item) => item.provider === providerId);
     const model = services.catalog.models.find((item) => item.ref === observation.modelRef);
     const now = services.clock.now();
+    services.telemetry.log({
+      id: newId('evt'),
+      ts: now.toISOString(),
+      level: 'info',
+      source: 'quota',
+      event: 'quota.updated',
+      session_id: traceContext?.sessionId,
+      trace_id: traceContext?.traceId,
+      data: {
+        provider_id: providerId,
+        model_ref: observation.modelRef,
+        status_code: observation.statusCode,
+        latency_ms: Math.round(observation.latencyMs),
+      },
+    });
     for (const header of Object.entries(observation.rateLimitHeaders)) {
       const [key, value] = header;
       const remaining = key.includes('remaining') ? Number(value) : null;
@@ -269,19 +327,38 @@ export function createSessionDependencies(
     }
     if (observation.statusCode === 429 || observation.statusCode === 503) {
       const retryAfter = observation.rateLimitHeaders['retry-after'];
-      const retryTimestamp = retryAfter
-        ? Number.isFinite(Number(retryAfter))
-          ? new Date(now.getTime() + Number(retryAfter) * 1000).toISOString()
-          : new Date(retryAfter).toISOString()
+      const retryTimestamp = retryAfterTimestamp(retryAfter, now);
+      const selected = selectedProviderKeys.get(traceContext?.sessionId ?? '');
+      const selectedEntry = selected
+        ? services.providerKeyEntries.list(providerId).find((entry) => entry.id === selected.keyId)
         : undefined;
+      if (selectedEntry && retryTimestamp) keyRetryAfter.set(selectedEntry.id, retryTimestamp);
+      const cooldownKeyId =
+        observation.statusCode === 503 ? providerId : (selectedEntry?.keyId ?? providerId);
       const cooldown = services.quota.noteFailure(
         providerId,
         observation.modelRef,
-        providerId,
+        cooldownKeyId,
         '429',
         retryTimestamp,
       );
-      if (cooldown.cooldownUntil)
+      services.telemetry.log({
+        id: newId('evt'),
+        ts: now.toISOString(),
+        level: 'warn',
+        source: 'quota',
+        event: 'quota.cooldown',
+        session_id: traceContext?.sessionId,
+        trace_id: traceContext?.traceId,
+        data: {
+          provider_id: providerId,
+          model_ref: observation.modelRef,
+          scope: observation.statusCode === 503 ? 'provider' : 'key_model',
+          until: cooldown.cooldownUntil,
+          status_code: observation.statusCode,
+        },
+      });
+      if (observation.statusCode === 503 && cooldown.cooldownUntil)
         services.cooldowns.put({
           id: providerId,
           until: cooldown.cooldownUntil,
@@ -294,14 +371,22 @@ export function createSessionDependencies(
             : {}),
         });
       const saved = services.providers.get(providerId);
-      if (saved)
+      if (saved && observation.statusCode === 503)
         services.providers.put({
           ...saved,
           health: 'cooldown',
           cooldownUntil: cooldown.cooldownUntil ?? null,
         });
     } else if (observation.statusCode !== null && observation.statusCode < 400) {
-      services.quota.noteSuccess(providerId, observation.modelRef, providerId);
+      const selected = selectedProviderKeys.get(traceContext?.sessionId ?? '');
+      const selectedEntry = selected
+        ? services.providerKeyEntries.list(providerId).find((entry) => entry.id === selected.keyId)
+        : undefined;
+      services.quota.noteSuccess(
+        providerId,
+        observation.modelRef,
+        selectedEntry?.keyId ?? providerId,
+      );
       services.cooldowns.delete(providerId);
       const saved = services.providers.get(providerId);
       if (saved) {
@@ -340,6 +425,24 @@ export function createSessionDependencies(
     providerAffinityKey(providerId, sessionId) {
       const selected = selectedProviderKeys.get(sessionId);
       return selected?.providerId === providerId ? selected.keyId : undefined;
+    },
+    providerKeyIds(providerId) {
+      const entries = services.providerKeyEntries.list(providerId);
+      return entries.length ? entries.map((entry) => entry.id) : [providerId];
+    },
+    unavailableProviderKeyIds(providerId, modelRef) {
+      const now = services.clock.now().getTime();
+      return services.providerKeyEntries.list(providerId).flatMap((entry) => {
+        const entryCooldown = entry.cooldownUntil ? Date.parse(entry.cooldownUntil) : 0;
+        const statusUnavailable =
+          !entry.enabled ||
+          entry.status === 'invalid' ||
+          ((entry.status === 'rate_limited' || entry.status === 'disabled') && entryCooldown > now);
+        const quotaUnavailable = Boolean(
+          modelRef && services.quota.health(providerId, modelRef, entry.keyId).health !== 'ok',
+        );
+        return statusUnavailable || quotaUnavailable ? [entry.id] : [];
+      });
     },
     async probeHeuristicCooldowns() {
       if (!routingSettings().cooldownReasons) return;
@@ -533,7 +636,7 @@ export function createSessionDependencies(
       const providerId = req.model.providerId;
       if (oauthModelCatalog.some((model) => model.providerId === providerId))
         return await streamOAuthStep(services.secrets, { ...req, signal });
-      const sessionId = req.messages.at(-1)?.sessionId ?? '';
+      const sessionId = traceContext?.sessionId ?? req.messages.at(-1)?.sessionId ?? '';
       const entries = services.providerKeyEntries.list(providerId);
       const stickyRoutes = z
         .record(
@@ -559,15 +662,18 @@ export function createSessionDependencies(
         services.providerKeys.get(providerId)?.id === stickyKeyId
       )
         preferredKeyId = entries.find((entry) => entry.position === 0)?.id;
+      const now = services.clock.now();
+      const availableEntries = entries.filter(
+        (entry) => services.quota.health(providerId, req.model.ref, entry.keyId).health === 'ok',
+      );
       const selectedKey = providerKeyRotation.select(
         providerId,
-        entries.map((entry) => ({ ...entry, order: entry.position })),
-        services.clock.now(),
+        availableEntries.map((entry) => ({ ...entry, order: entry.position })),
+        now,
         'round_robin',
         preferredKeyId,
       );
       if (selectedKey) selectedProviderKeys.set(sessionId, { providerId, keyId: selectedKey.id });
-      else selectedProviderKeys.delete(sessionId);
       const key = selectedKey
         ? await services.secrets.get(selectedKey.keyringRef)
         : entries.length === 0 && hasProviderKey(services, providerId)
@@ -575,6 +681,10 @@ export function createSessionDependencies(
               services.providerKeys.get(providerId)?.keyringRef ?? providerId,
             )
           : undefined;
+      if (!key && entries.length > 0)
+        throw Object.assign(new Error(`All configured keys for ${providerId} are unavailable.`), {
+          statusCode: 429,
+        });
       if (key) apiKeys[providerId] = key;
       else Reflect.deleteProperty(apiKeys, providerId);
       const outputState = { started: false };
@@ -622,19 +732,35 @@ export function createSessionDependencies(
           );
         return generated;
       } catch (error) {
+        const statusCode = providerErrorStatus(error);
+        const capacityError = isProviderCapacityError(error);
         if (selectedKey) {
-          const statusCode = providerErrorStatus(error);
+          const retryAfter =
+            providerErrorRetryAfter(error, services.clock.now()) ??
+            keyRetryAfter.get(selectedKey.id);
+          keyRetryAfter.delete(selectedKey.id);
+          const keyStatusCode =
+            capacityError && ![429, 503].includes(statusCode) ? 429 : statusCode;
           recordProviderKeyFailure(
             services,
             selectedKey,
-            statusCode,
+            keyStatusCode,
             providerErrorMessageForRouting(error),
+            retryAfter,
           );
+          if (capacityError && ![429, 503].includes(statusCode))
+            services.quota.noteFailure(
+              providerId,
+              req.model.ref,
+              selectedKey.keyId,
+              '429',
+              retryAfter,
+            );
         }
         if (
           selectedKey &&
           !outputState.started &&
-          [401, 403, 429].includes(providerErrorStatus(error)) &&
+          ([401, 402, 403, 429].includes(statusCode) || capacityError) &&
           hasUsableProviderKey(services, providerId)
         )
           return await gateway.streamStep(req, signal);
@@ -647,8 +773,23 @@ export function createSessionDependencies(
           );
         if (unsupportedFreeTier && savedProvider)
           services.providers.put({ ...savedProvider, freeTierUnsupported: true });
-        if (isProviderCapacityError(error) && ![429, 503].includes(providerErrorStatus(error))) {
+        if (capacityError && !selectedKey && ![429, 503].includes(statusCode)) {
           const cooldown = services.quota.noteFailure(providerId, req.model.ref, providerId, '429');
+          services.telemetry.log({
+            id: newId('evt'),
+            ts: services.clock.now().toISOString(),
+            level: 'warn',
+            source: 'quota',
+            event: 'quota.cooldown',
+            session_id: traceContext?.sessionId,
+            trace_id: traceContext?.traceId,
+            data: {
+              provider_id: providerId,
+              model_ref: req.model.ref,
+              until: cooldown.cooldownUntil,
+              reason: 'provider capacity',
+            },
+          });
           if (cooldown.cooldownUntil)
             services.cooldowns.put({
               id: providerId,
@@ -732,12 +873,52 @@ export function modelHintsFromRegistry(model: Pick<ModelInfo, 'capability'>): Pa
 
 function providerErrorStatus(error: unknown): number {
   if (!error || typeof error !== 'object') return 0;
-  const candidate = error as {
+  const outer = error as { name?: unknown; cause?: unknown };
+  const source =
+    outer.name === 'AI_StreamProviderError' && outer.cause && typeof outer.cause === 'object'
+      ? outer.cause
+      : error;
+  const candidate = source as {
     status?: unknown;
     statusCode?: unknown;
     response?: { status?: unknown };
   };
   return Number(candidate.statusCode ?? candidate.status ?? candidate.response?.status ?? 0);
+}
+
+function providerErrorRetryAfter(error: unknown, now: Date): string | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const outer = error as { name?: unknown; cause?: unknown };
+  const source =
+    outer.name === 'AI_StreamProviderError' && outer.cause && typeof outer.cause === 'object'
+      ? outer.cause
+      : error;
+  const candidate = source as {
+    response?: { headers?: Headers };
+    responseHeaders?: Record<string, string>;
+    headers?: Headers | Record<string, string>;
+  };
+  const headers = candidate.response?.headers ?? candidate.headers;
+  const raw =
+    (headers instanceof Headers ? headers.get('retry-after') : undefined) ??
+    candidate.responseHeaders?.['retry-after'] ??
+    candidate.responseHeaders?.['Retry-After'] ??
+    (headers && !(headers instanceof Headers)
+      ? (headers['retry-after'] ?? headers['Retry-After'])
+      : undefined);
+  if (!raw) return undefined;
+  return retryAfterTimestamp(raw, now);
+}
+
+function retryAfterTimestamp(raw: string | undefined, now: Date): string | undefined {
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  const until = Number.isFinite(seconds)
+    ? now.getTime() + Math.max(0, seconds) * 1000
+    : Date.parse(raw);
+  return Number.isFinite(until) && until > now.getTime()
+    ? new Date(until).toISOString()
+    : undefined;
 }
 
 function providerErrorMessageForRouting(error: unknown): string {

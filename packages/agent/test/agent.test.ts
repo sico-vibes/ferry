@@ -10,17 +10,38 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  DEFAULT_ROUTING_SETTINGS,
   ModelInfoSchema,
   ProfileIdSchema,
   ProviderIdSchema,
   ProviderSchema,
   WorkspaceIdSchema,
+  newTraceId,
+  type Message,
+  PartIdSchema,
+  newId,
 } from '@ferry/shared';
-import { openDatabase, MessageRepository, SessionRepository, TaskRepository } from '@ferry/storage';
+import {
+  openDatabase,
+  MessageRepository,
+  SessionRepository,
+  TaskRepository,
+  TurnLogRepository,
+  EventLogRepository,
+  ModelSwitchRepository,
+  LocalTelemetrySink,
+} from '@ferry/storage';
 import { BUILTIN_PROFILES } from '@ferry/router';
 import { createFixtureRepo, FakeOpenAIServer } from '@ferry/testkit';
 import { AGENT_EVALS, runAgentEvals } from '../evals/fixtures.js';
-import { AgentLoop, repairAndValidate, type AgentEvent } from '../src/loop.js';
+import {
+  AgentLoop,
+  createStepGenerator,
+  prepareResumeTranscript,
+  repairAndValidate,
+  toModelMessages,
+  type AgentEvent,
+} from '../src/loop.js';
 import { SessionStore } from '../src/session.js';
 
 const tempDirs: string[] = [];
@@ -106,6 +127,208 @@ describe('@ferry/agent', () => {
     expect(repairAndValidate(schema, '{broken')).toMatchObject({ ok: false });
   });
 
+  it('drops reasoning and handoff speech while preserving complete tool call pairs', async () => {
+    const state = await setup();
+    try {
+      const assistant = state.store.appendMessage(
+        state.session.id,
+        'assistant',
+        [
+          {
+            type: 'reasoning',
+            id: PartIdSchema.parse(newId('part')),
+            text: 'private chain of thought',
+          },
+          { type: 'text', id: PartIdSchema.parse(newId('part')), text: 'Visible answer.' },
+          {
+            type: 'tool_call',
+            id: PartIdSchema.parse(newId('part')),
+            toolCallId: 'call-1',
+            tool: 'read_file',
+            title: 'Read file',
+            args: { path: 'README.md' },
+            status: 'succeeded',
+            output: {
+              text: 'file contents',
+              filtered: false,
+              originalTokens: null,
+              filteredTokens: null,
+              recoveryHandle: null,
+            },
+            changes: [],
+            durationMs: 1,
+          },
+          {
+            type: 'handoff_marker',
+            id: PartIdSchema.parse(newId('part')),
+            from: state.model.ref,
+            to: state.model.ref,
+            reason: 'manual',
+            briefingTokens: 0,
+            explanation: 'Model handoff: do not serialize this as speech.',
+          },
+        ],
+        state.model.ref,
+      );
+      const converted = toModelMessages([assistant], state.model);
+      expect(JSON.stringify(converted)).not.toContain('private chain of thought');
+      expect(JSON.stringify(converted)).not.toContain('Model handoff:');
+      expect(JSON.stringify(converted)).toContain('Visible answer.');
+      expect(JSON.stringify(converted)).toContain('call-1');
+      expect(JSON.stringify(converted)).toContain('file contents');
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('replays opaque native reasoning only to the model that produced it', async () => {
+    const state = await setup();
+    try {
+      const artifact = {
+        google: { thoughtSignature: 'opaque-signature-fixture' },
+      };
+      const assistant = state.store.appendMessage(
+        state.session.id,
+        'assistant',
+        [
+          {
+            type: 'reasoning',
+            id: PartIdSchema.parse(newId('part')),
+            text: 'private reasoning fixture',
+            producedBy: state.model.ref,
+            providerMetadata: artifact,
+          },
+        ],
+        state.model.ref,
+      );
+      const sameModel = toModelMessages([assistant], state.model);
+      const foreignModel = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'openai/other-model',
+        name: 'Other Model',
+      });
+
+      expect(JSON.stringify(sameModel)).toContain('private reasoning fixture');
+      expect(JSON.stringify(sameModel)).toContain('opaque-signature-fixture');
+      expect(JSON.stringify(toModelMessages([assistant], foreignModel))).not.toContain(
+        'private reasoning fixture',
+      );
+      expect(JSON.stringify(toModelMessages([assistant], foreignModel))).not.toContain(
+        'opaque-signature-fixture',
+      );
+      expect(JSON.stringify(toModelMessages([assistant], state.model, false, true))).not.toContain(
+        'opaque-signature-fixture',
+      );
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('retries one invalid-signature 400 with native artifacts stripped', async () => {
+    const state = await setup();
+    try {
+      const model = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/gemini-3.8-flash',
+        providerId: 'gemini',
+        name: 'Gemini 3.8 Flash',
+      });
+      const user = state.store.appendMessage(
+        state.session.id,
+        'user',
+        [{ type: 'text', id: PartIdSchema.parse(newId('part')), text: 'Calculate the answer.' }],
+        null,
+      );
+      const assistant = state.store.appendMessage(
+        state.session.id,
+        'assistant',
+        [
+          {
+            type: 'reasoning',
+            id: PartIdSchema.parse(newId('part')),
+            text: 'private reasoning fixture',
+            producedBy: model.ref,
+            providerMetadata: { google: { thoughtSignature: 'signature-fixture' } },
+          },
+          {
+            type: 'tool_call',
+            id: PartIdSchema.parse(newId('part')),
+            toolCallId: 'fixture-call',
+            producedBy: model.ref,
+            providerOptions: { google: { thoughtSignature: 'signature-fixture' } },
+            tool: 'read_file',
+            title: 'Read file',
+            args: { path: 'README.md' },
+            status: 'succeeded',
+            output: {
+              text: 'Fixture result',
+              filtered: false,
+              originalTokens: null,
+              filteredTokens: null,
+              recoveryHandle: null,
+            },
+            changes: [],
+            durationMs: 1,
+          },
+        ],
+        model.ref,
+      );
+      const requestBodies: unknown[] = [];
+      const providerFetch: typeof fetch = async (input, init) => {
+        requestBodies.push(await new Request(input, init).json());
+        if (requestBodies.length === 1)
+          return new Response(JSON.stringify({ error: { message: 'Invalid thought signature' } }), {
+            status: 400,
+            headers: { 'content-type': 'application/json' },
+          });
+        return new Response(
+          [
+            'data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"Recovered."},"finish_reason":null}]}',
+            'data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+            'data: [DONE]',
+            '',
+          ].join('\n\n'),
+          { headers: { 'content-type': 'text/event-stream' } },
+        );
+      };
+      const generator = createStepGenerator(
+        { apiKeys: { gemini: 'test-key' }, providerFetch, emit: () => undefined },
+        model,
+        state.session.id,
+      );
+      const generated = await generator({
+        model,
+        system: 'test system',
+        messages: [user, assistant],
+        tools: [],
+        signal: new AbortController().signal,
+        onDelta: () => undefined,
+        modelHints: { toolProtocol: 'native' },
+      });
+
+      expect(generated.text).toBe('Recovered.');
+      expect(requestBodies).toHaveLength(2);
+      expect(JSON.stringify(requestBodies[0])).toContain('signature-fixture');
+      expect(JSON.stringify(requestBodies[1])).not.toContain('private reasoning fixture');
+      expect(JSON.stringify(requestBodies[1])).not.toContain('signature-fixture');
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('keeps an interrupted text-only assistant message in the resume transcript', () => {
+    const message = {
+      id: 'message_assistant' as Message['id'],
+      sessionId: 'session_test' as Message['sessionId'],
+      role: 'assistant' as const,
+      createdAt: new Date().toISOString(),
+      modelRef: 'openai/test-model' as Message['modelRef'],
+      interrupted: { reason: 'rate limit', at: new Date().toISOString() },
+      parts: [{ type: 'text' as const, id: PartIdSchema.parse(newId('part')), text: 'Cut off.' }],
+    } satisfies Message;
+    expect(prepareResumeTranscript([message])).toEqual([message]);
+  });
+
   it('runs a single model step and persists the assistant response', async () => {
     const state = await setup();
     try {
@@ -137,6 +360,170 @@ describe('@ferry/agent', () => {
       state.database.close();
     }
   });
+
+  it('propagates one trace through attempts and tool I/O, and uses a fresh trace per request', async () => {
+    const state = await setup();
+    try {
+      const turns = new TurnLogRepository(state.database.client);
+      const logs = new EventLogRepository(state.database.client);
+      const switches = new ModelSwitchRepository(state.database.client);
+      const telemetry = new LocalTelemetrySink(turns, logs, switches, true);
+      const toolSource = {
+        tools: () => [
+          {
+            name: 'record_note',
+            title: 'Record note',
+            schema: z.object({ note: z.string() }),
+            execute: (args: unknown) => `saved ${(args as { note: string }).note}`,
+          },
+        ],
+      };
+      const firstTrace = newTraceId();
+      let calls = 0;
+      const firstLoop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        maxSteps: 3,
+        traceContext: { traceId: firstTrace, sessionId: state.session.id },
+        telemetry,
+        toolSources: [toolSource],
+        generator: async ({ onDelta }) => {
+          calls++;
+          if (calls === 1)
+            return { toolCalls: [{ name: 'record_note', input: { note: 'captured tool input' } }] };
+          onDelta('Captured assistant response');
+          return {
+            text: 'Captured assistant response',
+            reasoning: 'Captured reasoning',
+            responseModel: 'reported-model-id',
+            finishReason: 'stop',
+          };
+        },
+      });
+      await firstLoop.run({ sessionId: state.session.id });
+      const firstTurns = turns.list();
+      expect(firstTurns.length).toBeGreaterThanOrEqual(2);
+      expect(firstTurns.every((turn) => turn.trace_id === firstTrace)).toBe(true);
+      expect(firstTurns.some((turn) => turn.response_model === 'reported-model-id')).toBe(true);
+      expect(firstTurns.some((turn) => typeof turn.ttft_ms === 'number')).toBe(true);
+      expect(firstTurns.some((turn) => turn.finish_reason === 'stop')).toBe(true);
+      expect(
+        logs.list().filter((event) => event.event === 'tool.call' || event.event === 'tool.result'),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ trace_id: firstTrace, event: 'tool.call' }),
+          expect.objectContaining({ trace_id: firstTrace, event: 'tool.result' }),
+        ]),
+      );
+      expect(logs.list().find((event) => event.event === 'tool.call')?.data).toMatchObject({
+        input: { note: 'captured tool input' },
+      });
+      expect(logs.list().find((event) => event.event === 'tool.result')?.data).toMatchObject({
+        output: 'saved captured tool input',
+      });
+
+      const secondTrace = newTraceId();
+      const secondLoop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        maxSteps: 1,
+        traceContext: { traceId: secondTrace, sessionId: state.session.id },
+        telemetry,
+        generator: async () => ({ text: 'Second request response', finishReason: 'stop' }),
+      });
+      await secondLoop.run({ sessionId: state.session.id });
+      expect(turns.list().some((turn) => turn.trace_id === secondTrace)).toBe(true);
+      expect(secondTrace).not.toBe(firstTrace);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('records fallback attempts with stable group ids and a parent turn', async () => {
+    const state = await setup();
+    try {
+      const turns = new TurnLogRepository(state.database.client);
+      const logs = new EventLogRepository(state.database.client);
+      const switches = new ModelSwitchRepository(state.database.client);
+      const telemetry = new LocalTelemetrySink(turns, logs, switches, false);
+      const fallback = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'openai/fallback-model',
+        name: 'Fallback Model',
+      });
+      let calls = 0;
+      const traceId = newTraceId();
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, fallback] },
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        maxSteps: 1,
+        traceContext: { traceId, sessionId: state.session.id },
+        telemetry,
+        generator: async () => {
+          calls++;
+          if (calls === 1) throw Object.assign(new Error('rate limited'), { statusCode: 429 });
+          return { text: 'Fallback answered.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      const finalMessage = state.store.load(state.session.id)?.messages.at(-1);
+      expect(finalMessage?.modelAttempts?.map((attempt) => attempt.model)).toEqual([
+        fallback.ref,
+        state.model.ref,
+      ]);
+      expect(finalMessage).toMatchObject({
+        modelRef: state.model.ref,
+        requestedModelRef: 'auto',
+        providerReportedModelId: null,
+      });
+      expect(finalMessage?.turnId).toBeTruthy();
+      expect(finalMessage?.modelAttempts).toMatchObject([
+        { model: fallback.ref, outputStarted: false, fallbackReason: 'rate_limit' },
+        { model: state.model.ref, outputStarted: true },
+      ]);
+      expect(state.store.load(state.session.id)?.session.modelRef).toBe(state.model.ref);
+      const attempts = turns.list();
+      expect(attempts).toHaveLength(2);
+      const initialAttempt = attempts.find((attempt) => attempt.attempt === 1);
+      const fallbackAttempt = attempts.find((attempt) => attempt.attempt === 2);
+      expect(fallbackAttempt).toMatchObject({
+        attempt: 2,
+        parent_turn_id: initialAttempt?.id,
+        request_group_id: initialAttempt?.request_group_id,
+      });
+      expect(typeof fallbackAttempt?.routed_model).toBe('string');
+      expect(initialAttempt).toMatchObject({ status: 'fallback', fallback_reason: 'rate_limit' });
+      expect(switches.list()).toContainEqual(
+        expect.objectContaining({ kind: 'router_fallback', reason: 'rate_limit' }),
+      );
+      expect(
+        logs.list().some((event) => event.event === 'turn.fallback' && event.trace_id === traceId),
+      ).toBe(true);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
 
   it('completes a weak-model text tool call with a forgiving edit', async () => {
     const state = await setup();
@@ -256,6 +643,7 @@ describe('@ferry/agent', () => {
         profile: BUILTIN_PROFILES[0]!,
         catalog: { ...state.catalog, models: [state.model, fallback] },
         pinnedModelRef: state.model.ref,
+        routingSettings: () => ({ ...DEFAULT_ROUTING_SETTINGS, pinnedExhaustion: 'fail' }),
         capacity: () => ({ providers: [state.provider] }),
         apiKeys: {},
         permissionMode: 'full_auto',
@@ -267,14 +655,16 @@ describe('@ferry/agent', () => {
         waitForRetry: async () => {},
       });
       await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
-        'upstream unavailable',
+        /Pinned model openai\/test-model is unavailable and pinnedExhaustion is set to fail/,
       );
       expect(attempts).toEqual([state.model.ref, state.model.ref, state.model.ref]);
+      expect(state.store.load(state.session.id)?.session.modelRef).toBeNull();
       const failure = state.store
         .load(state.session.id)
         ?.messages.flatMap((message) => message.parts)
         .find((part) => part.type === 'error');
       if (failure?.type !== 'error') throw new Error('Missing pinned-model failure part');
+      expect(failure.message).toContain('pinnedExhaustion is set to fail');
       expect(failure.message).not.toContain('scoreBreakdown');
       expect(failure.details?.attempts).toMatchObject(
         Array.from({ length: 3 }, () => ({ model: state.model.ref, kind: 'server', status: 503 })),
@@ -411,6 +801,58 @@ describe('@ferry/agent', () => {
     }
   });
 
+  it('reads a changed model pin at the next step boundary without changing the saved pin', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/next-model',
+        providerId: 'gemini',
+        name: 'Next Model',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: ProviderIdSchema.parse('gemini'),
+        name: 'Gemini',
+      });
+      state.store.updateSession(state.session.id, { pinnedModelRef: state.model.ref });
+      let livePin = state.model.ref;
+      const served: string[] = [];
+      let generated = 0;
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        pinnedModelRef: state.model.ref,
+        getPinnedModelRef: () => livePin,
+        capacity: () => ({ providers: [state.provider, alternateProvider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        generator: async ({ model }) => {
+          served.push(model.ref);
+          generated++;
+          if (generated === 1) {
+            livePin = alternate.ref;
+            return {
+              toolCalls: [{ name: 'record_decision', input: { text: 'Continue', why: 'test' } }],
+              finishReason: 'tool-calls',
+            };
+          }
+          return { text: 'Finished.', finishReason: 'stop' };
+        },
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.status).toBe('completed');
+      expect(served).toEqual([state.model.ref, alternate.ref]);
+      expect(result.session.pinnedModelRef).toBe(state.model.ref);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
   it('compacts context through a summarize step when the token estimate exceeds 70 percent', async () => {
     const state = await setup();
     try {
@@ -451,6 +893,83 @@ describe('@ferry/agent', () => {
       state.database.close();
     }
   });
+
+  it('fits a large handover history to the smaller target and records omitted context', async () => {
+    const state = await setup();
+    try {
+      const small = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'openai/small-window',
+        name: 'Small Window',
+        contextWindow: 8_192,
+      });
+      for (let index = 0; index < 14; index++) {
+        state.store.appendMessage(
+          state.session.id,
+          'assistant',
+          [
+            {
+              type: 'tool_call',
+              id: PartIdSchema.parse(newId('part')),
+              toolCallId: `old-${String(index)}`,
+              tool: 'read_file',
+              title: 'Read file',
+              args: { path: `old-${String(index)}.txt` },
+              status: 'succeeded',
+              output: {
+                text: `Old context ${String(index)}. ${'repeated output. '.repeat(450)}`,
+                filtered: false,
+                originalTokens: null,
+                filteredTokens: null,
+                recoveryHandle: null,
+              },
+              changes: [],
+              durationMs: 1,
+            },
+          ],
+          state.model.ref,
+        );
+      }
+      const selected: string[] = [];
+      let handoffSystem = '';
+      let handoffInputEstimate = 0;
+      let handoffMessageChars = 0;
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, small] },
+        resolveCandidates: () => [small, state.model],
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        estimateTokens: (text) => Math.ceil(text.length / 4),
+        generator: async ({ model, system, messages }) => {
+          selected.push(model.ref);
+          handoffSystem = system;
+          handoffMessageChars = JSON.stringify(toModelMessages(messages, small)).length;
+          handoffInputEstimate = (system.length + handoffMessageChars) / 4;
+          return { text: 'Finished.', finishReason: 'stop' };
+        },
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.status).toBe('completed');
+      expect(selected).toEqual([small.ref]);
+      expect(
+        handoffInputEstimate,
+        `system=${String(handoffSystem.length)}; messages=${String(handoffMessageChars)}`,
+      ).toBeLessThan(small.contextWindow);
+      expect(handoffSystem).toContain('[Ferry handover packet]');
+      expect(handoffSystem).toContain('Context omitted for your window');
+      expect(result.taskRecord.decisions.some((decision) => decision.text.includes('pruned'))).toBe(
+        true,
+      );
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
 
   it('hands off to an eligible model after quota capacity removes the current provider', async () => {
     const state = await setup();
@@ -507,7 +1026,7 @@ describe('@ferry/agent', () => {
     }
   });
 
-  it('emits and records a rate-limit handoff before continuing on another provider', async () => {
+  it('silently retries a pre-output rate limit in one message labelled with the serving model', async () => {
     const state = await setup();
     try {
       const alternate = ModelInfoSchema.parse({
@@ -551,29 +1070,510 @@ describe('@ferry/agent', () => {
 
       await loop.run({ sessionId: state.session.id });
 
-      const marker = state.store
+      const assistantMessages = state.store
         .load(state.session.id)
-        ?.messages.flatMap((message) => message.parts)
-        .find((part) => part.type === 'handoff_marker');
-      expect(marker).toMatchObject({
-        type: 'handoff_marker',
-        from: state.model.ref,
-        to: alternate.ref,
-        reason: 'rate_limit',
+        ?.messages.filter((message) => message.role === 'assistant');
+      expect(assistantMessages).toHaveLength(1);
+      expect(assistantMessages?.[0]).toMatchObject({
+        modelRef: alternate.ref,
+        parts: [{ type: 'text', text: 'Continued after the rate limit.' }],
+        modelAttempts: [
+          { model: state.model.ref, status: 429, errorKind: 'rate_limit', outputStarted: false },
+          { model: alternate.ref, status: 200 },
+        ],
       });
-      if (marker?.type !== 'handoff_marker') throw new Error('Rate-limit marker was not saved');
-      expect(marker.briefingTokens).toBeGreaterThanOrEqual(0);
-      expect(marker.explanation).toContain('rate_limit (HTTP 429)');
-      expect(marker.explanation).toContain('Bearer [redacted]');
-      expect(marker.explanation).not.toContain('top-secret-fixture');
+      expect(assistantMessages?.[0]?.parts.some((part) => part.type === 'handoff_marker')).toBe(
+        false,
+      );
+      expect(handoffs).toEqual([]);
       expect(
         events.some(
           (event) => event.type === 'session.part' && event.part.type === 'handoff_marker',
         ),
-      ).toBe(true);
-      expect(handoffs).toEqual([
-        { reason: 'rate_limit', from: state.model.ref, to: alternate.ref },
+      ).toBe(false);
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('keeps partial output on A and starts a warned, labelled B handover', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/test-model',
+        providerId: 'gemini',
+        name: 'Gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: 'gemini',
+        name: 'Gemini',
+      });
+      const prompts: { model: string; system: string; messages: readonly Message[] }[] = [];
+      let calls = 0;
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        capacity: () => ({ providers: [state.provider, alternateProvider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        resolveCandidates: () => [state.model, alternate],
+        generator: async ({ model, system, messages, onDelta }) => {
+          prompts.push({ model: model.ref, system, messages });
+          calls++;
+          if (calls === 1) {
+            onDelta('I inspected the file and began an unverified claim');
+            throw Object.assign(new Error('rate limit'), { statusCode: 429 });
+          }
+          expect(model.ref).toBe(alternate.ref);
+          return { text: 'I will verify the claim first.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+
+      const assistants = state.store
+        .load(state.session.id)
+        ?.messages.filter((message) => message.role === 'assistant');
+      expect(assistants).toHaveLength(2);
+      const interrupted = assistants?.[0];
+      expect(interrupted?.modelRef).toBe(state.model.ref);
+      expect(typeof interrupted?.interrupted?.reason).toBe('string');
+      expect(typeof interrupted?.interrupted?.at).toBe('string');
+      expect(interrupted?.parts).toMatchObject([
+        { type: 'text', text: 'I inspected the file and began an unverified claim' },
       ]);
+      expect(assistants?.[1]).toMatchObject({ modelRef: alternate.ref });
+      expect(assistants?.[1]?.parts[0]?.type).toBe('handoff_marker');
+      expect(
+        prompts[1]?.messages.some(
+          (message) =>
+            message.role === 'assistant' &&
+            message.parts.some(
+              (part) => part.type === 'text' && part.text.includes('unverified claim'),
+            ),
+        ),
+      ).toBe(true);
+      expect(prompts[1]?.system).toContain('unfinished and unverified');
+      expect(prompts[1]?.system).toContain('Do not repeat it');
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('does not hand over while a prior tool call is still running', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/test-model',
+        providerId: 'gemini',
+        name: 'Gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: 'gemini',
+        name: 'Gemini',
+      });
+      state.store.appendMessage(
+        state.session.id,
+        'assistant',
+        [
+          {
+            type: 'tool_call',
+            id: PartIdSchema.parse(newId('part')),
+            toolCallId: 'running-1',
+            tool: 'bash',
+            title: 'Run command',
+            args: { command: 'sleep 1' },
+            status: 'running',
+            output: null,
+            changes: [],
+            durationMs: null,
+          },
+        ],
+        state.model.ref,
+      );
+      let calls = 0;
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        capacity: () => ({ providers: [state.provider, alternateProvider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        resolveCandidates: () => [state.model, alternate],
+        generator: async ({ onDelta }) => {
+          calls++;
+          onDelta('partial before blocked handover');
+          throw Object.assign(new Error('rate limit'), { statusCode: 429 });
+        },
+      });
+      await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(/rate limit/i);
+      expect(calls).toBe(1);
+      const marker = state.store
+        .load(state.session.id)
+        ?.messages.flatMap((message) => message.parts)
+        .find((part) => part.type === 'handoff_marker');
+      expect(marker).toBeUndefined();
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('defers handover while an approval request is still pending', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/test-model',
+        providerId: 'gemini',
+        name: 'Gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: 'gemini',
+        name: 'Gemini',
+      });
+      state.store.appendMessage(
+        state.session.id,
+        'assistant',
+        [
+          {
+            type: 'approval_request',
+            id: PartIdSchema.parse(newId('part')),
+            kind: 'command',
+            summary: 'Run rm -rf /tmp/demo',
+            detail: 'destructive',
+            risk: 'high',
+            state: 'pending',
+          },
+        ],
+        state.model.ref,
+      );
+      let calls = 0;
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        capacity: () => ({ providers: [state.provider, alternateProvider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        resolveCandidates: () => [state.model, alternate],
+        generator: async ({ onDelta }) => {
+          calls++;
+          onDelta('partial before deferred handover');
+          throw Object.assign(new Error('rate limit'), { statusCode: 429 });
+        },
+      });
+      await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(/rate limit/i);
+      expect(calls).toBe(1);
+      const marker = state.store
+        .load(state.session.id)
+        ?.messages.flatMap((message) => message.parts)
+        .find((part) => part.type === 'handoff_marker');
+      expect(marker).toBeUndefined();
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('applies pinned exhaustion fail, ask, and handover policies', async () => {
+    for (const policy of ['fail', 'ask', 'handover'] as const) {
+      const state = await setup();
+      try {
+        const alternate = ModelInfoSchema.parse({
+          ...state.model,
+          ref: 'gemini/test-model',
+          providerId: 'gemini',
+          name: 'Gemini',
+        });
+        const alternateProvider = ProviderSchema.parse({
+          ...state.provider,
+          id: 'gemini',
+          name: 'Gemini',
+        });
+        let calls = 0;
+        const approvals: string[] = [];
+        const loop = new AgentLoop({
+          store: state.store,
+          workspace: state.root,
+          dataDir: state.root,
+          profile: BUILTIN_PROFILES[0]!,
+          catalog: { ...state.catalog, models: [state.model, alternate] },
+          capacity: () => ({ providers: [state.provider, alternateProvider] }),
+          apiKeys: {},
+          permissionMode: 'full_auto',
+          emit: () => {},
+          pinnedModelRef: state.model.ref,
+          routingSettings: () => ({ ...DEFAULT_ROUTING_SETTINGS, pinnedExhaustion: policy }),
+          resolveCandidates: () => [state.model, alternate],
+          requestApproval: async (part) => {
+            approvals.push(part.kind);
+            return 'allowed_once';
+          },
+          generator: async ({ model }) => {
+            calls++;
+            if (calls === 1) throw Object.assign(new Error('usage limit'), { statusCode: 429 });
+            expect(model.ref).toBe(alternate.ref);
+            return { text: 'Continued.', finishReason: 'stop' };
+          },
+        });
+
+        if (policy === 'fail') {
+          await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
+            /pinnedExhaustion is set to fail/,
+          );
+          expect(calls).toBe(1);
+        } else {
+          await loop.run({ sessionId: state.session.id });
+          expect(calls).toBe(2);
+          const assistants = state.store
+            .load(state.session.id)
+            ?.messages.filter((message) => message.role === 'assistant');
+          expect(assistants).toHaveLength(2);
+          expect(assistants?.[1]?.modelRef).toBe(alternate.ref);
+          expect(assistants?.[1]?.parts.some((part) => part.type === 'handoff_marker')).toBe(true);
+          expect(approvals).toEqual(policy === 'ask' ? ['model_handover'] : []);
+        }
+      } finally {
+        state.database.close();
+      }
+    }
+  });
+
+  it('does not exclude a provider when one key fails and another key remains', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'openai/alternate-model',
+        name: 'Alternate OpenAI model',
+      });
+      const calls: string[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        providerAffinityKey: () => 'openai:key-1',
+        providerKeyIds: () => ['openai:key-1', 'openai:key-2'],
+        resolveCandidates: () => [state.model, alternate],
+        generator: async ({ model }) => {
+          calls.push(model.ref);
+          if (calls.length === 1)
+            throw Object.assign(new Error('invalid api key'), { statusCode: 401 });
+          return { text: 'Recovered on the same provider.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      expect(calls).toEqual([state.model.ref, alternate.ref]);
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('adds a handover packet when the routed model changes between completed steps', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/test-model',
+        providerId: 'gemini',
+        name: 'Gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: 'gemini',
+        name: 'Gemini',
+      });
+      let candidates = [state.model];
+      let calls = 0;
+      let secondSystem = '';
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        capacity: () => ({ providers: [state.provider, alternateProvider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        resolveCandidates: () => candidates,
+        generator: async ({ model, system }) => {
+          calls++;
+          if (calls === 1) {
+            expect(model.ref).toBe(state.model.ref);
+            candidates = [alternate];
+            return {
+              toolCalls: [{ name: 'read_file', input: { path: 'README.md' } }],
+              finishReason: 'tool-calls',
+            };
+          }
+          secondSystem = system;
+          expect(model.ref).toBe(alternate.ref);
+          return { text: 'Finished the next step.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      const assistants = state.store
+        .load(state.session.id)
+        ?.messages.filter((message) => message.role === 'assistant');
+      expect(assistants?.[0]?.parts.some((part) => part.type === 'handoff_marker')).toBe(true);
+      expect(secondSystem).toContain('completed its step');
+      expect(secondSystem).toContain('Plan');
+      expect(secondSystem).toContain('Files touched');
+      expect(calls).toBe(2);
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('bypasses a soft quota candidate at the next step boundary and keeps it bypassed', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/test-model',
+        providerId: 'gemini',
+        name: 'Gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: 'gemini',
+        name: 'Gemini',
+      });
+      const windows = [
+        {
+          id: 'openai-daily-tokens',
+          scope: 'provider' as const,
+          modelRef: null,
+          metric: 'tokens' as const,
+          kind: 'fixed_daily' as const,
+          periodLabel: 'daily',
+          used: 7_500,
+          limit: 10_000,
+          remaining: 2_500,
+          resetAt: '2026-06-02T00:00:00.000Z',
+          confidence: 'exact' as const,
+          observedAt: new Date().toISOString(),
+          durationMs: 24 * 60 * 60_000,
+        },
+      ];
+      let quotaIsLow = false;
+      const used: string[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        capacity: () => ({
+          providers: [
+            {
+              ...state.provider,
+              windows: quotaIsLow ? windows : [],
+              // Soft via stepsLeft < 2 with remaining still above one-step hard exhaustion.
+              stepsLeftToday: quotaIsLow ? 1 : 5,
+            },
+            alternateProvider,
+          ],
+        }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        resolveCandidates: () => [state.model, alternate],
+        generator: async ({ model }) => {
+          used.push(model.ref);
+          if (used.length === 1) {
+            quotaIsLow = true;
+            return {
+              toolCalls: [{ name: 'read_file', input: { path: 'README.md' } }],
+              finishReason: 'tool-calls',
+            };
+          }
+          if (used.length === 2)
+            return {
+              toolCalls: [{ name: 'read_file', input: { path: 'README.md' } }],
+              finishReason: 'tool-calls',
+            };
+          return { text: 'Done.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      expect(used).toEqual([state.model.ref, alternate.ref, alternate.ref]);
+    } finally {
+      state.database.close();
+    }
+  });
+
+  it('excludes a candidate with fresh hard quota exhaustion before dispatch', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/test-model',
+        providerId: 'gemini',
+        name: 'Gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: 'gemini',
+        name: 'Gemini',
+      });
+      const now = new Date().toISOString();
+      const exhaustedWindow = {
+        id: 'openai-daily-tokens',
+        scope: 'provider' as const,
+        modelRef: null,
+        metric: 'tokens' as const,
+        kind: 'fixed_daily' as const,
+        periodLabel: 'daily',
+        used: 10_000,
+        limit: 10_000,
+        remaining: 0,
+        resetAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+        confidence: 'exact' as const,
+        observedAt: now,
+        durationMs: 24 * 60 * 60_000,
+      };
+      const used: string[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        capacity: () => ({
+          providers: [{ ...state.provider, windows: [exhaustedWindow] }, alternateProvider],
+        }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        resolveCandidates: () => [state.model, alternate],
+        generator: async ({ model }) => {
+          used.push(model.ref);
+          return { text: 'Done.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      expect(used).toEqual([alternate.ref]);
     } finally {
       state.database.close();
     }
@@ -644,9 +1644,8 @@ describe('@ferry/agent', () => {
       expect(
         state.store
           .load(state.session.id)
-          ?.messages.flatMap((message) => message.parts)
-          .some((part) => part.type === 'handoff_marker' && part.reason === 'rate_limit'),
-      ).toBe(true);
+          ?.messages.filter((message) => message.role === 'assistant'),
+      ).toHaveLength(1);
     } finally {
       await fake.stop();
       state.database.close();
@@ -705,9 +1704,8 @@ describe('@ferry/agent', () => {
       expect(
         state.store
           .load(state.session.id)
-          ?.messages.flatMap((message) => message.parts)
-          .some((part) => part.type === 'handoff_marker' && part.reason === 'error'),
-      ).toBe(true);
+          ?.messages.filter((message) => message.role === 'assistant'),
+      ).toHaveLength(1);
 
       const failedSession = state.store.create({
         workspaceId: state.session.workspaceId,

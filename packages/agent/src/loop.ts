@@ -4,6 +4,7 @@ import {
   tool,
   type JSONSchema7,
   type ModelMessage,
+  type ProviderMetadata,
   type ToolSet,
 } from 'ai';
 import type { ProviderRequestOverrides } from '@ferry/shared';
@@ -48,6 +49,7 @@ import {
   type ToolRejection,
   type StickyRoute,
 } from '@ferry/router';
+import { evaluateProactiveQuota } from '@ferry/quota';
 import {
   newId,
   PartIdSchema,
@@ -62,12 +64,16 @@ import {
   type UsageRecord,
   type RoutingSettings,
   type AgentEvent as StructuredAgentEvent,
+  type TraceContext,
+  type TelemetrySink,
+  newTraceId,
+  newSpanId,
   normalizeInlineThinking,
   normalizeReasoningPart,
 } from '@ferry/shared';
 import type { Catalog } from '@ferry/catalog';
 import type { RawCallObservation } from '@ferry/providers';
-import { assembleSystemPrompt, type PromptSection } from './prompt.js';
+import { assembleSystemPrompt, withModelIdentity, type PromptSection } from './prompt.js';
 import { SessionStore } from './session.js';
 import { createWorkspaceTools, type AgentTool, type ToolSource } from './tool-registry.js';
 import {
@@ -111,11 +117,13 @@ export interface ModelToolCall {
 export interface GeneratedStep {
   text?: string;
   reasoning?: string;
+  reasoningProviderMetadata?: ProviderMetadata;
   reasoningAvailable?: boolean;
   toolCalls?: ModelToolCall[];
   inputTokens?: number;
   outputTokens?: number;
   finishReason?: string;
+  responseModel?: string;
 }
 export interface StepGeneratorInput {
   model: ModelInfo;
@@ -158,6 +166,8 @@ export interface AgentOptions {
   permissionMode: import('@ferry/shared').PermissionMode;
   permissionRules?: import('@ferry/workspace').PermissionRule[];
   emit(event: AgentEvent): void;
+  traceContext?: TraceContext;
+  telemetry?: TelemetrySink;
   requestApproval?: (
     part: Extract<MessagePart, { type: 'approval_request' }>,
     signal: AbortSignal,
@@ -183,6 +193,8 @@ export interface AgentOptions {
   maxSteps?: number;
   maxHandoffsPerStep?: number;
   pinnedModelRef?: ModelRef | null;
+  /** Read the user's current pin at step boundaries; when provided it supersedes the snapshot. */
+  getPinnedModelRef?: () => ModelRef | null;
   tokenBudget?: number;
   /** Maximum time without stream progress before this model attempt is abandoned. */
   stepTimeoutMs?: number;
@@ -197,7 +209,7 @@ export interface AgentOptions {
     signal: AbortSignal,
   ) => Promise<{ allowed: boolean; message?: string; usageId?: string; release?: () => void }>;
   onHandoff?: (
-    reason: 'quota' | 'rate_limit' | 'error' | 'capability',
+    reason: 'quota' | 'rate_limit' | 'error' | 'capability' | 'manual',
     from: string,
     to: string,
   ) => void;
@@ -215,6 +227,9 @@ export interface AgentOptions {
   onReliabilityState?: (entries: ReliabilityObservation[]) => void;
   routingNow?: () => number;
   acquireQuotaLease?: (model: ModelInfo, tokens: number) => (() => void) | null;
+  /** Configured key ids in the same namespace returned by providerAffinityKey. */
+  providerKeyIds?: (providerId: string) => readonly string[];
+  providerUnavailableKeyIds?: (providerId: string, modelRef?: string) => readonly string[];
   stickyState?: Readonly<Record<string, StickyRoute>>;
   onStickyState?: (state: Record<string, StickyRoute>) => void;
   providerAffinityKey?: (providerId: string, sessionId: string) => string | undefined;
@@ -230,6 +245,11 @@ export interface AgentOptions {
 interface AttemptFailure {
   model: ModelRef;
   provider: string;
+  id?: string;
+  attempt?: number;
+  providerKeyId?: string;
+  outputStarted?: boolean;
+  fallbackReason?: string;
   kind: ProviderFailureFamily;
   status: number | null;
   latencyMs: number;
@@ -239,6 +259,13 @@ interface AttemptFailure {
 interface ModelAttempt {
   model: ModelRef;
   provider: string;
+  id?: string;
+  attempt?: number;
+  providerKeyId?: string;
+  outputStarted?: boolean;
+  fallbackReason?: string;
+  upstreamModel?: string;
+  responseModel?: string;
   status: number | null;
   latencyMs: number;
   errorKind: ProviderFailureFamily | null;
@@ -268,7 +295,11 @@ export class AgentLoop {
   private readonly toolRejections: ToolRejection[];
   private readonly retirementFailures: RetirementFailure[];
   private readonly retiredModels: Set<string>;
+  private readonly softQuotaBypasses = new Map<string, Set<string>>();
+  private readonly proactiveHandoverSteps = new Map<string, number>();
   private readonly sessionBadKeys = new Map<string, Set<string>>();
+  private readonly pinnedHandoverModels = new Map<string, ModelRef>();
+  private readonly pinnedHandoverSourcePins = new Map<string, ModelRef>();
   private readonly activeMessageParts = new Map<
     string,
     { messageId: Message['id']; parts: MessagePart[] }
@@ -288,12 +319,58 @@ export class AgentLoop {
     return this.options.routingNow?.() ?? Date.now();
   }
 
+  private providerKeysExhausted(sessionId: string, providerId: string, modelRef?: string): boolean {
+    const badKeys = this.sessionBadKeys.get(sessionId) ?? new Set<string>();
+    if (badKeys.has(`${providerId}:*`)) return true;
+    const keyIds = this.options.providerKeyIds?.(providerId) ?? [];
+    const unavailable = this.options.providerUnavailableKeyIds?.(providerId, modelRef) ?? [];
+    const effectivelyBad = new Set([
+      ...[...badKeys].filter((key) => key.startsWith(`${providerId}:`)),
+      ...unavailable.map((keyId) => `${providerId}:${keyId}`),
+    ]);
+    return (
+      keyIds.length > 0 && keyIds.every((keyId) => effectivelyBad.has(`${providerId}:${keyId}`))
+    );
+  }
+
+  private pinnedModelRefFor(sessionId: string): ModelRef | null {
+    if (this.options.getPinnedModelRef) {
+      const livePin = this.options.getPinnedModelRef();
+      if (!livePin) {
+        this.pinnedHandoverModels.delete(sessionId);
+        this.pinnedHandoverSourcePins.delete(sessionId);
+        return null;
+      }
+      if (this.pinnedHandoverSourcePins.get(sessionId) !== livePin) {
+        this.pinnedHandoverModels.delete(sessionId);
+        this.pinnedHandoverSourcePins.delete(sessionId);
+      }
+      return this.pinnedHandoverModels.get(sessionId) ?? livePin;
+    }
+    return this.pinnedHandoverModels.get(sessionId) ?? this.options.pinnedModelRef ?? null;
+  }
+
   private emitStructuredEvent(sessionId: string, event: StructuredAgentEvent): void {
     this.options.store.appendAgentEvent(sessionId, event);
     this.options.emit({ type: 'agent.event', sessionId, event });
   }
 
   async run({ sessionId, signal: outerSignal, resume = false }: RunInput): Promise<RunResult> {
+    const traceContext = this.options.traceContext ?? { traceId: newTraceId() };
+    const traceId = traceContext.traceId;
+    let requestGroupId: string;
+    let parentTurnId: string | null;
+    let attemptNumber: number;
+    this.options.telemetry?.log({
+      id: newId('evt'),
+      ts: new Date().toISOString(),
+      level: 'info',
+      source: 'agent',
+      event: 'request.received',
+      session_id: sessionId,
+      trace_id: traceId,
+      data: {},
+    });
     if (this.options.routingSettings?.().cooldownReasons)
       await this.options.probeHeuristicCooldowns?.();
     const controller = new AbortController();
@@ -305,6 +382,8 @@ export class AgentLoop {
     let loaded = this.options.store.load(sessionId);
     if (!loaded) throw new Error(`Unknown session ${sessionId}`);
     this.sessionBadKeys.set(sessionId, new Set());
+    this.softQuotaBypasses.set(sessionId, new Set());
+    this.proactiveHandoverSteps.delete(sessionId);
     let { session, messages, taskRecord } = loaded;
     let resumedTranscript = false;
     const resumedToolResults = new Map<string, Extract<MessagePart, { type: 'tool_call' }>>();
@@ -411,6 +490,18 @@ export class AgentLoop {
         return output;
       },
       ...(this.options.toolSources ? { sources: this.options.toolSources } : {}),
+      onCheckpointCreated: (checkpointId, label) => {
+        this.options.telemetry?.log({
+          id: newId('evt'),
+          ts: new Date().toISOString(),
+          level: 'info',
+          source: 'agent',
+          event: 'checkpoint.created',
+          session_id: sessionId,
+          trace_id: traceId,
+          data: { checkpoint_id: checkpointId, label },
+        });
+      },
       updateTask: (task) => {
         taskRecord = task;
         this.persistTask(task);
@@ -427,6 +518,9 @@ export class AgentLoop {
     ];
     try {
       while (stepCount < maxSteps && totalTokens < budget) {
+        requestGroupId = newId('group');
+        parentTurnId = null;
+        attemptNumber = 0;
         if (signal.aborted)
           return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'cancelled');
         loaded = this.options.store.load(sessionId);
@@ -444,39 +538,22 @@ export class AgentLoop {
           resumedTranscript = true;
         }
         taskRecord = loaded.taskRecord;
-        const contextWindow =
-          this.options.catalog.models.find((candidate) => candidate.ref === session.modelRef)
-            ?.contextWindow ??
-          Math.max(...this.options.catalog.models.map((candidate) => candidate.contextWindow));
-        const compactedContext = compactConversationMessages(
-          messages,
-          contextWindow,
-          this.estimates,
-          this.recoveryStore,
-          sessionId,
-        );
-        for (const event of compactedContext.events)
-          this.options.emit({ type: 'optimizer.event', ...event });
-        messages = compactedContext.messages;
-        if (compactedContext.summary) {
+        attemptFailures.length = 0;
+        const keepTurns = this.options.pinnedTurns ?? 4;
+        const pinnedMessages = messages.slice(-keepTurns * 2);
+        if (messages.length > pinnedMessages.length) {
+          const omitted = `${String(messages.length - pinnedMessages.length)} older conversation message(s) omitted by the recent-turn window; tool outputs remain recoverable from their handles.`;
           taskRecord = {
             ...taskRecord,
             decisions: [
               ...taskRecord.decisions.filter(
-                (decision) => !decision.text.startsWith('Context compacted:'),
+                (decision) => decision.why !== 'Recent context omitted.',
               ),
-              {
-                text: compactedContext.summary,
-                why: 'Keep the compacted context summary in the task record.',
-                at: new Date().toISOString(),
-              },
+              { text: omitted, why: 'Recent context omitted.', at: new Date().toISOString() },
             ].slice(-12),
           };
           this.persistTask(taskRecord);
         }
-        attemptFailures.length = 0;
-        const keepTurns = this.options.pinnedTurns ?? 4;
-        const pinnedMessages = messages.slice(-keepTurns * 2);
         let system = await assembleSystemPrompt({
           workspace: this.options.workspace,
           sessionId,
@@ -512,7 +589,16 @@ export class AgentLoop {
         const inputTokens = Math.ceil(
           (this.estimates(system) + messageTokens + toolSchemaTokens) * 1.15,
         );
-        const routeEstimate = inputTokens;
+        const minimumContext = Math.min(
+          Math.ceil(
+            (this.estimates(system) +
+              toolSchemaTokens +
+              this.estimates(JSON.stringify(messages.slice(-2)))) *
+              1.15,
+          ),
+          this.contextFitEstimate(inputTokens),
+        );
+        const estimatedInputTokens = inputTokens;
         const stepKind = plannerRepairHint
           ? 'plan'
           : pendingEditPlan
@@ -520,7 +606,7 @@ export class AgentLoop {
             : classifyStep({
                 firstStep: stepCount === 0,
                 pendingEdits: taskRecord.touchedFiles.length > 0,
-                estimatedInputTokens: routeEstimate,
+                estimatedInputTokens,
               });
         let requestedRole =
           rolesEnabled && (stepKind === 'plan' || stepKind === 'edit')
@@ -532,29 +618,280 @@ export class AgentLoop {
           ? this.selectRoleModel(
               requestedRole,
               stepKind,
-              routeEstimate,
+              estimatedInputTokens,
               session.modelRef,
               sessionId,
+              minimumContext,
             )
-          : this.selectModel(stepKind, routeEstimate, session.modelRef, sessionId);
+          : this.selectModel(
+              stepKind,
+              estimatedInputTokens,
+              session.modelRef,
+              sessionId,
+              minimumContext,
+            );
         if (requestedRole === 'planner' && selectedModel) {
           const editor = this.selectRoleModel(
             'editor',
             'edit',
-            routeEstimate,
+            estimatedInputTokens,
             selectedModel.ref,
             sessionId,
+            minimumContext,
           );
           if (!editor || editor.ref === selectedModel.ref) {
             rolesEnabled = false;
             requestedRole = undefined;
-            selectedModel = this.selectModel(stepKind, routeEstimate, session.modelRef, sessionId);
+            selectedModel = this.selectModel(
+              stepKind,
+              estimatedInputTokens,
+              session.modelRef,
+              sessionId,
+              minimumContext,
+            );
           }
         }
-        if (!selectedModel) throw new AllCandidatesExhaustedError(this.exhaustedMessage(stepKind));
+        if (selectedModel) {
+          const quotaProvider = this.options
+            .capacity()
+            .providers.find((provider) => provider.id === selectedModel?.providerId);
+          const quotaSignal = evaluateProactiveQuota({
+            windows: quotaProvider?.windows ?? [],
+            stepsLeft: quotaProvider?.stepsLeftToday ?? null,
+            inputTokens: estimatedInputTokens,
+            outputTokens: 2048,
+            now: this.now(),
+          });
+          const cooldownActive = Boolean(
+            quotaProvider?.health === 'cooldown' &&
+            quotaProvider.cooldownUntil &&
+            Date.parse(quotaProvider.cooldownUntil) > this.now(),
+          );
+          if (cooldownActive) quotaSignal.signal = 'hard';
+          const pinned = Boolean(this.pinnedModelRefFor(sessionId));
+          const lastHandover = this.proactiveHandoverSteps.get(sessionId) ?? -Infinity;
+          const maySoftHandover = !pinned && stepCount - lastHandover >= 3;
+          if (quotaSignal.signal === 'soft' && !pinned && maySoftHandover) {
+            this.softQuotaBypasses.get(sessionId)?.add(selectedModel.ref);
+            const previous = selectedModel;
+            const rerouted = this.selectModel(
+              stepKind,
+              estimatedInputTokens,
+              session.modelRef,
+              sessionId,
+              minimumContext,
+            );
+            if (rerouted && rerouted.ref !== previous.ref) {
+              selectedModel = rerouted;
+              this.proactiveHandoverSteps.set(sessionId, stepCount);
+              this.options.telemetry?.log({
+                id: newId('evt'),
+                ts: new Date().toISOString(),
+                level: 'info',
+                source: 'router',
+                event: 'routing.decision',
+                session_id: sessionId,
+                trace_id: traceId,
+                data: {
+                  signal: 'soft',
+                  excluded_model: previous.ref,
+                  selected_model: rerouted.ref,
+                  steps_left: quotaProvider?.stepsLeftToday ?? null,
+                },
+              });
+            }
+          } else if (quotaSignal.signal === 'hard') {
+            if (pinned) {
+              const pin = this.pinnedModelRefFor(sessionId);
+              const pinnedExhaustion =
+                this.options.routingSettings?.().pinnedExhaustion ?? 'handover';
+              let approved = pinnedExhaustion === 'handover';
+              if (pinnedExhaustion === 'ask' && this.options.requestApproval) {
+                const approval: Extract<MessagePart, { type: 'approval_request' }> = {
+                  type: 'approval_request',
+                  id: PartIdSchema.parse(newId('part')),
+                  kind: 'model_handover',
+                  summary: `Switch from ${selectedModel.name} because its quota is nearly exhausted?`,
+                  detail: 'Ferry will continue this step with another eligible model.',
+                  risk: 'medium',
+                  state: 'pending',
+                };
+                this.addPart(sessionId, approval);
+                const waiting = this.options.store.updateSession(sessionId, {
+                  status: 'awaiting_approval',
+                });
+                this.options.emit({ type: 'session.updated', session: waiting });
+                const decision = await this.options.requestApproval(approval, signal);
+                const resumed = this.options.store.updateSession(sessionId, { status: 'running' });
+                this.options.emit({ type: 'session.updated', session: resumed });
+                this.replacePart(sessionId, {
+                  ...approval,
+                  state: decision === 'denied' ? 'denied' : decision,
+                });
+                approved = decision === 'allowed_once' || decision === 'allowed_always';
+              }
+              const fallback =
+                approved && pin
+                  ? this.selectFallback(
+                      stepKind,
+                      estimatedInputTokens,
+                      new Set([selectedModel.ref]),
+                      sessionId,
+                      true,
+                      minimumContext,
+                    )
+                  : undefined;
+              if (fallback && pin) {
+                this.pinnedHandoverSourcePins.set(sessionId, pin);
+                this.pinnedHandoverModels.set(sessionId, fallback.ref);
+                selectedModel = fallback;
+                this.options.telemetry?.log({
+                  id: newId('evt'),
+                  ts: new Date().toISOString(),
+                  level: 'info',
+                  source: 'router',
+                  event: 'routing.decision',
+                  session_id: sessionId,
+                  trace_id: traceId,
+                  data: {
+                    signal: 'hard',
+                    excluded_model: pin,
+                    selected_model: fallback.ref,
+                    window_id: quotaSignal.windowId,
+                    pinned_exhaustion: pinnedExhaustion,
+                  },
+                });
+              } else {
+                selectedModel = undefined;
+              }
+            } else {
+              const previous = selectedModel;
+              const hardWindow = quotaProvider?.windows.find(
+                (window) => window.id === quotaSignal.windowId,
+              );
+              const excludedRefs =
+                cooldownActive || hardWindow?.scope === 'provider'
+                  ? this.options.catalog.models
+                      .filter((candidate) => candidate.providerId === previous.providerId)
+                      .map((candidate) => candidate.ref)
+                  : [previous.ref];
+              const rerouted = this.selectModel(
+                stepKind,
+                estimatedInputTokens,
+                session.modelRef,
+                sessionId,
+                minimumContext,
+                new Set(excludedRefs),
+              );
+              if (rerouted && rerouted.ref !== previous.ref) {
+                selectedModel = rerouted;
+                this.options.telemetry?.log({
+                  id: newId('evt'),
+                  ts: new Date().toISOString(),
+                  level: 'info',
+                  source: 'router',
+                  event: 'routing.decision',
+                  session_id: sessionId,
+                  trace_id: traceId,
+                  data: {
+                    signal: 'hard',
+                    excluded_model: previous.ref,
+                    selected_model: rerouted.ref,
+                    window_id: quotaSignal.windowId,
+                  },
+                });
+              } else {
+                selectedModel = undefined;
+              }
+            }
+          } else if (quotaSignal.signal === 'soft' && pinned) {
+            this.options.telemetry?.log({
+              id: newId('evt'),
+              ts: new Date().toISOString(),
+              level: 'info',
+              source: 'router',
+              event: 'routing.decision',
+              session_id: sessionId,
+              trace_id: traceId,
+              data: {
+                signal: 'soft',
+                model: selectedModel.ref,
+                steps_left: quotaProvider?.stepsLeftToday ?? null,
+                reset_at: quotaSignal.resetAt ?? null,
+              },
+            });
+          }
+        }
+        if (!selectedModel) {
+          const pin = this.pinnedModelRefFor(sessionId);
+          if (pin)
+            throw new Error(
+              `Pinned model ${pin} is unavailable; no eligible handover model is available (pinnedExhaustion: ${this.options.routingSettings?.().pinnedExhaustion ?? 'handover'}).`,
+            );
+          throw new AllCandidatesExhaustedError(this.exhaustedMessage(stepKind));
+        }
         let model: ModelInfo = selectedModel;
-        let contextMessages = pinnedMessages;
-        if (inputTokens > model.contextWindow * 0.9) {
+        const targetCompaction = compactConversationMessages(
+          messages,
+          model.contextWindow,
+          this.estimates,
+          this.recoveryStore,
+          sessionId,
+        );
+        for (const event of targetCompaction.events)
+          this.options.emit({ type: 'optimizer.event', ...event });
+        const fittedMessages = targetCompaction.messages.slice(-keepTurns * 2);
+        if (targetCompaction.summary) {
+          taskRecord = {
+            ...taskRecord,
+            decisions: [
+              ...taskRecord.decisions.filter(
+                (decision) => !decision.text.startsWith('Context compacted:'),
+              ),
+              {
+                text: targetCompaction.summary,
+                why: 'Keep the compacted context summary in the task record.',
+                at: new Date().toISOString(),
+              },
+            ].slice(-12),
+          };
+          this.persistTask(taskRecord);
+        }
+        const omittedNote = targetCompaction.summary
+          ? `${targetCompaction.summary} Fitted for ${model.name} (${String(model.contextWindow)} tokens).`
+          : '';
+        if (omittedNote) {
+          taskRecord = {
+            ...taskRecord,
+            decisions: [
+              ...taskRecord.decisions,
+              {
+                text: omittedNote,
+                why: 'Record context omitted during target-model fitting.',
+                at: new Date().toISOString(),
+              },
+            ].slice(-12),
+          };
+          this.persistTask(taskRecord);
+          this.options.telemetry?.log({
+            id: newId('evt'),
+            ts: new Date().toISOString(),
+            level: 'info',
+            source: 'router',
+            event: 'routing.decision',
+            session_id: sessionId,
+            data: { target_model: model.ref, omitted_context: omittedNote },
+          });
+        }
+        const targetMessageTokens = this.estimates(
+          JSON.stringify(toModelMessages(fittedMessages, model)),
+        );
+        const fittedInputTokens = Math.ceil(
+          (this.estimates(system) + targetMessageTokens + toolSchemaTokens) * 1.15,
+        );
+        let routeEstimate = fittedInputTokens;
+        let contextMessages = fittedMessages;
+        if (fittedInputTokens > model.contextWindow * 0.9) {
           if (stepCount >= maxSteps)
             return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
           const summaryModel =
@@ -563,6 +900,7 @@ export class AgentLoop {
               Math.min(routeEstimate, Math.floor(model.contextWindow * 0.6)),
               session.modelRef,
               sessionId,
+              minimumContext,
             ) ?? model;
           const summarize =
             this.options.generator ?? this.createStreamingGenerator(summaryModel, sessionId);
@@ -570,7 +908,7 @@ export class AgentLoop {
             model: summaryModel,
             system:
               'Summarize the conversation for continued coding work. Preserve user requirements, completed actions, key discoveries, file names, constraints, and unresolved next steps. Return only the concise summary.',
-            messages: pinnedMessages,
+            messages: fittedMessages,
             tools: [],
             modelHints: this.options.modelHints?.(summaryModel) ?? {
               toolProtocol: 'native',
@@ -601,22 +939,39 @@ export class AgentLoop {
             (summaryResult.inputTokens ?? routeEstimate) +
             (summaryResult.outputTokens ?? this.estimates(contextSummary));
           stepCount++;
-          contextMessages = pinnedMessages;
+          contextMessages = fittedMessages;
         }
-        if (session.modelRef && session.modelRef !== model.ref && activeRole === requestedRole) {
+        const livePinnedRef = this.pinnedModelRefFor(sessionId);
+        const previousAssistant = [...messages]
+          .reverse()
+          .find((message) => message.role === 'assistant');
+        if (
+          previousAssistant?.modelRef &&
+          previousAssistant.modelRef !== model.ref &&
+          activeRole === requestedRole
+        ) {
           const briefing = buildBriefing(
             taskRecord,
-            messages,
+            fittedMessages,
             model,
             Math.floor(model.contextWindow * 0.25),
             this.estimates,
+            {
+              from: previousAssistant.modelRef,
+              to: model.ref,
+              reason: livePinnedRef ? 'manual model selection' : 'automatic routing boundary',
+              ...(omittedNote ? { omittedContext: omittedNote } : {}),
+            },
           );
+          const handoffReason = livePinnedRef ? 'manual' : 'error';
           const marker = createHandoffMarker(
-            session.modelRef,
+            previousAssistant.modelRef,
             model.ref,
-            'quota',
+            handoffReason,
             briefing,
-            'The router selected another eligible model.',
+            livePinnedRef
+              ? `You selected ${model.name} for the next step.`
+              : `Automatic routing selected ${model.name} for the next step.`,
           );
           this.addPart(sessionId, {
             type: 'handoff_marker',
@@ -626,8 +981,93 @@ export class AgentLoop {
             reason: marker.reason,
             briefingTokens: marker.briefingTokens,
             explanation: marker.explanation,
+            trigger: livePinnedRef ? 'manual' : 'proactive',
           });
-          this.options.onHandoff?.('quota', marker.from, marker.to);
+          this.options.onHandoff?.(livePinnedRef ? 'manual' : 'error', marker.from, marker.to);
+          system += `\n\n[Ferry handover packet]\n${briefing.text}`;
+          let packetInputTokens = Math.ceil(
+            (this.estimates(system) +
+              this.estimates(JSON.stringify(toModelMessages(contextMessages, model))) +
+              toolSchemaTokens) *
+              1.15,
+          );
+          let packetContextOmitted = false;
+          let fitCursor = 0;
+          while (packetInputTokens > model.contextWindow && fitCursor < contextMessages.length) {
+            const oldest = contextMessages[fitCursor];
+            if (!oldest) break;
+            const compactedOldest = compactMessageToolOutputs(
+              oldest,
+              this.estimates,
+              this.recoveryStore,
+              sessionId,
+              model.name,
+            );
+            if (compactedOldest) {
+              packetContextOmitted = true;
+              contextMessages = contextMessages.map((entry, index) =>
+                index === fitCursor ? compactedOldest : entry,
+              );
+            }
+            fitCursor++;
+            packetInputTokens = Math.ceil(
+              (this.estimates(system) +
+                this.estimates(JSON.stringify(toModelMessages(contextMessages, model))) +
+                toolSchemaTokens) *
+                1.15,
+            );
+          }
+          while (packetInputTokens > model.contextWindow && contextMessages.length > 2) {
+            const latestUserIndex = contextMessages.findLastIndex((entry) => entry.role === 'user');
+            const removeIndex = latestUserIndex === 0 ? 1 : 0;
+            contextMessages = contextMessages.filter((_, index) => index !== removeIndex);
+            packetContextOmitted = true;
+            packetInputTokens = Math.ceil(
+              (this.estimates(system) +
+                this.estimates(JSON.stringify(toModelMessages(contextMessages, model))) +
+                toolSchemaTokens) *
+                1.15,
+            );
+          }
+          if (packetContextOmitted) {
+            const omitted = `Older tool outputs or turns were omitted to fit ${model.name}; compacted tool outputs retain recovery handles.`;
+            system += `\n\nContext omitted: ${omitted}`;
+            taskRecord = {
+              ...taskRecord,
+              decisions: [
+                ...taskRecord.decisions,
+                { text: omitted, why: 'Target context fitting.', at: new Date().toISOString() },
+              ].slice(-12),
+            };
+            this.persistTask(taskRecord);
+            this.options.telemetry?.log({
+              id: newId('evt'),
+              ts: new Date().toISOString(),
+              level: 'info',
+              source: 'router',
+              event: 'routing.decision',
+              session_id: sessionId,
+              data: { target_model: model.ref, omitted_context: omitted },
+            });
+          }
+          if (packetInputTokens > model.contextWindow) {
+            const omitted = `Handover packet and recent context fitted to ${model.name}; older context omitted.`;
+            system += `\n\nContext omitted: ${omitted}`;
+            taskRecord = {
+              ...taskRecord,
+              decisions: [
+                ...taskRecord.decisions,
+                { text: omitted, why: 'Target context fitting.', at: new Date().toISOString() },
+              ].slice(-12),
+            };
+            this.persistTask(taskRecord);
+          }
+          routeEstimate = Math.ceil(
+            (this.estimates(system) +
+              this.estimates(JSON.stringify(toModelMessages(contextMessages, model))) +
+              toolSchemaTokens) *
+              1.15,
+          );
           this.options.emit({
             type: 'toast',
             tone: 'info',
@@ -641,7 +1081,6 @@ export class AgentLoop {
         }
         const selectedRef = model.ref;
         session = this.options.store.updateSession(sessionId, {
-          modelRef: selectedRef,
           status: 'running',
         });
         this.options.emit({ type: 'session.updated', session });
@@ -654,8 +1093,13 @@ export class AgentLoop {
           new Date(),
           executionRole,
         );
+        assistant = {
+          ...assistant,
+          requestedModelRef: this.pinnedModelRefFor(sessionId) ?? 'auto',
+        };
+        this.options.store.replaceMessage(assistant);
         this.options.emit({ type: 'session.message', message: assistant });
-        const streamedTextPartId = PartIdSchema.parse(newId('part'));
+        let streamedTextPartId = PartIdSchema.parse(newId('part'));
         let streamedText = '';
         const streamedParts = {
           messageId: assistant.id,
@@ -667,13 +1111,34 @@ export class AgentLoop {
         this.activeMessageParts.set(sessionId, streamedParts);
         if (stepCount >= maxSteps)
           return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
+        let activeTurnId: string | null = null;
+        let activeTurnStartedAt = 0;
+        let firstTokenRecorded = false;
+        const recordFirstToken = () => {
+          if (!activeTurnId || firstTokenRecorded) return;
+          firstTokenRecorded = true;
+          this.options.telemetry?.turnUpdated(activeTurnId, {
+            ttft_ms: Math.max(0, Math.round(performance.now() - activeTurnStartedAt)),
+          });
+          this.options.telemetry?.log({
+            id: newId('evt'),
+            ts: new Date().toISOString(),
+            level: 'info',
+            source: 'agent',
+            event: 'turn.first_token',
+            session_id: sessionId,
+            turn_id: activeTurnId,
+            trace_id: traceId,
+            data: {},
+          });
+        };
         const stepRequest = (
           selected: ModelInfo,
           stepSignal: AbortSignal,
           onProgress: () => void,
         ): StepGeneratorInput => ({
           model: selected,
-          system:
+          system: withModelIdentity(
             executionRole === 'planner' && stepKind === 'plan'
               ? `${system}\n\nYou are the planner. Do not call tools or edit files. Return only a JSON edit plan matching this shape: {"files":[{"path":"relative/path","intent":"why this file changes"}],"changes":[{"path":"relative/path","instructions":"exact edits or a precise pseudo-diff"}]}. Include every file the editor must change. Paths must be workspace-relative and must not contain parent-directory segments, drive prefixes, or UNC/absolute paths.${plannerRepairHint ? `\n\nRepair required: ${plannerRepairHint}` : ''}`
               : executionRole === 'planner'
@@ -681,6 +1146,8 @@ export class AgentLoop {
                 : executionRole === 'editor' && pendingEditPlan
                   ? `${system}\n\nExecute this approved planner output with your own tool/edit format. Do not expand scope beyond the listed files and instructions.\n\n${formatEditPlan(pendingEditPlan)}`
                   : system,
+            selected,
+          ),
           messages: contextMessages,
           tools: requestedRole === 'planner' && stepKind === 'plan' ? [] : tools,
           modelHints: this.options.modelHints?.(selected) ?? {
@@ -688,10 +1155,14 @@ export class AgentLoop {
             editFormat: 'search_replace',
           },
           signal: stepSignal,
-          onProgress,
+          onProgress: () => {
+            onProgress();
+            recordFirstToken();
+          },
           onDelta: (text) => {
             if (isSignalAborted(signal)) return;
             onProgress();
+            recordFirstToken();
             streamedText += text;
             const partial = { type: 'text' as const, id: streamedTextPartId, text: streamedText };
             const previousParts = streamedParts.parts;
@@ -725,6 +1196,48 @@ export class AgentLoop {
         let pendingPaidUsageId: string | undefined;
         while (!generationComplete) {
           const attemptStartedAt = performance.now();
+          const turnId = newId('turn');
+          activeTurnId = turnId;
+          activeTurnStartedAt = performance.now();
+          firstTokenRecorded = false;
+          traceContext.turnId = turnId;
+          traceContext.spanId = newSpanId();
+          attemptNumber++;
+          this.options.telemetry?.turnStarted({
+            id: turnId,
+            session_id: sessionId,
+            message_id: assistant.id,
+            user_message_id:
+              messages.filter((message) => message.role === 'user').at(-1)?.id ?? null,
+            trace_id: traceId,
+            device_id: traceContext.deviceId,
+            request_group_id: requestGroupId,
+            attempt: attemptNumber,
+            parent_turn_id: parentTurnId,
+            source: 'agent',
+            step_id: `${sessionId}:${String(stepCount + 1)}`,
+            step_kind: stepKind,
+            requested_model: this.pinnedModelRefFor(sessionId) ?? 'auto',
+            routing_mode: this.pinnedModelRefFor(sessionId) ? 'pinned' : 'auto',
+            routed_provider: model.providerId,
+            routed_model: model.ref,
+            status: 'pending',
+            started_at: new Date().toISOString(),
+          });
+          this.options.telemetry?.log({
+            id: newId('evt'),
+            ts: new Date().toISOString(),
+            level: 'info',
+            source: 'agent',
+            event: 'turn.requested',
+            session_id: sessionId,
+            turn_id: turnId,
+            trace_id: traceId,
+            data: {
+              requested_model: this.pinnedModelRefFor(sessionId) ?? 'auto',
+              routed_model: model.ref,
+            },
+          });
           try {
             const paidDecision = await this.options.authorizePaidCall?.(
               model,
@@ -772,6 +1285,42 @@ export class AgentLoop {
               this.options.stepTimeoutMs ?? 120_000,
               releaseOnce,
             );
+            this.options.telemetry?.turnUpdated(turnId, {
+              status: 'success',
+              finished_at: new Date().toISOString(),
+              latency_ms: Math.round(performance.now() - attemptStartedAt),
+              input_tokens: generated.inputTokens ?? null,
+              output_tokens: generated.outputTokens ?? null,
+              response_model: generated.responseModel ?? null,
+              finish_reason: generated.finishReason ?? null,
+            });
+            this.options.telemetry?.log({
+              id: newId('evt'),
+              ts: new Date().toISOString(),
+              level: 'info',
+              source: 'agent',
+              event: 'turn.completed',
+              session_id: sessionId,
+              turn_id: turnId,
+              trace_id: traceId,
+              data: { response: generated.text ?? '' },
+            });
+            if (generated.responseModel && generated.responseModel !== model.ref)
+              this.options.telemetry?.log({
+                id: newId('evt'),
+                ts: new Date().toISOString(),
+                level: 'warn',
+                source: 'agent',
+                event: 'turn.model_credit_mismatch',
+                session_id: sessionId,
+                turn_id: turnId,
+                trace_id: traceId,
+                data: {
+                  routed_model: model.ref,
+                  response_model: generated.responseModel,
+                },
+              });
+            parentTurnId = turnId;
             const inlineReasoning = normalizeInlineThinking(generated.text ?? '');
             if (inlineReasoning.thinking) {
               generated.text = inlineReasoning.text;
@@ -795,9 +1344,18 @@ export class AgentLoop {
                 timestamp: new Date().toISOString(),
               });
             generationComplete = true;
+            const attemptProviderKeyId = this.options.providerAffinityKey?.(
+              model.providerId,
+              sessionId,
+            );
             modelAttempts.push({
               model: model.ref,
               provider: model.providerId,
+              id: turnId,
+              attempt: modelAttempts.length + 1,
+              ...(attemptProviderKeyId ? { providerKeyId: attemptProviderKeyId } : {}),
+              outputStarted: Boolean(streamedText || generated.text),
+              ...(generated.responseModel ? { responseModel: generated.responseModel } : {}),
               status: 200,
               latencyMs: Math.max(0, performance.now() - attemptStartedAt),
               errorKind: null,
@@ -834,11 +1392,43 @@ export class AgentLoop {
             this.options.onResilienceState?.(this.resilience.snapshot());
             break;
           } catch (error) {
+            const classified = classifyProviderError(errorInput(error));
+            const unsafeSignatureError = isInvalidSignatureOrThinkingError(error);
+            this.options.telemetry?.turnUpdated(turnId, {
+              status: isSignalAborted(signal)
+                ? 'cancelled'
+                : classified.family === 'timeout'
+                  ? 'timeout'
+                  : 'error',
+              finished_at: new Date().toISOString(),
+              latency_ms: Math.round(performance.now() - attemptStartedAt),
+              error_kind: classified.family,
+              error_message: unsafeSignatureError
+                ? 'Provider rejected native reasoning metadata.'
+                : redactedProviderMessage(error),
+            });
+            this.options.telemetry?.log({
+              id: newId('evt'),
+              ts: new Date().toISOString(),
+              level: 'error',
+              source: 'agent',
+              event: 'turn.failed',
+              session_id: sessionId,
+              turn_id: turnId,
+              trace_id: traceId,
+              data: {
+                error: unsafeSignatureError
+                  ? 'Provider rejected native reasoning metadata.'
+                  : error instanceof Error
+                    ? error.message
+                    : String(error),
+              },
+            });
+            parentTurnId = turnId;
             pendingPaidRelease?.();
             pendingPaidRelease = undefined;
             pendingPaidUsageId = undefined;
             if (executionRole === 'editor') editorFailures += 1;
-            const classified = classifyProviderError(errorInput(error));
             const routing = this.options.routingSettings?.();
             const localQuotaReservation = error instanceof QuotaReservationError;
             if (routing?.smartReliability && !localQuotaReservation) {
@@ -876,17 +1466,33 @@ export class AgentLoop {
               this.retirementFailures.push({ modelRef: model.ref, requestId, at: this.now() });
               this.options.onRetirementFailureState?.([...this.retirementFailures]);
             }
+            const attemptProviderKeyId = this.options.providerAffinityKey?.(
+              model.providerId,
+              sessionId,
+            );
             attemptFailures.push({
               model: model.ref,
               provider: model.providerId,
+              id: turnId,
+              attempt: modelAttempts.length + 1,
+              ...(attemptProviderKeyId ? { providerKeyId: attemptProviderKeyId } : {}),
+              outputStarted: Boolean(streamedText),
+              fallbackReason: classified.family,
               kind: classified.family,
               status: classified.status,
               latencyMs: Math.max(0, performance.now() - attemptStartedAt),
-              message: redactedProviderMessage(error),
+              message: unsafeSignatureError
+                ? 'Provider rejected native reasoning metadata.'
+                : redactedProviderMessage(error),
             });
             modelAttempts.push({
               model: model.ref,
               provider: model.providerId,
+              id: turnId,
+              attempt: modelAttempts.length + 1,
+              ...(attemptProviderKeyId ? { providerKeyId: attemptProviderKeyId } : {}),
+              outputStarted: Boolean(streamedText),
+              fallbackReason: classified.family,
               status: classified.status,
               latencyMs: Math.max(0, performance.now() - attemptStartedAt),
               errorKind: classified.family,
@@ -914,12 +1520,12 @@ export class AgentLoop {
             const unsupportedFreeTier = classified.family === 'unsupported_free_tier';
             const requestTooLarge = classified.family === 'request_too_large';
             const timedOut = error instanceof StepWatchdogError || classified.family === 'timeout';
-            const safeToSwitch = streamedText.length === 0;
             const providerPolicy = this.options
               .capacity()
               .providers.find((item) => item.id === model.providerId);
             const stopFallback = shouldStopFallback({
-              pinnedModelRef: this.options.pinnedModelRef ?? null,
+              pinnedModelRef: this.pinnedModelRefFor(sessionId),
+              pinnedExhaustion: routing?.pinnedExhaustion ?? 'handover',
               attemptedModelRef: model.ref,
               avoidTrainingProviders: routing?.avoidTrainingProviders ?? false,
               providerDataUse: providerPolicy?.dataUse ?? null,
@@ -927,9 +1533,54 @@ export class AgentLoop {
             const badCredentialStatus =
               [401, 402, 403].includes(classified.status ?? 0) &&
               classified.family !== 'paid_required';
-            if (badCredentialStatus) this.sessionBadKeys.get(sessionId)?.add(model.providerId);
+            if (badCredentialStatus) {
+              const keyId = this.options.providerAffinityKey?.(model.providerId, sessionId);
+              this.sessionBadKeys.get(sessionId)?.add(`${model.providerId}:${keyId ?? '*'}`);
+              for (const unavailable of this.options.providerUnavailableKeyIds?.(
+                model.providerId,
+                model.ref,
+              ) ?? [])
+                this.sessionBadKeys.get(sessionId)?.add(`${model.providerId}:${unavailable}`);
+            }
             if (!localQuotaReservation && !badCredentialStatus && routingFailure.scope !== 'none') {
               this.resilience.recordFailure(routingFailure, model.ref, model.providerId);
+            }
+            let approvedPinnedHandover = false;
+            if (
+              stopFallback &&
+              this.pinnedModelRefFor(sessionId) &&
+              routing?.pinnedExhaustion === 'ask' &&
+              (rateLimited || badCredentialStatus || timedOut || routingFailure.scope !== 'none') &&
+              this.options.requestApproval
+            ) {
+              const approval: Extract<MessagePart, { type: 'approval_request' }> = {
+                type: 'approval_request',
+                id: PartIdSchema.parse(newId('part')),
+                kind: 'model_handover',
+                summary: `Switch from ${model.name} after it became unavailable?`,
+                detail: 'Ferry will continue this step with another eligible model.',
+                risk: 'medium',
+                state: 'pending',
+              };
+              this.addPart(sessionId, approval);
+              const waiting = this.options.store.updateSession(sessionId, {
+                status: 'awaiting_approval',
+              });
+              this.options.emit({ type: 'session.updated', session: waiting });
+              const decision = await this.options.requestApproval(approval, signal);
+              const resumed = this.options.store.updateSession(sessionId, { status: 'running' });
+              this.options.emit({ type: 'session.updated', session: resumed });
+              this.replacePart(sessionId, {
+                ...approval,
+                state: decision === 'denied' ? 'denied' : decision,
+              });
+              if (decision === 'allowed_once' || decision === 'allowed_always')
+                approvedPinnedHandover = true;
+              else
+                throw new Error(
+                  `Pinned model ${model.ref} is unavailable; handover was declined.`,
+                  { cause: error },
+                );
             }
             if (
               !localQuotaReservation &&
@@ -953,6 +1604,7 @@ export class AgentLoop {
               classified.family === 'timeout' ||
               classified.family === 'stream_failure';
             if (
+              streamedText.length === 0 &&
               !requestTooLarge &&
               !rateLimited &&
               !badCredentialStatus &&
@@ -961,12 +1613,35 @@ export class AgentLoop {
               sameModelRetries < 2
             ) {
               sameModelRetries++;
-              await (this.options.waitForRetry ?? delayForRetry)(
-                retryDelayMs(sameModelRetries - 1, 300, 3_000),
-                signal,
-              );
+              const retryDelayMsValue = retryDelayMs(sameModelRetries - 1, 300, 3_000);
+              this.options.telemetry?.log({
+                id: newId('evt'),
+                ts: new Date().toISOString(),
+                level: 'warn',
+                source: 'agent',
+                event: 'turn.retry',
+                session_id: sessionId,
+                turn_id: turnId,
+                trace_id: traceId,
+                data: {
+                  attempt: attemptNumber,
+                  retry: sameModelRetries,
+                  model: model.ref,
+                  reason: classified.family,
+                  delay_ms: retryDelayMsValue,
+                },
+              });
+              await (this.options.waitForRetry ?? delayForRetry)(retryDelayMsValue, signal);
               continue;
             }
+            const pendingBoundaryWork = (this.options.store.load(sessionId)?.messages ?? []).some(
+              (entry) =>
+                entry.parts.some(
+                  (part) =>
+                    (part.type === 'tool_call' && ['pending', 'running'].includes(part.status)) ||
+                    (part.type === 'approval_request' && part.state === 'pending'),
+                ),
+            );
             if (
               (!rateLimited &&
                 !modelUnavailable &&
@@ -974,12 +1649,23 @@ export class AgentLoop {
                 !unsupportedFreeTier &&
                 !timedOut &&
                 !requestTooLarge &&
-                routingFailure.scope === 'none') ||
-              !safeToSwitch ||
-              stopFallback ||
+                !badCredentialStatus &&
+                routingFailure.scope === 'none' &&
+                classified.family !== 'stream_failure') ||
+              // Every provider shares this network; switching models cannot help, so say so.
+              classified.family === 'offline' ||
+              pendingBoundaryWork ||
+              (stopFallback && !approvedPinnedHandover) ||
               isSignalAborted(signal)
-            )
+            ) {
+              const currentPin = this.pinnedModelRefFor(sessionId);
+              if (stopFallback && currentPin && routing?.pinnedExhaustion === 'fail')
+                throw new Error(
+                  `Pinned model ${currentPin} is unavailable and pinnedExhaustion is set to fail.`,
+                  { cause: error },
+                );
               throw error;
+            }
             if (
               executionRole === 'editor' &&
               editorFailures >= this.options.profile.roles.editorFailureThreshold
@@ -995,9 +1681,8 @@ export class AgentLoop {
                 attemptedModels.add(planner.ref);
                 executionRole = 'planner';
                 model = planner;
-                assistant = { ...assistant, agentRole: 'planner', modelRef: planner.ref };
+                assistant = { ...assistant, agentRole: 'planner' };
                 this.options.store.replaceMessage(assistant);
-                this.options.store.updateSession(sessionId, { modelRef: planner.ref });
                 sameModelRetries = 0;
                 continue;
               }
@@ -1015,48 +1700,161 @@ export class AgentLoop {
               routeEstimate,
               attemptedModels,
               sessionId,
+              approvedPinnedHandover,
+              minimumContext,
             );
             if (!fallback) {
+              const currentPin = this.pinnedModelRefFor(sessionId);
+              if (currentPin)
+                throw new Error(
+                  `Pinned model ${currentPin} is unavailable; no eligible handover model is available (pinnedExhaustion: ${routing?.pinnedExhaustion ?? 'handover'}).`,
+                  { cause: error },
+                );
               throw new AllCandidatesExhaustedError(this.exhaustedMessage(stepKind));
+            }
+            if (parentTurnId) {
+              const fallbackReason = toolsUnsupported
+                ? 'capability'
+                : requestTooLarge
+                  ? 'context'
+                  : classified.family === 'quota_exhausted'
+                    ? 'quota'
+                    : rateLimited
+                      ? 'rate_limit'
+                      : 'error';
+              this.options.telemetry?.turnUpdated(parentTurnId, {
+                status: 'fallback',
+                fallback_reason: fallbackReason,
+                finished_at: new Date().toISOString(),
+              });
+              this.options.telemetry?.modelSwitch({
+                session_id: sessionId,
+                turn_id: parentTurnId,
+                kind:
+                  this.pinnedModelRefFor(sessionId) &&
+                  (routing?.pinnedExhaustion ?? 'handover') === 'handover'
+                    ? 'handoff'
+                    : 'router_fallback',
+                from_model: model.ref,
+                to_model: fallback.ref,
+                to_provider: fallback.providerId,
+                reason: fallbackReason,
+                data: { trace_id: traceId },
+              });
+              this.options.telemetry?.log({
+                id: newId('evt'),
+                ts: new Date().toISOString(),
+                level: 'warn',
+                source: 'router',
+                event: 'turn.fallback',
+                session_id: sessionId,
+                turn_id: parentTurnId,
+                trace_id: traceId,
+                data: { from_model: model.ref, to_model: fallback.ref, reason: fallbackReason },
+              });
             }
             attemptedModels.add(fallback.ref);
             handoffsThisStep++;
+            const currentPin =
+              this.options.getPinnedModelRef?.() ?? this.pinnedModelRefFor(sessionId);
+            if (currentPin) {
+              this.pinnedHandoverModels.set(sessionId, fallback.ref);
+              this.pinnedHandoverSourcePins.set(sessionId, currentPin);
+            }
+            const visibleHandover =
+              streamedText.length > 0 ||
+              approvedPinnedHandover ||
+              Boolean(
+                this.pinnedModelRefFor(sessionId) &&
+                (routing?.pinnedExhaustion ?? 'handover') === 'handover',
+              );
+            const handoffReason = toolsUnsupported
+              ? 'capability'
+              : requestTooLarge
+                ? 'context'
+                : classified.family === 'quota_exhausted'
+                  ? 'quota'
+                  : rateLimited
+                    ? 'rate_limit'
+                    : 'error';
+            const interruptedAt = new Date().toISOString();
+            const interruptedMessage: Message = {
+              ...assistant,
+              modelRef: model.ref,
+              ...(streamedText.length > 0
+                ? {
+                    interrupted: {
+                      reason: formatClassifiedFailure(classified.family, error),
+                      at: interruptedAt,
+                    },
+                    modelAttempts,
+                    parts: streamedParts.parts,
+                  }
+                : {}),
+            };
+            if (visibleHandover) this.options.store.replaceMessage(interruptedMessage);
             const briefing = buildBriefing(
               taskRecord,
-              messages,
+              visibleHandover ? [...messages, interruptedMessage] : messages,
               fallback,
               Math.floor(fallback.contextWindow * 0.25),
               this.estimates,
+              {
+                from: model.ref,
+                to: fallback.ref,
+                reason: handoffReason,
+                failed: true,
+                omittedContext:
+                  'This packet summarizes Ferry task records and recent turns; older turns may be outside the target model’s retained history.',
+                ...(visibleHandover ? { partialText: streamedText } : {}),
+              },
             );
-            const marker = createHandoffMarker(
-              model.ref,
-              fallback.ref,
-              toolsUnsupported ? 'capability' : rateLimited ? 'rate_limit' : 'error',
-              briefing,
-              toolsUnsupported
-                ? `${model.name} rejected tool calling (${formatClassifiedFailure(classified.family, error)}); continuing with ${fallback.name}.`
-                : rateLimited
-                  ? `${model.name} returned ${formatClassifiedFailure(classified.family, error)}; continuing with ${fallback.name}.`
-                  : `${model.name} failed with ${formatClassifiedFailure(classified.family, error)}; continuing with ${fallback.name}.`,
-            );
-            this.addPart(sessionId, {
-              type: 'handoff_marker',
-              id: PartIdSchema.parse(newId('part')),
-              from: marker.from as ModelRef,
-              to: marker.to as ModelRef,
-              reason: marker.reason,
-              briefingTokens: marker.briefingTokens,
-              explanation: marker.explanation,
-            });
-            this.options.onHandoff?.(
-              toolsUnsupported ? 'capability' : rateLimited ? 'rate_limit' : 'error',
-              marker.from,
-              marker.to,
-            );
+            if (visibleHandover) {
+              contextMessages = [...contextMessages, interruptedMessage];
+              assistant = this.options.store.appendMessage(
+                sessionId,
+                'assistant',
+                [],
+                fallback.ref,
+                new Date(),
+                executionRole,
+              );
+              this.options.emit({ type: 'session.message', message: assistant });
+              streamedText = '';
+              streamedTextPartId = PartIdSchema.parse(newId('part'));
+              streamedParts.messageId = assistant.id;
+              streamedParts.parts = [];
+              const explanation =
+                classified.family === 'quota_exhausted'
+                  ? `${model.name} reached its usage limit; continuing with ${fallback.name}.`
+                  : badCredentialStatus
+                    ? `${model.name} could not continue because of a credentials error; continuing with ${fallback.name}.`
+                    : toolsUnsupported
+                      ? `${model.name} rejected tool calling; continuing with ${fallback.name}.`
+                      : `${model.name} failed with ${formatClassifiedFailure(classified.family, error)}; continuing with ${fallback.name}.`;
+              const marker = createHandoffMarker(
+                model.ref,
+                fallback.ref,
+                handoffReason,
+                briefing,
+                explanation,
+              );
+              this.addPart(sessionId, {
+                type: 'handoff_marker',
+                id: PartIdSchema.parse(newId('part')),
+                from: marker.from as ModelRef,
+                to: marker.to as ModelRef,
+                reason: marker.reason,
+                briefingTokens: marker.briefingTokens,
+                explanation: marker.explanation,
+                trigger: 'reactive',
+              });
+              system += `\n\n[Ferry handover packet]\n${briefing.text}`;
+            } else {
+              system += `\n\n[Ferry retry attribution] ${model.name} produced no visible output; ${fallback.name} is answering this step after ${handoffReason}.`;
+            }
             model = fallback;
             sameModelRetries = 0;
-            system += `\n\nHandoff briefing:\n${briefing.text}`;
-            this.options.store.updateSession(sessionId, { modelRef: fallback.ref });
           }
         }
         this.activeMessageParts.delete(sessionId);
@@ -1123,10 +1921,18 @@ export class AgentLoop {
             reasoningAvailable: false,
             timestamp: new Date().toISOString(),
           });
-        if (generated.reasoning)
+        if (generated.reasoning || generated.reasoningProviderMetadata)
           parts = [
             ...parts,
-            { type: 'reasoning', id: PartIdSchema.parse(newId('part')), text: generated.reasoning },
+            {
+              type: 'reasoning',
+              id: PartIdSchema.parse(newId('part')),
+              text: generated.reasoning ?? '',
+              producedBy: model.ref,
+              ...(generated.reasoningProviderMetadata
+                ? { providerMetadata: generated.reasoningProviderMetadata }
+                : {}),
+            },
           ];
         if (generated.text && streamedText)
           parts = parts.map((part) =>
@@ -1137,7 +1943,17 @@ export class AgentLoop {
             ...parts,
             { type: 'text', id: PartIdSchema.parse(newId('part')), text: generated.text },
           ];
-        this.options.store.replaceMessage({ ...assistant, parts, modelAttempts });
+        assistant = {
+          ...assistant,
+          modelRef: model.ref,
+          turnId: activeTurnId ?? undefined,
+          providerReportedModelId: generated.responseModel ?? null,
+          parts,
+          modelAttempts,
+        };
+        this.options.store.replaceMessage(assistant);
+        session = this.options.store.updateSession(sessionId, { modelRef: model.ref });
+        this.options.emit({ type: 'session.updated', session });
         for (const part of parts)
           this.options.emit({
             type: 'session.part',
@@ -1298,6 +2114,7 @@ export class AgentLoop {
             id: PartIdSchema.parse(newId('part')),
             ...(call.toolCallId || call.id ? { toolCallId: call.toolCallId ?? call.id } : {}),
             ...(call.providerOptions ? { providerOptions: call.providerOptions } : {}),
+            producedBy: model.ref,
             tool: call.name,
             title: definition.title,
             args: parsed.value as Record<string, unknown>,
@@ -1307,6 +2124,16 @@ export class AgentLoop {
             durationMs: null,
           };
           this.addPart(sessionId, toolPart);
+          this.options.telemetry?.log({
+            id: newId('evt'),
+            ts: new Date().toISOString(),
+            level: 'info',
+            source: 'tool',
+            event: 'tool.call',
+            session_id: sessionId,
+            trace_id: traceId,
+            data: { tool: call.name, input: parsed.value },
+          });
           const start = Date.now();
           const eventCallId = call.toolCallId ?? call.id ?? toolPart.id;
           this.emitStructuredEvent(sessionId, {
@@ -1334,6 +2161,16 @@ export class AgentLoop {
               recoveryHandle: null,
             };
             const value = structured.value ?? result;
+            this.options.telemetry?.log({
+              id: newId('evt'),
+              ts: new Date().toISOString(),
+              level: 'info',
+              source: 'tool',
+              event: 'tool.result',
+              session_id: sessionId,
+              trace_id: traceId,
+              data: { tool: call.name, output: output.text },
+            });
             const changes = Array.isArray(value)
               ? value.filter(isFileChange)
               : isFileChange(value)
@@ -1451,9 +2288,13 @@ export class AgentLoop {
       const poolExhausted =
         error instanceof AllCandidatesExhaustedError ||
         (error instanceof Error && error.message.startsWith('All free candidates exhausted.'));
+      const pinnedPolicyFailure =
+        error instanceof Error && error.message.startsWith('Pinned model ');
       const message = poolExhausted
         ? error.message
-        : formatAttemptSummary(attemptFailures, providerDetail);
+        : pinnedPolicyFailure
+          ? error.message
+          : formatAttemptSummary(attemptFailures, providerDetail);
       this.emitStructuredEvent(sessionId, {
         id: newId('event'),
         type: 'error',
@@ -1477,6 +2318,13 @@ export class AgentLoop {
           modelAttempts: attemptFailures.map((attempt) => ({
             model: attempt.model,
             provider: attempt.provider,
+            ...(attempt.id ? { id: attempt.id } : {}),
+            ...(attempt.attempt ? { attempt: attempt.attempt } : {}),
+            ...(attempt.providerKeyId ? { providerKeyId: attempt.providerKeyId } : {}),
+            ...(attempt.outputStarted !== undefined
+              ? { outputStarted: attempt.outputStarted }
+              : {}),
+            ...(attempt.fallbackReason ? { fallbackReason: attempt.fallbackReason } : {}),
             status: attempt.status,
             latencyMs: attempt.latencyMs,
             errorKind: attempt.kind,
@@ -1490,6 +2338,7 @@ export class AgentLoop {
       throw error;
     } finally {
       this.sessionBadKeys.delete(sessionId);
+      this.pinnedHandoverModels.delete(sessionId);
       outerSignal?.removeEventListener('abort', relayAbort);
     }
   }
@@ -1527,15 +2376,16 @@ export class AgentLoop {
     inputTokens: number,
     previous: ModelRef | null,
     sessionId: string,
+    minimumContext = 0,
   ): ModelInfo | undefined {
     // A manual pin applies to every model request, including planner and editor steps.
-    if (this.options.pinnedModelRef)
-      return this.selectModel(step, inputTokens, previous, sessionId);
+    if (this.pinnedModelRefFor(sessionId))
+      return this.selectModel(step, inputTokens, previous, sessionId, minimumContext);
     const configured =
       role === 'planner'
         ? this.options.profile.roles.plannerModelRef
         : this.options.profile.roles.editorModelRef;
-    const baseline = this.selectModel(step, inputTokens, previous, sessionId);
+    const baseline = this.selectModel(step, inputTokens, previous, sessionId, minimumContext);
     const candidates = scoreModels({
       models: this.options.catalog.models,
       capacity: this.options.capacity(),
@@ -1544,6 +2394,7 @@ export class AgentLoop {
       estimate: {
         inputTokens,
         contextTokens: this.contextFitEstimate(inputTokens),
+        minimumContext,
         outputTokens: 2048,
         requiresTools: role === 'editor',
       },
@@ -1577,10 +2428,14 @@ export class AgentLoop {
     inputTokens: number,
     previous: ModelRef | null,
     sessionId: string,
+    minimumContext = 0,
+    dispatchExcluded: ReadonlySet<string> = new Set(),
   ): ModelInfo | undefined {
-    if (this.options.pinnedModelRef)
-      return this.options.catalog.models.find((model) => model.ref === this.options.pinnedModelRef);
+    const pinnedModelRef = this.pinnedModelRefFor(sessionId);
+    if (pinnedModelRef)
+      return this.options.catalog.models.find((model) => model.ref === pinnedModelRef);
     const locked = this.sessionModelLocks.get(sessionId);
+    const softBypassed = this.softQuotaBypasses.get(sessionId);
     const withinFailedSize = (model: ModelInfo) =>
       (this.requestTooLargeAt.get(model.ref) ?? Number.POSITIVE_INFINITY) <= inputTokens;
     const routing = this.options.routingSettings?.();
@@ -1589,7 +2444,9 @@ export class AgentLoop {
       : undefined;
     const stickyRef = stickyRoute?.modelRef;
     const eligible = (model: ModelInfo) =>
-      !this.sessionBadKeys.get(sessionId)?.has(model.providerId) &&
+      !this.providerKeysExhausted(sessionId, model.providerId, model.ref) &&
+      !softBypassed?.has(model.ref) &&
+      !dispatchExcluded.has(model.ref) &&
       !locked?.has(model.ref) &&
       !(routing?.carefulModelRetirement && this.retiredModels.has(model.ref)) &&
       !withinFailedSize(model);
@@ -1597,7 +2454,7 @@ export class AgentLoop {
     if (resolved)
       return this.selectResilient(
         preferStickyAffinity(
-          resolved.filter(eligible),
+          resolved.filter((model) => eligible(model) && model.contextWindow >= minimumContext),
           stickyRoute,
           this.options.profile.affinityMode,
           (providerId) => this.options.providerAffinityKey?.(providerId, sessionId) ?? undefined,
@@ -1611,6 +2468,7 @@ export class AgentLoop {
       estimate: {
         inputTokens,
         contextTokens: this.contextFitEstimate(inputTokens),
+        minimumContext,
         outputTokens: 2048,
         expectedSteps: 1,
         requiresTools: true,
@@ -1622,19 +2480,16 @@ export class AgentLoop {
     });
     const selected = this.selectResilient(
       candidates.flatMap((item) => {
+        const model = this.options.catalog.models.find((candidate) => candidate.ref === item.ref);
         if (
-          this.sessionBadKeys
-            .get(sessionId)
-            ?.has(
-              this.options.catalog.models.find((candidate) => candidate.ref === item.ref)
-                ?.providerId ?? '',
-            ) ||
+          (model && this.providerKeysExhausted(sessionId, model.providerId, item.ref)) ||
+          softBypassed?.has(item.ref) ||
+          dispatchExcluded.has(item.ref) ||
           locked?.has(item.ref) ||
           (routing?.carefulModelRetirement && this.retiredModels.has(item.ref)) ||
           (this.requestTooLargeAt.get(item.ref) ?? Infinity) <= inputTokens
         )
           return [];
-        const model = this.options.catalog.models.find((candidate) => candidate.ref === item.ref);
         return model ? [model] : [];
       }),
     );
@@ -1646,8 +2501,17 @@ export class AgentLoop {
     inputTokens: number,
     attemptedRefs: ReadonlySet<string>,
     sessionId: string,
+    allowPinnedHandover = false,
+    minimumContext = 0,
   ): ModelInfo | undefined {
-    if (this.options.pinnedModelRef) return undefined;
+    // Session dependencies rotate through provider keys before this model fallback path is reached.
+    const pinnedExhaustion = this.options.routingSettings?.().pinnedExhaustion ?? 'handover';
+    if (
+      this.pinnedModelRefFor(sessionId) &&
+      pinnedExhaustion !== 'handover' &&
+      !allowPinnedHandover
+    )
+      return undefined;
     const locked = this.sessionModelLocks.get(sessionId);
     const candidates = this.options.resolveCandidates?.(this.options.profile, step, inputTokens);
     const retirementEnabled = this.options.routingSettings?.().carefulModelRetirement;
@@ -1655,8 +2519,9 @@ export class AgentLoop {
       return this.selectResilient(
         candidates.filter(
           (candidate) =>
-            !this.sessionBadKeys.get(sessionId)?.has(candidate.providerId) &&
+            !this.providerKeysExhausted(sessionId, candidate.providerId, candidate.ref) &&
             !attemptedRefs.has(candidate.ref) &&
+            candidate.contextWindow >= minimumContext &&
             !locked?.has(candidate.ref) &&
             !(retirementEnabled && this.retiredModels.has(candidate.ref)) &&
             (this.requestTooLargeAt.get(candidate.ref) ?? Number.POSITIVE_INFINITY) > inputTokens,
@@ -1671,6 +2536,7 @@ export class AgentLoop {
       estimate: {
         inputTokens,
         contextTokens: this.contextFitEstimate(inputTokens),
+        minimumContext,
         requiresTools: true,
       },
       ...(previousModelRef ? { previousModelRef } : {}),
@@ -1679,7 +2545,7 @@ export class AgentLoop {
     });
     const remaining = ranked.flatMap((candidate) => {
       if (
-        this.sessionBadKeys.get(sessionId)?.has(candidate.ref.split('/')[0] ?? '') ||
+        this.providerKeysExhausted(sessionId, candidate.ref.split('/')[0] ?? '', candidate.ref) ||
         attemptedRefs.has(candidate.ref) ||
         locked?.has(candidate.ref) ||
         (this.requestTooLargeAt.get(candidate.ref) ?? Number.POSITIVE_INFINITY) <= inputTokens
@@ -1900,127 +2766,153 @@ export function createStepGenerator(
     options.providerFetch ?? globalThis.fetch,
     requestOverrides,
   );
-  return async ({
-    system,
-    messages,
-    tools,
-    signal,
-    onDelta,
-    onReasoning,
-    onProgress,
-    modelHints,
-  }) => {
-    const sdkTools: Record<string, unknown> = Object.fromEntries(
-      tools.map((definition) => [
-        definition.name,
-        tool({
-          description: definition.title,
-          inputSchema: jsonSchema(
-            normalizeToolSchema(
-              toolSchemaForEstimate(definition.schema),
-              model.providerId,
-            ) as JSONSchema7,
-          ),
-        }),
-      ]),
-    );
-    if (options.askUser)
-      sdkTools.ask_user = tool({
-        description: 'Ask the user a question and pause until they answer.',
-        inputSchema: z.object({ question: z.string() }),
-      });
-    const result = streamText({
-      model: createLanguageModel(model.ref, {
-        apiKey: options.apiKeys[model.providerId] ?? '',
-        ...(options.providerBaseUrls?.[model.providerId]
-          ? { baseUrl: options.providerBaseUrls[model.providerId] }
-          : {}),
-        fetch: observationFetch,
-        sessionId,
-      }),
-      system,
-      ...(Object.keys(
-        promptCacheOptions(model.providerId, options.promptCaching?.(model) ?? true, sessionId),
-      ).length
-        ? {
-            providerOptions: {
-              [model.providerId]: promptCacheOptions(
+  return async (input) => {
+    const streamState = { outputStarted: false };
+    const generate = async (dropNativeArtifacts: boolean): Promise<GeneratedStep> => {
+      const { system, messages, tools, signal, onDelta, onReasoning, onProgress, modelHints } =
+        input;
+      const sdkTools: Record<string, unknown> = Object.fromEntries(
+        tools.map((definition) => [
+          definition.name,
+          tool({
+            description: definition.title,
+            inputSchema: jsonSchema(
+              normalizeToolSchema(
+                toolSchemaForEstimate(definition.schema),
                 model.providerId,
-                options.promptCaching?.(model) ?? true,
-                sessionId,
-              ),
-            },
-          }
-        : {}),
-      messages: sanitizeProviderMessages(
-        toModelMessages(messages, model, modelHints.toolProtocol !== 'native'),
-        model.providerId as import('@ferry/providers').MessageNormalizationProvider,
-      ),
-      tools: sdkTools as unknown as ToolSet,
-      abortSignal: signal,
-      maxRetries: 0,
-      onError: () => undefined,
-    });
-    let text = '';
-    let reasoning = '';
-    let reasoningAvailable = false;
-    for await (const part of result.stream) {
-      onProgress?.();
-      if (part.type === 'error') throw part.error;
-      const streamPart = part as unknown as {
-        type: string;
-        text?: string;
-        delta?: string;
-        reasoning?: string;
-        reasoning_content?: string;
-        thought?: boolean;
-      };
-      const exposedReasoning =
-        normalizeReasoningPart(streamPart) ??
-        streamPart.reasoning_content ??
-        (streamPart.type === 'reasoning-delta' ||
-        streamPart.type === 'reasoning' ||
-        streamPart.thought
-          ? (streamPart.delta ?? streamPart.text ?? streamPart.reasoning)
-          : undefined);
-      if (typeof exposedReasoning === 'string' && exposedReasoning) {
-        reasoningAvailable = true;
-        reasoning += exposedReasoning;
-        onReasoning?.(exposedReasoning);
-      } else if (streamPart.type === 'text-delta' && typeof streamPart.text === 'string') {
-        text += streamPart.text;
-        onDelta(streamPart.text);
-      }
-    }
-    const [usage, rawCalls] = await Promise.all([result.usage, result.toolCalls]);
-    const calls = z
-      .array(
-        z.object({
-          toolCallId: z.string(),
-          toolName: z.string(),
-          input: z.unknown(),
-          providerOptions: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
-          providerMetadata: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+              ) as JSONSchema7,
+            ),
+          }),
+        ]),
+      );
+      if (options.askUser)
+        sdkTools.ask_user = tool({
+          description: 'Ask the user a question and pause until they answer.',
+          inputSchema: z.object({ question: z.string() }),
+        });
+      const result = streamText({
+        model: createLanguageModel(model.ref, {
+          apiKey: options.apiKeys[model.providerId] ?? '',
+          ...(options.providerBaseUrls?.[model.providerId]
+            ? { baseUrl: options.providerBaseUrls[model.providerId] }
+            : {}),
+          fetch: observationFetch,
+          sessionId,
         }),
-      )
-      .parse(rawCalls);
-    return {
-      text,
-      ...(reasoning ? { reasoning } : {}),
-      reasoningAvailable,
-      toolCalls: calls.map((call) => {
-        const providerOptions = call.providerOptions ?? call.providerMetadata;
-        return {
-          id: call.toolCallId,
-          toolCallId: call.toolCallId,
-          name: call.toolName,
-          input: call.input,
-          ...(providerOptions ? { providerOptions } : {}),
+        system,
+        ...(Object.keys(
+          promptCacheOptions(model.providerId, options.promptCaching?.(model) ?? true, sessionId),
+        ).length
+          ? {
+              providerOptions: {
+                [model.providerId]: promptCacheOptions(
+                  model.providerId,
+                  options.promptCaching?.(model) ?? true,
+                  sessionId,
+                ),
+              },
+            }
+          : {}),
+        messages: sanitizeProviderMessages(
+          toModelMessages(
+            messages,
+            model,
+            modelHints.toolProtocol !== 'native',
+            dropNativeArtifacts,
+          ),
+          model.providerId as import('@ferry/providers').MessageNormalizationProvider,
+        ),
+        tools: sdkTools as unknown as ToolSet,
+        abortSignal: signal,
+        maxRetries: 0,
+        onError: () => undefined,
+      });
+      let text = '';
+      let reasoning = '';
+      let reasoningAvailable = false;
+      let reasoningProviderMetadata: ProviderMetadata | undefined;
+      for await (const part of result.stream) {
+        onProgress?.();
+        if (part.type === 'error') throw part.error;
+        const streamPart = part as unknown as {
+          type: string;
+          text?: string;
+          delta?: string;
+          reasoning?: string;
+          reasoning_content?: string;
+          thought?: boolean;
+          providerMetadata?: ProviderMetadata;
         };
-      }),
-      inputTokens: usage.inputTokens ?? 0,
-      outputTokens: usage.outputTokens ?? 0,
+        if (
+          streamPart.type === 'reasoning-start' ||
+          streamPart.type === 'reasoning-delta' ||
+          streamPart.type === 'reasoning-end'
+        )
+          reasoningProviderMetadata = mergeProviderMetadata(
+            reasoningProviderMetadata,
+            streamPart.providerMetadata,
+          );
+        const exposedReasoning =
+          normalizeReasoningPart(streamPart) ??
+          streamPart.reasoning_content ??
+          (streamPart.type === 'reasoning-delta' ||
+          streamPart.type === 'reasoning' ||
+          streamPart.thought
+            ? (streamPart.delta ?? streamPart.text ?? streamPart.reasoning)
+            : undefined);
+        if (typeof exposedReasoning === 'string' && exposedReasoning) {
+          streamState.outputStarted = true;
+          reasoningAvailable = true;
+          reasoning += exposedReasoning;
+          onReasoning?.(exposedReasoning);
+        } else if (streamPart.type === 'text-delta' && typeof streamPart.text === 'string') {
+          streamState.outputStarted = true;
+          text += streamPart.text;
+          onDelta(streamPart.text);
+        }
+      }
+      const [usage, rawCalls] = await Promise.all([result.usage, result.toolCalls]);
+      const finalStep = await result.finalStep;
+      const providerResponse = finalStep.response;
+      const calls = z
+        .array(
+          z.object({
+            toolCallId: z.string(),
+            toolName: z.string(),
+            input: z.unknown(),
+            providerOptions: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+            providerMetadata: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+          }),
+        )
+        .parse(rawCalls);
+      return {
+        text,
+        ...(reasoning ? { reasoning } : {}),
+        ...(reasoningProviderMetadata ? { reasoningProviderMetadata } : {}),
+        reasoningAvailable,
+        ...(typeof providerResponse.modelId === 'string'
+          ? { responseModel: providerResponse.modelId }
+          : {}),
+        toolCalls: calls.map((call) => {
+          const providerOptions = call.providerOptions ?? call.providerMetadata;
+          return {
+            id: call.toolCallId,
+            toolCallId: call.toolCallId,
+            name: call.toolName,
+            input: call.input,
+            ...(providerOptions ? { providerOptions } : {}),
+          };
+        }),
+        inputTokens: usage.inputTokens ?? 0,
+        outputTokens: usage.outputTokens ?? 0,
+      };
     };
+    try {
+      return await generate(false);
+    } catch (error) {
+      if (streamState.outputStarted || !isInvalidSignatureOrThinkingError(error)) throw error;
+      return generate(true);
+    }
   };
 }
 
@@ -2032,7 +2924,7 @@ function toolSchemaForEstimate(schema: z.ZodType): unknown {
   }
 }
 
-function prepareResumeTranscript(messages: readonly Message[]): Message[] {
+export function prepareResumeTranscript(messages: readonly Message[]): Message[] {
   let lastUserIndex = -1;
   let lastAssistantIndex = -1;
   for (let index = 0; index < messages.length; index += 1) {
@@ -2043,19 +2935,28 @@ function prepareResumeTranscript(messages: readonly Message[]): Message[] {
   const lastAssistant = messages[lastAssistantIndex];
   if (!lastAssistant) return [...messages];
   const tools = lastAssistant.parts.filter((part) => part.type === 'tool_call');
-  if (!tools.length) return messages.filter((_message, index) => index !== lastAssistantIndex);
+  if (!tools.length && !lastAssistant.interrupted)
+    return messages.filter((_message, index) => index !== lastAssistantIndex);
+  if (!tools.length) return [...messages];
   if (tools.every((part) => !['pending', 'running'].includes(part.status))) return [...messages];
   const durableTools = tools.filter((part) => !['pending', 'running'].includes(part.status));
+  if (!durableTools.length && lastAssistant.interrupted)
+    return messages.map((message, index) =>
+      index === lastAssistantIndex
+        ? { ...message, parts: message.parts.filter((part) => part.type !== 'tool_call') }
+        : message,
+    );
   if (!durableTools.length)
     return messages.filter((_message, index) => index !== lastAssistantIndex);
   return messages.map((message, index) =>
     index === lastAssistantIndex ? { ...message, parts: durableTools } : message,
   );
 }
-function toModelMessages(
+export function toModelMessages(
   messages: readonly Message[],
   targetModel: ModelInfo | undefined,
   escapeToolResults = false,
+  dropNativeArtifacts = false,
 ): ModelMessage[] {
   const prompt: ModelMessage[] = [];
   for (const message of messages) {
@@ -2071,8 +2972,17 @@ function toModelMessages(
     const content: Exclude<Extract<ModelMessage, { role: 'assistant' }>['content'], string> = [];
     const toolResults: Extract<ModelMessage, { role: 'tool' }>['content'] = [];
     for (const part of message.parts) {
-      if (part.type === 'text' || part.type === 'reasoning') {
+      if (part.type === 'text') {
         if (part.text) content.push({ type: 'text', text: part.text });
+      } else if (part.type === 'reasoning') {
+        if (!dropNativeArtifacts && targetModel && part.producedBy === targetModel.ref)
+          content.push({
+            type: 'reasoning',
+            text: part.text,
+            ...(part.providerMetadata
+              ? { providerOptions: part.providerMetadata as ProviderMetadata }
+              : {}),
+          });
       } else if (part.type === 'tool_call') {
         if (part.status === 'succeeded' && JSON.stringify(part.args).length > 1_200) {
           const path = typeof part.args.path === 'string' ? ` for ${part.args.path}` : '';
@@ -2083,7 +2993,14 @@ function toModelMessages(
           continue;
         }
         const toolCallId = part.toolCallId ?? part.id;
-        const providerOptions = withGemini3ThoughtSignature(part.providerOptions, targetModel);
+        const producer = part.producedBy ?? message.modelRef;
+        const providerOptions = dropNativeArtifacts
+          ? undefined
+          : withGemini3ThoughtSignature(
+              producer === targetModel?.ref ? part.providerOptions : undefined,
+              targetModel,
+              message.modelRef,
+            );
         content.push({
           type: 'tool-call',
           toolCallId,
@@ -2152,6 +3069,38 @@ function isGemini3Model(model: ModelInfo | undefined): boolean {
   return (
     model?.providerId === 'gemini' && /gemini[-/]3(?:[.-]|$)/i.test(`${model.ref} ${model.name}`)
   );
+}
+
+function compactMessageToolOutputs(
+  message: Message,
+  estimate: (text: string) => number,
+  blobStore: InMemoryBlobStore,
+  sessionId: string,
+  modelName: string,
+): Message | null {
+  const parts = message.parts.map((part) => {
+    if (
+      part.type !== 'tool_call' ||
+      !part.output ||
+      part.output.text.startsWith('Older tool output omitted to fit ')
+    )
+      return part;
+    const handle = part.output.recoveryHandle ?? blobStore.put(sessionId, part.output.text);
+    const text = `Older tool output omitted to fit ${modelName}'s context. Recover full output with ${handle}.`;
+    return {
+      ...part,
+      output: {
+        ...part.output,
+        text,
+        filtered: true,
+        originalTokens: part.output.originalTokens ?? estimate(part.output.text),
+        filteredTokens: estimate(text),
+        recoveryHandle: handle,
+      },
+    };
+  });
+  if (parts.every((part, index) => part === message.parts[index])) return null;
+  return { ...message, parts };
 }
 
 function compactConversationMessages(
@@ -2370,8 +3319,12 @@ function hasThoughtSignature(
 function withGemini3ThoughtSignature(
   providerOptions: Record<string, Record<string, unknown>> | undefined,
   targetModel: ModelInfo | undefined,
+  sourceModelRef: ModelRef | null,
 ): Record<string, Record<string, unknown>> | undefined {
-  if (!isGemini3Model(targetModel) || hasThoughtSignature(providerOptions)) return providerOptions;
+  if (!targetModel || !isGemini3Model(targetModel) || hasThoughtSignature(providerOptions))
+    return providerOptions;
+  // Gemini's skip sentinel is only valid for calls whose signature belongs to another model.
+  if (sourceModelRef === targetModel.ref) return providerOptions;
   return {
     ...providerOptions,
     google: {
@@ -2379,6 +3332,27 @@ function withGemini3ThoughtSignature(
       thoughtSignature: 'skip_thought_signature_validator',
     },
   };
+}
+
+function mergeProviderMetadata(
+  current: ProviderMetadata | undefined,
+  next: ProviderMetadata | undefined,
+): ProviderMetadata | undefined {
+  if (!next) return current;
+  const merged = { ...current };
+  for (const [provider, metadata] of Object.entries(next)) {
+    merged[provider] = { ...merged[provider], ...metadata };
+  }
+  return Object.keys(merged).length ? merged : undefined;
+}
+
+function isInvalidSignatureOrThinkingError(error: unknown): boolean {
+  if (errorStatus(error) !== 400) return false;
+  const message = providerErrorMessage(error).toLowerCase();
+  return (
+    /(?:invalid|missing|unknown|mismatch|malformed|unsupported)/.test(message) &&
+    /(?:thought.?signature|signature|thinking(?:_block| block|_signature)?)/.test(message)
+  );
 }
 
 function compactToolHistoryText(text: string): string {
@@ -2409,7 +3383,7 @@ function rootErrorCause(error: unknown): unknown {
 }
 
 function summarizeMessagePart(part: MessagePart): string {
-  if (part.type === 'handoff_marker') return `Model handoff: ${part.explanation}`;
+  if (part.type === 'handoff_marker') return '';
   if (part.type === 'approval_request') return `Approval ${part.state}: ${part.summary}`;
   if (part.type === 'error') return `Error (${part.kind}): ${part.message}`;
   if (part.type === 'checkpoint') return `Checkpoint created: ${part.label}`;

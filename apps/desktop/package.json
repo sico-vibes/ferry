@@ -28,6 +28,7 @@
     "test:e2e": "node scripts/e2e-runner.mjs"
   },
   "dependencies": {
+    "@ferry/cloud": "workspace:*",
     "@napi-rs/keyring": "2.1.0",
     "@napi-rs/keyring-win32-x64-msvc": "2.1.0",
     "@vscode/ripgrep": "1.18.0",
