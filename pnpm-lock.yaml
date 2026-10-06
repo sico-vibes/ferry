@@ -135,9 +135,6 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@ferry/cloud':
-        specifier: workspace:*
-        version: link:../../packages/cloud
       '@napi-rs/keyring':
         specifier: 2.1.0
         version: 2.1.0
@@ -175,6 +172,9 @@ importers:
       '@ferry/client':
         specifier: workspace:*
         version: link:../../packages/client
+      '@ferry/cloud':
+        specifier: workspace:*
+        version: link:../../packages/cloud
       '@ferry/config':
         specifier: workspace:*
         version: link:../../packages/config

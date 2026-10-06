@@ -24,6 +24,7 @@ const bundledWorkspacePackages = [
   '@ferry/providers',
   '@ferry/quota',
   '@ferry/router',
+  '@ferry/cloud',
 ];
 
 const copyMigrationsPlugin = {
