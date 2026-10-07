@@ -9,6 +9,7 @@ import type { AgentTool, ToolSource as AgentToolSource } from '@ferry/agent';
 import type { ToolSource as ExtensionToolSource } from '@ferry/extensions';
 import {
   DIRECT_PROFILE_ID,
+  EffortSchema,
   MessageSchema,
   PartIdSchema,
   ProfileSchema,
@@ -271,6 +272,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         workspaceId: z.string().min(1).optional(),
         profileId: z.string().min(1).optional(),
         modelRef: z.union([z.literal('auto'), ModelRefSchema]).optional(),
+        effort: EffortSchema.nullable().optional(),
       }).parse(rawInput);
       const workspaceId = input.workspaceId ?? services.workspaces.list()[0]?.id;
       if (!workspaceId) throw rpcDomainError(-32044, 'not_found', 'No workspace is open');
@@ -293,6 +295,13 @@ export function register(host: CoreHost, services: FerryServices): void {
         }),
       );
       try {
+        if (input.effort !== undefined)
+          await host.dispatch({
+            jsonrpc: '2.0',
+            id: 'start-effort',
+            method: 'sessions.setEffort',
+            params: [created.id, input.effort],
+          });
         if (input.modelRef !== undefined)
           await host.dispatch({
             jsonrpc: '2.0',
@@ -1642,6 +1651,10 @@ export function register(host: CoreHost, services: FerryServices): void {
     setPinned(rawId: unknown, rawValue: unknown) {
       const session = requireSession(rawId);
       return updateSession({ ...session, pinned: BooleanSchema.parse(rawValue) });
+    },
+    setEffort(rawId: unknown, rawEffort: unknown) {
+      const session = requireSession(rawId);
+      return updateSession({ ...session, effort: EffortSchema.nullable().parse(rawEffort) });
     },
     remove(rawId: unknown) {
       const session = requireSession(rawId);

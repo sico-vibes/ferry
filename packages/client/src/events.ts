@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   CapacitySummarySchema,
+  ProviderLimitsSchema,
   DelegationRunSchema,
   AgentEventSchema,
   GatewayRequestRecordSchema,
@@ -19,6 +20,7 @@ import {
 } from '@ferry/shared';
 import type {
   CapacitySummary,
+  ProviderLimits,
   DelegationRun,
   AgentEvent,
   Message,
@@ -107,6 +109,7 @@ export const FerryEventSchemas = {
   }),
   'task.updated': TaskRecordSchema,
   'quota.updated': CapacitySummarySchema,
+  'quota.limits.updated': z.array(ProviderLimitsSchema),
   'provider.updated': ProviderSchema,
   'delegation.updated': DelegationRunSchema,
   'workspace.updated': WorkspaceSchema,
@@ -207,6 +210,7 @@ export interface FerryEvents {
   };
   'task.updated': TaskRecord;
   'quota.updated': CapacitySummary;
+  'quota.limits.updated': ProviderLimits[];
   'provider.updated': Provider;
   'delegation.updated': DelegationRun;
   'workspace.updated': import('@ferry/shared').Workspace;

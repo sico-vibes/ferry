@@ -548,6 +548,8 @@ export function createGatewayController(
           .join('\n\n');
         const result = await streamProviderChat({
           model: model.ref,
+          modelInfo: model,
+          ...(input.effort ? { effort: input.effort } : {}),
           apiKey: key,
           messages: routedMessages,
           ...(instructions ? { system: instructions } : {}),

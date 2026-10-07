@@ -1,5 +1,7 @@
 export * from './normalization.js';
 export * from './key-rotation.js';
+export * from './reasoning.js';
+import { reasoningTransportOptions } from './reasoning.js';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
@@ -13,7 +15,7 @@ import {
   type ModelMessage,
   type ToolSet,
 } from 'ai';
-import { loadCatalog } from '@ferry/catalog';
+import { loadCatalog, reasoningEffortsForModel, advertisesReasoning } from '@ferry/catalog';
 export type { ModelMessage } from 'ai';
 import {
   ProviderIdSchema,
@@ -23,6 +25,7 @@ import {
   UsageRecordSchema,
   type ModelRef,
   type ModelInfo,
+  type Effort,
   type ProbeResult,
   type ProviderErrorKind,
   type ProviderId,
@@ -299,6 +302,8 @@ export function createLanguageModel(ref: ModelRef, opts: ModelFactoryOptions): L
 
 export interface ProviderChatInput {
   model: ModelRef;
+  modelInfo?: ModelInfo;
+  effort?: Effort | null;
   apiKey: string;
   messages: ModelMessage[];
   system?: string;
@@ -341,8 +346,19 @@ export async function streamProviderChat(input: ProviderChatInput) {
       },
     ]),
   ) as ToolSet;
+  const reasoningOptions = input.modelInfo
+    ? reasoningTransportOptions(
+        input.modelInfo,
+        input.effort,
+        input.maxTokens ?? input.modelInfo.maxOutput,
+      )
+    : {};
+  const maxOutputTokens =
+    input.maxTokens ??
+    (Object.keys(reasoningOptions).length ? input.modelInfo?.maxOutput : undefined);
   const result = streamText({
     model,
+    ...(Object.keys(reasoningOptions).length ? { providerOptions: reasoningOptions } : {}),
     ...(input.system ? { system: input.system } : {}),
     messages: input.messages,
     ...(input.tools?.length ? { tools: sdkTools } : {}),
@@ -356,7 +372,7 @@ export async function streamProviderChat(input: ProviderChatInput) {
               : { type: 'tool', toolName: input.toolChoice.name },
         }
       : {}),
-    ...(input.maxTokens ? { maxOutputTokens: input.maxTokens } : {}),
+    ...(maxOutputTokens ? { maxOutputTokens } : {}),
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
     ...(input.jsonMode ? { responseFormat: { type: 'json' as const } } : {}),
     ...(input.signal ? { abortSignal: input.signal } : {}),
@@ -409,7 +425,7 @@ export async function streamProviderChat(input: ProviderChatInput) {
 
 function isRateLimitHeader(name: string): boolean {
   const lower = name.toLowerCase();
-  return lower === 'retry-after' || /^x-ratelimit-[a-z0-9-]+$/.test(lower);
+  return lower === 'retry-after' || /^(?:x-ratelimit|anthropic-ratelimit)-[a-z0-9-]+$/.test(lower);
 }
 
 function requestSize(
@@ -1483,7 +1499,17 @@ export async function discoverProviderModels(
       ...(known?.knowledgeCutoff ? { knowledgeCutoff: known.knowledgeCutoff } : {}),
       ...(known?.openWeights !== undefined ? { openWeights: known.openWeights } : {}),
       ...(known?.inputModalities ? { inputModalities: known.inputModalities } : {}),
-      reasoning: known?.reasoning ?? false,
+      reasoning: Array.isArray(supportedParameters)
+        ? advertisesReasoning(supportedParameters)
+        : (known?.reasoning ?? false),
+      reasoningEfforts: reasoningEffortsForModel({
+        provider: providerId,
+        id: normalizedId,
+        reasoning: known?.reasoning,
+        metadata: Array.isArray(supportedParameters)
+          ? (item as Record<string, unknown>)
+          : { ...(item as Record<string, unknown>), reasoningEfforts: known?.reasoningEfforts },
+      }),
       free,
       priceInPerM,
       priceOutPerM,

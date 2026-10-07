@@ -103,12 +103,14 @@ describe('warm workspace sends and sessions.start', () => {
         await rpc('sessions.start', [
           {
             text: 'first',
+            effort: 'high',
             modelRef: model.ref,
             attachments: [{ name: 'context.txt', text: 'attached context' }],
           },
         ]),
       );
       await waitFor(() => services.sessions.get(first.id)?.status !== 'running');
+      expect(services.sessions.get(first.id)?.effort).toBe('high');
       expect(dispatches).toHaveLength(1);
       expect(services.messages.list().find((message) => message.role === 'user')?.parts).toEqual(
         expect.arrayContaining([

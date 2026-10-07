@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ReadOutputInputSchema } from './domain/session.js';
-import { ProviderIdSchema } from './domain/ids.js';
+import { ProviderIdSchema, SessionIdSchema } from './domain/ids.js';
+import { EffortSchema } from './domain/provider.js';
 
 export const FERRY_PROTOCOL = 'ferry/1' as const;
 export const DomainErrorKindSchema = z.enum([
@@ -33,6 +34,7 @@ export const FERRY_METHODS = [
   'sessions.rename',
   'sessions.setStarred',
   'sessions.setPinned',
+  'sessions.setEffort',
   'sessions.remove',
   'approvals.respond',
   'checkpoints.list',
@@ -56,6 +58,7 @@ export const FERRY_METHODS = [
   'oauth.logout',
   'oauth.status',
   'quota.capacity',
+  'quota.limits',
   'quota.history',
   'quota.handoffs',
   'models.list',
@@ -105,6 +108,8 @@ export const FERRY_METHOD_PARAMS_SCHEMAS: Readonly<
   Record<string, z.ZodType<unknown[]> | undefined>
 > = {
   'sessions.readOutput': z.tuple([ReadOutputInputSchema]),
+  'sessions.setEffort': z.tuple([SessionIdSchema, EffortSchema.nullable()]),
+  'quota.limits': z.tuple([]),
   'providers.listKeys': z.tuple([ProviderIdSchema]),
   'providers.effectiveOverrides': z.tuple([ProviderIdSchema]),
   'providers.setKey': z.tuple([ProviderIdSchema, z.string()]),
@@ -141,6 +146,7 @@ export const FERRY_EVENTS = [
   'routing.explain',
   'task.updated',
   'quota.updated',
+  'quota.limits.updated',
   'provider.updated',
   'delegation.updated',
   'workspace.updated',

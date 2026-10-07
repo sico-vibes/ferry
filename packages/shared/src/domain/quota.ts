@@ -1,6 +1,26 @@
 import { z } from 'zod';
 import { ProviderIdSchema } from './ids.js';
 
+export const ProviderLimitWindowSchema = z.object({
+  metric: z.enum(['requests', 'tokens', 'usd', 'credits']),
+  period: z.enum(['day', 'month']),
+  limit: z.number().nonnegative().nullable(),
+  used: z.number().nonnegative(),
+  remaining: z.number().nonnegative().nullable(),
+  resetAt: z.iso.datetime().nullable(),
+  source: z.enum(['header', 'endpoint', 'published', 'learned']),
+  observedAt: z.iso.datetime().nullable(),
+  model: z.string().optional(),
+});
+export type ProviderLimitWindow = z.infer<typeof ProviderLimitWindowSchema>;
+export const ProviderLimitsSchema = z.object({
+  providerId: ProviderIdSchema,
+  providerName: z.string(),
+  state: z.enum(['known', 'no_published_limit', 'paid_no_limit']),
+  windows: z.array(ProviderLimitWindowSchema),
+});
+export type ProviderLimits = z.infer<typeof ProviderLimitsSchema>;
+
 export const ProviderErrorKindSchema = z.enum([
   'auth',
   'forbidden',
@@ -89,6 +109,8 @@ export const QuotaObservationSchema = z.object({
   providerId: ProviderIdSchema,
   modelRef: z.string().nullable().optional(),
   windowId: z.string(),
+  /** Period of an observed window not present in the published catalog. */
+  period: z.enum(['minute', 'hour', 'day', 'month']).optional(),
   metric: z.enum(['requests', 'tokens', 'usd', 'credits']),
   value: z.number().nonnegative().optional(),
   limit: z.number().nonnegative().nullable().optional(),

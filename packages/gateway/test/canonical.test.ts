@@ -18,6 +18,27 @@ const golden = JSON.parse(
 ) as Record<string, unknown>;
 
 describe('canonical protocol conversions', () => {
+  it('preserves OpenAI reasoning efforts through chat and Responses normalization', () => {
+    expect(
+      openAiChatToCanonical({ model: 'openai/gpt-5', messages: [], reasoning_effort: 'low' })
+        .effort,
+    ).toBe('low');
+    expect(
+      openAiChatToCanonical({ model: 'openai/gpt-5', messages: [], reasoning: { effort: 'high' } })
+        .effort,
+    ).toBe('high');
+    expect(
+      openAiResponsesToCanonical({
+        model: 'openai/gpt-5',
+        input: 'hello',
+        reasoning: { effort: 'xhigh' },
+      }).effort,
+    ).toBe('xhigh');
+    expect(
+      openAiChatToCanonical({ model: 'custom/model', messages: [], reasoning_effort: 'invalid' })
+        .effort,
+    ).toBeUndefined();
+  });
   it('normalizes OpenAI Chat, Anthropic Messages, Responses, and Gemini requests', () => {
     const chat = openAiChatToCanonical(golden.chat as Record<string, unknown>);
     const anthropic = anthropicToCanonical(golden.anthropic as Record<string, unknown>);

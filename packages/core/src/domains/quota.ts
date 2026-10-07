@@ -1,5 +1,6 @@
 import {
   CapacitySummarySchema,
+  ProviderLimitsSchema,
   HandoffStatSchema,
   UsageHistoryPointSchema,
   type UsageHistoryPoint,
@@ -8,15 +9,47 @@ import {
 import { z } from 'zod';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
+import { oauthModelCatalog } from '@ferry/oauth';
 
 const DaysSchema = z.number().int().min(1).max(365);
 
 export function register(host: CoreHost, services: FerryServices): void {
+  const limits = () =>
+    z.array(ProviderLimitsSchema).parse(
+      services.quota.limits([
+        ...services.catalog.providers.map((provider) => ({
+          id: provider.provider as import('@ferry/shared').ProviderId,
+          name: provider.name,
+          tag: provider.tag,
+          billingEnabled: services.providers.get(provider.provider)?.billingEnabled ?? false,
+        })),
+        ...[...new Set(oauthModelCatalog.map((model) => model.providerId))]
+          .filter((id) => !services.catalog.providers.some((provider) => provider.provider === id))
+          .map((id) => ({
+            id,
+            name: services.providers.get(id)?.name ?? id,
+            tag: 'subscription_oauth' as const,
+          })),
+      ]),
+    );
+  let previousLimits = JSON.stringify(limits());
+  const emitLimits = () => {
+    const snapshot = limits();
+    const serialized = JSON.stringify(snapshot);
+    if (serialized === previousLimits) return;
+    previousLimits = serialized;
+    host.emit('quota.limits.updated', snapshot);
+  };
+  const offProviders = host.onEvent((event) => {
+    if (event === 'provider.updated') emitLimits();
+  });
+  host.onShutdown(offProviders);
   const emitUpdate = () => {
     host.emit('quota.updated', CapacitySummarySchema.parse(services.quota.capacitySummary()));
   };
   services.quota.subscribe((event) => {
     emitUpdate();
+    emitLimits();
     services.telemetry.log({
       id: newId('evt'),
       ts: services.clock.now().toISOString(),
@@ -29,6 +62,9 @@ export function register(host: CoreHost, services: FerryServices): void {
   host.registerDomain('quota', {
     capacity() {
       return Promise.resolve(CapacitySummarySchema.parse(services.quota.capacitySummary()));
+    },
+    limits() {
+      return Promise.resolve(limits());
     },
     history(rawDays: unknown) {
       return Promise.resolve()

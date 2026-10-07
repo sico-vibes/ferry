@@ -46,6 +46,7 @@ export interface RpcFerryClient extends FerryClient {
       workspaceId?: import('@ferry/shared').WorkspaceId;
       profileId?: import('@ferry/shared').ProfileId;
       modelRef?: import('@ferry/shared').ModelRef | 'auto';
+      effort?: import('@ferry/shared').Effort | null;
       text: string;
       attachments?: { name: string; text: string }[];
     }): Promise<import('@ferry/shared').Session>;
@@ -404,7 +405,7 @@ export function createHybridClient(
                       ? 'sessions'
                       : event === 'mcp.status'
                         ? 'mcp'
-                        : event === 'quota.updated'
+                        : event.startsWith('quota.')
                           ? 'quota'
                           : event === 'provider.updated'
                             ? 'providers'

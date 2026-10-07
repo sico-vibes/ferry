@@ -471,7 +471,7 @@ export async function createServices({
           providerId: 'openrouter',
           windowId:
             window.windowId === 'free-model-requests-day'
-              ? 'openrouter:provider:*:requests:fixed_daily'
+              ? 'openrouter:model:*:free:requests:fixed_daily'
               : window.windowId,
           metric: window.windowId === 'credits' ? 'credits' : 'requests',
           ...(window.limit === null || window.remaining === null

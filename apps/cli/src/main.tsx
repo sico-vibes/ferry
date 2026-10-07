@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { createClientAsync, inspectLocalCore, resolveEngineDataDirectory } from './client.js';
 import { good, muted, warn } from './colors.js';
+import { formatLimits } from './format.js';
 import {
   clearGatewayStatus,
   gatewayDataDir,
@@ -1236,14 +1237,7 @@ async function quota(client: FerryClient, json: boolean) {
   const value = await client.quota.capacity();
   if (json) process.stdout.write(`${JSON.stringify(value)}\n`);
   else {
-    const count = Math.round((value.percentRemaining / 100) * 9);
-    process.stdout.write(
-      `Capacity  ${value.stepsLeftToday} steps left  ${'▰'.repeat(count)}${'▱'.repeat(9 - count)} ${value.percentRemaining}%\n`,
-    );
-    for (const reset of value.nextResets)
-      process.stdout.write(
-        `  ${reset.providerId} · ${reset.label} · ${new Date(reset.at).toLocaleString()}\n`,
-      );
+    process.stdout.write(`${formatLimits(await client.quota.limits())}\n`);
   }
   return value.stepsLeftToday === 0 ? 4 : 0;
 }
@@ -1257,22 +1251,14 @@ async function quotaWatch(client: FerryClient, json: boolean): Promise<number> {
     return quota(client, false);
   }
   let snapshot = await client.quota.capacity();
+  let limits = await client.quota.limits();
   const redraw = () => {
     if (json) {
       process.stdout.write(`${JSON.stringify({ type: 'quota.update', payload: snapshot })}\n`);
       return;
     }
     process.stdout.write('\u001b[2J\u001b[H');
-    const barCount = Math.round((snapshot.percentRemaining / 100) * 9);
-    process.stdout.write(
-      `Ferry quota · ${snapshot.stepsLeftToday} steps left · ${'▰'.repeat(barCount)}${'▱'.repeat(9 - barCount)} ${snapshot.percentRemaining}%\n`,
-    );
-    for (const reset of snapshot.nextResets) {
-      const minutes = Math.max(0, Math.ceil((Date.parse(reset.at) - Date.now()) / 60_000));
-      process.stdout.write(
-        `  ${reset.providerId} · ${reset.label} · reset in ${Math.floor(minutes / 60)}h ${minutes % 60}m\n`,
-      );
-    }
+    process.stdout.write(`Ferry quota\n${formatLimits(limits)}\n`);
     if (!json) process.stdout.write('\nPress q or Ctrl+C to exit.\n');
   };
   redraw();
@@ -1280,12 +1266,17 @@ async function quotaWatch(client: FerryClient, json: boolean): Promise<number> {
     snapshot = value;
     redraw();
   });
+  const offLimits = client.on('quota.limits.updated', (value) => {
+    limits = value;
+    if (!json) redraw();
+  });
   const timer = setInterval(redraw, 1000);
   return new Promise((resolve) => {
     const stdin = process.stdin;
     const finish = () => {
       clearInterval(timer);
       off();
+      offLimits();
       stdin.setRawMode(false);
       stdin.off('data', onData);
       stdin.pause();

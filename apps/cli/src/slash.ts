@@ -1,6 +1,6 @@
 import type { FerryClient } from '@ferry/client';
 import type { Profile, SessionId } from '@ferry/shared';
-import { formatCapacity } from './format.js';
+import { formatLimits } from './format.js';
 
 /* Quota and optimizer counts are intentionally interpolated into human-readable output. */
 /* eslint-disable @typescript-eslint/restrict-template-expressions */
@@ -136,9 +136,7 @@ export async function executeSlashCommand(context: SlashContext, command: string
     return `Delegation ${run.id} · ${run.lane} · ${run.status}`;
   }
   if (name === '/quota') {
-    const capacity = await client.quota.capacity();
-    const providers = await client.providers.list();
-    return `${formatCapacity(capacity)}\n${capacity.perProvider.map((row) => `${providers.find((provider) => provider.id === row.providerId)?.name ?? row.providerId}: ${row.stepsLeft ?? '—'} steps`).join('\n')}`;
+    return formatLimits(await client.quota.limits());
   }
   if (name === '/optimize') {
     const mode = words[0];

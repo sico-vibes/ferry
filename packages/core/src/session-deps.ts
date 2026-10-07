@@ -39,6 +39,7 @@ import { oauthModelCatalog, streamOAuthStep } from '@ferry/oauth';
 import { hasUsableProviderKey, recordProviderKeyFailure, type FerryServices } from './services.js';
 import { z } from 'zod';
 import { getGatewayController } from './gateway.js';
+import { observationsFromRateLimitHeaders } from '@ferry/quota';
 
 const providerKeyPresence = new WeakMap<FerryServices, Map<string, boolean>>();
 
@@ -307,37 +308,8 @@ export function createSessionDependencies(
         latency_ms: Math.round(observation.latencyMs),
       },
     });
-    for (const header of Object.entries(observation.rateLimitHeaders)) {
-      const [key, value] = header;
-      const remaining = key.includes('remaining') ? Number(value) : null;
-      const limit = key.includes('limit') && !key.includes('remaining') ? Number(value) : null;
-      if (remaining === null && limit === null) continue;
-      const definitions =
-        limits?.windows.filter(
-          (window) =>
-            window.metric === (key.includes('token') ? 'tokens' : 'requests') &&
-            (window.scope === 'provider' ||
-              window.model === model?.ref.slice(providerId.length + 1)),
-        ) ?? [];
-      for (const definition of definitions) {
-        const observationRecord = QuotaObservationSchema.safeParse({
-          id: newId('quota'),
-          providerId,
-          windowId: `${providerId}:${definition.scope}:${definition.model ?? '*'}:${definition.metric}:${definition.kind}`,
-          metric: definition.metric,
-          ...(remaining !== null && limit !== null
-            ? { value: Math.max(0, limit - remaining) }
-            : {}),
-          limit,
-          remaining,
-          resetAt: null,
-          source: 'header',
-          observedAt: now.toISOString(),
-          ...(observation.statusCode === 429 ? { statusCode: 429 } : {}),
-        });
-        if (observationRecord.success) services.quota.observe(observationRecord.data);
-      }
-    }
+    for (const record of observationsFromRateLimitHeaders(observation, limits?.windows ?? [], now))
+      services.quota.observe(QuotaObservationSchema.parse(record));
     if (observation.statusCode === 429 || observation.statusCode === 503) {
       const retryAfter = observation.rateLimitHeaders['retry-after'];
       const retryTimestamp = retryAfterTimestamp(retryAfter, now);

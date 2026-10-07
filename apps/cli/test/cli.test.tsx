@@ -301,7 +301,10 @@ describe('@ferry/cli', () => {
     if (!profile) throw new Error('fixture profile missing');
     const app = render(<Chat client={api} workspace={workspace} profile={profile} />);
     expect(app.lastFrame()).toContain(profile.name);
-    expect(statusLine(profile.name, 'auto', await api.quota.capacity())).toContain('steps left');
+    expect(statusLine(profile.name, 'auto', await api.quota.limits())).toContain('auto');
+    expect(statusLine(profile.name, 'gemini/gemini-flash', await api.quota.limits())).toContain(
+      'daily requests left',
+    );
     app.unmount();
   });
 

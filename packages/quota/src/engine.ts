@@ -11,6 +11,8 @@ import type {
   QuotaObservation,
   QuotaWindow,
   UsageRecord,
+  Provider,
+  ProviderLimits as HonestProviderLimits,
 } from '@ferry/shared';
 import { ProviderErrorKindSchema } from '@ferry/shared';
 import { newId } from '@ferry/shared';
@@ -18,6 +20,7 @@ import { ProviderLimitsSchema, type Catalog, type ProviderLimits } from '@ferry/
 import { QuotaObservationRepository, RequestRepository } from '@ferry/storage';
 import { nextReset, remaining, usageIn, windowStart, type WindowSpec } from './windows.js';
 import { QuotaLeaseLedger } from './leases.js';
+import { catalogWindowId, matchesQuotaModel } from './headers.js';
 
 type EventListener = (event: { type: 'quota.updated'; summary: CapacitySummary }) => void;
 type Source = QuotaObservation['source'];
@@ -159,6 +162,10 @@ export class QuotaEngine {
   private readonly observations: QuotaObservationRepository | undefined;
   private readonly records = new Map<string, UsageRecord>();
   private readonly snapshots = new Map<string, QuotaObservation>();
+  private readonly windowCache = new Map<
+    string,
+    { at: number; until: number; windows: QuotaWindow[] }
+  >();
   private readonly learned = new Map<string, LearnedLimit>();
   private readonly cooldowns = new Map<string, Cooldown>();
   private readonly breakers = new Map<string, CircuitBreakerPolicy>();
@@ -264,7 +271,7 @@ export class QuotaEngine {
     };
     return {
       ...value,
-      id: `${providerId}:${value.scope}:${value.model ?? '*'}:${value.metric}:${value.kind}`,
+      id: catalogWindowId(providerId, value),
       kind: value.kind,
       tz: value.tz ?? 'UTC',
       length: value.length ?? (value.kind === 'dynamic_5h' ? 300 : 60),
@@ -283,6 +290,7 @@ export class QuotaEngine {
     return () => this.listeners.delete(listener);
   }
   recordUsage(input: UsageRecord): void {
+    this.windowCache.delete(input.providerId);
     const record = {
       ...input,
       ...(input.inputTokens === undefined ? {} : { inputTokens: Math.max(0, input.inputTokens) }),
@@ -334,6 +342,7 @@ export class QuotaEngine {
     );
   }
   observe(observation: QuotaObservation): void {
+    this.windowCache.delete(observation.providerId);
     const key = this.key(
       observation.providerId,
       observation.windowId,
@@ -350,7 +359,11 @@ export class QuotaEngine {
       };
     }
     if (observation.statusCode === 429) {
-      const current = this.currentWindow(observation.providerId, window);
+      const current = this.currentWindow(
+        observation.providerId,
+        window,
+        observation.modelRef ?? undefined,
+      );
       const currentUsage = current.used;
       const estimated = current.remaining;
       if ((estimated ?? 1) > 0) {
@@ -378,11 +391,17 @@ export class QuotaEngine {
     }
     this.observations?.put(observation);
     const previous = this.snapshots.get(key);
+    const previousExpired = previous?.resetAt
+      ? Date.parse(previous.resetAt) <= this.now().getTime()
+      : previous && window?.kind === 'rolling'
+        ? this.now().getTime() - Date.parse(previous.observedAt) >= (window.length ?? 60) * 1000
+        : false;
     if (
       !previous ||
+      previousExpired ||
       rank[sourceFor(observation)] > rank[sourceFor(previous)] ||
       (rank[sourceFor(observation)] === rank[sourceFor(previous)] &&
-        Date.parse(observation.observedAt) > Date.parse(previous.observedAt))
+        Date.parse(observation.observedAt) >= Date.parse(previous.observedAt))
     ) {
       this.snapshots.set(key, observation);
     }
@@ -391,9 +410,37 @@ export class QuotaEngine {
   }
   private windowDefinitions(providerId: string): ExtendedWindow[] {
     const provider = this.providers.find((item) => item.provider === providerId);
-    return provider?.windows.map((window) => this.normalizeCatalogWindow(providerId, window)) ?? [];
+    const definitions =
+      provider?.windows.map((window) => this.normalizeCatalogWindow(providerId, window)) ?? [];
+    for (const observation of this.snapshots.values()) {
+      if (
+        observation.providerId !== providerId ||
+        !observation.period ||
+        definitions.some((window) => window.id === observation.windowId)
+      )
+        continue;
+      const period = observation.period;
+      definitions.push({
+        id: observation.windowId,
+        scope: observation.modelRef ? 'model' : 'provider',
+        ...(observation.modelRef ? { model: observation.modelRef } : {}),
+        metric: observation.metric,
+        limit: null,
+        kind:
+          period === 'day' ? 'fixed_daily' : period === 'month' ? 'monthly_from_anchor' : 'rolling',
+        tz: 'UTC',
+        time: '00:00',
+        day: 1,
+        length: period === 'hour' ? 3600 : 60,
+      });
+    }
+    return definitions;
   }
-  private currentWindow(providerId: string, target?: ExtendedWindow): QuotaWindow {
+  private currentWindow(
+    providerId: string,
+    target?: ExtendedWindow,
+    selectedModelRef?: string,
+  ): QuotaWindow {
     const window = target ?? this.windowDefinitions(providerId)[0];
     if (!window)
       return {
@@ -414,14 +461,18 @@ export class QuotaEngine {
     const spec = asWindowSpec(window);
     const now = this.now();
     const matching = this.queryUsage({ providerId }).filter(
-      (record) => window.scope !== 'model' || record.modelRef.includes(window.model ?? ''),
+      (record) =>
+        window.scope !== 'model' ||
+        (selectedModelRef
+          ? record.modelRef === selectedModelRef
+          : matchesQuotaModel(providerId, record.modelRef, window.model ?? '')),
     );
     const start = windowStart(now, spec, matching);
     const end = nextReset(now, spec, matching);
-    const amounts = usageIn({ start, end: now }, matching);
+    const amounts = usageIn({ start, end: new Date(now.getTime() + 1) }, matching);
     const inWindow = matching.filter((record) => {
       const timestamp = Date.parse(record.occurredAt);
-      return timestamp >= start.getTime() && timestamp < now.getTime();
+      return timestamp >= start.getTime() && timestamp <= now.getTime();
     });
     const pricedUsd = inWindow.reduce((sum, record) => sum + this.costFor(record), 0);
     const pricedCredits = inWindow.reduce(
@@ -437,21 +488,31 @@ export class QuotaEngine {
           : window.metric === 'usd'
             ? pricedUsd
             : pricedCredits;
-    const normalizedWindowModel = window.model?.toLowerCase().replace(/^.*\//, '');
-    const modelRef = normalizedWindowModel
-      ? (this.models.find(
-          (model) =>
-            model.providerId === providerId &&
-            (model.ref.toLowerCase().endsWith(`/${normalizedWindowModel}`) ||
-              model.family?.toLowerCase() === normalizedWindowModel),
-        )?.ref ?? null)
-      : null;
-    const observation = this.snapshots.get(this.key(providerId, window.id, modelRef ?? undefined));
+    const modelRef =
+      window.scope === 'model'
+        ? (selectedModelRef ??
+          this.models.find((model) => matchesQuotaModel(providerId, model.ref, window.model ?? ''))
+            ?.ref ??
+          null)
+        : null;
+    const observation =
+      this.snapshots.get(this.key(providerId, window.id, modelRef ?? undefined)) ??
+      this.snapshots.get(this.key(providerId, window.id));
     const validSnapshot =
-      observation && (!observation.resetAt || Date.parse(observation.resetAt) > now.getTime())
+      observation &&
+      (!observation.resetAt || Date.parse(observation.resetAt) > now.getTime()) &&
+      (observation.resetAt ||
+        nextReset(new Date(observation.observedAt), spec).getTime() > now.getTime()) &&
+      (!!observation.resetAt ||
+        window.kind !== 'rolling' ||
+        now.getTime() - Date.parse(observation.observedAt) < (window.length ?? 60) * 1000)
         ? observation
         : undefined;
-    const learned = this.learned.get(this.key(providerId, window.id, modelRef ?? undefined));
+    const learnedSnapshot = this.learned.get(
+      this.key(providerId, window.id, modelRef ?? undefined),
+    );
+    const learned =
+      learnedSnapshot && learnedSnapshot.expiresAt > now.getTime() ? learnedSnapshot : undefined;
     const learnedLimit =
       learned && learned.expiresAt > now.getTime()
         ? Math.min(
@@ -470,7 +531,7 @@ export class QuotaEngine {
     return {
       id: window.id,
       scope: window.scope,
-      modelRef,
+      modelRef: modelRef as QuotaWindow['modelRef'],
       metric: window.metric,
       kind:
         window.kind === 'weekly_fixed' || window.kind === 'weekly_from_first_use'
@@ -481,10 +542,14 @@ export class QuotaEngine {
               ? 'dynamic'
               : window.kind,
       periodLabel: window.kind,
-      used,
+      used:
+        validSnapshot?.value ??
+        (limit != null && validSnapshot?.remaining != null
+          ? Math.max(0, limit - validSnapshot.remaining)
+          : used),
       limit,
       remaining: remaining(limit, used, authoritative),
-      resetAt: end.toISOString(),
+      resetAt: validSnapshot?.resetAt ?? end.toISOString(),
       confidence: validSnapshot
         ? confidence[validSnapshot.source]
         : learned
@@ -494,7 +559,7 @@ export class QuotaEngine {
         validSnapshot?.observedAt ?? (learned ? new Date(learned.observedAt).toISOString() : null),
       durationMs:
         window.kind === 'rolling'
-          ? (window.length ?? 60) * 60_000
+          ? (window.length ?? 60) * 1000
           : window.kind === 'dynamic_5h'
             ? 5 * 60 * 60_000
             : window.kind === 'fixed_daily'
@@ -505,9 +570,116 @@ export class QuotaEngine {
     };
   }
   getWindows(providerId: string): QuotaWindow[] {
-    return this.windowDefinitions(providerId).map((window) =>
-      this.currentWindow(providerId, window),
+    const now = this.now().getTime();
+    const cached = this.windowCache.get(providerId);
+    if (cached && now >= cached.at && now < cached.until) return cached.windows;
+    const windows = this.windowDefinitions(providerId).flatMap((window) => {
+      if (window.scope !== 'model') return [this.currentWindow(providerId, window)];
+      const refs = [
+        ...new Set([
+          ...this.models
+            .filter((model) => matchesQuotaModel(providerId, model.ref, window.model ?? ''))
+            .map((model) => model.ref),
+          ...this.queryUsage({ providerId })
+            .filter((record) => matchesQuotaModel(providerId, record.modelRef, window.model ?? ''))
+            .map((record) => record.modelRef),
+          ...[...this.snapshots.values()]
+            .filter(
+              (observation) =>
+                observation.providerId === providerId &&
+                observation.windowId === window.id &&
+                observation.modelRef,
+            )
+            .flatMap((observation) => (observation.modelRef ? [observation.modelRef] : [])),
+        ]),
+      ];
+      return refs.length
+        ? refs.map((ref) => this.currentWindow(providerId, window, ref))
+        : [this.currentWindow(providerId, window)];
+    });
+    const resetTimes = windows
+      .map((window) => Date.parse(window.resetAt ?? ''))
+      .filter((at) => at > now);
+    const futureUsage = this.queryUsage({ providerId })
+      .map((record) => Date.parse(record.occurredAt))
+      .filter((at) => at > now);
+    this.windowCache.set(providerId, {
+      at: now,
+      until: Math.min(now + 100, ...resetTimes, ...futureUsage),
+      windows,
+    });
+    return windows;
+  }
+
+  limits(
+    metadata: readonly Pick<Provider, 'id' | 'name' | 'tag' | 'billingEnabled'>[] = [],
+  ): HonestProviderLimits[] {
+    const providers = new Map(
+      this.providers.map((provider) => [
+        provider.provider,
+        {
+          id: provider.provider as Provider['id'],
+          name: provider.name,
+          tag: provider.tag,
+          billingEnabled: false,
+        },
+      ]),
     );
+    for (const provider of metadata)
+      providers.set(provider.id, { ...provider, billingEnabled: provider.billingEnabled ?? false });
+    return [...providers.values()].map((provider) => {
+      const windows: HonestProviderLimits['windows'] = this.getWindows(provider.id).flatMap(
+        (window) => {
+          const definition = this.windowDefinitions(provider.id).find(
+            (item) => item.id === window.id,
+          );
+          const period =
+            definition?.kind === 'fixed_daily' ||
+            (definition?.kind === 'rolling' && definition.length === 86400)
+              ? 'day'
+              : definition?.kind === 'monthly_from_anchor'
+                ? 'month'
+                : undefined;
+          if (!period) return [];
+          const source = (
+            this.snapshots.get(this.key(provider.id, window.id, window.modelRef ?? undefined)) ??
+            this.snapshots.get(this.key(provider.id, window.id))
+          )?.source;
+          return [
+            {
+              metric: window.metric,
+              period,
+              limit: window.limit,
+              used: window.used,
+              remaining: window.remaining,
+              resetAt: window.resetAt,
+              source:
+                window.confidence === 'exact'
+                  ? source === 'endpoint'
+                    ? 'endpoint'
+                    : 'header'
+                  : window.confidence === 'learned'
+                    ? 'learned'
+                    : 'published',
+              observedAt: window.observedAt ?? null,
+              ...(window.scope === 'model'
+                ? { model: window.modelRef ?? `${provider.id}/${definition?.model ?? '*'}` }
+                : {}),
+            },
+          ];
+        },
+      );
+      return {
+        providerId: provider.id,
+        providerName: provider.name,
+        state: windows.some((window) => window.limit !== null || window.remaining !== null)
+          ? 'known'
+          : provider.billingEnabled || provider.tag === 'paid'
+            ? 'paid_no_limit'
+            : 'no_published_limit',
+        windows,
+      };
+    });
   }
 
   acquireLease(providerId: string, modelRef: string, tokens: number): (() => void) | undefined {
@@ -575,12 +747,14 @@ export class QuotaEngine {
     return cost;
   }
   private stepsFor(providerId: string, modelRef?: string): number | null {
-    const windows = this.getWindows(providerId);
+    const windows = this.getWindows(providerId).filter(
+      (window) => window.scope === 'provider' || !modelRef || window.modelRef === modelRef,
+    );
     const model = modelRef ?? this.models.find((entry) => entry.providerId === providerId)?.ref;
     const bounded = windows.some((window) => {
       if (window.limit === null) return false;
       const definition = this.windowDefinitions(providerId).find((item) => item.id === window.id);
-      return definition?.kind !== 'rolling' || (definition.length ?? 0) >= 3600;
+      return definition?.kind !== 'rolling' || (definition.length ?? 0) >= 86400;
     });
     if (!model || !bounded) return null;
     const average = [...this.averages.entries()]
@@ -596,7 +770,7 @@ export class QuotaEngine {
     for (const window of windows) {
       if (window.remaining === null) continue;
       const definition = this.windowDefinitions(providerId).find((item) => item.id === window.id);
-      if (definition?.kind === 'rolling' && (definition.length ?? 0) < 3600) continue;
+      if (definition?.kind === 'rolling' && (definition.length ?? 0) < 86400) continue;
       if (window.metric === 'requests') candidates.push(window.remaining);
       if (window.metric === 'tokens') candidates.push(Math.floor(window.remaining / avgTokens));
       if ((window.metric === 'usd' || window.metric === 'credits') && avgCost > 0)

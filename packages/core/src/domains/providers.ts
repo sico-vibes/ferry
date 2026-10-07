@@ -5,12 +5,12 @@ import {
   ProviderSchema,
   RoutingSettingsSchema,
   QuotaObservationSchema,
-  newId,
   redactKnownSecretText,
   type Provider,
 } from '@ferry/shared';
 import { discoverProviderModels, probe, resolveProviderRequestOverrides } from '@ferry/providers';
 import { z } from 'zod';
+import { observationsFromProbe } from '@ferry/quota';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { invalidateSessionProviderKeyCache } from '../session-deps.js';
@@ -678,41 +678,20 @@ export function register(host: CoreHost, services: FerryServices): void {
       const now = services.clock.now().toISOString();
       const limits = services.catalog.providers.find((item) => item.provider === id);
       const modelRef = services.catalog.models.find((model) => model.providerId === id)?.ref;
-      const testedModel = modelRef?.slice(id.length + 1);
-      for (const window of result.windows) {
-        const definitions = limits?.windows.filter(
-          (candidate) =>
-            candidate.metric === window.metric &&
-            (candidate.scope === 'provider' || candidate.model === testedModel),
-        );
-        const targets = definitions?.length
-          ? definitions.map(
-              (definition) =>
-                `${id}:${definition.scope}:${definition.model ?? '*'}:${definition.metric}:${definition.kind}`,
-            )
-          : [window.id];
-        for (const windowId of targets) {
-          const observation = {
-            id: newId('quota'),
-            providerId: id,
-            windowId,
-            metric: window.metric,
-            ...(window.limit === null || window.remaining === null
-              ? {}
-              : { value: Math.max(0, window.limit - window.remaining) }),
-            limit: window.limit,
-            remaining: window.remaining,
-            resetAt: window.resetAt,
-            source: 'header' as const,
-            observedAt: now,
-            ...(result.errorKind === 'rate_limit' || result.errorKind === 'quota_exhausted'
-              ? { statusCode: 429 }
-              : {}),
-          };
-          const parsed = QuotaObservationSchema.safeParse(observation);
-          if (parsed.success) services.quota.observe(parsed.data);
-        }
-      }
+      const observedModel = result.usedModel
+        ? result.usedModel.startsWith(id + '/')
+          ? result.usedModel
+          : id + '/' + result.usedModel
+        : modelRef;
+      for (const observation of observationsFromProbe({
+        providerId: id,
+        modelRef: observedModel,
+        windows: result.windows,
+        definitions: limits?.windows ?? [],
+        source: id === 'openrouter' ? 'endpoint' : 'header',
+        observedAt: now,
+      }))
+        services.quota.observe(QuotaObservationSchema.parse(observation));
       const cooldownModel = modelRef ?? id;
       if (result.errorKind === 'rate_limit' || result.errorKind === 'quota_exhausted') {
         const cooldown = services.quota.noteFailure(

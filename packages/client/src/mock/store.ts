@@ -26,6 +26,7 @@ import type {
   Workspace,
   WorkspaceId,
 } from '@ferry/shared';
+import { providerLimitsFromProviders } from './limits.js';
 import { TypedEmitter } from './emitter.js';
 import { computeCapacity } from './capacity.js';
 import { systemClock } from './clock.js';
@@ -245,8 +246,17 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
     }
     if (behavior.injectErrors && rng.next() < 0.1) throw new MockInjectedError();
   };
+  let previousLimits = JSON.stringify(providerLimitsFromProviders(state.providers));
   const emit = <E extends keyof FerryEvents>(event: E, payload: FerryEvents[E]) => {
     emitter.emit(event, payload);
+    if (event === 'quota.updated' || event === 'provider.updated') {
+      const limits = providerLimitsFromProviders(state.providers);
+      const serialized = JSON.stringify(limits);
+      if (serialized !== previousLimits) {
+        previousLimits = serialized;
+        emitter.emit('quota.limits.updated', limits);
+      }
+    }
   };
   const session = (id: SessionId): Session => {
     const found = state.sessions.find((item) => item.id === id);

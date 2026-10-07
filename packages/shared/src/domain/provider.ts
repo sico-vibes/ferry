@@ -113,6 +113,8 @@ export const ProbeResultSchema = z.object({
   skippedModels: z.array(z.object({ model: z.string(), reason: z.string() })).optional(),
 });
 export type ProbeResult = z.infer<typeof ProbeResultSchema>;
+export const EffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+export type Effort = z.infer<typeof EffortSchema>;
 export const ModelInfoSchema = z.object({
   ref: ModelRefSchema,
   providerId: ProviderIdSchema,
@@ -123,6 +125,7 @@ export const ModelInfoSchema = z.object({
   maxOutput: z.number().int().positive(),
   toolCalling: z.boolean(),
   reasoning: z.boolean(),
+  reasoningEfforts: z.array(EffortSchema).optional(),
   free: z.boolean(),
   priceInPerM: z.number().nonnegative().nullable(),
   priceOutPerM: z.number().nonnegative().nullable(),

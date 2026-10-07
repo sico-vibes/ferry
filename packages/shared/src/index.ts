@@ -6,6 +6,7 @@ export * from './domain/provider.js';
 export * from './domain/free-model.js';
 export * from './domain/oauth.js';
 export * from './domain/quota.js';
+export * from './domain/usage.js';
 export * from './domain/profile.js';
 export * from './domain/integrations.js';
 export * from './domain/delegation.js';

@@ -1,4 +1,5 @@
 import type { GatewayMessage } from './index.js';
+import { EffortSchema, type Effort } from '@ferry/shared';
 
 export type CanonicalPart =
   | { type: 'text'; text: string }
@@ -32,7 +33,16 @@ export interface CanonicalRequest {
   toolChoice?: unknown;
   maxTokens?: number;
   temperature?: number;
+  effort?: Effort;
   stream: boolean;
+}
+function canonicalReasoningEffort(input: Record<string, unknown>): { effort?: Effort } {
+  const nested =
+    input.reasoning && typeof input.reasoning === 'object'
+      ? (input.reasoning as Record<string, unknown>).effort
+      : undefined;
+  const parsed = EffortSchema.safeParse(input.reasoning_effort ?? nested);
+  return parsed.success ? { effort: parsed.data } : {};
 }
 
 export interface CanonicalUsage {
@@ -199,6 +209,7 @@ export function openAiChatToCanonical(input: Record<string, unknown>): Canonical
     ...(input.tool_choice !== undefined ? { toolChoice: input.tool_choice } : {}),
     ...(typeof input.max_tokens === 'number' ? { maxTokens: input.max_tokens } : {}),
     ...(typeof input.temperature === 'number' ? { temperature: input.temperature } : {}),
+    ...canonicalReasoningEffort(input),
     stream: input.stream === true,
   };
 }
@@ -277,6 +288,7 @@ export function openAiResponsesToCanonical(input: Record<string, unknown>): Cano
     ...(canonicalTools ? { tools: canonicalTools } : {}),
     ...(input.tool_choice !== undefined ? { toolChoice: input.tool_choice } : {}),
     ...(typeof input.max_output_tokens === 'number' ? { maxTokens: input.max_output_tokens } : {}),
+    ...canonicalReasoningEffort(input),
     stream: input.stream === true,
   };
 }

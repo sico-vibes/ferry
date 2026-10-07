@@ -11,6 +11,7 @@ import {
 } from './ids.js';
 import { ProviderFailureFamilySchema } from './quota.js';
 import { AgentEventSchema } from './agent-event.js';
+import { EffortSchema } from './provider.js';
 export const SessionStatusSchema = z.enum([
   'idle',
   'running',
@@ -27,6 +28,7 @@ export const SessionSchema = z.object({
   profileId: ProfileIdSchema,
   modelRef: ModelRefSchema.nullable(),
   pinnedModelRef: ModelRefSchema.nullable().default(null),
+  effort: EffortSchema.nullable().optional(),
   starred: z.boolean(),
   pinned: z.boolean(),
   status: SessionStatusSchema,

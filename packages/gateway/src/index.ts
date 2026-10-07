@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { mapProviderError } from '@ferry/providers';
 import { classifyProviderError } from '@ferry/router';
+import { EffortSchema, type Effort } from '@ferry/shared';
 import {
   canonicalToGatewayMessages,
   anthropicToCanonical,
@@ -67,6 +68,8 @@ export interface GatewayRequest {
   response_format?: { type?: string };
   max_tokens?: number;
   temperature?: number;
+  reasoning_effort?: Effort;
+  reasoning?: { effort?: Effort };
 }
 export interface GatewayCompletion {
   id: string;
@@ -135,6 +138,7 @@ export interface GatewayRuntime {
     jsonMode?: boolean;
     maxTokens?: number;
     temperature?: number;
+    effort?: Effort;
     sessionHint: string;
     signal: AbortSignal;
     traceId?: string;
@@ -471,6 +475,10 @@ function modelFor(raw: string, key: GatewayKey): string {
     throw new Error('Unknown model');
   return alias ? `@profile:${alias}` : model;
 }
+function reasoningInput(input: GatewayRequest): { effort?: Effort } {
+  const parsed = EffortSchema.safeParse(input.reasoning_effort ?? input.reasoning?.effort);
+  return parsed.success ? { effort: parsed.data } : {};
+}
 function chatChunk(
   id: string,
   model: string,
@@ -572,6 +580,7 @@ async function handleChat(
         jsonMode: input.response_format?.type === 'json_object',
         ...(input.max_tokens ? { maxTokens: input.max_tokens } : {}),
         ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+        ...reasoningInput(input),
         sessionHint,
         signal: controller.signal,
         ...ferryAttemptOptions(ferryState),
@@ -613,6 +622,7 @@ async function handleChat(
         jsonMode: input.response_format?.type === 'json_object',
         ...(input.max_tokens ? { maxTokens: input.max_tokens } : {}),
         ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+        ...reasoningInput(input),
         sessionHint,
         signal: controller.signal,
         ...ferryAttemptOptions(ferryState),
@@ -1081,6 +1091,7 @@ async function handleCanonicalProtocol(
       ...(canonical.toolChoice !== undefined ? { toolChoice: canonical.toolChoice } : {}),
       ...(canonical.maxTokens ? { maxTokens: canonical.maxTokens } : {}),
       ...(canonical.temperature !== undefined ? { temperature: canonical.temperature } : {}),
+      ...(canonical.effort ? { effort: canonical.effort } : {}),
       sessionHint,
       signal: controller.signal,
       ...ferryAttemptOptions(ferryState),

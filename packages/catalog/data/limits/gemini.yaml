@@ -38,10 +38,17 @@ probe_models:
 windows:
   - {
       scope: model,
-      model: flash,
+      model: 'gemini-*flash*',
       metric: requests,
       kind: fixed_daily,
       tz: America/Los_Angeles,
       limit: 250,
     }
-  - { scope: model, model: flash, metric: requests, kind: rolling, length: 60, limit: 10 }
+  - {
+      scope: model,
+      model: 'gemini-*flash*',
+      metric: requests,
+      kind: rolling,
+      length: 60,
+      limit: 10,
+    }

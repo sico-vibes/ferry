@@ -10,12 +10,4 @@ source_url: https://openrouter.ai/docs/api/reference/limits
 parser: openrouter_key
 windows:
   - { scope: provider, metric: requests, kind: rolling, length: 60, limit: 20 }
-  - { scope: model, model: ':free', metric: requests, kind: fixed_daily, tz: UTC, limit: 50 }
-  - {
-      scope: model,
-      model: ':free_after_credit',
-      metric: requests,
-      kind: fixed_daily,
-      tz: UTC,
-      limit: 1000,
-    }
+  - { scope: model, model: '*:free', metric: requests, kind: fixed_daily, tz: UTC, limit: 50 }

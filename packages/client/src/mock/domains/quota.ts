@@ -1,3 +1,4 @@
+import { providerLimitsFromProviders } from '../limits.js';
 import type { FerryClient } from '../../ferry-client.js';
 import type { HandoffStat, Provider } from '@ferry/shared';
 import type { MockDeps } from './deps.js';
@@ -6,6 +7,10 @@ import type { MockStore } from '../types.js';
 export function createQuotaDomain(_store: MockStore, deps: MockDeps): FerryClient['quota'] {
   const { clock, rng, before, capacity } = deps;
   return {
+    async limits() {
+      await before();
+      return providerLimitsFromProviders(deps.state.providers);
+    },
     async capacity() {
       await before();
       return capacity();

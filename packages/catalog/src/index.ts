@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { resolveFerryRuntimePaths } from '@ferry/shared/electron-paths';
 import { loadCapabilityRegistry, normalizeModelId } from './registry.js';
+import { reasoningEffortsForModel } from './reasoning.js';
+export { reasoningEffortsForModel, advertisesReasoning } from './reasoning.js';
 import { loadQualityPriors, qualityPenaltyForModel, resolveQualityFamily } from './quality.js';
 import {
   ModelInfoSchema,
@@ -153,6 +155,12 @@ export function normalizeModels(
         maxOutput: model.limit?.output ?? Math.min(model.limit?.context ?? 8192, 4096),
         toolCalling: model.tool_call ?? false,
         reasoning: model.reasoning ?? false,
+        reasoningEfforts: reasoningEffortsForModel({
+          provider: providerId,
+          id: model.id,
+          reasoning: model.reasoning,
+          metadata: model as unknown as Record<string, unknown>,
+        }),
         free: isModelFreeForPlan(
           {
             id: ProviderIdSchema.parse(providerId),
@@ -267,6 +275,15 @@ export async function loadCatalog(
       ...model,
       cachedInputRatio: providerCacheRatio ?? model.cachedInputRatio ?? 1,
       toolCalling: capability?.toolCall ?? true,
+      reasoning: capability?.reasoning ?? model.reasoning,
+      reasoningEfforts: reasoningEffortsForModel({
+        provider: model.providerId,
+        id: model.ref.slice(model.providerId.length + 1),
+        reasoning: capability?.reasoning ?? model.reasoning,
+        metadata: options.liveModels?.find(
+          (entry) => `${entry.provider}/${entry.id}` === model.ref,
+        ) ?? { reasoningEfforts: capability?.reasoningEfforts ?? model.reasoningEfforts },
+      }),
       ...(capability ? { capability } : {}),
       quality: score,
       qualityConfidence: confidence,

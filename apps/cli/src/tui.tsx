@@ -33,11 +33,13 @@ export function Chat({
     summary: string;
     detail: string;
   } | null>(null);
-  const [status, setStatus] = useState(
-    `${profile?.name ?? 'No profile'} · auto · loading capacity`,
-  );
+  const [status, setStatus] = useState(`${profile?.name ?? 'No profile'} · auto`);
   const [activeProfile, setActiveProfile] = useState(profile);
   const [model, setModel] = useState('auto');
+  const display = useRef({ profileName: activeProfile?.name ?? 'No profile', model });
+  useEffect(() => {
+    display.current = { profileName: activeProfile?.name ?? 'No profile', model };
+  }, [activeProfile, model]);
   const [cloudEmail, setCloudEmail] = useState<string | null>(null);
   const [passwordEmail, setPasswordEmail] = useState<string | null>(null);
   const [freeOnly, setFreeOnly] = useState(false);
@@ -68,7 +70,7 @@ export function Chat({
   useEffect(() => {
     let active = true;
     void client.quota
-      .capacity()
+      .limits()
       .then((quota) => {
         if (active) setStatus(statusLine(activeProfile?.name ?? 'No profile', model, quota));
       })
@@ -97,6 +99,16 @@ export function Chat({
     });
     const updateOff = client.on('session.updated', (value) => {
       if (value.id !== sessionRef.current) return;
+      if (value.modelRef) {
+        display.current.model = value.modelRef;
+        setModel(value.modelRef);
+        void client.quota
+          .limits()
+          .then((limits) =>
+            setStatus(statusLine(display.current.profileName, display.current.model, limits)),
+          )
+          .catch(showError);
+      }
       const nowRunning = value.status === 'running' || value.status === 'awaiting_approval';
       setRunning(nowRunning);
       if (wasRunning.current && !nowRunning) {
@@ -111,11 +123,15 @@ export function Chat({
       }
       wasRunning.current = nowRunning;
     });
+    const limitsOff = client.on('quota.limits.updated', (limits) => {
+      setStatus(statusLine(display.current.profileName, display.current.model, limits));
+    });
     return () => {
       active = false;
       off();
       partOff();
       updateOff();
+      limitsOff();
     };
   }, [client, profile, workspace]);
   useInput((value, key) => {
@@ -179,14 +195,14 @@ export function Chat({
           onProfile: (next) => {
             setActiveProfile(next);
             void client.quota
-              .capacity()
+              .limits()
               .then((quota) => setStatus(statusLine(next.name, model, quota)))
               .catch(showError);
           },
           onModel: (ref) => {
             setModel(ref);
             void client.quota
-              .capacity()
+              .limits()
               .then((quota) =>
                 setStatus(statusLine(activeProfile?.name ?? 'No profile', ref, quota)),
               )

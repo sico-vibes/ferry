@@ -24,7 +24,7 @@ describe('quota window math', () => {
           const milliseconds = length * 1000;
           const spec = { kind: 'rolling' as const, length };
           expect(windowStart(new Date(now), spec).getTime()).toBe(now - milliseconds);
-          expect(nextReset(new Date(now), spec).getTime()).toBe(now);
+          expect(nextReset(new Date(now), spec).getTime()).toBe(now + milliseconds);
         },
       ),
     );

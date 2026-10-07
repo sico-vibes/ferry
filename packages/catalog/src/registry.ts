@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { advertisesReasoning, reasoningEffortsForModel } from './reasoning.js';
+import type { Effort } from '@ferry/shared';
 
 export type ToolProtocol = 'native' | 'xml' | 'react' | 'none';
 export interface ModelCapability {
@@ -10,6 +12,7 @@ export interface ModelCapability {
   parallelToolCalls: boolean | null;
   vision: boolean;
   reasoning: boolean;
+  reasoningEfforts?: Effort[];
   context: number;
   maxOutput: number;
   editFormat: string;
@@ -189,6 +192,14 @@ export function normalizeCapability(input: CapabilityInput): ModelCapability {
     parallelToolCalls,
     vision,
     reasoning,
+    reasoningEfforts: reasoningEffortsForModel({
+      provider: input.provider,
+      id: input.id,
+      reasoning,
+      metadata: [...sourceProperties]
+        .reverse()
+        .reduce<Record<string, unknown>>((merged, key) => ({ ...merged, ...input[key] }), {}),
+    }),
     context,
     maxOutput,
     editFormat: editFormatValue,
@@ -257,9 +268,23 @@ export function buildCapabilityRegistry(inputs: CapabilityInput[]): CapabilityRe
         ]),
       ),
     ];
-    const capability = { ...normalized, aliases };
-    for (const entry of group) registry[`${entry.provider}/${entry.id}`] = capability;
+    const entries = group.map((entry) => ({
+      ...normalized,
+      aliases,
+      reasoningEfforts: reasoningEffortsForModel({
+        provider: entry.provider,
+        id: entry.id,
+        reasoning: normalized.reasoning,
+        metadata: [...sourceProperties]
+          .reverse()
+          .reduce<Record<string, unknown>>((merged, key) => ({ ...merged, ...entry[key] }), {}),
+      }),
+    }));
+    const capability = entries[0] ?? { ...normalized, aliases };
     for (const alias of aliases) registry[alias] = capability;
+    group.forEach((entry, index) => {
+      registry[`${entry.provider}/${entry.id}`] = entries[index] ?? capability;
+    });
   }
   return registry;
 }
@@ -335,7 +360,8 @@ export async function loadCapabilityRegistry(
     if (Array.isArray(item.supported_parameters)) {
       openrouterFields.tool_call = parameters.includes('tools');
       openrouterFields.parallel_tool_calls = parameters.includes('parallel_tool_calls');
-      openrouterFields.reasoning = parameters.includes('reasoning');
+      openrouterFields.reasoning = advertisesReasoning(parameters);
+      openrouterFields.supported_parameters = parameters;
       openrouterFields.cachePrompt = parameters.some((parameter) =>
         parameter.includes('prompt-caching'),
       );
@@ -373,7 +399,7 @@ export async function loadCapabilityRegistry(
     if (parameters) {
       live.tool_call = parameters.includes('tools');
       live.parallel_tool_calls = parameters.includes('parallel_tool_calls');
-      live.reasoning = parameters.includes('reasoning');
+      live.reasoning = advertisesReasoning(parameters);
       live.cachePrompt = parameters.some((parameter) => parameter.includes('prompt-caching'));
     } else {
       if (typeof item.tool_call === 'boolean') live.tool_call = item.tool_call;

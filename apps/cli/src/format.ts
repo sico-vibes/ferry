@@ -1,6 +1,6 @@
 import { marked } from 'marked';
 import { highlight } from 'cli-highlight';
-import type { CapacitySummary } from '@ferry/shared';
+import type { CapacitySummary, ProviderLimits } from '@ferry/shared';
 import { blue, emphasis, muted, warn } from './colors.js';
 export { bad, blue, emphasis, good, gradient, muted, warn } from './colors.js';
 
@@ -11,18 +11,41 @@ export { bad, blue, emphasis, good, gradient, muted, warn } from './colors.js';
 export function formatCapacity(capacity: CapacitySummary): string {
   const filled = Math.round((capacity.percentRemaining / 100) * 9);
   const bar = '▰'.repeat(filled) + '▱'.repeat(9 - filled);
-  return `≈ ${capacity.stepsLeftToday} steps ${capacity.percentRemaining >= 80 ? warn(bar) : blue(bar)} ${capacity.percentRemaining}%`;
+  return `${capacity.percentRemaining >= 80 ? warn(bar) : blue(bar)} ${capacity.percentRemaining}%`;
 }
 
-export function statusLine(profile: string, model: string, capacity: CapacitySummary): string {
-  const reset = capacity.nextResets[0]?.at;
-  const resetText = reset ? relativeReset(reset) : 'reset unknown';
-  return `${blue(profile)} · ${model} · ≈${capacity.stepsLeftToday} steps left · ${resetText} · saved 38%`;
+export function statusLine(
+  profile: string,
+  model: string,
+  limits: readonly ProviderLimits[],
+): string {
+  const providerId = model.includes('/') ? model.slice(0, model.indexOf('/')) : undefined;
+  const provider = limits.find((item) => item.providerId === providerId);
+  const daily =
+    provider?.windows.filter(
+      (window) =>
+        window.metric === 'requests' &&
+        window.period === 'day' &&
+        (!window.model || window.model === model) &&
+        window.remaining !== null,
+    ) ?? [];
+  const remaining = daily.length ? Math.min(...daily.map((window) => window.remaining ?? 0)) : null;
+  return `${blue(profile)} · ${model}${remaining === null ? '' : ` · ${remaining} daily requests left`}`;
 }
 
-function relativeReset(value: string): string {
-  const mins = Math.max(0, Math.round((Date.parse(value) - Date.now()) / 60000));
-  return `reset ${Math.floor(mins / 60)}h${String(mins % 60).padStart(2, '0')}m`;
+export function formatLimits(limits: readonly ProviderLimits[]): string {
+  return limits
+    .map((provider) => {
+      if (provider.state !== 'known')
+        return `${provider.providerName}: ${provider.state === 'paid_no_limit' ? 'paid · no published daily/monthly limit' : 'no published daily/monthly limit'}`;
+      return `${provider.providerName}\n${provider.windows
+        .map(
+          (window) =>
+            `  ${window.model ? `${window.model} · ` : ''}${window.remaining ?? 'unknown'} / ${window.limit ?? 'unknown'} ${window.metric} left per ${window.period} · ${window.source}${window.resetAt ? ` · resets ${new Date(window.resetAt).toLocaleString()}` : ''}`,
+        )
+        .join('\n')}`;
+    })
+    .join('\n');
 }
 
 export function renderMarkdown(source: string): string {

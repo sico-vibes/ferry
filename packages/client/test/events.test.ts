@@ -88,6 +88,7 @@ const samples = {
   },
   'task.updated': sampleTaskRecord satisfies TaskRecord,
   'quota.updated': sampleCapacitySummary satisfies CapacitySummary,
+  'quota.limits.updated': [],
   'provider.updated': sampleProvider satisfies Provider,
   'delegation.updated': sampleDelegationRun satisfies DelegationRun,
   'workspace.updated': sampleWorkspace,

@@ -15,6 +15,7 @@ import {
   createLanguageModel,
   sanitizeProviderMessages,
   promptCacheOptions,
+  reasoningTransportOptions,
   normalizeToolSchema,
 } from '@ferry/providers';
 import {
@@ -70,6 +71,8 @@ import {
   newSpanId,
   normalizeInlineThinking,
   normalizeReasoningPart,
+  reasoningTokensFromUsage,
+  type Effort,
 } from '@ferry/shared';
 import type { Catalog } from '@ferry/catalog';
 import type { RawCallObservation } from '@ferry/providers';
@@ -124,6 +127,8 @@ export interface GeneratedStep {
   reasoning?: string;
   reasoningProviderMetadata?: ProviderMetadata;
   reasoningAvailable?: boolean;
+  reasoningTokens?: number;
+  thinkingDurationMs?: number;
   toolCalls?: ModelToolCall[];
   inputTokens?: number;
   outputTokens?: number;
@@ -132,6 +137,7 @@ export interface GeneratedStep {
 }
 export interface StepGeneratorInput {
   model: ModelInfo;
+  effort?: Effort | null | undefined;
   system: string;
   messages: readonly Message[];
   tools: readonly AgentTool[];
@@ -139,6 +145,7 @@ export interface StepGeneratorInput {
   onProgress?: () => void;
   onDelta: (text: string) => void;
   onReasoning?: (text: string) => void;
+  onToolDelta?: () => void;
   modelHints: ModelHints;
 }
 export type StepGenerator = (input: StepGeneratorInput) => Promise<GeneratedStep>;
@@ -1149,6 +1156,7 @@ export class AgentLoop {
           onProgress: () => void,
         ): StepGeneratorInput => ({
           model: selected,
+          effort: this.options.store.load(sessionId)?.session.effort,
           system: withModelIdentity(
             executionRole === 'planner' && stepKind === 'plan'
               ? `${system}\n\nYou are the planner. Do not call tools or edit files. Return only a JSON edit plan matching this shape: {"files":[{"path":"relative/path","intent":"why this file changes"}],"changes":[{"path":"relative/path","instructions":"exact edits or a precise pseudo-diff"}]}. Include every file the editor must change. Paths must be workspace-relative and must not contain parent-directory segments, drive prefixes, or UNC/absolute paths.${plannerRepairHint ? `\n\nRepair required: ${plannerRepairHint}` : ''}`
@@ -1174,6 +1182,7 @@ export class AgentLoop {
             if (isSignalAborted(signal)) return;
             onProgress();
             recordFirstToken();
+            endThinking();
             streamedText += text;
             const partial = { type: 'text' as const, id: streamedTextPartId, text: streamedText };
             const previousParts = streamedParts.parts;
@@ -1195,7 +1204,24 @@ export class AgentLoop {
               text,
             });
           },
+          onReasoning: (text) => {
+            if (!text || isSignalAborted(signal)) return;
+            onProgress();
+            reasoningStartedAt ??= performance.now();
+          },
+          onToolDelta: () => {
+            onProgress();
+            endThinking();
+          },
         });
+        let reasoningStartedAt: number | undefined;
+        let thinkingDurationMs: number | undefined;
+        const endThinking = () => {
+          if (reasoningStartedAt !== undefined && thinkingDurationMs === undefined)
+            thinkingDurationMs = Math.max(0, performance.now() - reasoningStartedAt);
+        };
+        const stepStartedAt = performance.now();
+        let stepDurationMs = 0;
         let generated!: GeneratedStep;
         let generationComplete = false;
         const attemptedModels = new Set<string>([model.ref]);
@@ -1206,6 +1232,8 @@ export class AgentLoop {
         let pendingPaidRelease: (() => void) | undefined;
         let pendingPaidUsageId: string | undefined;
         while (!generationComplete) {
+          reasoningStartedAt = undefined;
+          thinkingDurationMs = undefined;
           const attemptStartedAt = performance.now();
           const turnId = newId('turn');
           activeTurnId = turnId;
@@ -1296,6 +1324,8 @@ export class AgentLoop {
               this.options.stepTimeoutMs ?? 120_000,
               releaseOnce,
             );
+            endThinking();
+            stepDurationMs = Math.max(0, performance.now() - stepStartedAt);
             this.options.telemetry?.turnUpdated(turnId, {
               status: 'success',
               finished_at: new Date().toISOString(),
@@ -1352,6 +1382,9 @@ export class AgentLoop {
                 id: newId('event'),
                 type: 'thinking',
                 content: generated.reasoning,
+                ...((generated.thinkingDurationMs ?? thinkingDurationMs) === undefined
+                  ? {}
+                  : { durationMs: generated.thinkingDurationMs ?? thinkingDurationMs }),
                 timestamp: new Date().toISOString(),
               });
             generationComplete = true;
@@ -1905,6 +1938,10 @@ export class AgentLoop {
           stepKind,
           inputTokens: generated.inputTokens ?? 0,
           outputTokens: generated.outputTokens ?? 0,
+          ...(generated.reasoningTokens === undefined
+            ? {}
+            : { reasoningTokens: generated.reasoningTokens }),
+          latencyMs: stepDurationMs,
           status: 'success',
         });
         this.emitStructuredEvent(sessionId, {
@@ -1912,6 +1949,10 @@ export class AgentLoop {
           type: 'usage',
           inputTokens: generated.inputTokens ?? 0,
           outputTokens: generated.outputTokens ?? 0,
+          ...(generated.reasoningTokens === undefined
+            ? {}
+            : { reasoningTokens: generated.reasoningTokens }),
+          durationMs: stepDurationMs,
           timestamp: new Date().toISOString(),
         });
         pendingPaidRelease?.();
@@ -2802,6 +2843,18 @@ export function createStepGenerator(
           description: 'Ask the user a question and pause until they answer.',
           inputSchema: z.object({ question: z.string() }),
         });
+      const cache = promptCacheOptions(
+        model.providerId,
+        options.promptCaching?.(model) ?? true,
+        sessionId,
+      );
+      const reasoningOptions = reasoningTransportOptions(model, input.effort);
+      const providerOptions = {
+        ...reasoningOptions,
+        ...(Object.keys(cache).length
+          ? { [model.providerId]: { ...cache, ...reasoningOptions[model.providerId] } }
+          : {}),
+      };
       const result = streamText({
         model: createLanguageModel(model.ref, {
           apiKey: options.apiKeys[model.providerId] ?? '',
@@ -2817,19 +2870,8 @@ export function createStepGenerator(
           sessionId,
         }),
         system,
-        ...(Object.keys(
-          promptCacheOptions(model.providerId, options.promptCaching?.(model) ?? true, sessionId),
-        ).length
-          ? {
-              providerOptions: {
-                [model.providerId]: promptCacheOptions(
-                  model.providerId,
-                  options.promptCaching?.(model) ?? true,
-                  sessionId,
-                ),
-              },
-            }
-          : {}),
+        ...(Object.keys(providerOptions).length ? { providerOptions } : {}),
+        ...(Object.keys(reasoningOptions).length ? { maxOutputTokens: model.maxOutput } : {}),
         messages: sanitizeProviderMessages(
           toModelMessages(
             messages,
@@ -2848,6 +2890,12 @@ export function createStepGenerator(
       let reasoning = '';
       let reasoningAvailable = false;
       let reasoningProviderMetadata: ProviderMetadata | undefined;
+      let reasoningStartedAt: number | undefined;
+      let thinkingDurationMs: number | undefined;
+      const endThinking = () => {
+        if (reasoningStartedAt !== undefined && thinkingDurationMs === undefined)
+          thinkingDurationMs = Math.max(0, performance.now() - reasoningStartedAt);
+      };
       for await (const part of result.stream) {
         onProgress?.();
         if (part.type === 'error') throw part.error;
@@ -2878,19 +2926,27 @@ export function createStepGenerator(
             ? (streamPart.delta ?? streamPart.text ?? streamPart.reasoning)
             : undefined);
         if (typeof exposedReasoning === 'string' && exposedReasoning) {
+          reasoningStartedAt ??= performance.now();
           streamState.outputStarted = true;
           reasoningAvailable = true;
           reasoning += exposedReasoning;
           onReasoning?.(exposedReasoning);
         } else if (streamPart.type === 'text-delta' && typeof streamPart.text === 'string') {
+          endThinking();
           streamState.outputStarted = true;
           text += streamPart.text;
           onDelta(streamPart.text);
         }
+        if (/^tool-(?:input|call)/.test(streamPart.type)) {
+          endThinking();
+          input.onToolDelta?.();
+        }
       }
+      endThinking();
       const [usage, rawCalls] = await Promise.all([result.usage, result.toolCalls]);
       const finalStep = await result.finalStep;
       const providerResponse = finalStep.response;
+      const reasoningTokens = reasoningTokensFromUsage(usage, finalStep.providerMetadata);
       const calls = z
         .array(
           z.object({
@@ -2907,6 +2963,8 @@ export function createStepGenerator(
         ...(reasoning ? { reasoning } : {}),
         ...(reasoningProviderMetadata ? { reasoningProviderMetadata } : {}),
         reasoningAvailable,
+        ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+        ...(thinkingDurationMs === undefined ? {} : { thinkingDurationMs }),
         ...(typeof providerResponse.modelId === 'string'
           ? { responseModel: providerResponse.modelId }
           : {}),

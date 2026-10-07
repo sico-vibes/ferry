@@ -10,6 +10,7 @@ import {
   type AssistantMessage as PiAssistantMessage,
   type JsonObject,
   createModels,
+  getSupportedThinkingLevels,
 } from '@earendil-works/pi-ai';
 import {
   forgetSecret,
@@ -18,6 +19,8 @@ import {
   ProviderIdSchema,
   ModelRefSchema,
   rememberSecret,
+  reasoningTokensFromUsage,
+  type Effort,
 } from '@ferry/shared';
 import type { Message, ModelInfo } from '@ferry/shared';
 import { z } from 'zod';
@@ -323,6 +326,26 @@ export async function listOAuthProviders(): Promise<OAuthProviderInfo[]> {
   });
 }
 
+// Native model maps are optional in a standalone CLI bundle until its OAuth runtime is staged.
+const piModels = new Map(
+  (
+    await (async () => {
+      const loaders = await piOAuthFlowLoaders();
+      return (
+        await Promise.all(
+          [...loaders.keys()]
+            .filter((id) => id !== 'openrouter' && id !== 'radius')
+            .map(async (id) => (await loadProvider(id)).provider.getModels()),
+        )
+      ).flat();
+    })().catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === 'ERR_MODULE_NOT_FOUND')
+        return [];
+      throw error;
+    })
+  ).map((model) => [`${model.provider}/${model.id}`, model]),
+);
+
 /** Curated IDs from pi-ai 0.87.1 kept routable through pi-ai's native OAuth stream. */
 export const oauthModelCatalog = [
   {
@@ -441,6 +464,12 @@ export const oauthModelCatalog = [
     maxOutput: model.maxOutput,
     toolCalling: true,
     reasoning: model.reasoning,
+    reasoningEfforts: (() => {
+      const native = piModels.get(`${model.providerId}/${model.id}`);
+      return native
+        ? getSupportedThinkingLevels(native).filter((level): level is Effort => level !== 'off')
+        : [];
+    })(),
     free: false,
     priceInPerM: null,
     priceOutPerM: null,
@@ -585,11 +614,15 @@ export async function createOAuthModelGateway(secrets: SecretStore) {
 
 export interface OAuthStepRequest {
   model: ModelInfo;
+  effort?: Effort | null | undefined;
   system: string;
   messages: readonly Message[];
   tools: readonly { name: string; title: string; schema: z.ZodType }[];
   signal: AbortSignal;
   onDelta(text: string): void;
+  onReasoning?(text: string): void;
+  onToolDelta?(): void;
+  onProgress?(): void;
 }
 
 /** Adapts Ferry agent steps to pi-ai's native OAuth-aware streaming and tool-call API. */
@@ -663,25 +696,53 @@ export async function streamOAuthStep(secrets: SecretStore, request: OAuthStepRe
       parameters: z.toJSONSchema(item.schema),
     })),
   };
-  const stream = gateway.stream(model, context, { signal: request.signal });
+  const effort =
+    request.effort &&
+    request.model.reasoningEfforts?.includes(request.effort) &&
+    getSupportedThinkingLevels(model).includes(request.effort)
+      ? request.effort
+      : undefined;
+  const stream = gateway.streamSimple(model, context, {
+    signal: request.signal,
+    ...(effort ? { reasoning: effort } : {}),
+  });
   let text = '';
   let reasoning = '';
+  let reasoningStartedAt: number | undefined;
+  let thinkingDurationMs: number | undefined;
+  const endThinking = () => {
+    if (reasoningStartedAt !== undefined && thinkingDurationMs === undefined)
+      thinkingDurationMs = Math.max(0, performance.now() - reasoningStartedAt);
+  };
   for await (const event of stream) {
+    request.onProgress?.();
     if (event.type === 'error')
       throw new Error(event.error.errorMessage ?? 'pi-ai OAuth stream failed');
     if (event.type === 'text_delta') {
+      endThinking();
       text += event.delta;
       request.onDelta(event.delta);
-    } else if (event.type === 'thinking_delta') reasoning += event.delta;
+    } else if (event.type === 'thinking_delta') {
+      if (event.delta) reasoningStartedAt ??= performance.now();
+      reasoning += event.delta;
+      request.onReasoning?.(event.delta);
+    } else if (event.type.startsWith('toolcall_')) {
+      endThinking();
+      request.onToolDelta?.();
+    }
   }
+  endThinking();
   const result = await stream.result();
   if (result.errorMessage) throw new Error(result.errorMessage);
   const toolCalls = result.content.flatMap((part) =>
     part.type === 'toolCall' ? [{ id: part.id, name: part.name, input: part.arguments }] : [],
   );
+  const reasoningTokens = reasoningTokensFromUsage(result.usage);
   return {
     text,
     ...(reasoning ? { reasoning } : {}),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+    ...(thinkingDurationMs === undefined ? {} : { thinkingDurationMs }),
     toolCalls,
     inputTokens: result.usage.input,
     outputTokens: result.usage.output,

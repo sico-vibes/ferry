@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CapacitySummarySchema,
+  ProviderLimitsSchema,
   AcpAgentDetectionSchema,
   CheckpointSchema,
   McpServerSchema,
@@ -97,6 +98,7 @@ export function runFerryClientContract(
       if (includes('settings')) SettingsSchema.parse(await client.settings.get());
       if (includes('quota')) {
         CapacitySummarySchema.parse(await client.quota.capacity());
+        for (const limits of await client.quota.limits()) ProviderLimitsSchema.parse(limits);
         expect(
           (await client.quota.history(2)).every(
             (x) => UsageHistoryPointSchema.safeParse(x).success,
@@ -133,6 +135,8 @@ export function runFerryClientContract(
       expect(session.title).toBe('Renamed');
       expect((await client.sessions.setStarred(session.id, true)).starred).toBe(true);
       expect((await client.sessions.setPinned(session.id, true)).pinned).toBe(true);
+      expect((await client.sessions.setEffort(session.id, 'high')).effort).toBe('high');
+      expect((await client.sessions.setEffort(session.id, null)).effort).toBeNull();
       await client.sessions.remove(session.id);
       expect((await client.sessions.list()).some((x) => x.id === session.id)).toBe(false);
     });

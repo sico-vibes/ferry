@@ -157,8 +157,13 @@ export function windowStart(
 }
 
 export function nextReset(now: Date, spec: WindowSpec, records: readonly UsageRecord[] = []): Date {
-  if (spec.kind === 'rolling')
-    return new Date(windowStart(now, spec, records).getTime() + spec.length * 1000);
+  if (spec.kind === 'rolling') {
+    const expiry = records
+      .map((record) => Date.parse(record.occurredAt) + spec.length * 1000)
+      .filter((at) => at > now.getTime())
+      .sort((a, b) => a - b)[0];
+    return new Date(expiry ?? now.getTime() + spec.length * 1000);
+  }
   if (spec.kind === 'dynamic_5h') {
     const next = records
       .map((record) => Date.parse(record.occurredAt) + 5 * hour)

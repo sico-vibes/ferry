@@ -29,7 +29,8 @@ describe('interactive slash commands', () => {
     const session = (await client.sessions.list())[0];
     if (!session) throw new Error('mock session missing');
     const output = await executeSlashCommand(context(client, session.id), '/quota');
-    expect(output).toContain('steps');
+    expect(output).toContain('requests');
+    expect(output).not.toContain('steps');
     expect(output).toContain('Gemini');
   });
 

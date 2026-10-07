@@ -1,5 +1,7 @@
 import type {
   CapacitySummary,
+  Effort,
+  ProviderLimits,
   Checkpoint,
   CheckpointId,
   DelegationRun,
@@ -136,6 +138,7 @@ export interface FerryClient {
     rename(id: SessionId, title: string): Promise<Session>;
     setStarred(id: SessionId, v: boolean): Promise<Session>;
     setPinned(id: SessionId, v: boolean): Promise<Session>;
+    setEffort(id: SessionId, effort: Effort | null): Promise<Session>;
     remove(id: SessionId): Promise<void>;
   };
   approvals: {
@@ -187,6 +190,7 @@ export interface FerryClient {
   };
   quota: {
     capacity(): Promise<CapacitySummary>;
+    limits(): Promise<ProviderLimits[]>;
     history(days: number): Promise<UsageHistoryPoint[]>;
     handoffs(days: number): Promise<HandoffStat[]>;
   };

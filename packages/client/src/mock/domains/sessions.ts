@@ -1,5 +1,5 @@
 import type { FerryClient } from '../../ferry-client.js';
-import { ReadOutputInputSchema, readOutputPage, SessionSchema } from '@ferry/shared';
+import { EffortSchema, ReadOutputInputSchema, readOutputPage, SessionSchema } from '@ferry/shared';
 import type { Message, SessionId } from '@ferry/shared';
 import type { MockDeps } from './deps.js';
 import type { MockStore } from '../types.js';
@@ -297,6 +297,12 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
       await before();
       const s = session(id);
       s.pinned = v;
+      return updateSession(s);
+    },
+    async setEffort(id, effort) {
+      await before();
+      const s = session(id);
+      s.effort = EffortSchema.nullable().parse(effort);
       return updateSession(s);
     },
     async remove(id) {

@@ -7,7 +7,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
   DEFAULT_ROUTING_SETTINGS,
@@ -98,6 +98,109 @@ async function setup() {
   });
   return { root, database, store, session, model, provider, catalog };
 }
+
+describe('step usage and thinking timing', () => {
+  it('sends effort only for supported models and extracts reasoning usage from SDK responses', async () => {
+    const state = await setup();
+    const bodies: Record<string, unknown>[] = [];
+    const providerFetch: typeof fetch = async (input, init) => {
+      bodies.push((await new Request(input, init).json()) as Record<string, unknown>);
+      return new Response(
+        [
+          'data: {"id":"fixture","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"content":"Done"},"finish_reason":null}]}',
+          'data: {"id":"fixture","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":12,"total_tokens":22,"completion_tokens_details":{"reasoning_tokens":7}}}',
+          'data: [DONE]',
+          '',
+        ].join('\n\n'),
+        { headers: { 'content-type': 'text/event-stream' } },
+      );
+    };
+    try {
+      for (const reasoningEfforts of [['high'] as const, []] as const) {
+        const model = { ...state.model, reasoning: true, reasoningEfforts: [...reasoningEfforts] };
+        const generator = createStepGenerator(
+          { apiKeys: { openai: 'fixture' }, providerFetch, emit: () => undefined },
+          model,
+          state.session.id,
+        );
+        const generated = await generator({
+          model,
+          effort: 'high',
+          system: 'test',
+          messages: state.store.load(state.session.id)?.messages ?? [],
+          tools: [],
+          signal: new AbortController().signal,
+          onDelta: () => undefined,
+          modelHints: { toolProtocol: 'native' },
+        });
+        expect(generated.reasoningTokens).toBe(7);
+      }
+      expect(bodies[0]?.reasoning_effort).toBe('high');
+      expect(bodies[1]).not.toHaveProperty('reasoning_effort');
+    } finally {
+      state.database.close();
+    }
+  });
+  it.each(['text', 'tool'] as const)(
+    'ends thinking at the first %s delta and preserves reasoning tokens',
+    async (boundary) => {
+      const fixture = await setup();
+      const { database, store, session, model, provider, catalog, root } = fixture;
+      const events: AgentEvent[] = [];
+      const onUsage = vi.fn();
+      const clock = vi.spyOn(performance, 'now').mockReturnValue(1000);
+      try {
+        const loop = new AgentLoop({
+          store,
+          workspace: root,
+          dataDir: root,
+          profile: BUILTIN_PROFILES[0]!,
+          catalog,
+          capacity: () => ({ providers: [provider], now: new Date().toISOString() }),
+          apiKeys: {},
+          permissionMode: 'full_auto',
+          maxSteps: 1,
+          emit: (event) => events.push(event),
+          onUsage,
+          generator: (input) => {
+            clock.mockReturnValue(1010);
+            input.onReasoning?.('thinking');
+            clock.mockReturnValue(1050);
+            if (boundary === 'text') input.onDelta('done');
+            else input.onToolDelta?.();
+            clock.mockReturnValue(1080);
+            return Promise.resolve({
+              text: 'done',
+              reasoning: 'thinking',
+              reasoningTokens: 7,
+              inputTokens: 10,
+              outputTokens: 12,
+            });
+          },
+        });
+        await loop.run({ sessionId: session.id, signal: new AbortController().signal });
+        const structured = events.flatMap((event) =>
+          event.type === 'agent.event' ? [event.event] : [],
+        );
+        expect(structured.find((event) => event.type === 'thinking')).toMatchObject({
+          durationMs: 40,
+        });
+        expect(structured.find((event) => event.type === 'usage')).toMatchObject({
+          inputTokens: 10,
+          outputTokens: 12,
+          reasoningTokens: 7,
+          durationMs: 80,
+        });
+        expect(onUsage).toHaveBeenCalledWith(
+          expect.objectContaining({ modelRef: model.ref, reasoningTokens: 7, latencyMs: 80 }),
+        );
+      } finally {
+        clock.mockRestore();
+        database.close();
+      }
+    },
+  );
+});
 
 describe('@ferry/agent', () => {
   it('creates, reloads and lists persisted ordered session messages with a fallback title', async () => {
