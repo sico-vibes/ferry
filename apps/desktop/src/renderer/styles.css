@@ -6306,11 +6306,25 @@ button:not(:disabled):active,
   pointer-events: none;
   transition: opacity 150ms ease-out;
 }
-.transcript-message:has(.message-answer:hover) .v2-message-actions,
-.transcript-message:has(.message-answer:focus-within) .v2-message-actions,
+/* Actions stay visible while the pointer is anywhere on the message row, including the actions
+   themselves, so moving toward a button never hides it. */
+.transcript-message:hover .v2-message-actions,
+.transcript-message:focus-within .v2-message-actions,
 .v2-message-actions:focus-within {
   opacity: 1;
   pointer-events: auto;
+}
+/* Your messages: actions sit under the bubble, aligned to its right edge. */
+.v2-message-actions.is-user {
+  justify-content: flex-end;
+}
+.v2-message-actions .v2-message-copy {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
 }
 @media (prefers-reduced-motion: reduce) {
   .v2-message-actions {
@@ -6842,6 +6856,38 @@ button:not(:disabled):active,
   border-bottom: 1px solid var(--border);
   padding: 0 12px;
   color: var(--muted-foreground);
+}
+.model-picker-filter {
+  flex: none;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--muted);
+  padding: 0 10px;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 150ms ease-out,
+    color 150ms ease-out;
+}
+.model-picker-filter:hover {
+  color: var(--foreground);
+}
+.model-picker-filter[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.model-picker-filter:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .model-picker-filter {
+    transition: none;
+  }
 }
 .model-picker-search [cmdk-input] {
   min-width: 0;

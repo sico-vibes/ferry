@@ -15,6 +15,27 @@ import { Composer } from '@ferry/ui';
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 
+function ChipProviders({
+  client,
+  children,
+}: {
+  client: ReturnType<typeof createMockFerryClient>;
+  children: ReactNode;
+}) {
+  const [queryClient] = useState(
+    () => new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+  );
+  return (
+    <FerryProvider client={client}>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    </FerryProvider>
+  );
+}
+
+function renderChip(client: ReturnType<typeof createMockFerryClient>, chip: ReactNode) {
+  return render(<ChipProviders client={client}>{chip}</ChipProviders>);
+}
+
 describe('ComposerModelChip', () => {
   it('opens above the composer chip with a viewport-clamped picker', async () => {
     const client = createMockFerryClient({ behavior: 'test' });
@@ -44,6 +65,93 @@ describe('ComposerModelChip', () => {
     expect(picker.style.maxHeight).toBe(
       'min(560px, var(--radix-popover-content-available-height))',
     );
+  });
+
+  it('names the picked model on the chip, not the model that answered last', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const [first, second] = await client.models.list();
+    if (!first || !second) throw new Error('Expected two fixture models');
+    renderChip(
+      client,
+      <ComposerModelChip
+        sessionId={null}
+        modelName={first.name}
+        modelRef={second.ref}
+        mode="manual"
+      />,
+    );
+    const chip = await screen.findByRole('button', { name: second.name });
+    expect(chip.textContent).toContain(second.name);
+    expect(chip.textContent).not.toContain(first.name);
+  });
+
+  it('shows the Ferry mark and profile only when a real profile is active', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const model = (await client.models.list())[0];
+    if (!model) throw new Error('Expected a fixture model');
+    const { container, rerender } = renderChip(
+      client,
+      <ComposerModelChip
+        sessionId={null}
+        modelName={model.name}
+        modelRef={model.ref}
+        mode="manual"
+        profileName="Auto-Free"
+        activeProfileId={'profile_free' as never}
+      />,
+    );
+    expect(container.querySelector('.v2-chip-ferry')).not.toBeNull();
+    rerender(
+      <ChipProviders client={client}>
+        <ComposerModelChip
+          sessionId={null}
+          modelName={model.name}
+          modelRef={model.ref}
+          mode="manual"
+          profileName="No profile"
+          activeProfileId={'profile_builtin_direct' as never}
+        />
+      </ChipProviders>,
+    );
+    expect(container.querySelector('.v2-chip-ferry')).toBeNull();
+    expect(container.querySelector('.v2-chip-profile')).toBeNull();
+  });
+
+  it('filters the picker to free models and remembers the choice', async () => {
+    localStorage.removeItem('ferry.modelPicker.freeOnly');
+    const client = createMockFerryClient({ behavior: 'test' });
+    const model = (await client.models.list())[0];
+    if (!model) throw new Error('Expected a fixture model');
+    renderChip(
+      client,
+      <ComposerModelChip
+        sessionId={null}
+        modelName={model.name}
+        modelRef={model.ref}
+        mode="manual"
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: model.name }));
+    const toggle = await screen.findByRole('button', { name: 'Free only' });
+    const picker = screen.getByRole('dialog', { name: 'Choose model' });
+    await waitFor(() => {
+      expect(
+        picker.querySelectorAll('.model-candidate:not(.auto):not(.model-profile)').length,
+      ).toBeGreaterThan(0);
+    });
+    const before = picker.querySelectorAll(
+      '.model-candidate:not(.auto):not(.model-profile)',
+    ).length;
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    await waitFor(() => {
+      expect(within(picker).queryAllByText('Paid')).toHaveLength(0);
+    });
+    expect(
+      picker.querySelectorAll('.model-candidate:not(.auto):not(.model-profile)').length,
+    ).toBeLessThanOrEqual(before);
+    expect(localStorage.getItem('ferry.modelPicker.freeOnly')).toBe('true');
+    localStorage.removeItem('ferry.modelPicker.freeOnly');
   });
 
   it('marks the pinned model by ref even when the chip name points to another model', async () => {

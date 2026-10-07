@@ -55,6 +55,7 @@ import { WorkspaceMenu } from './WorkspaceMenu';
 import { greeting } from './usageSummary';
 import { canScroll, isLatestVisible, readTailGeometry } from './transcriptScroll';
 import { ensureWorkspaceTrusted, SendCancelledError, sendMessage } from '../data/sendMessage';
+import { Check, Copy } from 'lucide-react';
 
 const warnedOAuthRuns = new Set<string>();
 const warnedTrainingSessions = new Set<string>();
@@ -141,7 +142,9 @@ function shortModel(
   ref: string | null | undefined,
   models: { ref: string; name: string }[],
 ): string {
-  if (!ref) return models[0]?.name.split(' ').slice(-1)[0] ?? 'GLM-5.3';
+  // No model yet (a new chat before its first reply): say nothing rather than naming an arbitrary
+  // catalog model, which showed up as "01-ai/yi-large".
+  if (!ref) return '';
   const model = models.find((item) => item.ref === ref);
   return model?.name ?? ref.split('/').at(-1) ?? ref;
 }
@@ -269,7 +272,7 @@ export function HomeCanvas() {
   const activeProfile = profiles.find(
     (profile) => profile.id === (draftProfileId ?? settings?.activeProfileId),
   );
-  const activeModel = models[0]?.name ?? 'GLM-5.3';
+  const activeModel = '';
   const draftModel = models.find((model) => model.ref === draftModelRef);
   const selectedWorkspace =
     workspaces.find((item) => item.id === selectedWorkspaceId) ?? workspaces[0];
@@ -706,7 +709,14 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
       .filter((part) => part.type === 'text')
       .map((part) => part.text)
       .join('') || answerText;
-  const copyMessage = () => void navigator.clipboard.writeText(messageText);
+  const [copied, setCopied] = useState(false);
+  const copyMessage = () =>
+    void navigator.clipboard.writeText(messageText).then(() => {
+      setCopied(true);
+      window.setTimeout(() => {
+        setCopied(false);
+      }, 1500);
+    });
   const retryMessage = async () => {
     try {
       const detail = await client.sessions.get(sessionId);
@@ -896,9 +906,19 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
           {message.interrupted ? <InterruptedFooter reason={message.interrupted.reason} /> : null}
         </AssistantMessage>
       )}
-      <div className="v2-message-actions">
-        <button aria-label="Copy message" onClick={copyMessage} type="button">
-          Copy
+      <div className={`v2-message-actions${message.role === 'user' ? ' is-user' : ''}`}>
+        <button
+          aria-label={copied ? 'Copied' : 'Copy message'}
+          className="v2-message-copy"
+          onClick={copyMessage}
+          title={copied ? 'Copied' : 'Copy'}
+          type="button"
+        >
+          {copied ? (
+            <Check aria-hidden="true" size={14} strokeWidth={1.75} />
+          ) : (
+            <Copy aria-hidden="true" size={14} strokeWidth={1.75} />
+          )}
         </button>
         {message.role === 'assistant' && canRetry && (
           <button aria-label="Retry response" onClick={() => void retryMessage()} type="button">

@@ -440,6 +440,23 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
 }
 
 const noProfileValue = 'profile none no profile';
+const freeOnlyStorageKey = 'ferry.modelPicker.freeOnly';
+
+function readFreeOnly(): boolean {
+  try {
+    return localStorage.getItem(freeOnlyStorageKey) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function saveFreeOnly(value: boolean): void {
+  try {
+    localStorage.setItem(freeOnlyStorageKey, String(value));
+  } catch {
+    // Preference only; the picker still works without storage.
+  }
+}
 
 export function ComposerModelChip({
   sessionId,
@@ -536,15 +553,19 @@ export function ComposerModelChip({
   }, [activeProfileId, open, profiles]);
   const autoRef = visibleCandidates[0]?.ref;
   const autoInfo = models.find((model) => model.ref === autoRef);
-  const autoModel = autoInfo?.name ?? modelName;
+  const autoModel = autoInfo?.name ?? (modelName || 'picks per message');
   const pinnedModel = models.find((model) => model.ref === modelRef);
   const servedModel = models.find((model) => model.ref === servedModelRef);
   const chipModel = pinnedUnavailable ? servedModel : mode === 'auto' ? autoInfo : pinnedModel;
+  // The chip always names the model you picked, never the last model that happened to answer.
+  const pinnedRefTail = modelRef?.split('/').at(-1);
+  const pinnedName =
+    pinnedModel?.name ?? (modelName !== '' ? modelName : (pinnedRefTail ?? 'Choose a model'));
   const chipLabel = pinnedUnavailable
-    ? `Pinned: ${pinnedModel?.name ?? modelRef ?? 'model'} (unavailable) · now ${modelName}`
+    ? `Pinned: ${pinnedName} (unavailable) · now ${modelName}`
     : mode === 'auto'
       ? `Auto · ${autoModel}`
-      : modelName;
+      : pinnedName;
   const configuredProviderIds = new Set(
     providers
       .filter(
@@ -553,7 +574,19 @@ export function ComposerModelChip({
       )
       .map((provider) => provider.id),
   );
-  const availableModels = models.filter((model) => configuredProviderIds.has(model.providerId));
+  const [freeOnly, setFreeOnly] = useState(readFreeOnly);
+  const providerExclusions = new Map(
+    providers.map((provider) => [provider.id, new Set(provider.excludedModelRefs ?? [])]),
+  );
+  const connectedModels = models.filter(
+    (model) =>
+      configuredProviderIds.has(model.providerId) &&
+      !providerExclusions.get(model.providerId)?.has(model.ref),
+  );
+  const availableModels = freeOnly
+    ? connectedModels.filter((model) => model.free)
+    : connectedModels;
+  const hiddenPaidCount = connectedModels.length - availableModels.length;
   const candidateByRef = new Map(visibleCandidates.map((candidate) => [candidate.ref, candidate]));
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const grouped = useMemo(
@@ -604,9 +637,9 @@ export function ComposerModelChip({
           className="v2-composer-chip inline-flex items-center gap-2 rounded-pill px-2 py-1 text-body font-medium text-text-1 hover:bg-icon-circle"
           type="button"
         >
-          <FerryMark className="v2-chip-ferry" decorative size={14} variant="brand" />
           {noProfile ? null : (
             <>
+              <FerryMark className="v2-chip-ferry" decorative size={14} variant="brand" />
               <span className="v2-chip-profile">{profileName}</span>
               <span aria-hidden="true" className="v2-chip-divider" />
             </>
@@ -628,7 +661,7 @@ export function ComposerModelChip({
                 {autoModel}
               </>
             ) : (
-              modelName
+              pinnedName
             )}
           </span>
           <ChevronDown aria-hidden="true" size={14} />
@@ -667,6 +700,24 @@ export function ComposerModelChip({
                   placeholder="Search models…"
                   value={modelQuery}
                 />
+                <button
+                  aria-pressed={freeOnly}
+                  className="model-picker-filter"
+                  title={
+                    freeOnly && hiddenPaidCount > 0
+                      ? `${String(hiddenPaidCount)} paid models hidden`
+                      : 'Show only free models'
+                  }
+                  type="button"
+                  onClick={() => {
+                    setFreeOnly((current) => {
+                      saveFreeOnly(!current);
+                      return !current;
+                    });
+                  }}
+                >
+                  Free only
+                </button>
               </div>
               <ModelCommand.List
                 onPointerEnter={() => {
