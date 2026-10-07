@@ -103,6 +103,30 @@ contextBridge.exposeInMainWorld('ferryHost', {
     ipcRenderer.on('ferry:update-state', listener);
     return () => ipcRenderer.removeListener('ferry:update-state', listener);
   },
+  getShellPreferences: (): Promise<import('../main/desktop-shell.js').ShellPreferences> =>
+    ipcRenderer.invoke('ferry:shell-preferences') as Promise<
+      import('../main/desktop-shell.js').ShellPreferences
+    >,
+  setShellPreferences: (
+    patch: Partial<import('../main/desktop-shell.js').ShellPreferences>,
+  ): Promise<import('../main/desktop-shell.js').ShellPreferences> =>
+    ipcRenderer.invoke('ferry:shell-preferences-set', patch) as Promise<
+      import('../main/desktop-shell.js').ShellPreferences
+    >,
+  notify: (input: import('../main/desktop-shell.js').ShellNotification): Promise<boolean> =>
+    ipcRenderer.invoke('ferry:notify', input) as Promise<boolean>,
+  onShellCommand: (
+    handler: (command: import('../main/desktop-shell.js').ShellCommand) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      command: import('../main/desktop-shell.js').ShellCommand,
+    ) => {
+      handler(command);
+    };
+    ipcRenderer.on('ferry:shell-command', listener);
+    return () => ipcRenderer.removeListener('ferry:shell-command', listener);
+  },
   onOpenWorkspace: (handler: (path: string) => void): (() => void) => {
     openWorkspaceHandler = handler;
     if (pendingWorkspacePath) {

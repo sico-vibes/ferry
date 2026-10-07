@@ -78,7 +78,10 @@ describe('warm workspace sends and sessions.start', () => {
       );
       const rpc = (method: string, params: unknown[] = []) =>
         host.dispatch({ jsonrpc: '2.0', id: 'test', method, params });
-      const workspace = (await rpc('workspaces.open', [workspacePath])) as { id: string };
+      const workspace = (await rpc('workspaces.open', [workspacePath])) as {
+        id: string;
+        path: string;
+      };
       await rpc('workspaces.trust', [workspace.id]);
       const marker = join(root, 'starts');
       services.settings.put('mcp-servers', [
@@ -112,7 +115,8 @@ describe('warm workspace sends and sessions.start', () => {
           expect.objectContaining({ text: 'Attachment: context.txt\nattached context' }),
         ]),
       );
-      const manager = createSkillManager(services, workspacePath);
+      // Managers are keyed by the engine's canonical path (CI temp folders use 8.3 short names).
+      const manager = createSkillManager(services, workspace.path);
       expect(await manager.callSkillTool('load_skill', { name: 'test-skill' })).toBe(
         'Original body',
       );

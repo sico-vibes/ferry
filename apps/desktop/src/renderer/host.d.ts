@@ -29,6 +29,14 @@ declare global {
       onUpdateState(
         handler: (state: import('../main/update-state.js').UpdateSnapshot) => void,
       ): () => void;
+      getShellPreferences(): Promise<import('../main/desktop-shell.js').ShellPreferences>;
+      setShellPreferences(
+        patch: Partial<import('../main/desktop-shell.js').ShellPreferences>,
+      ): Promise<import('../main/desktop-shell.js').ShellPreferences>;
+      notify(input: import('../main/desktop-shell.js').ShellNotification): Promise<boolean>;
+      onShellCommand(
+        handler: (command: import('../main/desktop-shell.js').ShellCommand) => void,
+      ): () => void;
       onOpenWorkspace(handler: (path: string) => void): () => void;
       isWindowBackgrounded(): boolean;
       onWindowBackground(handler: (backgrounded: boolean) => void): () => void;

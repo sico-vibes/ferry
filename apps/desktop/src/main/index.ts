@@ -34,6 +34,12 @@ import { isAllowlistedExternal } from './external-links.js';
 import { UpdateController, type UpdateSnapshot } from './update-state.js';
 import { createUpdaterLogger } from './updater-log.js';
 import { stopInstalledGateway } from './update-gateway.js';
+import {
+  DesktopShell,
+  parseShellNotification,
+  parseShellPreferencePatch,
+  type ShellCommand,
+} from './desktop-shell.js';
 import { releaseChannelForVersion } from '../../scripts/release-config.mjs';
 
 const { autoUpdater } = updater;
@@ -87,6 +93,18 @@ function traceCore(event: string, details: Record<string, unknown>): void {
 }
 const updateController = new UpdateController(autoUpdater);
 autoUpdater.logger = createUpdaterLogger(join(app.getPath('userData'), 'logs', 'updater.log'));
+const desktopShell = new DesktopShell({
+  preferencesPath: join(app.getPath('userData'), 'shell.json'),
+  iconPath: app.isPackaged ? join(process.resourcesPath, 'app-icon.ico') : DEV_WINDOW_ICON,
+  enabled: process.platform === 'win32' && !e2eTracing,
+  getWindow: () => mainWindow,
+  openWindow: () => {
+    openMainWindow();
+  },
+  send: (command: ShellCommand) => {
+    mainWindow?.webContents.send('ferry:shell-command', command);
+  },
+});
 let pendingWorkspacePath: string | null = findWorkspaceArgument(process.argv);
 
 function findWorkspaceArgument(args: string[]): string | null {
@@ -120,6 +138,7 @@ updateController.subscribe((state) => {
 });
 
 function restoreAfterFailedUpdate(): void {
+  desktopShell.markQuitting(false);
   updateInstallStarted = false;
   shuttingDown = false;
   shutdownComplete = false;
@@ -377,6 +396,7 @@ async function createWindow(): Promise<void> {
     },
   });
 
+  desktopShell.attachWindow(mainWindow);
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
   });
@@ -599,8 +619,8 @@ app.on('second-instance', (_event, argv) => {
   const workspacePath = findWorkspaceArgument(argv);
   if (workspacePath) pendingWorkspacePath = workspacePath;
   if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
+    // Also brings Ferry back when it is hidden in the tray.
+    desktopShell.show();
     publishWorkspacePath(pendingWorkspacePath);
   }
 });
@@ -628,6 +648,19 @@ ipcMain.handle('ferry:update-install', (event, ...args: unknown[]) => {
   EmptyIpcArgsSchema.parse(args);
   if (updateController.getSnapshot().status === 'downloaded') app.quit();
   else updateController.fail('The update is no longer ready to install. Download it again.');
+});
+ipcMain.handle('ferry:shell-preferences', (event, ...args: unknown[]) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  EmptyIpcArgsSchema.parse(args);
+  return desktopShell.getPreferences();
+});
+ipcMain.handle('ferry:shell-preferences-set', (event, patch: unknown) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  return desktopShell.setPreferences(parseShellPreferencePatch(patch));
+});
+ipcMain.handle('ferry:notify', (event, input: unknown) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  return desktopShell.notify(parseShellNotification(input));
 });
 ipcMain.handle('ferry:update-download', async (event, ...args: unknown[]) => {
   if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
@@ -678,7 +711,10 @@ app
     if (gotLock) {
       launchCore();
       if (process.env.FERRY_E2E_USER_DATA_DIR) console.log('FERRY_MAIN_READY');
-      if (!process.env.FERRY_E2E_CORE_ONLY) openMainWindow();
+      if (!process.env.FERRY_E2E_CORE_ONLY) {
+        openMainWindow();
+        desktopShell.createTray();
+      }
     }
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) openMainWindow();
@@ -693,7 +729,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+app.on('will-quit', () => {
+  desktopShell.dispose();
+});
+
 app.on('before-quit', (event) => {
+  // Quit, update install and relaunch all go through here: the window must really close now.
+  desktopShell.markQuitting();
   if (updateController.getSnapshot().status === 'downloaded' && !updateInstallStarted) {
     event.preventDefault();
     updateInstallStarted = true;

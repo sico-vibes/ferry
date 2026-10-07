@@ -1,10 +1,10 @@
-import { Profiler, useEffect, useState } from 'react';
+import { Profiler, useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { ChevronRight, SlidersHorizontal } from 'lucide-react';
 import { Dialog, UiV2 } from '@ferry/ui';
-import type { SessionId } from '@ferry/shared';
+import type { Session, SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { useFerryEvents } from '../data/events';
 import { openProjectFolder } from '../data/projects';
@@ -164,6 +164,24 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     sync(window.ferryHost.isWindowBackgrounded());
     return window.ferryHost.onWindowBackground(sync);
   }, []);
+  // Tray menu and notification clicks.
+  const createChatRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  useEffect(() => {
+    if (!window.ferryHost) return;
+    return window.ferryHost.onShellCommand((command) => {
+      if (command.type === 'new-chat') {
+        void createChatRef.current();
+        return;
+      }
+      const session = cache
+        .getQueryData<Session[]>(keys.sessions)
+        ?.find((item) => item.id === command.sessionId);
+      useUI
+        .getState()
+        .openTab({ id: command.sessionId as SessionId, title: session?.title ?? 'Chat' });
+      void navigate({ to: '/s/$sessionId', params: { sessionId: command.sessionId } });
+    });
+  }, [cache, navigate]);
   useEffect(() => {
     if (!window.ferryHost) return;
     let active = true;
@@ -300,6 +318,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       });
     }
   };
+  createChatRef.current = createChat;
   const closeAndNavigate = (id: string, stop: boolean) => {
     if (stop) void client.sessions.cancel(id as (typeof sessions)[number]['id']);
     const index = tabs.findIndex((tab) => tab.id === id);

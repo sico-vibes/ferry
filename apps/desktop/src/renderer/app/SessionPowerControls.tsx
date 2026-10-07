@@ -341,7 +341,7 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
   ];
   const settingsShortcuts: SettingsSection[] = searching
     ? [...settingsSections]
-    : ['General', 'Providers & keys', 'Storage & Cloud'];
+    : ['General', 'Notifications', 'Providers & keys'];
   const actions: { id: string; label: string; shortcut: string }[] = [
     { id: 'profile', label: 'Switch profile', shortcut: '' },
     { id: 'density', label: `Toggle density (${density})`, shortcut: '' },

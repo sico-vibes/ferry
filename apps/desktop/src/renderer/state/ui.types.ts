@@ -4,6 +4,7 @@ export type RightTab = 'chats' | 'plan' | 'changes';
 export type Density = 'comfortable' | 'compact';
 export const settingsSections = [
   'General',
+  'Notifications',
   'Profiles',
   'Providers & keys',
   'Routing',

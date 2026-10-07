@@ -24,7 +24,9 @@ import {
 } from '@ferry/shared';
 import type { RoutingSettings } from '@ferry/shared';
 import type { UpdateSnapshot } from '../../main/update-state.js';
+import type { ShellPreferences } from '../../main/desktop-shell.js';
 import {
+  Bell,
   Cloud,
   Eye,
   EyeOff,
@@ -54,6 +56,7 @@ import { saveKeybindings, useKeybindings } from '../state/keybindings';
 import type { SettingsSection } from '../state/ui.types';
 const settingsSectionIcons: Record<SettingsSection, LucideIcon> = {
   General: SlidersHorizontal,
+  Notifications: Bell,
   Profiles: Layers,
   'Providers & keys': KeyRound,
   Routing: Route,
@@ -68,6 +71,7 @@ const settingsSectionIcons: Record<SettingsSection, LucideIcon> = {
 };
 const settingsSectionKeywords: Record<SettingsSection, string[]> = {
   General: ['theme', 'dark', 'light', 'font', 'appearance', 'home', 'onboarding', 'layout'],
+  Notifications: ['notification', 'notify', 'tray', 'close', 'minimize', 'background', 'quit'],
   Profiles: ['profile', 'auto-free', 'fallback', 'caps', 'planner', 'editor', 'tier'],
   'Providers & keys': ['provider', 'key', 'api key', 'oauth', 'subscription', 'trial', 'login'],
   Routing: ['routing', 'spending', 'caps', 'sticky', 'quota', 'mapping', 'override'],
@@ -82,6 +86,10 @@ const settingsSectionKeywords: Record<SettingsSection, string[]> = {
 };
 const settingsPageCopy: Record<string, { title: string; description: string }> = {
   General: { title: 'General', description: 'Set the way Ferry looks and behaves.' },
+  Notifications: {
+    title: 'Notifications',
+    description: 'Choose when Ferry tells you about chats and what closing the window does.',
+  },
   Profiles: {
     title: 'Profiles',
     description: 'Choose the models and limits Ferry uses for each kind of work.',
@@ -604,6 +612,7 @@ export function SettingsCanvas() {
       );
     if (section === 'Profiles') return <ProfilesSettings />;
     if (section === 'Storage & Cloud') return <CloudSettings />;
+    if (section === 'Notifications') return <NotificationSettings />;
     if (section === 'Providers & keys')
       return (
         <Group>
@@ -1794,6 +1803,71 @@ function RoutingMappingsEditor({
         >
           Apply override
         </UiV2.Button>
+      </Group>
+    </>
+  );
+}
+
+/** Desktop-only preferences kept by the main process (tray, close button, OS notifications). */
+function NotificationSettings() {
+  const [preferences, setPreferences] = useState<ShellPreferences | null>(null);
+  useEffect(() => {
+    void window.ferryHost?.getShellPreferences().then(setPreferences);
+  }, []);
+  const change = (patch: Partial<ShellPreferences>) => {
+    void window.ferryHost?.setShellPreferences(patch).then(setPreferences);
+  };
+  if (!window.ferryHost)
+    return (
+      <Group title="Notifications">
+        <p className="muted">Notifications and the tray are available in the desktop app.</p>
+      </Group>
+    );
+  return (
+    <>
+      <Group title="Notify me">
+        <SettingRow
+          title="When a chat finishes"
+          helper="A Windows notification when a reply is ready or a run stops with an error, while Ferry is in the background."
+        >
+          <Switch
+            label="Notify when a chat finishes"
+            checked={preferences?.notifyChatFinished ?? true}
+            onCheckedChange={(enabled) => {
+              change({ notifyChatFinished: enabled });
+            }}
+          />
+        </SettingRow>
+        <SettingRow
+          title="When a chat needs approval"
+          helper="A Windows notification when a run is waiting for you to allow an action."
+        >
+          <Switch
+            label="Notify when a chat needs approval"
+            checked={preferences?.notifyApproval ?? true}
+            onCheckedChange={(enabled) => {
+              change({ notifyApproval: enabled });
+            }}
+          />
+        </SettingRow>
+      </Group>
+      <Group title="Window">
+        <SettingRow
+          title="Close button"
+          helper="Keep Ferry running in the tray so chats continue and notifications still arrive."
+        >
+          <SegmentedControl
+            label="Close button"
+            value={(preferences?.closeToTray ?? true) ? 'tray' : 'quit'}
+            onValueChange={(value) => {
+              change({ closeToTray: value === 'tray' });
+            }}
+            options={[
+              { value: 'tray', label: 'Minimize to tray' },
+              { value: 'quit', label: 'Quit Ferry' },
+            ]}
+          />
+        </SettingRow>
       </Group>
     </>
   );

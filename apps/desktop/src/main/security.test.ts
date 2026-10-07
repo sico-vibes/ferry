@@ -59,7 +59,7 @@ describe('Electron security boundary', () => {
   });
 
   it('guards all IPC handlers and exposes only named preload capabilities', () => {
-    expect(mainSource.match(/ipcMain\.handle\(/g)).toHaveLength(14);
+    expect(mainSource.match(/ipcMain\.handle\(/g)).toHaveLength(17);
     expect(mainSource.match(/ipcMain\.on\(/g)).toHaveLength(2);
     expect(mainSource).toContain('isTrustedSender(event)');
     expect(mainSource).toContain('event.sender === mainWindow.webContents');
@@ -95,6 +95,18 @@ describe('Electron security boundary', () => {
     expect(mainSource).toMatch(
       /ipcMain\.handle\('ferry:process-metrics',[\s\S]*?if \(!isTrustedSender\(event\)\) throw new Error\('Untrusted IPC sender'\);[\s\S]*?EmptyIpcArgsSchema\.parse\(args\);/,
     );
+    // Tray and notification preferences: trusted sender, and only parsed, typed input.
+    expect(mainSource).toMatch(
+      /ipcMain\.handle\('ferry:shell-preferences',[\s\S]*?if \(!isTrustedSender\(event\)\) throw new Error\('Untrusted IPC sender'\);[\s\S]*?EmptyIpcArgsSchema\.parse\(args\);/,
+    );
+    expect(mainSource).toMatch(
+      /ipcMain\.handle\('ferry:shell-preferences-set',[\s\S]*?if \(!isTrustedSender\(event\)\) throw new Error\('Untrusted IPC sender'\);[\s\S]*?parseShellPreferencePatch\(patch\)/,
+    );
+    expect(mainSource).toMatch(
+      /ipcMain\.handle\('ferry:notify',[\s\S]*?if \(!isTrustedSender\(event\)\) throw new Error\('Untrusted IPC sender'\);[\s\S]*?parseShellNotification\(input\)/,
+    );
+    expect(preloadSource).toContain('notify:');
+    expect(preloadSource).toContain('onShellCommand:');
     expect(preloadSource).toContain('getProcessMetrics:');
     expect(preloadSource).toContain('getEngineStatus:');
     expect(preloadSource).toContain('revealDataFolder:');

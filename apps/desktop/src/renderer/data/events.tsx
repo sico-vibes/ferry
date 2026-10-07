@@ -1,7 +1,15 @@
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { MessageId, MessagePart, PartId, SessionDetail, SessionId } from '@ferry/shared';
+import type {
+  MessageId,
+  MessagePart,
+  PartId,
+  Session,
+  SessionDetail,
+  SessionId,
+} from '@ferry/shared';
 import { keys } from './queries';
+import { chatNotificationFor } from './notifications';
 import { useFerryClient } from './client';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
@@ -28,6 +36,7 @@ export function useFerryEvents(): void {
   const pushToast = useToasts((state) => state.push);
   const flushPendingDeltas = useRef<() => void>(() => undefined);
   useEffect(() => {
+    const lastStatus = new Map<string, Session['status']>();
     const pendingParts = new Map<string, Map<PartId, MessagePart>>();
     const pendingKey = (sessionId: SessionId, messageId: MessageId) => `${sessionId}:${messageId}`;
     const takePendingParts = (sessionId: SessionId, messageId: MessageId) => {
@@ -39,7 +48,17 @@ export function useFerryEvents(): void {
     const off = [
       client.on('quota.updated', (capacity) => cache.setQueryData(keys.capacity, capacity)),
       client.on('session.updated', (session) => {
-        void cache.invalidateQueries({ queryKey: keys.sessions });
+        const previous = lastStatus.get(session.id);
+        lastStatus.set(session.id, session.status);
+        const notification = chatNotificationFor(previous, session);
+        if (notification) void window.ferryHost?.notify(notification).catch(() => undefined);
+        // Patch the sidebar row in place; refetch the list only for a chat it doesn't have yet.
+        const rows = cache.getQueryData<Session[]>(keys.sessions);
+        if (rows?.some((row) => row.id === session.id))
+          cache.setQueryData<Session[]>(keys.sessions, (current) =>
+            current?.map((row) => (row.id === session.id ? session : row)),
+          );
+        else void cache.invalidateQueries({ queryKey: keys.sessions });
         const key = keys.session(session.id);
         const current = cache.getQueryData<SessionDetail>(key);
         if (current) cache.setQueryData(key, { ...current, session });
