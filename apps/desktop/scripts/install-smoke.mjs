@@ -400,7 +400,9 @@ try {
     });
   });
   const session = await updateBrowser.newBrowserCDPSession();
-  await session.send('Browser.close').catch(() => undefined);
+  // The app exits before CDP can answer, so this promise may never settle: don't await it, or
+  // Node runs out of work and quits mid-script. The process exit is the signal we wait for.
+  void session.send('Browser.close').catch(() => undefined);
   await oldExit;
   updateApplication = undefined;
   updateBrowser = undefined;
