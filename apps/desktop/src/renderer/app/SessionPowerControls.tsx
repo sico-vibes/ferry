@@ -311,8 +311,9 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
   const allChats = sessions.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   // Idle: a few recent chats so actions and settings stay in view; searching covers every chat.
   const recentChats = searching ? allChats : allChats.slice(0, 6);
-  const projectName = (workspaceId: string) =>
-    workspaces.find((workspace) => workspace.id === workspaceId)?.name ?? '';
+  // Chats without a project (Recents) show no project name.
+  const projectName = (workspaceId: string | null | undefined) =>
+    workspaceId ? (workspaces.find((workspace) => workspace.id === workspaceId)?.name ?? '') : '';
   const openChat = (sessionId: SessionId, title: string) => {
     closeThenRun(() => {
       useUI.getState().openTab({ id: sessionId, title });

@@ -49,6 +49,8 @@ export interface ComposerProps {
     onSelect?: () => void;
   }[];
   profileControl?: ReactNode;
+  /** Shown right after the model/profile control, e.g. a reasoning effort chip. */
+  effortControl?: ReactNode;
   /** Replaces the built-in workspace chip (e.g. an app-level project menu). */
   workspaceControl?: ReactNode;
   workspaceName?: string;
@@ -70,6 +72,7 @@ export function Composer({
   onProfileClick,
   profileMenuItems,
   profileControl,
+  effortControl,
   workspaceControl,
   workspaceName,
   workspaceMenuItems,
@@ -184,6 +187,7 @@ export function Composer({
                   <ChevronDown aria-hidden="true" />
                 </button>
               ))}
+            {effortControl}
             {workspaceControl ??
               (workspaceName &&
                 (workspaceMenuItems?.length ? (

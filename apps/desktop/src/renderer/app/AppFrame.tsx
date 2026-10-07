@@ -174,8 +174,9 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
         return;
       }
       const session = cache
-        .getQueryData<Session[]>(keys.sessions)
-        ?.find((item) => item.id === command.sessionId);
+        .getQueriesData<Session[]>({ queryKey: keys.sessions })
+        .flatMap(([, rows]) => rows ?? [])
+        .find((item) => item.id === command.sessionId);
       useUI
         .getState()
         .openTab({ id: command.sessionId as SessionId, title: session?.title ?? 'Chat' });

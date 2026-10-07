@@ -2021,6 +2021,13 @@ body {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+.v2-capacity-detail {
+  margin-top: -4px;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+}
 .v2-capacity-card [role='progressbar'] {
   height: 4px;
   overflow: hidden;

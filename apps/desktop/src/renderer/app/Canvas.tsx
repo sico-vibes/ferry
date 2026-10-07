@@ -13,6 +13,7 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type {
   AgentEvent,
+  Effort,
   MessagePart,
   ModelRef,
   Provider,
@@ -47,6 +48,7 @@ import { keys, useProfiles, useSessionDetail, useSettings, useWorkspaces } from 
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
 import { ComposerModelChip } from './SessionPowerControls';
+import { EffortChip } from './EffortChip';
 import { FullOutputDialog } from './FullOutputDialog';
 import { useDisplayName } from './useDisplayName';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -269,6 +271,7 @@ export function HomeCanvas() {
   const [prompt, setPrompt] = useState('');
   const [draftProfileId, setDraftProfileId] = useState<string | null>(null);
   const [draftModelRef, setDraftModelRef] = useState<ModelRef | null>(null);
+  const [draftEffort, setDraftEffort] = useState<Effort | null>(null);
   const activeProfile = profiles.find(
     (profile) => profile.id === (draftProfileId ?? settings?.activeProfileId),
   );
@@ -292,6 +295,8 @@ export function HomeCanvas() {
         ...(profileId ? { profileId } : {}),
       });
       if (draftModelRef) await client.models.select(session.id, draftModelRef);
+      if (draftEffort && draftModel?.reasoningEfforts?.includes(draftEffort))
+        await client.sessions.setEffort(session.id, draftEffort);
       openTab({ id: session.id, title: session.title });
       warnOAuthUseOnce(`app:${session.id}`, draftModelRef ?? session.modelRef, pushToast);
       await sendMessage(client, session.id, { text });
@@ -336,6 +341,13 @@ export function HomeCanvas() {
               onModelSelect={(ref) => {
                 setDraftModelRef(ref === 'auto' ? null : ref);
               }}
+            />
+          }
+          effortControl={
+            <EffortChip
+              efforts={draftModel?.reasoningEfforts}
+              value={draftEffort}
+              onChange={setDraftEffort}
             />
           }
           workspaceControl={
@@ -1411,6 +1423,30 @@ export function SessionCanvas() {
           {...(data?.session.profileId ? { activeProfileId: data.session.profileId } : {})}
           onProfileSelect={(profileId) => {
             void activateProfile(profileId);
+          }}
+        />
+      }
+      effortControl={
+        <EffortChip
+          efforts={
+            models.find((model) => model.ref === data?.session.pinnedModelRef)?.reasoningEfforts
+          }
+          value={data?.session.effort}
+          onChange={(effort) => {
+            void client.sessions
+              .setEffort(sessionId, effort)
+              .then((session) => {
+                const key = keys.session(sessionId);
+                const current = cache.getQueryData<SessionDetail>(key);
+                if (current) cache.setQueryData(key, { ...current, session });
+              })
+              .catch((error: unknown) => {
+                pushToast({
+                  kind: 'error',
+                  title: 'Effort could not be changed',
+                  body: error instanceof Error ? error.message : String(error),
+                });
+              });
           }}
         />
       }

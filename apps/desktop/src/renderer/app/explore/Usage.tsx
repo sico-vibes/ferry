@@ -1,8 +1,10 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { RingGauge, ResetsTimeline, ShowMoreList, UsageChart } from '@ferry/ui';
+import { ResetsTimeline, ShowMoreList, UsageChart } from '@ferry/ui';
 import { useFerryClient } from '../../data/client';
 import { usesRealDomain } from '../../data/realDomains';
+import { useLimits } from '../../data/queries';
+import { describeReset, describeSource, describeWindow, remainingShare } from '../../data/limits';
 
 const number = (value: number) => new Intl.NumberFormat().format(value);
 
@@ -17,6 +19,7 @@ export function UsageTab() {
     queryKey: ['usage', 'capacity'],
     queryFn: () => client.quota.capacity(),
   });
+  const { data: limits = [] } = useLimits();
   const { data: history = [] } = useQuery({
     queryKey: ['usage', 'history', 14],
     queryFn: () => client.quota.history(14),
@@ -62,78 +65,72 @@ export function UsageTab() {
       )
       .map((provider) => provider.id),
   );
-  const maxSteps = Math.max(1, ...(capacity?.perProvider ?? []).map((item) => item.stepsLeft ?? 0));
   const cachedTokens = history.reduce((sum, item) => sum + (item.cachedTokens ?? 0), 0);
 
   return (
     <div aria-label="Usage dashboard" className="grid gap-8" role="region">
       <div className="grid gap-6 md:grid-cols-2">
-        <section aria-label="Capacity remaining" className="grid gap-4 rounded-card bg-card p-5">
-          <div className="flex items-center gap-5">
-            {capacity ? (
-              <RingGauge
-                label={`${String(capacity.percentRemaining)}% capacity remaining`}
-                size={104}
-                stroke={7}
-                value={capacity.percentRemaining}
-              />
-            ) : (
-              <span
-                aria-label="Capacity unavailable"
-                className="text-2xl text-muted-foreground"
-                role="img"
-              >
-                --
-              </span>
-            )}
-            <div>
-              <h2 className="text-ui-section font-semibold">Today</h2>
-              <p className="mt-1 text-ui-secondary text-muted-foreground">Capacity remaining</p>
-              <p className="mt-2 text-ui-title font-semibold tabular-nums">
-                {capacity ? `${number(capacity.stepsLeftToday)} steps left` : 'Usage unavailable'}
-              </p>
-            </div>
+        <section aria-label="Provider limits" className="grid gap-4 rounded-card bg-card p-5">
+          <div>
+            <h2 className="text-ui-section font-semibold">Limits</h2>
+            <p className="mt-1 text-ui-secondary text-muted-foreground">
+              Daily and monthly limits your providers report or publish. Ferry doesn’t guess the
+              rest.
+            </p>
           </div>
           <ShowMoreList
-            items={(capacity?.perProvider ?? []).filter((item) =>
-              usableProviderIds.has(item.providerId),
-            )}
-            groupKey="models:usage:capacity"
+            items={limits.filter((item) => usableProviderIds.has(item.providerId))}
+            groupKey="models:usage:limits"
             label="providers"
-            listClassName="grid gap-3"
-            renderItem={(item) => (
-              <li className="grid gap-1.5" key={item.providerId}>
-                <div className="flex justify-between gap-3 text-ui-meta">
-                  <span className="truncate text-muted-foreground">
-                    {providerNames[item.providerId] ?? item.providerId}
-                  </span>
-                  {item.stepsLeft === null ? (
-                    <span
-                      aria-label={`${providerNames[item.providerId] ?? item.providerId}: limit unknown`}
-                      className="text-muted-foreground"
-                      role="img"
-                    >
-                      Limit unknown
+            listClassName="grid gap-4"
+            renderItem={(provider) => (
+              <li className="grid gap-2" key={provider.providerId}>
+                <div className="flex justify-between gap-3 text-ui-label">
+                  <span className="truncate font-medium">{provider.providerName}</span>
+                  {provider.state !== 'known' && (
+                    <span className="text-ui-meta text-muted-foreground">
+                      {provider.state === 'paid_no_limit'
+                        ? 'Pay as you go · no daily limit'
+                        : 'No published limit'}
                     </span>
-                  ) : (
-                    <span className="tabular-nums">{number(item.stepsLeft)}</span>
                   )}
                 </div>
-                {item.stepsLeft !== null && (
-                  <div
-                    aria-label={`${providerNames[item.providerId] ?? item.providerId} capacity`}
-                    aria-valuemax={100}
-                    aria-valuemin={0}
-                    aria-valuenow={(item.stepsLeft / maxSteps) * 100}
-                    className="h-1.5 overflow-hidden rounded-full bg-muted"
-                    role="progressbar"
-                  >
-                    <span
-                      className="block h-full rounded-full bg-primary"
-                      style={{ width: `${String((item.stepsLeft / maxSteps) * 100)}%` }}
-                    />
-                  </div>
-                )}
+                {provider.windows.map((window, index) => {
+                  const share = remainingShare(window);
+                  const reset = describeReset(window);
+                  return (
+                    <div
+                      className="grid gap-1"
+                      key={`${window.metric}-${window.period}-${window.model ?? ''}-${String(index)}`}
+                    >
+                      <div className="flex justify-between gap-3 text-ui-meta">
+                        <span className="truncate text-muted-foreground">
+                          {window.model ? `${window.model} · ` : ''}
+                          {describeWindow(window)}
+                        </span>
+                        {reset ? (
+                          <span className="shrink-0 text-muted-foreground">{reset}</span>
+                        ) : null}
+                      </div>
+                      {share !== null && (
+                        <div
+                          aria-label={`${provider.providerName}: ${describeWindow(window)}`}
+                          aria-valuemax={100}
+                          aria-valuemin={0}
+                          aria-valuenow={Math.round(share * 100)}
+                          className="h-1.5 overflow-hidden rounded-full bg-muted"
+                          role="progressbar"
+                          title={`Source: ${describeSource(window)}`}
+                        >
+                          <span
+                            className="block h-full rounded-full bg-primary"
+                            style={{ width: `${String(share * 100)}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </li>
             )}
           />

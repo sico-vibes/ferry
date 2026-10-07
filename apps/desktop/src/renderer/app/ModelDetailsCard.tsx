@@ -95,12 +95,6 @@ export function ModelDetailsCard({
           <dt>Cost</dt>
           <dd>{priceLabel(model)}</dd>
         </div>
-        {candidate?.stepsLeft !== null && candidate?.stepsLeft !== undefined && (
-          <div>
-            <dt>Headroom</dt>
-            <dd>≈ {String(Math.round(candidate.stepsLeft))} steps today</dd>
-          </div>
-        )}
       </dl>
       {capabilities.length > 0 && (
         <div className="v2-model-capabilities">

@@ -8,6 +8,7 @@ export const keys = {
   profiles: ['profiles'] as const,
   settings: ['settings'] as const,
   capacity: ['capacity'] as const,
+  limits: ['quota', 'limits'] as const,
   mcp: ['mcp'] as const,
   workspaces: ['workspaces'] as const,
   system: ['system'] as const,
@@ -43,6 +44,11 @@ export function useSystemInfo() {
 export function useCapacity() {
   const client = useFerryClient();
   return useQuery({ queryKey: keys.capacity, queryFn: () => client.quota.capacity() });
+}
+/** Per-provider daily/monthly limits Ferry actually knows (kept current by quota.limits.updated). */
+export function useLimits() {
+  const client = useFerryClient();
+  return useQuery({ queryKey: keys.limits, queryFn: () => client.quota.limits() });
 }
 export function useMcpServers() {
   const client = useFerryClient();

@@ -47,15 +47,19 @@ export function useFerryEvents(): void {
     };
     const off = [
       client.on('quota.updated', (capacity) => cache.setQueryData(keys.capacity, capacity)),
+      client.on('quota.limits.updated', (limits) => cache.setQueryData(keys.limits, limits)),
       client.on('session.updated', (session) => {
         const previous = lastStatus.get(session.id);
         lastStatus.set(session.id, session.status);
         const notification = chatNotificationFor(previous, session);
         if (notification) void window.ferryHost?.notify(notification).catch(() => undefined);
-        // Patch the sidebar row in place; refetch the list only for a chat it doesn't have yet.
-        const rows = cache.getQueryData<Session[]>(keys.sessions);
-        if (rows?.some((row) => row.id === session.id))
-          cache.setQueryData<Session[]>(keys.sessions, (current) =>
+        // Patch the sidebar row in place (every sessions query, keyed by its search text);
+        // refetch only when no list has this chat yet.
+        const known = cache
+          .getQueriesData<Session[]>({ queryKey: keys.sessions })
+          .some(([, rows]) => rows?.some((row) => row.id === session.id));
+        if (known)
+          cache.setQueriesData<Session[]>({ queryKey: keys.sessions }, (current) =>
             current?.map((row) => (row.id === session.id ? session : row)),
           );
         else void cache.invalidateQueries({ queryKey: keys.sessions });

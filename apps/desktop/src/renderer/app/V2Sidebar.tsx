@@ -27,7 +27,8 @@ import {
 } from 'lucide-react';
 import { FerryMark, UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
-import { keys, useCapacity, useSettings } from '../data/queries';
+import { keys, useLimits, useSettings } from '../data/queries';
+import { describeReset, describeWindow, tightestDailyWindow } from '../data/limits';
 import { useUI } from '../state/ui';
 import { useToasts } from '../state/toasts';
 import type { SessionId, SessionStatus } from '@ferry/shared';
@@ -79,7 +80,7 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
   });
   const { data: settings } = useSettings();
   const displayName = useDisplayName();
-  const { data: capacity } = useCapacity();
+  const { data: limits = [] } = useLimits();
   const pushToast = useToasts((state) => state.push);
   const [showAll, setShowAll] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -119,8 +120,7 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
     useUI.getState().openTab({ id, title });
     void navigate({ to: '/s/$sessionId', params: { sessionId: id } });
   };
-  const count = capacity?.stepsLeftToday ?? 0;
-  const percent = capacity?.percentRemaining ?? 0;
+  const tightest = tightestDailyWindow(limits);
   const shown = showAll ? orderedSessions : orderedSessions.slice(0, 6);
   return (
     <TooltipProvider>
@@ -273,18 +273,34 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
         {collapsed && <div className="v2-rail-spacer" />}
         <div className="v2-sidebar-bottom">
           {!collapsed && !pathname.startsWith('/models') && (
-            <section className="v2-capacity-card" aria-label="Capacity">
-              <div className="v2-capacity-top">
-                <span>≈ {String(count)} steps left today</span>
-                <span>{String(percent)}%</span>
-              </div>
-              <Progress value={percent} aria-label={`${String(percent)}% capacity remaining`} />
+            <section className="v2-capacity-card" aria-label="Daily limits">
+              {tightest ? (
+                <>
+                  <div className="v2-capacity-top">
+                    <span className="truncate">{tightest.providerName}</span>
+                    <span>{String(Math.round(tightest.share * 100))}%</span>
+                  </div>
+                  <Progress
+                    value={tightest.share * 100}
+                    aria-label={`${tightest.providerName}: ${describeWindow(tightest.window)}`}
+                  />
+                  <small className="v2-capacity-detail">
+                    {[describeWindow(tightest.window), describeReset(tightest.window)]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </small>
+                </>
+              ) : (
+                <div className="v2-capacity-top">
+                  <span>No daily limits reported yet</span>
+                </div>
+              )}
               <button
                 onClick={() => {
-                  go('/models');
+                  void navigate({ to: '/models/usage' });
                 }}
               >
-                Add provider
+                See limits
               </button>
             </section>
           )}
