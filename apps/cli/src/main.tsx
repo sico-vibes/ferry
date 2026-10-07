@@ -325,8 +325,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       return await gatewayCommand(flags.positionals.slice(1), json, client, dataDir, flags.values);
     if (!command) {
       const { interactive } = await import('./interactive.js');
-      await interactive(client, cwd);
-      return 0;
+      return await interactive(client, cwd, engine);
     }
     if (command === 'run') {
       if (engine === 'local') await assertLocalProvidersConfigured(client);
@@ -1769,6 +1768,5 @@ async function runInit(
     return 2;
   }
   const { launchInitWizard } = await import('./init-prompt.js');
-  await launchInitWizard(client, cwd);
-  return 0;
+  return await launchInitWizard(client, cwd);
 }

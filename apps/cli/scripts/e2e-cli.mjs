@@ -212,7 +212,10 @@ try {
   }
   fake.setResponses([completion('many-files-reply')]);
   const manyFilesStart = Date.now();
-  const manyFilesEvents = await runCli('Reply from the many-file workspace');
+  const manyFilesEvents = await runCli('Reply from the many-file workspace', [
+    '--profile',
+    'Auto-Free',
+  ]);
   const manyFilesElapsed = Date.now() - manyFilesStart;
   assert.ok(deltasContain(manyFilesEvents, 'many-files-reply'));
   assert.ok(

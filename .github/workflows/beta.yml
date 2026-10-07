@@ -49,6 +49,16 @@ jobs:
         env:
           FERRY_E2E_ONLY: golden-path
           FERRY_E2E_EXECUTABLE: apps/desktop/release/win-unpacked/Ferry.exe
+      - name: Run installed interactive CLI smoke
+        shell: pwsh
+        run: |
+          $data = Join-Path $env:RUNNER_TEMP ("ferry-cli-smoke-" + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $data | Out-Null
+          $env:FERRY_SMOKE_CLI = (Resolve-Path 'apps\desktop\release\win-unpacked\resources\cli\ferry.cmd').Path
+          $env:FERRY_SMOKE_EXECUTABLE = (Resolve-Path 'apps\desktop\release\win-unpacked\Ferry.exe').Path
+          $env:FERRY_SMOKE_DATA_DIR = $data
+          node --experimental-strip-types apps/desktop/scripts/cli-interactive-smoke.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Generate notes since the previous beta
         id: release-notes
         uses: actions/github-script@v7

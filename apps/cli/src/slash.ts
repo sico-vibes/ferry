@@ -1,5 +1,5 @@
 import type { FerryClient } from '@ferry/client';
-import type { ModelRef, Profile, SessionId } from '@ferry/shared';
+import type { Profile, SessionId } from '@ferry/shared';
 import { formatCapacity } from './format.js';
 
 /* Quota and optimizer counts are intentionally interpolated into human-readable output. */
@@ -13,14 +13,80 @@ export interface SlashContext {
   onProfile(profile: Profile): void;
   onModel(ref: string): void;
   onCompact(summary: string): void;
+  freeOnly?: boolean;
+  onFreeOnly?(value: boolean): void;
 }
+
+export interface ParsedSlashCommand {
+  name: string;
+  args: string[];
+}
+
+export function parseSlashCommand(command: string): ParsedSlashCommand {
+  const [name = '', ...args] = command.trim().split(/\s+/);
+  return { name: name.toLowerCase(), args };
+}
+
 export async function executeSlashCommand(context: SlashContext, command: string): Promise<string> {
-  const [name, ...words] = command.trim().split(/\s+/);
+  const { name, args: words } = parseSlashCommand(command);
   const { client, sessionId } = context;
   if (name === '/help')
-    return '/profile <name> /model <id|auto> /plan /diff /undo /delegate <lane> <brief> /quota /optimize on|off|stats /skills /mcp /compact /clear';
+    return '/model [number|ref] · /profile [name] · /free · /status · /login <email> · /logout · /new · /help · /exit · /plan · /diff · /undo · /delegate <lane> <brief> · /quota · /optimize on|off|stats · /skills · /mcp · /compact · /clear';
+  if (name === '/free') {
+    const freeOnly = !(context.freeOnly ?? false);
+    context.onFreeOnly?.(freeOnly);
+    return `Free-only model listing ${freeOnly ? 'on' : 'off'}.`;
+  }
+  if (name === '/model') {
+    const providers = await client.providers.list();
+    const connected = new Set(
+      providers.filter((row) => row.keyStatus === 'valid' && row.enabled).map((row) => row.id),
+    );
+    const models = (await client.models.list()).filter((row) => connected.has(row.providerId));
+    const visible = models.filter((row) => !(context.freeOnly ?? false) || row.free);
+    const value = words.join(' ');
+    if (!value)
+      return [
+        '0. Auto',
+        '1. No profile',
+        ...visible.map((row, index) => `${index + 2}. ${row.ref}${row.free ? ' · free' : ''}`),
+      ].join('\n');
+    if (value.toLowerCase() === 'auto' || value === '0') {
+      await client.models.select(sessionId, 'auto');
+      context.onModel('auto');
+      return 'Model set to Auto.';
+    }
+    const numeric = Number(value);
+    if (value.toLowerCase() === 'no profile' || numeric === 1) {
+      const profile = (await client.profiles.list()).find((row) => row.name === 'No profile');
+      if (!profile) return 'No profile option is unavailable.';
+      await client.profiles.activate(profile.id, sessionId);
+      context.onProfile(profile);
+      return 'Profile set to No profile.';
+    }
+    const selected =
+      Number.isInteger(numeric) && numeric > 1
+        ? visible[numeric - 2]
+        : visible.find((row) => row.ref === value);
+    if (!selected) return `Model not found in the current listing: ${value}`;
+    await client.models.select(sessionId, selected.ref);
+    context.onModel(selected.ref);
+    return `Model set to ${selected.ref}`;
+  }
+  if (name === '/status') {
+    const [info, providers, cloud] = await Promise.all([
+      client.system.info(),
+      client.providers.list(),
+      client.cloud.status(),
+    ]);
+    return `Engine: ${info.mock ? 'mock' : 'real'}\nKeys: ${providers.filter((row) => row.keyStatus === 'valid' && row.enabled).length} connected providers\nCloud: ${cloud.auth.signedIn ? (cloud.auth.email ?? 'signed in') : 'signed out'}`;
+  }
   if (name === '/profile') {
     const profiles = await client.profiles.list();
+    if (!words.length) {
+      const settings = await client.settings.get();
+      return `Profiles:\n${profiles.map((row) => `${row.name}${row.id === settings.activeProfileId ? ' · active' : ''}`).join('\n')}`;
+    }
     const profile = profiles.find(
       (row) => row.name.toLowerCase() === words.join(' ').toLowerCase(),
     );
@@ -29,14 +95,6 @@ export async function executeSlashCommand(context: SlashContext, command: string
     await client.profiles.activate(profile.id, sessionId);
     context.onProfile(profile);
     return `Profile set to ${profile.name}`;
-  }
-  if (name === '/model') {
-    const value = words.join(' ');
-    if (!value) return 'Usage: /model <id|auto>';
-    const ref = value === 'auto' ? 'auto' : (value as ModelRef);
-    await client.models.select(sessionId, ref);
-    context.onModel(value);
-    return `Model set to ${value}`;
   }
   if (name === '/plan') {
     const { taskRecord } = await client.sessions.get(sessionId);
@@ -130,6 +188,14 @@ export async function executeSlashCommand(context: SlashContext, command: string
     await context.onClear();
     return 'Started a fresh chat.';
   }
-  return `Unknown command ${name ?? ''}. Use /help.`;
+  if (name === '/new') {
+    await context.onClear();
+    return 'Started a fresh chat.';
+  }
+  if (name === '/logout') {
+    await client.cloud.signOut();
+    return 'Signed out of Ferry Cloud.';
+  }
+  return `Unknown command ${name}. Use /help.`;
 }
 /* eslint-enable @typescript-eslint/restrict-template-expressions */

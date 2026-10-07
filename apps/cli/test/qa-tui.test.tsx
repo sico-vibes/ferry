@@ -1,5 +1,5 @@
 import React from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createMockFerryClient } from '@ferry/client';
 import { Chat } from '../src/tui.js';
@@ -34,10 +34,10 @@ async function openChat(): Promise<ChatApp> {
   return app;
 }
 
-async function submit(app: ChatApp, text: string): Promise<void> {
+async function submit(app: ChatApp, text: string, enter = '\r'): Promise<void> {
   app.stdin.write(text);
   await wait(5);
-  app.stdin.write('\r');
+  app.stdin.write(enter);
 }
 
 describe('@ferry/cli Ink TUI slash commands', () => {
@@ -46,13 +46,14 @@ describe('@ferry/cli Ink TUI slash commands', () => {
   afterEach(() => {
     app?.unmount();
     app = undefined;
+    vi.restoreAllMocks();
   });
 
   it('/help lists the available commands', async () => {
     app = await openChat();
     await submit(app, '/help');
     const current = app;
-    await waitForFrame(current, (frame) => frame.includes('/profile <name>'));
+    await waitForFrame(current, (frame) => frame.includes('/model [number|ref]'));
     expect(current.lastFrame()).toContain('/help');
   });
 
@@ -70,6 +71,73 @@ describe('@ferry/cli Ink TUI slash commands', () => {
     const current = app;
     await waitForFrame(current, (frame) => frame.includes('No checkpoint'));
     expect(current.lastFrame()).toContain('to restore.');
+  });
+
+  it('submits when the terminal reports Enter as LF', async () => {
+    app = await openChat();
+    await submit(app, 'hello', '\n');
+    const current = app;
+    await waitForFrame(current, (frame) => frame.includes('you: hello'));
+    expect(current.lastFrame()).not.toContain('› hello');
+  });
+
+  it.each(['\r', '\n', '\r\n'])(
+    'submits text and Enter that arrive in one chunk (%j), once',
+    async (enter) => {
+      app = await openChat();
+      app.stdin.write(`hello${enter}`);
+      const current = app;
+      await waitForFrame(current, (frame) => frame.includes('you: hello'));
+      await wait(30);
+      expect(current.lastFrame()?.split('you: hello').length).toBe(2);
+      expect(current.lastFrame()).not.toContain('› hello');
+    },
+  );
+
+  it('creates the session lazily when the first message is submitted', async () => {
+    const client = createMockFerryClient();
+    const workspace = await client.workspaces.open(process.cwd());
+    const profile = (await client.profiles.list())[0];
+    if (!profile) throw new Error('fixture profile missing');
+    const create = vi.spyOn(client.sessions, 'create');
+    app = render(<Chat client={client} workspace={workspace} profile={profile} />);
+    const current = app;
+    await waitForFrame(current, (frame) => !frame.includes('loading capacity'));
+    expect(create).not.toHaveBeenCalled();
+
+    await submit(current, 'hello');
+    await waitForFrame(current, (frame) => frame.includes('you: hello'));
+    expect(create).toHaveBeenCalledOnce();
+  });
+
+  it('shows a visible error when lazy session creation fails', async () => {
+    const client = createMockFerryClient();
+    const workspace = await client.workspaces.open(process.cwd());
+    const profile = (await client.profiles.list())[0];
+    if (!profile) throw new Error('fixture profile missing');
+    vi.spyOn(client.sessions, 'create').mockRejectedValue(new Error('session creation failed'));
+    app = render(<Chat client={client} workspace={workspace} profile={profile} />);
+    const current = app;
+    await waitForFrame(current, (frame) => !frame.includes('loading capacity'));
+
+    await submit(current, 'hello');
+    await waitForFrame(current, (frame) => frame.includes('session creation failed'));
+    expect(current.lastFrame()).not.toContain('you: hello');
+  });
+
+  it('shows a visible error when sending the first message fails', async () => {
+    const client = createMockFerryClient();
+    const workspace = await client.workspaces.open(process.cwd());
+    const profile = (await client.profiles.list())[0];
+    if (!profile) throw new Error('fixture profile missing');
+    vi.spyOn(client.sessions, 'send').mockRejectedValue(new Error('message send failed'));
+    app = render(<Chat client={client} workspace={workspace} profile={profile} />);
+    const current = app;
+    await waitForFrame(current, (frame) => !frame.includes('loading capacity'));
+
+    await submit(current, 'hello');
+    await waitForFrame(current, (frame) => frame.includes('message send failed'));
+    expect(current.lastFrame()).toContain('you: hello');
   });
 
   it('/clear starts a fresh chat', async () => {

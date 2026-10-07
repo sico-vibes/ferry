@@ -1,0 +1,156 @@
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { FakeOpenAIServer } from '../../../packages/testkit/src/fake-servers.ts';
+
+if (process.platform !== 'win32')
+  throw new Error('Interactive installed CLI smoke requires Windows.');
+const desktopRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const root = resolve(desktopRoot, '../..');
+const cli = process.env.FERRY_SMOKE_CLI;
+const executable = process.env.FERRY_SMOKE_EXECUTABLE;
+const dataDirectory = process.env.FERRY_SMOKE_DATA_DIR;
+if (!cli || !executable || !dataDirectory)
+  throw new Error(
+    'FERRY_SMOKE_CLI, FERRY_SMOKE_EXECUTABLE, and FERRY_SMOKE_DATA_DIR are required.',
+  );
+const require = createRequire(join(root, 'apps/cli/package.json'));
+const pty = require('node-pty');
+const model = 'qwen/qwen3.8-27b:free';
+const response = {
+  chunks: [
+    {
+      id: 'chatcmpl_smoke',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model: 'fake-served-model',
+      choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+    },
+    {
+      id: 'chatcmpl_smoke',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model: 'fake-served-model',
+      choices: [{ index: 0, delta: { content: 'scripted reply' }, finish_reason: null }],
+    },
+    {
+      id: 'chatcmpl_smoke',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model: 'fake-served-model',
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+    },
+  ],
+};
+const fake = new FakeOpenAIServer({
+  models: [{ id: model, supported_parameters: ['tools'] }],
+  responses: [response, response],
+});
+await fake.start();
+const environment = {
+  ...process.env,
+  ELECTRON_RUN_AS_NODE: '1',
+  FERRY_SMOKE_EXECUTABLE: executable,
+  FERRY_E2E_USER_DATA_DIR: dataDirectory,
+  FERRY_E2E_PROVIDER_IDS: 'openrouter',
+  FERRY_E2E_PROVIDER_KEY: 'fixture-key',
+  FERRY_PROVIDER_BASE_URL_OPENROUTER: `${fake.baseUrl}/v1`,
+  FERRY_TEST_KEYRING_NAMESPACE: `ferry-installed-cli-${process.pid}`,
+  NODE_ENV: 'test',
+};
+try {
+  for (const variant of ['cmd', 'pwsh']) {
+    const workspace = await mkdtemp(join(tmpdir(), `ferry-pty-${variant}-`));
+    const variantDataDirectory = join(dataDirectory, variant);
+    const variantEnvironment = {
+      ...environment,
+      FERRY_DATA_DIR: join(variantDataDirectory, 'engine'),
+      FERRY_E2E_USER_DATA_DIR: variantDataDirectory,
+    };
+    let output = '';
+    let child;
+    try {
+      // Both shells run the installed wrapper inside ConPTY, matching interactive user launch.
+      const command =
+        variant === 'cmd'
+          ? `/d /s /c ""${cli}" --data-dir "${join(variantDataDirectory, 'engine')}" --cwd "${workspace}""`
+          : `& '${cli.replaceAll("'", "''")}' --data-dir '${join(variantDataDirectory, 'engine').replaceAll("'", "''")}' --cwd '${workspace.replaceAll("'", "''")}'`;
+      child = pty.spawn(
+        variant === 'cmd' ? (process.env.ComSpec ?? 'cmd.exe') : 'pwsh.exe',
+        variant === 'cmd' ? command : ['-NoLogo', '-Command', command],
+        {
+          cwd: workspace,
+          env: variantEnvironment,
+          cols: 100,
+          rows: 30,
+          name: 'xterm-color',
+          useConpty: true,
+        },
+      );
+      child.onData((data) => (output += data));
+      const waitFor = async (value, timeout = 30_000) => {
+        const deadline = Date.now() + timeout;
+        while (!output.includes(value) && Date.now() < deadline)
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, 40));
+        assert.ok(
+          output.includes(value),
+          `${variant}: timed out waiting for ${value}. Terminal output:\n${output}`,
+        );
+      };
+      await waitFor('Trust ');
+      child.write('y\r');
+      await waitFor('›');
+      child.write('hello\r');
+      await waitFor('scripted reply', 60_000);
+      // The CLI labels each reply with the Ferry model that served it.
+      await waitFor(`via openrouter/${model}`, 15_000);
+      child.write('\x03');
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 150));
+      child.write('\x03');
+      // cmd.exe asks this after Ctrl+C in any .cmd launcher (npm shims do the same); answer it so
+      // the batch finishes with Ferry's own exit code.
+      const batchPrompt = Date.now() + 5_000;
+      while (!output.includes('Terminate batch job') && Date.now() < batchPrompt)
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 40));
+      if (output.includes('Terminate batch job')) child.write('N\r');
+      const exitCode = await new Promise((resolvePromise, reject) => {
+        const timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `${variant}: CLI did not exit after Ctrl+C twice. Last output:
+${output.slice(-1500)}`,
+              ),
+            ),
+          10_000,
+        );
+        child.onExit(({ exitCode: code }) => {
+          clearTimeout(timer);
+          resolvePromise(code);
+        });
+      });
+      // Under the bundled runtime a console Ctrl+C can end the process directly; Windows then reports
+      // STATUS_CONTROL_C_EXIT (0xC000013A). Both that and a clean 0 mean the user's Ctrl+C exited.
+      const CONTROL_C_EXIT = -1073741510;
+      assert.ok(
+        exitCode === 0 ||
+          exitCode === CONTROL_C_EXIT ||
+          exitCode === 0xc000013a ||
+          // pwsh -Command reports a native command ended by Ctrl+C as a plain failure (1).
+          (variant === 'pwsh' && exitCode === 1),
+        `${variant}: CLI exited with code ${exitCode}.`,
+      );
+    } finally {
+      if (child) child.kill();
+      await rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    }
+  }
+  console.log(
+    'PASS installed-style interactive CLI renders, streams a reply, labels its model, and exits on Ctrl+C twice (cmd and pwsh).',
+  );
+} finally {
+  await fake.stop();
+}

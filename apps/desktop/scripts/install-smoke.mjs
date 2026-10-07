@@ -164,6 +164,14 @@ async function runInstalledSmoke(directory, profile, stateFile, seed) {
     'local',
     `Installed ferry.cmd status did not report local engine: ${status}`,
   );
+  run(process.execPath, [join(desktopRoot, 'scripts', 'cli-interactive-smoke.mjs')], {
+    env: {
+      ...env,
+      FERRY_E2E_PROVIDER_IDS: 'openrouter',
+      FERRY_E2E_PROVIDER_KEY: 'fixture-key',
+    },
+    timeout: 120_000,
+  });
 }
 function insertKeyReference(databasePath) {
   const db = new Database(databasePath);
