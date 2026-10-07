@@ -1,7 +1,17 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { Bell, Check, ChevronDown, Network, Search, X } from 'lucide-react';
+import {
+  Bell,
+  Check,
+  ChevronDown,
+  FolderOpen,
+  Network,
+  Search,
+  Settings2,
+  SquarePen,
+  X,
+} from 'lucide-react';
 import { Popover as PopoverPrimitive } from 'radix-ui';
 import { Dialog, FerryMark, ProviderLogo, ShowMoreList, Skeleton, TagBadge, UiV2 } from '@ferry/ui';
 import { DIRECT_PROFILE_ID } from '@ferry/shared';
@@ -11,6 +21,8 @@ import { listAllModels } from '@ferry/client';
 import { keys, useSessions, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI, type SettingsSection } from '../state/ui';
+import { settingsSections } from '../state/ui.types';
+import { openProjectFolder } from '../data/projects';
 import { ModelDetailsCard } from './ModelDetailsCard';
 import { formatTokens } from './modelFacts';
 import { matchesKeybinding } from '@ferry/config/keybindings';
@@ -213,11 +225,7 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
         break;
       }
       case 'folder': {
-        const path = await window.ferryHost?.openFolder();
-        if (path) {
-          await client.workspaces.open(path);
-          await cache.invalidateQueries({ queryKey: keys.workspaces });
-        }
+        if (await openProjectFolder(client, cache)) await navigate({ to: '/' });
         break;
       }
       case 'density':
@@ -298,9 +306,43 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
   const run = (action: string) => {
     closeThenRun(() => runAction(action));
   };
+  const query = searchValue.trim();
+  const searching = query.length > 0;
+  const allChats = sessions.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  // Idle: a few recent chats so actions and settings stay in view; searching covers every chat.
+  const recentChats = searching ? allChats : allChats.slice(0, 6);
+  const projectName = (workspaceId: string) =>
+    workspaces.find((workspace) => workspace.id === workspaceId)?.name ?? '';
+  const openChat = (sessionId: SessionId, title: string) => {
+    closeThenRun(() => {
+      useUI.getState().openTab({ id: sessionId, title });
+      void navigate({ to: '/s/$sessionId', params: { sessionId } });
+    });
+  };
+  // Alt+1…6 opens the matching recent chat while the palette is open (shown next to each row).
+  useEffect(() => {
+    if (!open || searching) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey) return;
+      const digit = Number(event.key);
+      const chat = Number.isInteger(digit) && digit >= 1 ? recentChats[digit - 1] : undefined;
+      if (!chat) return;
+      event.preventDefault();
+      openChat(chat.id, chat.title);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+    };
+  });
+  const quickActions: { id: string; label: string; shortcut: string; icon: typeof Search }[] = [
+    { id: 'new', label: 'New chat', shortcut: 'Ctrl+N', icon: SquarePen },
+    { id: 'folder', label: 'Open folder', shortcut: 'Ctrl+O', icon: FolderOpen },
+  ];
+  const settingsShortcuts: SettingsSection[] = searching
+    ? [...settingsSections]
+    : ['General', 'Providers & keys', 'Storage & Cloud'];
   const actions: { id: string; label: string; shortcut: string }[] = [
-    { id: 'new', label: 'New Chat', shortcut: 'Ctrl N' },
-    { id: 'folder', label: 'Open folder', shortcut: '' },
     { id: 'profile', label: 'Switch profile', shortcut: '' },
     { id: 'density', label: `Toggle density (${density})`, shortcut: '' },
     { id: 'sidebar', label: 'Toggle sidebar', shortcut: 'Ctrl+B' },
@@ -316,25 +358,8 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
     })),
     { id: 'usage', label: 'Go to Usage', shortcut: '' },
     { id: 'library', label: 'Go to Library', shortcut: '' },
-    { id: 'settings', label: 'Go to Settings', shortcut: '' },
-    ...[
-      'General',
-      'Profiles',
-      'Providers & keys',
-      'Gateway',
-      'Routing',
-      'Optimizers',
-      'Delegation',
-      'Permissions',
-      'Data & privacy',
-      'Shortcuts',
-      'About',
-    ].map((section) => ({
-      id: `settings:${section}`,
-      label: `Settings ${section}`,
-      shortcut: '',
-    })),
-    { id: 'shortcuts', label: 'Keyboard shortcuts', shortcut: 'Ctrl /' },
+    { id: 'settings', label: 'Go to Settings', shortcut: 'Ctrl+,' },
+    { id: 'shortcuts', label: 'Keyboard shortcuts', shortcut: 'Ctrl+/' },
     { id: 'delegate', label: 'Delegate current task…', shortcut: '' },
     { id: 'checkpoint', label: 'Restore last checkpoint', shortcut: '' },
   ];
@@ -367,54 +392,52 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
               autoFocus
               value={searchValue}
               onValueChange={setSearchValue}
-              placeholder="Search actions and sessions…"
+              placeholder="Search chats"
             />
           </div>
           <PaletteCommand.List>
             <PaletteCommand.Empty>No results.</PaletteCommand.Empty>
-            {!searchValue.trim().startsWith('>') && (
-              <PaletteCommand.Group heading="Recent sessions">
-                {sessions
-                  .slice()
-                  .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-                  .map((session) => (
-                    <PaletteCommand.Item
-                      key={`recent-${session.id}`}
-                      value={`${session.title} ${session.preview} ${session.id}`}
-                      onSelect={() => {
-                        closeThenRun(() => {
-                          useUI.getState().openTab({ id: session.id, title: session.title });
-                          void navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
-                        });
-                      }}
-                    >
-                      {session.title}
-                      <small>{session.preview}</small>
-                    </PaletteCommand.Item>
-                  ))}
+            {!query.startsWith('>') && recentChats.length > 0 && (
+              <PaletteCommand.Group heading="Chats">
+                {recentChats.map((session, index) => (
+                  <PaletteCommand.Item
+                    key={`chat-${session.id}`}
+                    className="palette-chat"
+                    value={`${session.title} ${projectName(session.workspaceId)} ${session.preview} ${session.id}`}
+                    onSelect={() => {
+                      openChat(session.id, session.title);
+                    }}
+                  >
+                    <span className="palette-label">{session.title}</span>
+                    <span className="palette-meta">{projectName(session.workspaceId)}</span>
+                    {!searching ? <kbd>{`Alt+${String(index + 1)}`}</kbd> : null}
+                  </PaletteCommand.Item>
+                ))}
               </PaletteCommand.Group>
             )}
-            {!searchValue.trim().startsWith('>') && (
-              <PaletteCommand.Group heading="Workspaces">
+            {searching && !query.startsWith('>') && workspaces.length > 0 && (
+              <PaletteCommand.Group heading="Projects">
                 {workspaces.map((workspace) => (
                   <PaletteCommand.Item
                     key={workspace.id}
                     value={`${workspace.name} ${workspace.path}`}
                     onSelect={() => {
                       closeThenRun(() => {
-                        localStorage.setItem('ferry.libraryWorkspace', workspace.id);
-                        void navigate({ to: '/library' });
+                        useUI.getState().setSelectedWorkspace(workspace.id);
+                        useUI.getState().requestComposerFocus();
+                        void navigate({ to: '/' });
                       });
                     }}
                   >
-                    {workspace.name}
-                    <small>{workspace.path}</small>
+                    <FolderOpen aria-hidden="true" />
+                    <span className="palette-label">{workspace.name}</span>
+                    <span className="palette-meta">{workspace.path}</span>
                   </PaletteCommand.Item>
                 ))}
               </PaletteCommand.Group>
             )}
-            <PaletteCommand.Group heading="Commands">
-              {actions.map(({ id, label, shortcut }) => (
+            <PaletteCommand.Group heading="Quick actions">
+              {quickActions.map(({ id, label, shortcut, icon: Icon }) => (
                 <PaletteCommand.Item
                   key={id}
                   value={label}
@@ -423,11 +446,44 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
                     run(id);
                   }}
                 >
-                  {label}
+                  <Icon aria-hidden="true" />
+                  <span className="palette-label">{label}</span>
                   <kbd>{shortcut}</kbd>
                 </PaletteCommand.Item>
               ))}
             </PaletteCommand.Group>
+            <PaletteCommand.Group heading="Settings">
+              {settingsShortcuts.map((section) => (
+                <PaletteCommand.Item
+                  key={section}
+                  value={`Settings ${section}`}
+                  aria-label={`Settings ${section}`}
+                  onSelect={() => {
+                    run(`settings:${section}`);
+                  }}
+                >
+                  <Settings2 aria-hidden="true" />
+                  <span className="palette-label">{section}</span>
+                </PaletteCommand.Item>
+              ))}
+            </PaletteCommand.Group>
+            {searching && (
+              <PaletteCommand.Group heading="Commands">
+                {actions.map(({ id, label, shortcut }) => (
+                  <PaletteCommand.Item
+                    key={id}
+                    value={label}
+                    aria-label={label}
+                    onSelect={() => {
+                      run(id);
+                    }}
+                  >
+                    <span className="palette-label">{label}</span>
+                    {shortcut ? <kbd>{shortcut}</kbd> : null}
+                  </PaletteCommand.Item>
+                ))}
+              </PaletteCommand.Group>
+            )}
           </PaletteCommand.List>
         </PaletteCommand>
       ) : (

@@ -7,6 +7,7 @@ import { Dialog, UiV2 } from '@ferry/ui';
 import type { SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { useFerryEvents } from '../data/events';
+import { openProjectFolder } from '../data/projects';
 import { keys, useSessions, useSettings } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
@@ -349,6 +350,11 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       } else if (matches('chat.new')) {
         event.preventDefault();
         void createChat();
+      } else if (matches('folder.open')) {
+        event.preventDefault();
+        void openProjectFolder(client, cache).then((workspace) => {
+          if (workspace) void navigate({ to: '/' });
+        });
       } else if (matches('panel.toggle')) {
         event.preventDefault();
         useUI.getState().toggleRight();

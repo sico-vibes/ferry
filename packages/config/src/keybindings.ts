@@ -33,6 +33,7 @@ export const DEFAULT_KEYBINDINGS: Keybinding[] = [
   { command: 'tab.close', key: 'Ctrl+W', when: [] },
   { command: 'tab.next', key: 'Ctrl+Tab', when: [] },
   { command: 'settings.open', key: 'Ctrl+,', when: [] },
+  { command: 'folder.open', key: 'Ctrl+O', when: ['isDesktop'] },
 ];
 
 export function parseKeybindings(raw: unknown): KeybindingsValidation {

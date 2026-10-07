@@ -3318,10 +3318,54 @@ body {
 .command-palette [cmdk-item] kbd {
   border-radius: 6px;
   background: var(--muted);
-  padding: 4px 8px;
+  padding: 2px 8px;
   color: var(--muted-foreground);
   font: inherit;
   font-size: 12px;
+}
+/* Codex-style search: the box is the header, rows are icon · label · meta · shortcut. */
+.command-dialog .ferry-dialog-head {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.command-dialog .command-search {
+  padding: 14px 16px;
+}
+.command-palette [cmdk-item] {
+  justify-content: flex-start;
+  gap: 10px;
+}
+.command-palette [cmdk-item] > svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--muted-foreground);
+}
+.command-palette .palette-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.command-palette .palette-meta {
+  max-width: 40%;
+  flex: none;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.command-palette .palette-chat {
+  padding-left: 34px;
+}
+.command-palette [cmdk-item] kbd {
+  flex: none;
 }
 .v2-drawer-content {
   gap: 12px;

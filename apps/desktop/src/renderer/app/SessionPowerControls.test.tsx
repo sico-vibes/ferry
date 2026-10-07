@@ -533,6 +533,8 @@ describe('ComposerModelChip', () => {
       </FerryProvider>,
     );
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    // Commands beyond Quick actions and Settings appear once you search.
+    await user.type(await screen.findByRole('combobox'), 'density');
     await user.click(await screen.findByText('Toggle density (comfortable)'));
     await waitFor(() => {
       expect(useUI.getState().density).toBe('compact');
@@ -556,7 +558,7 @@ describe('ComposerModelChip', () => {
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
     await screen.findByRole('dialog', { name: 'Command palette' });
     fireEvent.change(screen.getByRole('combobox'), { target: { value: '> New Chat' } });
-    fireEvent.click(await screen.findByRole('option', { name: /^New Chat$/ }));
+    fireEvent.click(await screen.findByRole('option', { name: /^New chat$/ }));
     await waitFor(() => {
       expect(onNewChat).toHaveBeenCalledOnce();
     });
@@ -606,14 +608,14 @@ describe('ComposerModelChip', () => {
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
     await screen.findByRole('dialog', { name: 'Command palette' });
     fireEvent.change(screen.getByRole('combobox'), { target: { value: '> New Chat' } });
-    fireEvent.click(await screen.findByRole('option', { name: /^New Chat$/ }));
+    fireEvent.click(await screen.findByRole('option', { name: /^New chat$/ }));
     await waitFor(() => {
       expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message Ferry' }));
     });
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull();
   });
 
-  it('searches sessions and limits `>` queries to commands', async () => {
+  it('searches chats and limits `>` queries to commands', async () => {
     const client = createMockFerryClient({ behavior: 'test' });
     const sessions = await client.sessions.list();
     const session = sessions[0];
@@ -632,12 +634,12 @@ describe('ComposerModelChip', () => {
     const search = screen.getByRole('combobox');
     expect(dialog.querySelector('[role="listbox"]')).toBeTruthy();
     fireEvent.change(search, { target: { value: session.title } });
-    const recentSessions = await screen.findByRole('group', { name: 'Recent sessions' });
-    expect(await within(recentSessions).findByRole('option')).toBeTruthy();
+    const chats = await screen.findByRole('group', { name: 'Chats' });
+    expect(await within(chats).findByRole('option')).toBeTruthy();
     fireEvent.change(search, { target: { value: '> New Chat' } });
     await waitFor(() => {
-      expect(screen.queryByText('Recent sessions')).toBeNull();
+      expect(screen.queryByRole('group', { name: 'Chats' })).toBeNull();
     });
-    expect(await screen.findByRole('option', { name: /^New Chat$/ })).toBeTruthy();
+    expect(await screen.findByRole('option', { name: /^New chat$/ })).toBeTruthy();
   });
 });
