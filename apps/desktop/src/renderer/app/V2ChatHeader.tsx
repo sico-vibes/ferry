@@ -64,13 +64,11 @@ export function V2ChatHeader({
       ? 'Setup'
       : pathname.startsWith('/settings')
         ? 'Settings'
-        : pathname.startsWith('/library')
-          ? 'Library'
-          : pathname.startsWith('/models')
-            ? 'Models'
-            : pathname.startsWith('/gateway')
-              ? 'Gateway'
-              : 'New chat';
+        : pathname.startsWith('/models')
+          ? 'Models'
+          : pathname.startsWith('/gateway')
+            ? 'Gateway'
+            : 'New chat';
   return (
     <>
       <header className="title-strip v2-titlebar v2-chat-header" aria-label="Window title bar">

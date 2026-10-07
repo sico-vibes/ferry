@@ -259,9 +259,6 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
       case 'usage':
         await navigate({ to: '/models/usage' });
         break;
-      case 'library':
-        await navigate({ to: '/library' });
-        break;
       case 'settings':
         useUI.getState().openSettings();
         break;
@@ -358,7 +355,6 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
       shortcut: '',
     })),
     { id: 'usage', label: 'Go to Usage', shortcut: '' },
-    { id: 'library', label: 'Go to Library', shortcut: '' },
     { id: 'settings', label: 'Go to Settings', shortcut: 'Ctrl+,' },
     { id: 'shortcuts', label: 'Keyboard shortcuts', shortcut: 'Ctrl+/' },
     { id: 'delegate', label: 'Delegate current task…', shortcut: '' },

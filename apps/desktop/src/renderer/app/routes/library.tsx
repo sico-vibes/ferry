@@ -1,17 +1,11 @@
-import { createRoute } from '@tanstack/react-router';
-import { lazy, Suspense } from 'react';
+import { createRoute, redirect } from '@tanstack/react-router';
 import { rootRoute } from './root';
-import { RouteLoading } from './RouteLoading';
 
-const LibraryCanvas = lazy(() =>
-  import('../LibraryCanvas').then((module) => ({ default: module.LibraryCanvas })),
-);
-const LibraryPage = () => (
-  <Suspense fallback={<RouteLoading />}>
-    <LibraryCanvas />
-  </Suspense>
-);
-
+// The Library page was replaced by Projects in the sidebar; old links land on Home.
 export const libraryRoutes = [
-  createRoute({ getParentRoute: () => rootRoute, path: '/library', component: LibraryPage }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/library',
+    beforeLoad: () => redirect({ to: '/' }),
+  }),
 ] as const;

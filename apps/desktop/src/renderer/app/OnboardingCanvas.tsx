@@ -348,8 +348,8 @@ export function OnboardingCanvas() {
               </div>
               <h1>Open a folder</h1>
               <p>
-                Choose a project to start your first Ferry session. You can add more folders from
-                Library.
+                Choose a project to start your first Ferry session. You can add more projects, or
+                chat without one, from the sidebar.
               </p>
               <div className="onboarding-actions">
                 <UiV2.Button
