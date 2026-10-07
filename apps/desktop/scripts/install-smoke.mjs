@@ -110,13 +110,19 @@ function registryInstallations() {
   const parsed = JSON.parse(result);
   return Array.isArray(parsed) ? parsed : [parsed];
 }
-function registryRowsForLocation(location) {
-  const literal = safePowerShellLiteral(location);
-  const script = `$root='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'; Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object { $p=Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue; if ($p.DisplayName -like 'Ferry*' -and $p.InstallLocation -eq ${literal}) { [PSCustomObject]@{ Key=$_.PSChildName; Location=$p.InstallLocation; Version=$p.DisplayVersion } } } | ConvertTo-Json -Compress`;
+function ferryRegistryRows() {
+  const script = `$root='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'; Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object { $p=Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue; if ($p.DisplayName -like 'Ferry*') { [PSCustomObject]@{ Key=$_.PSChildName; Location=$p.InstallLocation; Version=$p.DisplayVersion } } } | ConvertTo-Json -Compress`;
   const result = powershell(script);
   if (!result) return [];
   const parsed = JSON.parse(result);
   return Array.isArray(parsed) ? parsed : [parsed];
+}
+// CI temp folders mix 8.3 short (RUNNER~1) and long spellings; compare canonical paths.
+function registryRowsForLocation(location) {
+  const wanted = canonicalPath(location);
+  return ferryRegistryRows().filter(
+    (row) => typeof row.Location === 'string' && canonicalPath(row.Location) === wanted,
+  );
 }
 function hasRunningNsisUninstallerCopy() {
   const script =
@@ -413,7 +419,11 @@ try {
   });
   const upgradeWallTimeMs = Date.now() - upgradeStartedAt;
   assert.ok(upgradeWallTimeMs < 60_000, 'Updated installer exceeded 60 seconds');
-  assert.equal(registryRowsForLocation(installDirectory)[0]?.Version, upgrade);
+  assert.equal(
+    registryRowsForLocation(installDirectory)[0]?.Version,
+    upgrade,
+    `Registry after update: ${JSON.stringify(ferryRegistryRows())}; install dir ${installDirectory}`,
+  );
   const executableLiteral = safePowerShellLiteral(join(installDirectory, 'Ferry.exe'));
   const running = () =>
     powershell(
