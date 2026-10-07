@@ -60,6 +60,8 @@ const environment = {
   FERRY_PROVIDER_BASE_URL_OPENROUTER: `${fake.baseUrl}/v1`,
   FERRY_TEST_KEYRING_NAMESPACE: `ferry-installed-cli-${process.pid}`,
   NODE_ENV: 'test',
+  // CI runners set this, and Ink then stops drawing unless the CLI forces interactive mode.
+  CI: 'true',
 };
 // Console diagnostics from the same runtime and launch path, printed first so a failure on another
 // Windows version shows what the bundled runtime could see.

@@ -45,7 +45,9 @@ export async function interactive(
   try {
     const app = render(
       <Chat client={client} workspace={workspace} profile={profile} engine={engine} />,
-      { stdin: terminal.stdin, stdout: terminal.stdout },
+      // selectTerminalStreams already proved this is a console. Without this, Ink stops drawing
+      // whenever CI is set (GitHub runners, some shells) and the chat never appears.
+      { stdin: terminal.stdin, stdout: terminal.stdout, interactive: true },
     );
     await app.waitUntilExit();
     return 0;

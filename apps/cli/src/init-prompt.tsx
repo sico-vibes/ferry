@@ -21,7 +21,7 @@ export async function launchInitWizard(client: FerryClient, cwd: string): Promis
           app.unmount();
         }}
       />,
-      { stdin: terminal.stdin, stdout: terminal.stdout },
+      { stdin: terminal.stdin, stdout: terminal.stdout, interactive: true },
     );
     await app.waitUntilExit();
     return 0;
