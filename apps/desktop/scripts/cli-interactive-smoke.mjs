@@ -102,7 +102,8 @@ try {
       };
       await waitFor('Trust ');
       child.write('y\r');
-      await waitFor('›');
+      // First render waits for the engine to start in a fresh data folder; CI runners are slower.
+      await waitFor('›', 120_000);
       child.write('hello\r');
       await waitFor('scripted reply', 60_000);
       // The CLI labels each reply with the Ferry model that served it.
