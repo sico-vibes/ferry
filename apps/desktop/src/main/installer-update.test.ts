@@ -38,6 +38,28 @@ describe('NSIS update preservation', () => {
     expect(init).toContain('StrCpy $UnFerryIsUpdated 1');
     expect(updateGuard).toBeGreaterThan(-1);
     expect(uninstall.slice(updateGuard)).toContain('DeleteRegKey HKCU "Software\\Ferry"');
-    expect(uninstall.slice(updateGuard)).toContain('RMDir /r "$APPDATA\\@ferry\\desktop"');
+    expect(uninstall.slice(updateGuard)).toContain('!insertmacro FerryDeleteUserData');
+    expect(macro('FerryDeleteUserData')).toContain('RMDir /r "$APPDATA\\@ferry\\desktop"');
+  });
+
+  it('bounds every environment broadcast and detects existing per-user installations', () => {
+    const broadcasts = installer.split('\n').filter((line) => line.includes('SendMessage'));
+    expect(broadcasts).toHaveLength(3);
+    for (const line of broadcasts) expect(line).toContain('/TIMEOUT=2000');
+    expect(macro('customInit')).toContain('"${UNINSTALL_REGISTRY_KEY}" "DisplayVersion"');
+    expect(macro('customInit')).toContain('"${UNINSTALL_REGISTRY_KEY}" "InstallLocation"');
+    const page = installer.slice(
+      installer.indexOf('Function FerryExistingInstallPage'),
+      installer.indexOf('Function FerryInstallOptionsPage'),
+    );
+    expect(page).toContain('IfSilent');
+    expect(page).toContain('$FerryIsUpdated == 1');
+    expect(page).toContain('Update (keep my data)');
+    expect(page).toContain('Reinstall (keep my data)');
+    expect(page).toContain('Clean reinstall (delete chats, keys and settings)');
+    expect(page).toContain('${NSD_SetState} $FerryUpdateRadio ${BST_CHECKED}');
+    expect(macro('customInstall')).toContain('$FerryCleanReinstall == ${BST_CHECKED}');
+    expect(macro('customInstall')).toContain('!insertmacro FerryDeleteUserData');
+    expect(macro('FerryDeleteUserData')).toContain('RMDir /r "$APPDATA\\Ferry"');
   });
 });

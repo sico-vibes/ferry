@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execa } from 'execa';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 import { glob } from 'tinyglobby';
 import { z } from 'zod';
 import { WorkspaceJail } from './fs.js';

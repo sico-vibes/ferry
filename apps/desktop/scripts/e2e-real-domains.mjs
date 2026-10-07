@@ -44,6 +44,19 @@ const phase = process.env.FERRY_E2E_ONLY?.trim() || 'core-flows';
 const phases = ['core-flows', 'crash-resume', 'paid-guardrails', 'golden-path'];
 const goldenPathComplete = new Error('Golden path completed');
 
+async function assertPackagedSignIns(page) {
+  const signIns = await page.evaluate(() => window.ferryRpcClient.oauth.list());
+  for (const id of ['anthropic', 'openai-codex', 'github-copilot']) {
+    const provider = signIns.find((item) => item.id === id);
+    expect(provider, `Packaged OAuth provider ${id}`).toBeTruthy();
+    expect(provider.group).not.toBe('unavailable');
+    expect(provider.models.length).toBeGreaterThan(0);
+  }
+  console.log(
+    'PASS packaged OAuth list loads Anthropic, OpenAI Codex and GitHub Copilot through engine RPC',
+  );
+}
+
 async function captureFailureArtifacts(error) {
   if (!activePage || activePage.isClosed()) return;
   const artifactDirectory = join(appDirectory, '..', '..', '.dev');
@@ -339,6 +352,7 @@ async function startEmbeddedCore() {
     const helloDomains = await page.evaluate(() => window.ferryEngineHello?.realDomains ?? []);
     assert.ok(helloDomains.length > 0, 'File renderer hello must include real domains');
     console.log(`File renderer real client connected with ${String(helloDomains.length)} domains`);
+    if (phase === 'golden-path') await assertPackagedSignIns(page);
     await expect(skipSetup.or(primaryNavigation).first()).toBeVisible({
       timeout: 20_000,
     });

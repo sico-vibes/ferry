@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'electron-vite';
 import { copyStorageMigrations } from '../../packages/storage/scripts/copy-migrations.js';
+import { stageOAuthRuntime } from './scripts/stage-oauth-runtime.mjs';
 
 const releaseVersion = process.env.FERRY_RELEASE_VERSION ?? '0.9.0';
 
@@ -25,6 +26,7 @@ const bundledWorkspacePackages = [
   '@ferry/quota',
   '@ferry/router',
   '@ferry/cloud',
+  '@ferry/oauth',
 ];
 
 const copyMigrationsPlugin = {
@@ -33,6 +35,7 @@ const copyMigrationsPlugin = {
     const output = resolve('out/main/migrations');
     await copyStorageMigrations(resolve('../../packages/storage/src/migrations'), output);
     await cp(resolve('../../packages/catalog/data'), resolve('out/data'), { recursive: true });
+    await stageOAuthRuntime(resolve('out/main/node_modules'));
   },
 };
 
@@ -57,6 +60,7 @@ export default defineConfig({
           'pino',
           'pino-roll',
           'electron-updater',
+          '@earendil-works/pi-ai',
         ],
       },
       rollupOptions: {

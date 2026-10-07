@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { access, readFile, readdir, realpath } from 'node:fs/promises';
+import { access, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -87,6 +87,10 @@ export class SkillManager {
   private readonly skills = new Map<string, LoadedSkill>();
   private readonly enabled = new Map<string, boolean>();
   private readonly options: SkillManagerOptions;
+  private readonly parsedFiles = new Map<
+    string,
+    { stamp: string; parsed: Awaited<ReturnType<typeof parseSkillFile>> }
+  >();
 
   constructor(options: SkillManagerOptions) {
     this.options = options;
@@ -94,6 +98,7 @@ export class SkillManager {
 
   async load(): Promise<Skill[]> {
     this.skills.clear();
+    const seen = new Set<string>();
     const sources: { source: SkillSource; root: string }[] = [
       { source: 'project', root: join(this.options.projectPath, '.ferry', 'skills') },
       { source: 'user', root: this.options.userSkillsPath ?? getDataPaths().skills },
@@ -120,7 +125,13 @@ export class SkillManager {
         const directory = join(root, entry.name);
         const file = join(directory, 'SKILL.md');
         if (!(await exists(file))) continue;
-        const parsed = await parseSkillFile(file);
+        const info = await stat(file);
+        const directoryInfo = await stat(directory);
+        const stamp = [info.mtimeMs, info.ctimeMs, info.size, directoryInfo.mtimeMs].join(':');
+        seen.add(file);
+        const cached = this.parsedFiles.get(file);
+        const parsed = cached?.stamp === stamp ? cached.parsed : await parseSkillFile(file);
+        this.parsedFiles.set(file, { stamp, parsed });
         if (this.skills.has(parsed.name)) continue;
         const id = `skill_${createHash('sha256').update(`${source}:${parsed.name}`).digest('hex').slice(0, 20)}`;
         const savedEnabled = await this.options.getEnabled?.({
@@ -143,6 +154,7 @@ export class SkillManager {
         });
       }
     }
+    for (const file of this.parsedFiles.keys()) if (!seen.has(file)) this.parsedFiles.delete(file);
     return this.list();
   }
 

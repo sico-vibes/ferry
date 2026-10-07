@@ -9,7 +9,10 @@ describe('model identity in the system prompt', () => {
       providerId: 'groq',
     });
     expect(system.startsWith('Base rules')).toBe(true);
-    expect(system).toContain('served by GPT OSS 120B (groq/openai/gpt-oss-120b)');
+    expect(system).toContain('You are GPT OSS 120B.');
+    expect(system).toContain('give that name');
+    expect(system).toContain('Mention Ferry or the provider only if');
+    expect(system).not.toContain('via the groq provider');
     expect(system).toContain('project instruction files may name other assistants');
   });
 });

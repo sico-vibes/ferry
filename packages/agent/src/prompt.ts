@@ -1,7 +1,7 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import { hostname, platform, release } from 'node:os';
 import path from 'node:path';
-import { gitBranch, gitStatus, WorkspaceJail } from '@ferry/workspace';
 import type { TaskRecord } from '@ferry/shared';
 
 export interface PromptSection {
@@ -20,31 +20,73 @@ export interface PromptAssemblyOptions extends PromptContext {
   shell?: string;
   terseLevel?: 'off' | 'lite' | 'full' | 'ultra';
   sections?: readonly PromptSection[];
+  environment?: PromptEnvironment;
 }
 
-const BASE_RULES = `You are Ferry, a coding agent working in the user's repository.
+const BASE_RULES = `You are a coding agent working in the user's project.
 Use the provided tools to inspect and change files. Read before editing, make focused changes, and verify outcomes with available commands. Explain uncertainty and never claim an action succeeded unless its tool result confirms it.
 The workspace is the only project boundary. Do not access credentials or secrets. Ask before risky commands and honor approval decisions.
 Windows is the primary platform. Use PowerShell for shell commands, preserve existing CRLF/LF line endings, and use node:path semantics for paths. Avoid destructive commands.`;
 
-export async function assembleSystemPrompt(options: PromptAssemblyOptions): Promise<string> {
-  const jail = new WorkspaceJail(options.workspace);
+export interface PromptEnvironment {
+  branch: string | null;
+  status: string | null;
+  instructions: { name: string; text: string } | null;
+}
+
+function git(root: string, args: string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(
+      'git',
+      args,
+      { cwd: root, timeout: 2_000, maxBuffer: 1024 * 1024, windowsHide: true },
+      (error, stdout) => {
+        resolve(error ? null : stdout.trim());
+      },
+    );
+  });
+}
+
+export async function loadPromptEnvironment(workspace: string): Promise<PromptEnvironment> {
+  // Worktrees have a .git file; ordinary folders need no Git subprocesses.
+  let root = path.resolve(workspace);
+  let repository = false;
+  for (;;) {
+    if (
+      await stat(path.join(root, '.git')).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      repository = true;
+      break;
+    }
+    const parent = path.dirname(root);
+    if (parent === root) break;
+    root = parent;
+  }
   const [branch, status, instructions] = await Promise.all([
-    gitBranch(jail).catch(() => null),
-    gitStatus(jail).catch(() => null),
-    findInstructions(options.workspace),
+    repository ? git(workspace, ['rev-parse', '--abbrev-ref', 'HEAD']) : null,
+    repository ? git(workspace, ['status', '--porcelain', '--untracked-files=normal']) : null,
+    findInstructions(workspace),
   ]);
-  const branchName = branch?.current ?? '(detached or unavailable)';
-  const changes = status
-    ? [...status.modified, ...status.created, ...status.deleted, ...status.not_added].slice(0, 12)
-    : [];
+  return {
+    branch,
+    status: status === null ? null : status.split(/\r?\n/).filter(Boolean).slice(0, 12).join(', '),
+    instructions,
+  };
+}
+
+export async function assembleSystemPrompt(options: PromptAssemblyOptions): Promise<string> {
+  const { branch, status, instructions } =
+    options.environment ?? (await loadPromptEnvironment(options.workspace));
   const environment = [
     `OS: ${platform()} ${release()} (${hostname()})`,
     `Shell: ${options.shell ?? 'PowerShell'}`,
     `Date: ${(options.now ?? new Date()).toISOString()}`,
     `Workspace: ${path.resolve(options.workspace)}`,
-    `Git branch: ${branchName}`,
-    `Git status: ${changes.length ? changes.join(', ') : status ? 'clean' : 'unavailable'}`,
+    `Git branch: ${branch ?? '(detached or unavailable)'}`,
+    `Git status: ${status === '' ? 'clean' : (status ?? 'unavailable')}`,
   ].join('\n');
   const blocks = [BASE_RULES, `Environment\n${environment}`];
   if (instructions)
@@ -69,7 +111,7 @@ export function withModelIdentity(
   system: string,
   model: { ref: string; name: string; providerId: string },
 ): string {
-  return `${system}\n\nModel identity: this step is served by ${model.name} (${model.ref}) via the ${model.providerId} provider, routed by Ferry. If asked which model you are, answer with that. Earlier turns may have been written by other models, and project instruction files may name other assistants; neither changes your identity.`;
+  return `${system}\n\nModel identity: You are ${model.name}. If asked which model you are, give that name. Mention Ferry or the provider only if the user asks how they are reaching you. Earlier turns may have been written by other models, and project instruction files may name other assistants; neither changes your identity.`;
 }
 
 async function findInstructions(root: string): Promise<{ name: string; text: string } | null> {

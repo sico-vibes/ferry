@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { ArrowDownCircle, Loader2, RotateCw } from 'lucide-react';
+import { AlertTriangle, ArrowDownCircle, Loader2, RotateCw } from 'lucide-react';
 import type { UpdateSnapshot } from '../../main/update-state.js';
+import { useUI } from '../state/ui';
 
 /**
  * Title-bar update pill, next to the window buttons. Hidden unless an update is on its way:
@@ -25,10 +26,30 @@ export function UpdateBadge() {
       off();
     };
   }, []);
-  if (!state?.version || (state.status !== 'available' && state.status !== 'downloaded')) return null;
+  if (state?.status === 'error' && state.version)
+    return (
+      <button
+        type="button"
+        className="v2-update-badge"
+        data-state="failed"
+        title={state.error ?? 'The update could not be installed.'}
+        onClick={() => {
+          useUI.getState().openSettings('About');
+        }}
+      >
+        <AlertTriangle aria-hidden="true" />
+        Update failed
+      </button>
+    );
+  if (!state?.version || (state.status !== 'available' && state.status !== 'downloaded'))
+    return null;
   const downloaded = state.status === 'downloaded';
   const downloading = !downloaded && (state.autoDownload || busy);
-  const label = downloaded ? 'Restart to update' : downloading ? 'Downloading update' : 'Update available';
+  const label = downloaded
+    ? 'Restart to update'
+    : downloading
+      ? 'Downloading update'
+      : 'Update available';
   return (
     <button
       type="button"

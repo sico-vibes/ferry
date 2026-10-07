@@ -1,5 +1,7 @@
 import { readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { removeWorkspaceMcp } from './mcp.js';
+import { removeSkillManager } from './skills.js';
 import { WorkspaceIdSchema, WorkspaceSchema, newId } from '@ferry/shared';
 import { canonicalPathKey } from '@ferry/shared/node-paths';
 import type { Workspace } from '@ferry/shared';
@@ -100,10 +102,15 @@ export function register(host: CoreHost, services: FerryServices): void {
       return workspace;
     },
     remove(rawId: unknown) {
-      return Promise.resolve().then(() => {
+      return Promise.resolve().then(async () => {
         const id = IdSchema.parse(rawId);
+        const workspace = services.workspaces.get(id);
         if (!services.workspaces.delete(id))
           throw rpcDomainError(-32044, 'not_found', `Workspace not found: ${id}`);
+        if (workspace) {
+          removeSkillManager(services, workspace.path);
+          await removeWorkspaceMcp(services, workspace.path);
+        }
         host.emit('workspace.removed', { id });
       });
     },

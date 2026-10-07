@@ -22,6 +22,10 @@ import {
 import type { Message, ModelInfo } from '@ferry/shared';
 import { z } from 'zod';
 import type { SecretStore } from '@ferry/secrets';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolveFerryRuntimePaths } from '@ferry/shared/electron-paths';
 
 export type OAuthProviderId = string;
 export function isSupportedOAuthProvider(id: string): id is OAuthProviderId {
@@ -42,9 +46,11 @@ export interface OAuthProviderInfo {
   models: string[];
   riskLevel: 'low' | 'medium' | 'high';
   riskText: string;
-  group: 'official' | 'subscription' | 'gateway';
+  group: 'official' | 'subscription' | 'gateway' | 'unavailable';
   advanced?: boolean;
-  actionAvailable: true;
+  actionAvailable: boolean;
+  status?: 'unavailable';
+  reason?: string;
 }
 
 export interface LoginOptions {
@@ -73,6 +79,32 @@ const names: Record<string, string> = {
 };
 type OAuthFlowLoader = (options?: { name?: string; gateway?: string }) => Promise<OAuthAuth>;
 let flowLoadersPromise: Promise<Map<string, OAuthFlowLoader>> | undefined;
+
+function piProvidersEntry(): string {
+  try {
+    return import.meta.resolve('@earendil-works/pi-ai/providers/all');
+  } catch (error) {
+    // The installed CLI shares the desktop archive's production OAuth runtime.
+    const runtime = resolveFerryRuntimePaths({
+      entryFilePath: fileURLToPath(import.meta.url),
+      execPath: process.execPath,
+      env: process.env,
+      resourcesPath: (process as typeof process & { resourcesPath?: string }).resourcesPath,
+      exists: existsSync,
+    });
+    const entry = join(
+      dirname(runtime.nativeModuleAnchor),
+      'node_modules',
+      '@earendil-works',
+      'pi-ai',
+      'dist',
+      'providers',
+      'all.js',
+    );
+    if (!existsSync(entry)) throw error;
+    return pathToFileURL(entry).href;
+  }
+}
 
 function providerIdFromLoaderName(name: string): string | undefined {
   if (!/^load[A-Za-z0-9]+OAuth$/.test(name)) return undefined;
@@ -103,10 +135,7 @@ export function discoverOAuthFlowExports(
 
 async function piOAuthFlowLoaders(): Promise<Map<string, OAuthFlowLoader>> {
   flowLoadersPromise ??= (async () => {
-    const moduleUrl = new URL(
-      '../auth/oauth/load.js',
-      import.meta.resolve('@earendil-works/pi-ai/providers/all'),
-    );
+    const moduleUrl = new URL('../auth/oauth/load.js', piProvidersEntry());
     const module = (await import(moduleUrl.href)) as Record<string, unknown>;
     return discoverOAuthFlowExports(module);
   })();
@@ -123,7 +152,10 @@ async function loadProvider(
   const auth = await loader(
     id === 'radius' ? { name: 'Radius', gateway: gateway ?? '' } : undefined,
   );
-  const module = (await import(`@earendil-works/pi-ai/providers/${id}`)) as Record<string, unknown>;
+  const module = (await import(new URL(`${id}.js`, piProvidersEntry()).href)) as Record<
+    string,
+    unknown
+  >;
   const constructor = Object.values(module).find(
     (value): value is (options?: { gateway?: string }) => Provider =>
       typeof value === 'function' && value.name.endsWith('Provider'),
@@ -234,13 +266,22 @@ export async function listOAuthProviders(): Promise<OAuthProviderInfo[]> {
     'radius',
   ];
   const preferredRanks = new Map(preferredOrder.map((id, index) => [id, index]));
-  const providerIds = [...(await piOAuthFlowLoaders()).keys()].sort(
+  let discoveryError: unknown;
+  const loaders = await piOAuthFlowLoaders().catch((error: unknown) => {
+    discoveryError = error;
+    return new Map<string, OAuthFlowLoader>();
+  });
+  const providerIds = [...new Set([...preferredOrder, ...loaders.keys()])].sort(
     (left, right) =>
       (preferredRanks.get(left) ?? Number.MAX_SAFE_INTEGER) -
         (preferredRanks.get(right) ?? Number.MAX_SAFE_INTEGER) || left.localeCompare(right),
   );
-  return await Promise.all(
+  const results = await Promise.allSettled(
     providerIds.map(async (id) => {
+      if (discoveryError)
+        throw discoveryError instanceof Error
+          ? discoveryError
+          : new Error('OAuth provider discovery failed');
       const { provider } = id === 'radius' ? { provider: undefined } : await loadProvider(id);
       const official = id === 'openrouter';
       const gateway = id === 'radius';
@@ -262,6 +303,24 @@ export async function listOAuthProviders(): Promise<OAuthProviderInfo[]> {
       };
     }),
   );
+  return results.map((result, index): OAuthProviderInfo => {
+    if (result.status === 'fulfilled') return result.value as OAuthProviderInfo;
+    const id = providerIds[index] ?? '';
+    const error: unknown = result.reason;
+    return {
+      id,
+      name: names[id] ?? id,
+      tag: id === 'openrouter' ? 'legit' : 'subscription_oauth',
+      subscriptionRequired: id !== 'openrouter' && id !== 'radius',
+      models: [],
+      riskLevel: 'high',
+      riskText: RISK_TEXT,
+      group: 'unavailable',
+      actionAvailable: false,
+      status: 'unavailable',
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  });
 }
 
 /** Curated IDs from pi-ai 0.87.1 kept routable through pi-ai's native OAuth stream. */

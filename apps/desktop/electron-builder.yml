@@ -12,6 +12,7 @@ directories:
 files:
   - out/**
   - out/main/migrations/**
+  - out/main/node_modules/**
   - '!out/cli/**'
   - package.json
   - '!out/web/**'

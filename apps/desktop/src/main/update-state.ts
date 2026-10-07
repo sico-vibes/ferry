@@ -91,9 +91,21 @@ export class UpdateController {
   }
 
   install(): boolean {
-    if (this.snapshot.status !== 'downloaded') return false;
-    this.source.quitAndInstall(true, true);
-    return true;
+    if (this.snapshot.status !== 'downloaded') {
+      this.fail('The update is no longer ready to install. Download it again.');
+      return false;
+    }
+    try {
+      this.source.quitAndInstall(true, true);
+      return this.getSnapshot().status === 'downloaded';
+    } catch (error) {
+      this.fail(error instanceof Error ? error.message : String(error));
+      return false;
+    }
+  }
+
+  fail(message: string): void {
+    this.patch({ status: 'error', error: message });
   }
 
   private getVersion(info: unknown): string | null {

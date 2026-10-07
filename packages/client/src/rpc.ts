@@ -41,6 +41,15 @@ export class RpcError extends Error {
 }
 
 export interface RpcFerryClient extends FerryClient {
+  sessions: FerryClient['sessions'] & {
+    start(input: {
+      workspaceId?: import('@ferry/shared').WorkspaceId;
+      profileId?: import('@ferry/shared').ProfileId;
+      modelRef?: import('@ferry/shared').ModelRef | 'auto';
+      text: string;
+      attachments?: { name: string; text: string }[];
+    }): Promise<import('@ferry/shared').Session>;
+  };
   readonly hello: Promise<HelloResult>;
   readonly implementedMethods: ReadonlySet<string>;
   close(): void;

@@ -2244,6 +2244,10 @@ body {
   white-space: nowrap;
   -webkit-app-region: no-drag;
 }
+.v2-update-badge[data-state='failed'] {
+  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
 .v2-update-badge:hover:not(:disabled) {
   background: color-mix(in srgb, var(--ring) 26%, transparent);
 }

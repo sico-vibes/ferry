@@ -26,6 +26,7 @@ export const FERRY_METHODS = [
   'sessions.get',
   'sessions.readOutput',
   'sessions.create',
+  'sessions.start',
   'sessions.send',
   'sessions.resume',
   'sessions.cancel',

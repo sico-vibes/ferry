@@ -460,38 +460,47 @@ export function createSessionDependencies(
     async probeHeuristicCooldowns() {
       if (!routingSettings().cooldownReasons) return;
       const now = services.clock.now().getTime();
-      for (const cooldown of services.cooldowns.list()) {
-        if (
-          !canProbeCooldown(
-            {
-              until: Date.parse(cooldown.until),
-              provenance: cooldown.provenance ?? 'authoritative',
-            },
-            now,
+      await Promise.allSettled(
+        services.cooldowns.list().map(async (cooldown) => {
+          if (
+            !canProbeCooldown(
+              {
+                until: Date.parse(cooldown.until),
+                provenance: cooldown.provenance ?? 'authoritative',
+              },
+              now,
+            )
           )
-        )
-          continue;
-        const providerId = ProviderIdSchema.safeParse(cooldown.id);
-        if (!providerId.success) continue;
-        const key = await services.secrets.get(providerId.data);
-        if (!key) continue;
-        const baseUrl = providerBaseUrls[providerId.data];
-        const result = await probeProvider(
-          providerId.data,
-          key,
-          ...(baseUrl ? [{ baseUrl }] : []),
-        ).catch(() => null);
-        if (!result?.ok) continue;
-        services.cooldowns.delete(providerId.data);
-        const saved = services.providers.get(providerId.data);
-        if (saved)
-          services.providers.put({
-            ...saved,
-            health: 'ok',
-            cooldownUntil: null,
-            cooldownProvenance: null,
-          });
-      }
+            return;
+          const providerId = ProviderIdSchema.safeParse(cooldown.id);
+          if (!providerId.success) return;
+          const key = await services.secrets.get(providerId.data);
+          if (!key) return;
+          const baseUrl = providerBaseUrls[providerId.data];
+          const result = await probeProvider(
+            providerId.data,
+            key,
+            ...(baseUrl ? [{ baseUrl }] : []),
+          ).catch(() => null);
+          if (!result?.ok) return;
+          // The engine may have stopped or a newer authoritative cooldown may have arrived.
+          if (
+            !services.db.client.open ||
+            services.cooldowns.list().find((entry) => entry.id === cooldown.id)?.until !==
+              cooldown.until
+          )
+            return;
+          services.cooldowns.delete(providerId.data);
+          const saved = services.providers.get(providerId.data);
+          if (saved)
+            services.providers.put({
+              ...saved,
+              health: 'ok',
+              cooldownUntil: null,
+              cooldownProvenance: null,
+            });
+        }),
+      );
     },
     resolveCandidates(profile, stepKind, inputTokens = 1) {
       const configuredProviders = services.catalog.providers.filter(

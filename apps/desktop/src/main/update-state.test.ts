@@ -10,6 +10,26 @@ class FakeUpdater extends EventEmitter implements UpdateSource {
 }
 
 describe('UpdateController', () => {
+  it('publishes an error and stays alive when quitAndInstall throws', () => {
+    const updater = new FakeUpdater();
+    const updates = new UpdateController(updater);
+    const listener = vi.fn();
+    updates.subscribe(listener);
+    updater.emit('update-downloaded', { version: '1.0.0' });
+    updater.quitAndInstall.mockImplementation(() => {
+      throw new Error('installer failed');
+    });
+    expect(updates.install()).toBe(false);
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'error', error: 'installer failed' }),
+    );
+  });
+  it('publishes an error when the downloaded state is lost before installation', () => {
+    const updates = new UpdateController(new FakeUpdater());
+    expect(updates.install()).toBe(false);
+    expect(updates.getSnapshot().status).toBe('error');
+    expect(updates.getSnapshot().error).toContain('no longer ready');
+  });
   it('defaults to auto-download and publishes available then downloaded state', () => {
     const updater = new FakeUpdater();
     const updates = new UpdateController(updater);

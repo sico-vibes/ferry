@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { stageCliRuntime } from '../scripts/stage-runtime.mjs';
 
@@ -11,6 +11,21 @@ const cliDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const cliEntry = join(cliDirectory, 'dist', 'ferry.js');
 
 describe('built CLI bundle', () => {
+  it('highlights a TypeScript fence from the built ESM bundle', () => {
+    const entry = join(cliDirectory, 'dist', 'format.js');
+    const fixture = 'Here is code:\n\n```ts\nconst highlighted = 42;\n```';
+    const script = `import { renderMarkdown } from ${JSON.stringify(pathToFileURL(entry).href)}; process.stdout.write(renderMarkdown(${JSON.stringify(fixture)}));`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, FORCE_COLOR: '1' },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('highlighted');
+    expect(result.stdout).toContain('\u001b[');
+    expect(result.stdout).not.toContain('```');
+  }, 30_000);
   it('keeps the ESM bundle free of CommonJS directory globals', () => {
     const bundle = readFileSync(cliEntry, 'utf8');
     expect(bundle).not.toMatch(/\b__(?:dirname|filename)\b/);

@@ -73,7 +73,12 @@ import {
 } from '@ferry/shared';
 import type { Catalog } from '@ferry/catalog';
 import type { RawCallObservation } from '@ferry/providers';
-import { assembleSystemPrompt, withModelIdentity, type PromptSection } from './prompt.js';
+import {
+  assembleSystemPrompt,
+  loadPromptEnvironment,
+  withModelIdentity,
+  type PromptSection,
+} from './prompt.js';
 import { SessionStore } from './session.js';
 import { createWorkspaceTools, type AgentTool, type ToolSource } from './tool-registry.js';
 import {
@@ -374,13 +379,15 @@ export class AgentLoop {
       data: {},
     });
     if (this.options.routingSettings?.().cooldownReasons)
-      await this.options.probeHeuristicCooldowns?.();
+      void this.options.probeHeuristicCooldowns?.().catch(() => undefined);
     const controller = new AbortController();
     const relayAbort = () => {
       controller.abort(outerSignal?.reason);
     };
     outerSignal?.addEventListener('abort', relayAbort, { once: true });
+    if (outerSignal?.aborted) relayAbort();
     const signal = controller.signal;
+    const environment = await loadPromptEnvironment(this.options.workspace);
     let loaded = this.options.store.load(sessionId);
     if (!loaded) throw new Error(`Unknown session ${sessionId}`);
     this.sessionBadKeys.set(sessionId, new Set());
@@ -558,6 +565,7 @@ export class AgentLoop {
           this.persistTask(taskRecord);
         }
         let system = await assembleSystemPrompt({
+          environment,
           workspace: this.options.workspace,
           sessionId,
           task: taskRecord,

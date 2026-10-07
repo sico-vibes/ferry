@@ -34,7 +34,13 @@ const response = {
       object: 'chat.completion.chunk',
       created: 1,
       model: 'fake-served-model',
-      choices: [{ index: 0, delta: { content: 'scripted reply' }, finish_reason: null }],
+      choices: [
+        {
+          index: 0,
+          delta: { content: 'scripted reply\n\n```ts\nconst bundledHighlight = 42;\n```' },
+          finish_reason: null,
+        },
+      ],
     },
     {
       id: 'chatcmpl_smoke',
@@ -131,6 +137,8 @@ try {
       await waitFor('›', 120_000);
       child.write('hello\r');
       await waitFor('scripted reply', 60_000);
+      await waitFor('bundledHighlight', 15_000);
+      assert.ok(!output.includes('ERROR'), `${variant}: markdown rendering failed:\n${output}`);
       // The CLI labels each reply with the Ferry model that served it.
       await waitFor(`via openrouter/${model}`, 15_000);
       child.write('\x03');

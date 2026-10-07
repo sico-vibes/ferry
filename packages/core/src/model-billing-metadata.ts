@@ -14,14 +14,20 @@ export function preserveCatalogBillingMetadata(
   freePlanForModel?: (providerId: ModelInfo['providerId']) => CatalogFreePlan | undefined,
 ): ModelInfo[] {
   const catalogByRef = new Map(catalogModels.map((model) => [model.ref, model]));
+  const providers = new Map<ModelInfo['providerId'], Provider | undefined>();
+  const plans = new Map<ModelInfo['providerId'], CatalogFreePlan | undefined>();
   return models.map((model) => {
     const catalogModel = catalogByRef.get(model.ref);
     const catalogPrice = (cached: number | null, catalog: number | null | undefined) =>
       catalog ?? cached;
     const priceInPerM = catalogPrice(model.priceInPerM, catalogModel?.priceInPerM);
     const priceOutPerM = catalogPrice(model.priceOutPerM, catalogModel?.priceOutPerM);
-    const provider = providerForModel?.(model.providerId);
-    const sourcedPlan = freePlanForModel?.(model.providerId);
+    if (!providers.has(model.providerId))
+      providers.set(model.providerId, providerForModel?.(model.providerId));
+    if (!plans.has(model.providerId))
+      plans.set(model.providerId, freePlanForModel?.(model.providerId));
+    const provider = providers.get(model.providerId);
+    const sourcedPlan = plans.get(model.providerId);
     const freePlan: Provider['freePlan'] = sourcedPlan
       ? {
           sourceUrl: sourcedPlan.source_url,

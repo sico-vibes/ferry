@@ -1,5 +1,5 @@
 import { marked } from 'marked';
-import highlight from 'cli-highlight';
+import { highlight } from 'cli-highlight';
 import type { CapacitySummary } from '@ferry/shared';
 import { blue, emphasis, muted, warn } from './colors.js';
 export { bad, blue, emphasis, good, gradient, muted, warn } from './colors.js';
@@ -26,6 +26,15 @@ function relativeReset(value: string): string {
 }
 
 export function renderMarkdown(source: string): string {
+  try {
+    return renderMarkdownUnsafe(source);
+  } catch {
+    // Streaming fences and unsupported languages must never take down the TUI.
+    return source;
+  }
+}
+
+function renderMarkdownUnsafe(source: string): string {
   const tokens = marked.lexer(source);
   return tokens
     .map((token) => {

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { resolveFerryRuntimePaths } from '@ferry/shared/electron-paths';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 import { glob } from 'tinyglobby';
 import { z } from 'zod';
 import { WorkspaceJail, isBinary } from './fs.js';

@@ -3,6 +3,13 @@
 !include "WinMessages.nsh"
 !include "FileFunc.nsh"
 
+!macro FerryDeleteUserData
+  SetShellVarContext current
+  RMDir /r "$APPDATA\@ferry\desktop"
+  RMDir /r "$APPDATA\Ferry"
+  ; The desktop/CLI engine lives under Ferry\engine and is removed with Ferry.
+!macroend
+
 !ifndef BUILD_UNINSTALLER
 Var AddToPathCheckbox
 Var ExplorerCheckbox
@@ -11,8 +18,17 @@ Var AddToPathState
 Var ExplorerState
 Var FerryIsUpdated
 Var FerryInstallerParams
+Var FerryInstalledVersion
+Var FerryInstalledLocation
+Var FerryUpdateRadio
+Var FerryReinstallRadio
+Var FerryCleanRadio
+Var FerryCleanReinstall
 
 !macro customInit
+  StrCpy $FerryCleanReinstall 0
+  ReadRegStr $FerryInstalledVersion HKCU "${UNINSTALL_REGISTRY_KEY}" "DisplayVersion"
+  ReadRegStr $FerryInstalledLocation HKCU "${UNINSTALL_REGISTRY_KEY}" "InstallLocation"
   StrCpy $FerryIsUpdated 0
   StrCpy $ForceAddToPath 0
   ${GetParameters} $FerryInstallerParams
@@ -51,8 +67,44 @@ Var FerryInstallerParams
 !macroend
 
 !macro customWelcomePage
+  Page custom FerryExistingInstallPage FerryExistingInstallPageLeave
   Page custom FerryInstallOptionsPage FerryInstallOptionsPageLeave
 !macroend
+
+Function FerryExistingInstallPage
+  IfSilent ferry_existing_skip
+  ${If} $FerryIsUpdated == 1
+    Abort
+  ${EndIf}
+  ${If} $FerryInstalledVersion == ""
+    Abort
+  ${EndIf}
+  ${If} $FerryInstalledLocation == ""
+    Abort
+  ${EndIf}
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+  ${NSD_CreateLabel} 0 0 100% 24u "Ferry $FerryInstalledVersion is already installed."
+  Pop $0
+  ${NSD_CreateRadioButton} 0 34u 100% 14u "Update (keep my data)"
+  Pop $FerryUpdateRadio
+  ${NSD_CreateRadioButton} 0 56u 100% 14u "Reinstall (keep my data)"
+  Pop $FerryReinstallRadio
+  ${NSD_CreateRadioButton} 0 78u 100% 28u "Clean reinstall (delete chats, keys and settings)"
+  Pop $FerryCleanRadio
+  ${NSD_SetState} $FerryUpdateRadio ${BST_CHECKED}
+  nsDialogs::Show
+  Return
+ferry_existing_skip:
+  Abort
+FunctionEnd
+
+Function FerryExistingInstallPageLeave
+  ${NSD_GetState} $FerryCleanRadio $FerryCleanReinstall
+FunctionEnd
 
 Function FerryInstallOptionsPage
   ${If} $FerryIsUpdated == 1
@@ -158,6 +210,9 @@ ferry_path_remove_done:
 FunctionEnd
 
 !macro customInstall
+  ${If} $FerryCleanReinstall == ${BST_CHECKED}
+    !insertmacro FerryDeleteUserData
+  ${EndIf}
   ${If} $ForceAddToPath == 1
     StrCpy $AddToPathState ${BST_CHECKED}
   ${EndIf}
@@ -174,14 +229,14 @@ FunctionEnd
       ${EndIf}
       WriteRegExpandStr HKCU "Environment" "Path" "$1"
     ${EndIf}
-    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment"
+    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=2000
   ${Else}
     ReadRegStr $1 HKCU "Environment" "Path"
     StrCpy $3 "$INSTDIR\resources\cli"
     Call FerryRemovePathEntry
     WriteRegExpandStr HKCU "Environment" "Path" "$1"
     DeleteRegValue HKCU "Software\Ferry" "AddToPath"
-    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment"
+    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=2000
   ${EndIf}
   ${If} $ExplorerState == ${BST_CHECKED}
     WriteRegStr HKCU "Software\Classes\Directory\shell\Ferry" "" "Open in Ferry"
@@ -251,7 +306,7 @@ FunctionEnd
         Call un.RemoveFerryPathEntry
       ${EndIf}
       WriteRegExpandStr HKCU "Environment" "Path" "$2"
-      SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment"
+      SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=2000
     ${EndIf}
     ReadRegDWORD $1 HKCU "Software\Ferry" "ExplorerMenu"
     ${If} $1 == 1
@@ -264,8 +319,7 @@ FunctionEnd
       StrCpy $0 ${BST_CHECKED}
     ${EndIf}
     ${If} $0 == ${BST_CHECKED}
-      RMDir /r "$APPDATA\@ferry\desktop"
-      RMDir /r "$APPDATA\Ferry"
+      !insertmacro FerryDeleteUserData
     ${EndIf}
     ${EndIf}
 !macroend

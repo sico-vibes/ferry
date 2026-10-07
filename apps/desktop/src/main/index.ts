@@ -12,7 +12,7 @@ import {
 import updater, { type NsisUpdater } from 'electron-updater';
 import { existsSync, readFileSync, watch, writeFileSync } from 'node:fs';
 import { access, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   CoreHandoffTokenSchema,
@@ -32,6 +32,8 @@ import { buildCoreEnvironment } from './core-environment.js';
 import { isTrustedRendererOrigin } from './renderer-origin.js';
 import { isAllowlistedExternal } from './external-links.js';
 import { UpdateController, type UpdateSnapshot } from './update-state.js';
+import { createUpdaterLogger } from './updater-log.js';
+import { stopInstalledGateway } from './update-gateway.js';
 import { releaseChannelForVersion } from '../../scripts/release-config.mjs';
 
 const { autoUpdater } = updater;
@@ -84,6 +86,7 @@ function traceCore(event: string, details: Record<string, unknown>): void {
   if (e2eTracing) console.log(`FERRY_HANDOFF ${JSON.stringify({ event, ...details })}`);
 }
 const updateController = new UpdateController(autoUpdater);
+autoUpdater.logger = createUpdaterLogger(join(app.getPath('userData'), 'logs', 'updater.log'));
 let pendingWorkspacePath: string | null = findWorkspaceArgument(process.argv);
 
 function findWorkspaceArgument(args: string[]): string | null {
@@ -111,7 +114,34 @@ function publishWindowBackground(backgrounded: boolean): void {
   for (const window of BrowserWindow.getAllWindows())
     window.webContents.send('ferry:window-background', backgrounded);
 }
-updateController.subscribe(publishUpdateState);
+updateController.subscribe((state) => {
+  publishUpdateState(state);
+  if (state.status === 'error' && updateInstallStarted) restoreAfterFailedUpdate();
+});
+
+function restoreAfterFailedUpdate(): void {
+  updateInstallStarted = false;
+  shuttingDown = false;
+  shutdownComplete = false;
+  relaunchAfterShutdown = false;
+  if (!coreProcess) {
+    broadcastEngineRestarting();
+    launchCore();
+  }
+}
+
+async function installPreparedUpdate(): Promise<void> {
+  try {
+    await stopInstalledGateway(
+      process.env.FERRY_DATA_DIR ?? join(app.getPath('userData'), 'engine'),
+      dirname(process.execPath),
+    );
+    if (!updateController.install()) restoreAfterFailedUpdate();
+  } catch (error) {
+    updateController.fail(error instanceof Error ? error.message : String(error));
+    restoreAfterFailedUpdate();
+  }
+}
 
 const updatePreferencePath = (): string => join(app.getPath('userData'), 'updates.json');
 
@@ -433,6 +463,10 @@ ipcMain.handle('ferry:relaunch', (event, ...args: unknown[]) => {
   if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
   EmptyIpcArgsSchema.parse(args);
   relaunchAfterShutdown = true;
+  if (!coreProcess || shutdownComplete) {
+    relaunchAfterShutdown = false;
+    app.relaunch();
+  }
   app.quit();
 });
 
@@ -593,6 +627,7 @@ ipcMain.handle('ferry:update-install', (event, ...args: unknown[]) => {
   if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
   EmptyIpcArgsSchema.parse(args);
   if (updateController.getSnapshot().status === 'downloaded') app.quit();
+  else updateController.fail('The update is no longer ready to install. Download it again.');
 });
 ipcMain.handle('ferry:update-download', async (event, ...args: unknown[]) => {
   if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
@@ -663,7 +698,7 @@ app.on('before-quit', (event) => {
     event.preventDefault();
     updateInstallStarted = true;
     if (shutdownComplete || !coreProcess) {
-      updateController.install();
+      void installPreparedUpdate();
       return;
     }
   }
@@ -684,7 +719,7 @@ app.on('before-quit', (event) => {
     clearTimeout(fallback);
     coreProcess = null;
     shutdownComplete = true;
-    if (updateInstallStarted) updateController.install();
+    if (updateInstallStarted) void installPreparedUpdate();
     else if (relaunchAfterShutdown) {
       relaunchAfterShutdown = false;
       app.relaunch();

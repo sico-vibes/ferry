@@ -26,6 +26,36 @@ const config: McpServerConfig = {
 };
 
 describe('McpManager', () => {
+  it('bounds a failed handshake without preventing another server from connecting', async () => {
+    const onStatus = vi.fn();
+    const manager = new McpManager({
+      projectPath: process.cwd(),
+      connectTimeoutMs: 2_000,
+      maxReconnectAttempts: 0,
+      onStatus,
+    });
+    try {
+      await manager.configure([
+        {
+          ...config,
+          id: 'unresponsive',
+          args: [join(dirname(fixture), 'unresponsive-mcp-server.mjs')],
+        },
+        config,
+      ]);
+      await manager.connect();
+      expect(manager.list().find((server) => server.id === 'tiny')).toMatchObject({
+        status: 'connected',
+        toolCount: 3,
+      });
+      expect(manager.list().find((server) => server.id === 'unresponsive')?.toolCount).toBe(0);
+      expect(onStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ serverId: 'unresponsive', status: 'error' }),
+      );
+    } finally {
+      await manager.dispose();
+    }
+  }, 30_000);
   it('connects, lists and calls tools from an SDK stdio test server', async () => {
     const onStatus = vi.fn();
     const manager = new McpManager({ projectPath: process.cwd(), onStatus });

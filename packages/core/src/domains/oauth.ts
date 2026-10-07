@@ -118,12 +118,25 @@ export function register(host: CoreHost, services: FerryServices): void {
           actionAvailable: false as const,
         },
       ];
-      return Promise.all(
-        providers.map(async (provider) => ({
-          ...provider,
-          ...(await connection(provider.id)),
-        })),
+      const results = await Promise.allSettled(
+        providers.map(async (provider) => {
+          if (provider.group === 'unavailable')
+            return { ...provider, connected: false, status: 'unavailable' as const, account: null };
+          return { ...provider, ...(await connection(provider.id)) };
+        }),
       );
+      return results.map((result, index) => {
+        if (result.status === 'fulfilled') return result.value;
+        const error: unknown = result.reason;
+        return {
+          ...providers[index],
+          connected: false,
+          status: 'unavailable' as const,
+          account: null,
+          actionAvailable: false,
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      });
     },
     async status(rawId: unknown) {
       return (await connection(OAuthProviderIdSchema.parse(rawId))).connected;

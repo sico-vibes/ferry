@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import {
   access,
@@ -15,6 +15,7 @@ import {
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { chromium } from '@playwright/test';
 
 if (process.platform !== 'win32') throw new Error('The installer smoke requires Windows.');
 
@@ -33,6 +34,9 @@ let tempRoot;
 let originalUserPath;
 let didSetUserPath = false;
 let generatedUpgradeInstaller;
+let generatedUpgradePortable;
+let updateBrowser;
+let updateApplication;
 const isCi = process.env.GITHUB_ACTIONS === 'true';
 const realRoamingDirectory = powershell("[Environment]::GetFolderPath('ApplicationData')");
 const realFerryData = join(realRoamingDirectory, 'Ferry');
@@ -108,7 +112,7 @@ function registryInstallations() {
 }
 function registryRowsForLocation(location) {
   const literal = safePowerShellLiteral(location);
-  const script = `$root='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'; Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object { $p=Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue; if ($p.DisplayName -like 'Ferry*' -and $p.InstallLocation -eq ${literal}) { [PSCustomObject]@{ Key=$_.PSChildName; Location=$p.InstallLocation } } } | ConvertTo-Json -Compress`;
+  const script = `$root='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'; Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object { $p=Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue; if ($p.DisplayName -like 'Ferry*' -and $p.InstallLocation -eq ${literal}) { [PSCustomObject]@{ Key=$_.PSChildName; Location=$p.InstallLocation; Version=$p.DisplayVersion } } } | ConvertTo-Json -Compress`;
   const result = powershell(script);
   if (!result) return [];
   const parsed = JSON.parse(result);
@@ -312,9 +316,13 @@ try {
   await access(baseInstaller);
   const baseVersion = releaseVersion(baseInstaller);
   let upgrade = greaterVersion(baseVersion);
-  while (await exists(join(outputDirectory, `Ferry-Setup-${upgrade}.exe`)))
+  while (
+    (await exists(join(outputDirectory, `Ferry-Setup-${upgrade}.exe`))) ||
+    (await exists(join(outputDirectory, `Ferry-${upgrade}-portable.exe`)))
+  )
     upgrade = greaterVersion(upgrade);
   generatedUpgradeInstaller = join(outputDirectory, `Ferry-Setup-${upgrade}.exe`);
+  generatedUpgradePortable = join(outputDirectory, `Ferry-${upgrade}-portable.exe`);
   const pnpm = join(root, 'tools', 'pnpm.cmd');
   run(pnpm, ['--filter', '@ferry/desktop', 'dist'], {
     env: { ...process.env, FERRY_RELEASE_VERSION: upgrade },
@@ -353,13 +361,79 @@ try {
     ...process.env,
     APPDATA: join(profile, 'Roaming'),
     LOCALAPPDATA: join(profile, 'Local'),
+    FERRY_INSTALL_SMOKE: 'true',
+    FERRY_E2E_USER_DATA_DIR: dataDirectory,
   };
-  const upgradeStartedAt = Date.now();
-  run(generatedUpgradeInstaller, ['/S', `/D=${installDirectory}`], {
+  // electron-updater closes the running N-1 app before spawning the silent updated installer.
+  updateApplication = spawn(join(installDirectory, 'Ferry.exe'), ['--remote-debugging-port=0'], {
     env: upgradeEnv,
-    timeout: 240_000,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  const endpoint = await new Promise((resolveEndpoint, reject) => {
+    let output = '';
+    const timer = setTimeout(
+      () => reject(new Error('Previous app did not expose DevTools')),
+      30_000,
+    );
+    const onData = (chunk) => {
+      output += chunk.toString();
+      const found = /DevTools listening on (ws:\/\/[^\s]+)/.exec(output)?.[1];
+      if (found) {
+        clearTimeout(timer);
+        resolveEndpoint(found);
+      }
+    };
+    updateApplication.stderr.on('data', onData);
+    updateApplication.stdout.on('data', onData);
+    updateApplication.once('error', reject);
+  });
+  updateBrowser = await chromium.connectOverCDP(endpoint);
+  const oldPage = updateBrowser.contexts()[0].pages()[0];
+  await oldPage.waitForFunction(() => Boolean(window.ferryHost));
+  assert.equal((await oldPage.evaluate(() => window.ferryHost.getAppInfo())).version, baseVersion);
+  const oldExit = new Promise((resolveExit, reject) => {
+    const timer = setTimeout(() => reject(new Error('Previous app did not shut down')), 15_000);
+    updateApplication.once('exit', () => {
+      clearTimeout(timer);
+      resolveExit();
+    });
+  });
+  const session = await updateBrowser.newBrowserCDPSession();
+  await session.send('Browser.close').catch(() => undefined);
+  await oldExit;
+  updateApplication = undefined;
+  updateBrowser = undefined;
+  const upgradeStartedAt = Date.now();
+  run(generatedUpgradeInstaller, ['--updated', '/S', '--force-run', `/D=${installDirectory}`], {
+    env: upgradeEnv,
+    timeout: 60_000,
   });
   const upgradeWallTimeMs = Date.now() - upgradeStartedAt;
+  assert.ok(upgradeWallTimeMs < 60_000, 'Updated installer exceeded 60 seconds');
+  assert.equal(registryRowsForLocation(installDirectory)[0]?.Version, upgrade);
+  const executableLiteral = safePowerShellLiteral(join(installDirectory, 'Ferry.exe'));
+  const running = () =>
+    powershell(
+      `@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq ${executableLiteral} }).Count`,
+    );
+  const relaunchDeadline = Date.now() + 30_000;
+  while (Number(running()) === 0 && Date.now() < relaunchDeadline)
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+  assert.ok(Number(running()) > 0, 'Updated installer did not relaunch Ferry.exe');
+  record(
+    'Real --updated /S --force-run changes version and relaunches Ferry in under 60 s',
+    'PASS',
+    `${upgradeWallTimeMs} ms; ${baseVersion} -> ${upgrade}`,
+  );
+  // Close the relaunched GUI before the persistence smoke creates its own isolated app process.
+  powershell(
+    `Get-Process | Where-Object { $_.Path -eq ${executableLiteral} } | ForEach-Object { $_.CloseMainWindow() | Out-Null }`,
+  );
+  const closeDeadline = Date.now() + 15_000;
+  while (Number(running()) > 0 && Date.now() < closeDeadline)
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+  assert.equal(Number(running()), 0, 'Relaunched app did not close cleanly');
   verifyPersistedRecords(databasePath, state);
   const installedFileCount = await countFiles(installDirectory);
   record(
@@ -484,6 +558,8 @@ try {
   );
   process.exitCode = 1;
 } finally {
+  await updateBrowser?.close().catch(() => undefined);
+  updateApplication?.kill();
   if (didSetUserPath && originalUserPath !== undefined) {
     try {
       setUserPath(originalUserPath);
@@ -542,6 +618,10 @@ try {
       maxRetries: 8,
       retryDelay: 100,
     }).catch(() => undefined);
+  if (generatedUpgradePortable)
+    await rm(generatedUpgradePortable, { force: true, maxRetries: 8, retryDelay: 100 }).catch(
+      () => undefined,
+    );
 }
 
 console.log('\nInstall smoke results');

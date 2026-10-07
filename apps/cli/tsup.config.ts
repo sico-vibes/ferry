@@ -7,7 +7,7 @@ import { copyStorageMigrations } from '../../packages/storage/scripts/copy-migra
 const cliDirectory = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  entry: ['src/ferry.ts', 'src/runtime-paths.ts'],
+  entry: ['src/ferry.ts', 'src/runtime-paths.ts', 'src/format.ts'],
   format: ['esm'],
   platform: 'node',
   target: 'node22',

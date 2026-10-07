@@ -39,8 +39,7 @@ import {
   type SpendState,
 } from '@ferry/router';
 import { createSkillManager } from './skills.js';
-import { createMcpManager } from './mcp.js';
-import { McpServerConfigSchema } from '@ferry/extensions';
+import { connectWorkspaceMcp, createMcpManager } from './mcp.js';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { hasUsableProviderKey } from '../services.js';
@@ -58,6 +57,7 @@ const CreateSchema = z.object({
 });
 const SendSchema = z.object({
   text: z.string().min(1),
+  attachments: z.array(z.object({ name: z.string().min(1), text: z.string() })).optional(),
   maxSteps: z.number().int().positive().optional(),
   verbose: z.boolean().optional(),
   routingMode: z.enum(['auto_for_step']).optional(),
@@ -266,6 +266,51 @@ export function register(host: CoreHost, services: FerryServices): void {
   host.registerDomain('sessions', {
     list: listSessions,
     search: listSessions,
+    async start(rawInput: unknown) {
+      const input = SendSchema.extend({
+        workspaceId: z.string().min(1).optional(),
+        profileId: z.string().min(1).optional(),
+        modelRef: z.union([z.literal('auto'), ModelRefSchema]).optional(),
+      }).parse(rawInput);
+      const workspaceId = input.workspaceId ?? services.workspaces.list()[0]?.id;
+      if (!workspaceId) throw rpcDomainError(-32044, 'not_found', 'No workspace is open');
+      const workspace = services.workspaces.get(workspaceId);
+      if (!workspace)
+        throw rpcDomainError(-32044, 'not_found', `Workspace not found: ${workspaceId}`);
+      if (!workspace.trusted)
+        throw rpcDomainError(
+          -32046,
+          'workspace_untrusted',
+          'Trust this workspace before sending a message',
+          { workspaceId, riskyRoot: isRiskyWorkspaceRoot(workspace.path) },
+        );
+      const created = SessionSchema.parse(
+        await host.dispatch({
+          jsonrpc: '2.0',
+          id: 'start-create',
+          method: 'sessions.create',
+          params: [{ workspaceId, profileId: input.profileId }],
+        }),
+      );
+      try {
+        if (input.modelRef !== undefined)
+          await host.dispatch({
+            jsonrpc: '2.0',
+            id: 'start-select',
+            method: 'models.select',
+            params: [created.id, input.modelRef],
+          });
+        return await host.dispatch({
+          jsonrpc: '2.0',
+          id: 'start-send',
+          method: 'sessions.send',
+          params: [created.id, input],
+        });
+      } catch (error) {
+        deleteSession(created.id);
+        throw error;
+      }
+    },
     get(rawId: unknown) {
       const id = SessionIdSchema.parse(rawId);
       const detail = store.load(id);
@@ -385,7 +430,8 @@ export function register(host: CoreHost, services: FerryServices): void {
     },
     send(rawId: unknown, rawInput: unknown) {
       const session = requireSession(rawId);
-      const { text, maxSteps, verbose, routingMode, resume } = SendSchema.parse(rawInput);
+      const { text, attachments, maxSteps, verbose, routingMode, resume } =
+        SendSchema.parse(rawInput);
       const gatewayModel = selectedGatewayModel(services, session.pinnedModelRef);
       if (gatewayModel && !getGatewayController(services)?.status.running)
         throw rpcDomainError(
@@ -433,7 +479,14 @@ export function register(host: CoreHost, services: FerryServices): void {
         const userMessage = store.appendMessage(
           session.id,
           'user',
-          [{ type: 'text', id: PartIdSchema.parse(newId('part')), text }],
+          [
+            { type: 'text', id: PartIdSchema.parse(newId('part')), text },
+            ...(attachments ?? []).map((attachment) => ({
+              type: 'text' as const,
+              id: PartIdSchema.parse(newId('part')),
+              text: `Attachment: ${attachment.name}\n${attachment.text}`,
+            })),
+          ],
           session.modelRef,
           services.clock.now(),
         );
@@ -455,6 +508,14 @@ export function register(host: CoreHost, services: FerryServices): void {
       let timedOut = false;
       let backgroundFailed = false;
       let mcpManager: ReturnType<typeof createMcpManager> | undefined;
+      let agentEventHandler: (event: AgentEvent) => void = () => undefined;
+      const runtime = createSessionDependencies(
+        services,
+        (event) => {
+          agentEventHandler(event);
+        },
+        traceContext,
+      );
       let revokeGatewayTokens: () => void = () => undefined;
       const watchdog = setTimeout(() => {
         timedOut = true;
@@ -502,7 +563,7 @@ export function register(host: CoreHost, services: FerryServices): void {
               device_id: services.deviceId,
               data: { prompt: text, resume },
             });
-            const preflight = createSessionDependencies(services, () => undefined);
+            const preflight = runtime;
             const configuredProviders = services.catalog.providers.filter(
               ({ provider, key_required }) => {
                 const saved = services.providers.get(provider);
@@ -718,23 +779,11 @@ export function register(host: CoreHost, services: FerryServices): void {
                 services.optimizerEvents.put(optimizerEvent);
               } else host.emit('toast', { kind: event.tone, title: event.message, body: null });
             };
-            const runtime = createSessionDependencies(services, emitAgentEvent, traceContext);
+            agentEventHandler = emitAgentEvent;
             revokeGatewayTokens = runtime.revokeGatewayTokens;
-            const sessionCatalogModels = [
-              ...(services.env.NODE_ENV === 'test'
-                ? services.catalog.models
-                : configuredProviders.flatMap(({ provider: id }) => services.models.list(id))),
-              ...configuredOauth,
-              ...(gatewayModel ? [gatewayModel] : []),
-            ];
             const sessionCatalog = {
               ...services.catalog,
-              models: preserveCatalogBillingMetadata(
-                sessionCatalogModels,
-                services.catalog.models,
-                (id) => services.providers.get(id),
-                (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
-              ),
+              models: availableModels,
             };
             preparingStep = 'project configuration';
             const rawProjectConfig = await readFile(join(workspace.path, '.ferry', 'config.json'))
@@ -784,16 +833,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             await skillManager.load();
             if (isRunAborted()) throw controller.signal.reason;
             preparingStep = 'MCP tools';
-            mcpManager = createMcpManager(services, host, workspace.path);
-            const mcpConfigs = z
-              .array(McpServerConfigSchema)
-              .safeParse(services.settings.get('mcp-servers') ?? []);
-            if (mcpConfigs.success) {
-              await mcpManager.configure(mcpConfigs.data);
-              await mcpManager.connect().catch((error: unknown) => {
-                services.logger.warn({ err: error }, 'MCP tool connection failed');
-              });
-            }
+            mcpManager = await connectWorkspaceMcp(services, host, workspace.path);
             if (isRunAborted()) throw controller.signal.reason;
             const loop = new AgentLoop({
               store,
@@ -1494,9 +1534,6 @@ export function register(host: CoreHost, services: FerryServices): void {
           } finally {
             clearTimeout(watchdog);
             revokeGatewayTokens();
-            await mcpManager?.dispose().catch((error: unknown) => {
-              services.logger.warn({ err: error, sessionId: session.id }, 'MCP disposal failed');
-            });
             const ownsRun = controllers.get(session.id) === controller;
             if (ownsRun) controllers.delete(session.id);
             if (runPromises.get(session.id) === run) runPromises.delete(session.id);

@@ -43,6 +43,7 @@ export interface McpClientOptions {
   approveProjectConfig?: (hash: string) => boolean | Promise<boolean>;
   onStatus?: (event: McpStatusEvent) => void;
   timeoutMs?: number;
+  connectTimeoutMs?: number;
   reconnectInitialMs?: number;
   reconnectMaxMs?: number;
   maxReconnectAttempts?: number;
@@ -250,9 +251,16 @@ export class McpManager {
 
   private async connectState(state: ServerState): Promise<void> {
     if (this.disposed) return;
+    if (state.status === 'connected') return;
     const generation = ++state.generation;
+    let client: Client | undefined;
+    const controller = new AbortController();
+    const connectTimeoutMs = this.options.connectTimeoutMs ?? 10_000;
+    const timeout = setTimeout(() => {
+      controller.abort(new Error(`MCP connection timed out after ${String(connectTimeoutMs)}ms`));
+    }, connectTimeoutMs);
     try {
-      const client = new Client({ name: 'ferry', version: '0.0.0' });
+      client = new Client({ name: 'ferry', version: '0.0.0' });
       const transport =
         state.config.transport === 'stdio'
           ? new StdioClientTransport({
@@ -273,12 +281,20 @@ export class McpManager {
       transport.onerror = (error) => {
         this.setStatus(state, 'error', error.message);
       };
-      await client.connect(transport as unknown as Transport);
+      state.client = client;
+      state.transport = transport;
+      await client.connect(transport as unknown as Transport, {
+        signal: controller.signal,
+        timeout: connectTimeoutMs,
+      });
       if (state.generation !== generation) {
         await client.close();
         return;
       }
-      const result = await client.listTools();
+      const result = await client.listTools(undefined, {
+        signal: controller.signal,
+        timeout: connectTimeoutMs,
+      });
       state.client = client;
       state.transport = transport;
       state.tools = result.tools.map((tool) => ({
@@ -289,9 +305,15 @@ export class McpManager {
       state.attempts = 0;
       this.setStatus(state, 'connected');
     } catch (error) {
+      await client?.close().catch(() => undefined);
       if (state.generation !== generation) return;
+      state.client = undefined;
+      state.transport = undefined;
+      state.tools = [];
       this.setStatus(state, 'error', error instanceof Error ? error.message : String(error));
       this.scheduleReconnect(state);
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
