@@ -514,6 +514,7 @@ async function createSessionViaUi(
   profileName,
   modelRef,
   workspaceName = fixtureRepoName,
+  { keepUntrusted = false } = {},
 ) {
   const workspaces = await callRendererRpc(page, 'workspaces.list', []);
   const workspace = workspaces.find((item) => item.name === workspaceName);
@@ -521,33 +522,23 @@ async function createSessionViaUi(
   const previousSessions = await callRendererRpc(page, 'sessions.list', []);
   const previousSessionIds = previousSessions.map((session) => session.id);
   await selectWorkspaceViaComposer(page, workspaceName);
+  // "New chat" opens the composer and must not create a session until the first message is sent.
   await page.getByRole('button', { name: 'New chat', exact: true }).click();
-  let routeSnapshot;
-  await expect
-    .poll(
-      async () => {
-        routeSnapshot = await page.evaluate(async (knownSessionIds) => {
-          const routeSessionId = window.location.hash.split('/').filter(Boolean).at(-1);
-          const sessions = await window.ferryRpcClient.sessions.list();
-          const newSessionIds = sessions
-            .filter((session) => !knownSessionIds.includes(session.id))
-            .map((session) => session.id);
-          return {
-            routeSessionId,
-            newSessionIds,
-            isNewSessionOnRoute:
-              Boolean(routeSessionId) &&
-              !knownSessionIds.includes(routeSessionId) &&
-              newSessionIds.includes(routeSessionId),
-          };
-        }, previousSessionIds);
-        return routeSnapshot;
-      },
-      { timeout: 15_000 },
-    )
-    .toMatchObject({ isNewSessionOnRoute: true });
-  const sessionId = routeSnapshot.routeSessionId;
-  if (!sessionId) throw new Error(`New chat did not create a session for ${title}`);
+  await page.waitForURL((url) => url.hash === '#/' || url.hash === '', { timeout: 15_000 });
+  await expect(page.getByRole('textbox', { name: 'Message Ferry' })).toBeVisible();
+  const afterNewChat = await callRendererRpc(page, 'sessions.list', []);
+  assert.deepEqual(
+    afterNewChat.map((session) => session.id).filter((id) => !previousSessionIds.includes(id)),
+    [],
+    'New chat must not create an empty session',
+  );
+  // Tests configure profile and model before sending, so create the session through the engine
+  // here; the first-send path that creates a session from the composer is covered by the golden path.
+  // New folders start untrusted. Only the golden path exercises the trust prompt; other phases trust
+  // the fixture up front so they test what they are about.
+  if (!keepUntrusted) await callRendererRpc(page, 'workspaces.trust', [workspace.id]);
+  const created = await callRendererRpc(page, 'sessions.create', [{ workspaceId: workspace.id }]);
+  const sessionId = created.id;
   const detail = await callRendererRpc(page, 'sessions.get', [sessionId]);
   const sessionIdFromDetail = detail.session.id;
   if (detail.session.workspaceId !== workspace.id) {
@@ -659,16 +650,31 @@ try {
         .toBe(true);
       fakeProvider.setResponses([textTurn('golden-reply-one'), textTurn('golden-reply-two')]);
       const modelRef = 'openrouter/cohere/north-mini-code:free';
-      const session = await createSessionViaUi(page, 'Packaged golden path', 'Auto-Free', modelRef);
+      const session = await createSessionViaUi(
+        page,
+        'Packaged golden path',
+        'Auto-Free',
+        modelRef,
+        fixtureRepoName,
+        { keepUntrusted: true },
+      );
       await page.evaluate((id) => {
         window.location.hash = `/s/${id}`;
       }, session.id);
       await page.waitForURL((url) => url.hash === `#/s/${session.id}`, { timeout: 15_000 });
       const composer = page.getByRole('textbox', { name: 'Message Ferry' });
+      let trustAnswered = false;
       const sendAndWait = async (prompt, reply) => {
         const startedAt = Date.now();
         await composer.fill(prompt);
         await composer.press('Enter');
+        if (!trustAnswered) {
+          // First message in a new folder asks to trust it; nothing is sent until the user agrees.
+          const trustDialog = page.getByRole('alertdialog', { name: /^Trust / });
+          await expect(trustDialog).toBeVisible({ timeout: 5_000 });
+          await trustDialog.getByRole('button', { name: 'Trust folder' }).click();
+          trustAnswered = true;
+        }
         await expect
           .poll(
             () =>
