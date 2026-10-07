@@ -2,23 +2,15 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import {
-  ArrowLeft,
-  ArrowRight,
-  MoreHorizontal,
-  PanelLeft,
-  PanelRight,
-  Share2,
-  Trash2,
-} from 'lucide-react';
+import { MoreHorizontal, PanelLeft, PanelRight, Trash2 } from 'lucide-react';
 import { UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { keys, useSessions, useWorkspaces } from '../data/queries';
-import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
 import type { SessionId } from '@ferry/shared';
 import { ApprovalsTray } from './SessionPowerControls';
 import { ConfirmDialog } from './ConfirmDialog';
+import { UpdateBadge } from './UpdateBadge';
 
 const { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Input } =
   UiV2;
@@ -40,7 +32,6 @@ export function V2ChatHeader({
   const tabs = useUI((state) => state.tabs);
   const { data: sessionRows = [] } = useSessions();
   const { data: workspaces = [] } = useWorkspaces();
-  const pushToast = useToasts((state) => state.push);
   const isSession = Boolean(sessionId);
   const tab = sessionId ? tabs.find((item) => item.id === sessionId) : undefined;
   const session = sessionId ? sessionRows.find((item) => item.id === sessionId) : undefined;
@@ -97,26 +88,6 @@ export function V2ChatHeader({
               <PanelLeft aria-hidden="true" />
             </Button>
           )}
-          <Button
-            aria-label="Go back"
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              window.history.back();
-            }}
-          >
-            <ArrowLeft aria-hidden="true" />
-          </Button>
-          <Button
-            aria-label="Go forward"
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              window.history.forward();
-            }}
-          >
-            <ArrowRight aria-hidden="true" />
-          </Button>
         </div>
         <div className="v2-titlebar-context v2-header-title">
           <span className="v2-titlebar-project">{workspace?.name ?? 'Ferry'}</span>
@@ -152,19 +123,6 @@ export function V2ChatHeader({
           )}
         </div>
         <div className="v2-header-actions">
-          {isSession && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                void navigator.clipboard.writeText(window.location.href);
-                pushToast({ kind: 'success', title: 'Link copied', body: null });
-              }}
-            >
-              <Share2 aria-hidden="true" />
-              Share
-            </Button>
-          )}
           {isSession && <ApprovalsTray activeSessionId={sessionId} />}
           {isSession && (
             <Button
@@ -199,6 +157,7 @@ export function V2ChatHeader({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+          <UpdateBadge />
         </div>
         {children}
         <WebPreviewWindowControls />

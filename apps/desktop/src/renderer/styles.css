@@ -710,29 +710,6 @@ body {
     background-position: -200% 0;
   }
 }
-.update-banner {
-  display: flex;
-  min-height: 32px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border: 1px solid var(--border-hair);
-  border-radius: var(--r-item);
-  background: var(--bg-raised);
-  padding: 4px 12px;
-  color: var(--text-2);
-  font-size: 11px;
-}
-.update-banner button,
-.update-banner .update-notes-link {
-  border: 0;
-  background: transparent;
-  color: var(--text-link);
-  cursor: pointer;
-  font: inherit;
-  text-decoration: none;
-}
 @media (prefers-reduced-motion: reduce) {
   .skeleton-row {
     animation: none;
@@ -2250,6 +2227,34 @@ body {
   flex: 0 0 auto;
   margin-left: auto;
 }
+/* Update pill next to the window buttons; only rendered while an update is on its way. */
+.v2-update-badge {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--ring) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ring) 16%, transparent);
+  padding: 0 10px 0 8px;
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+.v2-update-badge:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ring) 26%, transparent);
+}
+.v2-update-badge:disabled {
+  cursor: default;
+  opacity: 0.8;
+}
+.v2-update-badge svg {
+  width: 14px;
+  height: 14px;
+}
 .v2-title-button {
   min-width: 0;
   max-width: 100%;
@@ -3516,8 +3521,7 @@ body {
   font-variant-numeric: tabular-nums;
 }
 .v2-app-shell .offline-warning,
-.v2-app-shell .engine-restarting,
-.v2-app-shell .update-banner {
+.v2-app-shell .engine-restarting {
   display: flex;
   min-height: 36px;
   height: auto;

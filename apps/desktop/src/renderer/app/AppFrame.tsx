@@ -18,7 +18,6 @@ import { V2Sidebar } from './V2Sidebar';
 import { SettingsDialog } from './SettingsDialog';
 import { V2ChatHeader } from './V2ChatHeader';
 import { BottomPanel } from './BottomPanel';
-import type { UpdateSnapshot } from '../../main/update-state.js';
 import { initializeKeybindings } from '../state/keybindings';
 import { useKeybindings } from '../state/keybindings';
 import { matchesKeybinding } from '@ferry/config/keybindings';
@@ -119,7 +118,6 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const cache = useQueryClient();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [engineRestarting, setEngineRestarting] = useState(false);
-  const [updateState, setUpdateState] = useState<UpdateSnapshot | null>(null);
   const [titlebarReserve, setTitlebarReserve] = useState(0);
   useEffect(() => {
     const overlay = (
@@ -181,18 +179,6 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       active = false;
       off();
       offConnected();
-    };
-  }, []);
-  useEffect(() => {
-    if (!window.ferryHost) return;
-    let active = true;
-    void window.ferryHost.getUpdateState().then((state) => {
-      if (active) setUpdateState(state);
-    });
-    const off = window.ferryHost.onUpdateState(setUpdateState);
-    return () => {
-      active = false;
-      off();
     };
   }, []);
   useEffect(() => {
@@ -489,22 +475,6 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           {engineRestarting && (
             <div className="engine-restarting" role="status">
               Engine restarting…
-            </div>
-          )}
-          {updateState?.status === 'downloaded' && (
-            <div className="update-banner" role="status">
-              <span>Update ready{updateState.version ? ` · ${updateState.version}` : ''}</span>
-              <a className="update-notes-link" href="https://github.com/sico-vibes/ferry/releases">
-                Release notes
-              </a>
-              <button
-                type="button"
-                onClick={() => {
-                  void window.ferryHost?.installUpdate();
-                }}
-              >
-                Restart to apply
-              </button>
             </div>
           )}
           <div className="canvas-slot">

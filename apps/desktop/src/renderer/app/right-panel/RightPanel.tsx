@@ -9,7 +9,6 @@ import {
   MoreHorizontal,
   PanelRight,
   Search,
-  Share2,
   Star,
 } from 'lucide-react';
 import { EmptyState, IconButton, KbdChip, NewChatButton, ShowMoreList, Skeleton } from '@ferry/ui';
@@ -166,9 +165,6 @@ export function RightPanel({
       <header className="right-panel-header">
         <IconButton label="Collapse right panel" size="sm" onClick={toggleRight}>
           <PanelRight size={16} />
-        </IconButton>
-        <IconButton label="Share from right panel" size="sm">
-          <Share2 size={16} />
         </IconButton>
         <IconButton label="More options" size="sm">
           <MoreHorizontal size={17} />
