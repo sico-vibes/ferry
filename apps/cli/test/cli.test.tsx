@@ -55,6 +55,7 @@ describe('@ferry/cli', () => {
         concurrency: '2',
         'tokens-per-min': '4000',
         'tokens-per-day': '50000',
+        'allowed-models': 'openrouter/model-a, openrouter/model-b',
       }),
     ).toBe(0);
     const created = JSON.parse(output.mock.calls.at(-1)?.[0]?.toString() ?? '{}') as {
@@ -70,16 +71,19 @@ describe('@ferry/cli', () => {
       concurrencyLimit: 2,
       tokenLimitPerMinute: 4000,
       tokenLimitPerDay: 50000,
+      allowedModels: ['openrouter/model-a', 'openrouter/model-b'],
     });
     await gatewayCommand(['keys', 'update', created.key.id], true, api, undefined, {
       rpm: '60',
       clear: 'tokens-per-day',
+      'allowed-models': 'openrouter/model-c',
     });
     output.mockClear();
     await gatewayCommand(['keys', 'show', created.key.id], true, api);
     expect(JSON.parse(output.mock.calls[0]?.[0]?.toString() ?? '{}')).toMatchObject({
       rateLimit: 60,
       tokenLimitPerDay: null,
+      allowedModels: ['openrouter/model-c'],
     });
   });
 
@@ -250,6 +254,11 @@ describe('@ferry/cli', () => {
     const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     expect(await runCli(['providers', 'keys', '--help'])).toBe(0);
     expect(output.mock.calls.map(([chunk]) => String(chunk)).join('')).toContain('--stdin');
+    output.mockClear();
+    expect(await runCli(['gateway', 'keys', '--help'])).toBe(0);
+    expect(output.mock.calls.map(([chunk]) => String(chunk)).join('')).toContain(
+      '--allowed-models <ref,ref>',
+    );
     output.mockClear();
     expect(
       await runCli([

@@ -213,6 +213,20 @@ export function createGatewayController(
       })
       .map((model) => model.ref);
   const routeableCandidates = async (key: GatewayKey, profileName: string, inputTokens = 1) => {
+    const allowedConcrete = key.allowedModels.filter(
+      (ref) => ref.includes('/') && !ref.startsWith('ferry/'),
+    );
+    if (key.profile === 'none' && allowedConcrete.length > 0) {
+      const candidates = [
+        ...services.catalog.models,
+        ...services.catalog.providers.flatMap(({ provider }) => services.models.list(provider)),
+      ];
+      const byRef = new Map(candidates.map((model) => [model.ref, model]));
+      return allowedConcrete.flatMap((ref) => {
+        const model = byRef.get(ref as (typeof candidates)[number]['ref']);
+        return model ? [model] : [];
+      });
+    }
     const allProfiles = [...BUILTIN_PROFILES];
     const custom = services.settings.get('profiles');
     if (Array.isArray(custom)) allProfiles.push(...(custom as typeof BUILTIN_PROFILES));
@@ -221,9 +235,6 @@ export function createGatewayController(
     const runtimeDeps = await import('./session-deps.js');
     const requestDeps = runtimeDeps.createSessionDependencies(services, () => undefined);
     const eligible = requestDeps.gateway.resolveCandidates(selected, 'plan', inputTokens);
-    const allowedConcrete = key.allowedModels.filter(
-      (ref) => ref.includes('/') && !ref.startsWith('ferry/'),
-    );
     return allowedConcrete.length
       ? allowedConcrete.flatMap((ref) => {
           const model = eligible.find((item) => item.ref === ref);

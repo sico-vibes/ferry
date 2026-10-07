@@ -1,7 +1,9 @@
 import { realpathSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRpcFerryClient } from '@ferry/client';
 import { ProviderIdSchema } from '@ferry/shared';
@@ -21,6 +23,34 @@ import { migrateLegacyEngineData } from '../src/data-directory.js';
 import { runCli } from '../src/main.js';
 
 const dataDirs: string[] = [];
+const cliEntry = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'ferry.js');
+
+function runCliSubprocess(
+  args: string[],
+): Promise<{ code: number | null; stderr: string; stdout: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cliEntry, ...args], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_ENV: 'test' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => (stdout += chunk));
+    child.stderr.on('data', (chunk: string) => (stderr += chunk));
+    const timer = setTimeout(() => child.kill(), 15_000);
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      resolve({ code, stderr, stdout });
+    });
+  });
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -191,6 +221,54 @@ describe('CLI client engine selection', () => {
     }
   }, 30_000);
 
+  it('lets a separate CLI process attach to a core started with the gateway daemon client path', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ferry-cli-process-attach-'));
+    dataDirs.push(dataDir);
+    const owner = spawn(
+      process.execPath,
+      [cliEntry, 'serve', '--gateway', '--data-dir', dataDir, '--json'],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, NODE_ENV: 'test' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    let ownerOutput = '';
+    let ownerError = '';
+    owner.stdout.setEncoding('utf8');
+    owner.stderr.setEncoding('utf8');
+    owner.stdout.on('data', (chunk: string) => (ownerOutput += chunk));
+    owner.stderr.on('data', (chunk: string) => (ownerError += chunk));
+    try {
+      const deadline = Date.now() + 10_000;
+      while (!ownerOutput.trim() && Date.now() < deadline) {
+        if (owner.exitCode !== null)
+          throw new Error(`Core owner exited (${String(owner.exitCode)}): ${ownerError}`);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(ownerOutput).toContain('url');
+      const attached = await runCliSubprocess([
+        'status',
+        '--engine',
+        'local',
+        '--data-dir',
+        dataDir,
+        '--json',
+      ]);
+      expect(attached.code, attached.stderr).toBe(0);
+      expect(JSON.parse(attached.stdout)).toMatchObject({ engine: 'local' });
+    } finally {
+      owner.kill();
+      await new Promise<void>((resolve) => {
+        if (owner.exitCode !== null) resolve();
+        else
+          owner.once('exit', () => {
+            resolve();
+          });
+      });
+    }
+  }, 30_000);
+
   it('uses one desktop-style core for CLI status, Gateway, and a streamed session run', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ferry-cli-shared-core-'));
     dataDirs.push(root);
@@ -259,6 +337,16 @@ describe('CLI client engine selection', () => {
       await expect(
         runCli(['status', '--json', '--engine', 'local', '--data-dir', dataDir]),
       ).resolves.toBe(0);
+      const desktopAttached = await runCliSubprocess([
+        'status',
+        '--json',
+        '--engine',
+        'local',
+        '--data-dir',
+        dataDir,
+      ]);
+      expect(desktopAttached.code, desktopAttached.stderr).toBe(0);
+      expect(JSON.parse(desktopAttached.stdout)).toMatchObject({ engine: 'local' });
       expect(JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(''))).toMatchObject({
         engine: 'local',
         providersConfigured: true,

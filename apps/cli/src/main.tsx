@@ -617,7 +617,7 @@ export async function main(): Promise<void> {
         '  cloud status|login|logout|mode|sync|migrate-keys  Manage Ferry Cloud storage and account',
         '  serve --gateway                              Run Ferry core and Gateway in the foreground',
         '  gateway start|stop|status                    Manage the local Gateway',
-        '  gateway keys create <name> [profile]         Create a Gateway key (shown once)',
+        '  gateway keys create <name> [profile] [--allowed-models <ref,ref>]  Create a Gateway key',
         '  gateway keys list|show|update|revoke <id>     List, inspect, update, or revoke Gateway keys',
         '  providers keys <provider> <action>            Manage provider keys without argv secrets',
         '  providers routing <provider>                  Show or set provider priority and weight',
@@ -790,6 +790,18 @@ function gatewayLimitPatch(
   options: Record<string, string | boolean>,
 ): NonNullable<Parameters<FerryClient['gateway']['updateKey']>[0]['patch']> {
   const patch: NonNullable<Parameters<FerryClient['gateway']['updateKey']>[0]['patch']> = {};
+  if (options['allowed-models'] !== undefined) {
+    const value = options['allowed-models'];
+    if (typeof value !== 'string' || !value.trim())
+      throw new CliError(
+        2,
+        'Invalid --allowed-models. Provide a comma-separated list of model refs.',
+      );
+    const refs = value.split(',').map((ref) => ref.trim());
+    if (refs.some((ref) => !ref))
+      throw new CliError(2, 'Invalid --allowed-models. Model refs must not be empty.');
+    patch.allowedModels = [...new Set(refs)];
+  }
   const limits = [
     ['rpm', 'rateLimit'],
     ['concurrency', 'concurrencyLimit'],
@@ -1063,7 +1075,7 @@ function commandHelp(positionals: string[]): string {
       'Usage: ferry cloud status|login [--email <email>]|logout|mode <local|cloud>|sync|migrate-keys\nManage cloud account, storage mode, synchronization, and key migration.\n',
     gateway: 'Usage: ferry gateway start|stop|status|keys ...\nManage the local Gateway.\n',
     'gateway keys':
-      'Usage: ferry gateway keys create <name> [profile] [limits] | show <id> | update <id> [limits] | list | revoke <id>\nCreate and manage Gateway keys and budgets.\n',
+      'Usage: ferry gateway keys create <name> [profile] [--allowed-models <ref,ref>] [limits] | show <id> | update <id> [--allowed-models <ref,ref>] [limits] | list | revoke <id>\nCreate and manage Gateway keys and budgets.\n',
     providers:
       'Usage: ferry providers list|enable|disable|test ... | keys ... | routing ... | overrides ...\nManage provider keys, routing preferences, and effective overrides.\n',
     'providers keys':

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CoreHost } from '../src/index.js';
 import {
   localControlEndpointPath,
+  localControlSocketAddress,
   readLocalControlEndpoint,
   verifyLocalControlToken,
 } from '../src/local-control.js';
@@ -22,6 +23,15 @@ afterEach(async () => {
 });
 
 describe('core local control channel', () => {
+  it('derives a stable Windows pipe name from the canonical engine directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ferry-core-pipe-name-'));
+    dataDirectories.push(root);
+    const first = localControlSocketAddress(join(root, 'Engine'), 'win32');
+    const second = localControlSocketAddress(join(root, 'engine'), 'win32');
+    expect(first.transport).toBe('pipe');
+    expect(second).toEqual(first);
+  });
+
   it('rejects a missing or incorrect authentication token', () => {
     expect(verifyLocalControlToken('expected-token-value', undefined)).toBe(false);
     expect(verifyLocalControlToken('expected-token-value', '')).toBe(false);

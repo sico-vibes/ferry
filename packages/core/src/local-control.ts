@@ -1,9 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
 import { rpcError } from '@ferry/shared';
+import { canonicalPathKey } from '@ferry/shared/node-paths';
 import type { CoreHost, CoreTransport } from './host.js';
 
 const endpointFileName = 'core.endpoint.json';
@@ -46,7 +46,7 @@ export function localControlSocketAddress(
 } {
   if (platform !== 'win32') return { transport: 'unix', endpoint: join(dataDir, 'core.sock') };
   const scopedId = createHash('sha256')
-    .update(`${userInfo().username}\0${homedir()}\0${dataDir}`)
+    .update(canonicalPathKey(dataDir))
     .digest('hex')
     .slice(0, 24);
   return { transport: 'pipe', endpoint: `\\\\.\\pipe\\ferry-${scopedId}` };
