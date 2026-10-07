@@ -2044,13 +2044,13 @@ body {
 .v2-user-row {
   display: flex;
   width: 100%;
-  height: 40px;
+  min-height: 48px;
   align-items: center;
   gap: 10px;
   border: 0;
   border-radius: 10px;
   background: transparent;
-  padding: 4px;
+  padding: 8px 6px;
   color: var(--foreground);
   cursor: pointer;
   text-align: left;
@@ -2853,7 +2853,6 @@ body {
   width: min(calc(100% - 48px), 768px);
 }
 .v2-composer:focus-within {
-  border-color: var(--ring);
   background: var(--card);
   box-shadow: none;
 }
@@ -2988,7 +2987,6 @@ body {
   display: none;
 }
 .v2-composer:focus-within {
-  border-color: color-mix(in oklab, var(--ring) 45%, transparent);
   background: var(--card);
   box-shadow: none;
 }
@@ -3579,8 +3577,7 @@ body {
   justify-content: flex-start;
   padding: 8px 12px;
 }
-.v2-app-shell
-  :is(button, input, textarea, [role='menuitem'], [role='menuitemradio']):focus-visible {
+.v2-app-shell :is(button, [role='menuitem'], [role='menuitemradio']):focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
@@ -4588,13 +4585,6 @@ body {
 }
 .ferry-input::placeholder {
   color: var(--text-3);
-}
-.ferry-input:focus-visible,
-.rule-row input:focus-visible,
-.gate-chips input:focus-visible {
-  border-color: var(--blue-500);
-  outline: 2px solid color-mix(in srgb, var(--blue-500), transparent 60%);
-  outline-offset: 1px;
 }
 .ferry-field-eye {
   position: absolute;
@@ -6396,9 +6386,6 @@ button:not(:disabled):active,
   padding: 0 10px;
   color: var(--muted-foreground);
 }
-.v2-settings-search:focus-within {
-  border-color: var(--ring);
-}
 .v2-settings-search svg {
   width: 14px;
   height: 14px;
@@ -7607,10 +7594,6 @@ button:not(:disabled):active,
   padding: 0 var(--space-3);
   color: var(--muted-foreground);
 }
-.v2-model-multi-search:focus-within {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
 .v2-model-multi-search input {
   min-width: 0;
   flex: 1;
@@ -8036,8 +8019,10 @@ button:not(:disabled):active,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Two-line rows: the highlight keeps the same breathing room above and below as at the sides. */
 .v2-workspace-menu [role='menuitem'] {
   min-height: 36px;
+  padding-block: 8px;
 }
 .v2-workspace-menu-check {
   flex: none;
@@ -8119,4 +8104,15 @@ button:not(:disabled):active,
   color: var(--muted-foreground);
   font-size: 12px;
   font-weight: 400;
+}
+/* Text fields never show a focus ring, outline or glow; the caret is the focus cue.
+   Buttons and menu items keep their keyboard focus outline. */
+:is(
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  textarea,
+  select,
+  [cmdk-input]
+):is(:focus, :focus-visible) {
+  outline: none !important;
+  box-shadow: none !important;
 }

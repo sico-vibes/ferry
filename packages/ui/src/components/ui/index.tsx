@@ -23,6 +23,8 @@ import { useTheme } from '../../lib/theme';
 
 const focus =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background';
+// Text fields show the caret only: no ring, outline or glow when focused.
+const fieldFocus = 'focus:outline-none focus-visible:outline-none';
 const surface =
   'ferry-ui border border-border bg-card text-card-foreground shadow-[var(--shadow-popover)]';
 
@@ -266,7 +268,7 @@ function MenuItem({
   return (
     <DropdownMenuPrimitive.Item
       className={cn(
-        'relative flex min-h-8 cursor-default select-none items-center gap-2 rounded-control px-2 text-ui-body outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground [&_svg]:size-4',
+        'relative flex min-h-8 cursor-default select-none items-center gap-2 rounded-control px-2 py-1.5 text-ui-body outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground [&_svg]:size-4',
         inset && 'pl-8',
         className,
       )}
@@ -824,7 +826,7 @@ export const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<'in
       type={type}
       className={cn(
         'flex h-9 w-full rounded-control border border-input bg-background px-3 py-1 text-ui-body placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
-        focus,
+        fieldFocus,
         className,
       )}
       {...props}
@@ -838,7 +840,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.ComponentPro
       ref={ref}
       className={cn(
         'flex min-h-20 w-full rounded-control border border-input bg-background px-3 py-2 text-ui-body  placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
-        focus,
+        fieldFocus,
         className,
       )}
       {...props}
