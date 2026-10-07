@@ -47,7 +47,10 @@ describe('NSIS update preservation', () => {
     expect(broadcasts).toHaveLength(3);
     for (const line of broadcasts) expect(line).toContain('/TIMEOUT=2000');
     expect(macro('customInit')).toContain('"${UNINSTALL_REGISTRY_KEY}" "DisplayVersion"');
-    expect(macro('customInit')).toContain('"${UNINSTALL_REGISTRY_KEY}" "InstallLocation"');
+    // electron-builder writes InstallLocation under INSTALL_REGISTRY_KEY (installer.nsh in
+    // app-builder-lib), never under the uninstall entry.
+    expect(macro('customInit')).toContain('"${INSTALL_REGISTRY_KEY}" "InstallLocation"');
+    expect(macro('customInit')).not.toContain('"${UNINSTALL_REGISTRY_KEY}" "InstallLocation"');
     const page = installer.slice(
       installer.indexOf('Function FerryExistingInstallPage'),
       installer.indexOf('Function FerryInstallOptionsPage'),

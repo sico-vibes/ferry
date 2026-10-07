@@ -28,7 +28,8 @@ Var FerryCleanReinstall
 !macro customInit
   StrCpy $FerryCleanReinstall 0
   ReadRegStr $FerryInstalledVersion HKCU "${UNINSTALL_REGISTRY_KEY}" "DisplayVersion"
-  ReadRegStr $FerryInstalledLocation HKCU "${UNINSTALL_REGISTRY_KEY}" "InstallLocation"
+  ; electron-builder keeps InstallLocation under INSTALL_REGISTRY_KEY, not the uninstall entry.
+  ReadRegStr $FerryInstalledLocation HKCU "${INSTALL_REGISTRY_KEY}" "InstallLocation"
   StrCpy $FerryIsUpdated 0
   StrCpy $ForceAddToPath 0
   ${GetParameters} $FerryInstallerParams

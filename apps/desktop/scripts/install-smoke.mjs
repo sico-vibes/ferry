@@ -110,8 +110,10 @@ function registryInstallations() {
   const parsed = JSON.parse(result);
   return Array.isArray(parsed) ? parsed : [parsed];
 }
+// The uninstall entry carries the version; electron-builder keeps InstallLocation under
+// HKCU\Software\<app GUID> (its INSTALL_REGISTRY_KEY), keyed by the same GUID.
 function ferryRegistryRows() {
-  const script = `$root='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'; Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object { $p=Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue; if ($p.DisplayName -like 'Ferry*') { [PSCustomObject]@{ Key=$_.PSChildName; Location=$p.InstallLocation; Version=$p.DisplayVersion } } } | ConvertTo-Json -Compress`;
+  const script = `$root='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'; Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object { $p=Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue; if ($p.DisplayName -like 'Ferry*') { $i=Get-ItemProperty ('HKCU:\\Software\\' + $_.PSChildName) -ErrorAction SilentlyContinue; [PSCustomObject]@{ Key=$_.PSChildName; Location=$i.InstallLocation; Version=$p.DisplayVersion } } } | ConvertTo-Json -Compress`;
   const result = powershell(script);
   if (!result) return [];
   const parsed = JSON.parse(result);
@@ -442,10 +444,19 @@ try {
   powershell(
     `Get-Process | Where-Object { $_.Path -eq ${executableLiteral} } | ForEach-Object { $_.CloseMainWindow() | Out-Null }`,
   );
-  const closeDeadline = Date.now() + 15_000;
+  const closeDeadline = Date.now() + 10_000;
   while (Number(running()) > 0 && Date.now() < closeDeadline)
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-  assert.equal(Number(running()), 0, 'Relaunched app did not close cleanly');
+  // The installer relaunches Ferry through the shell (no smoke environment), so closing the
+  // window can hide it to the tray as designed; end it like Quit from the tray would.
+  if (Number(running()) > 0)
+    powershell(
+      `Get-Process | Where-Object { $_.Path -eq ${executableLiteral} } | Stop-Process -Force`,
+    );
+  const killDeadline = Date.now() + 10_000;
+  while (Number(running()) > 0 && Date.now() < killDeadline)
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+  assert.equal(Number(running()), 0, 'Relaunched app did not close');
   verifyPersistedRecords(databasePath, state);
   const installedFileCount = await countFiles(installDirectory);
   record(
