@@ -61,6 +61,29 @@ const environment = {
   FERRY_TEST_KEYRING_NAMESPACE: `ferry-installed-cli-${process.pid}`,
   NODE_ENV: 'test',
 };
+// Console diagnostics from the same runtime and launch path, printed first so a failure on another
+// Windows version shows what the bundled runtime could see.
+await new Promise((resolveDiag) => {
+  const diagScript = join(desktopRoot, 'scripts', 'tty-diag.cjs');
+  let diag = '';
+  const probe = pty.spawn(
+    process.env.ComSpec ?? 'cmd.exe',
+    `/d /s /c "set ELECTRON_RUN_AS_NODE=1&& "${executable}" "${diagScript}""`,
+    { cwd: tmpdir(), env: process.env, cols: 100, rows: 20, useConpty: true },
+  );
+  const done = () => {
+    const line = diag.split(/\r?\n/).find((entry) => entry.includes('FERRY_TTY_DIAG'));
+    console.log(line ? line.trim() : `FERRY_TTY_DIAG unavailable: ${diag.slice(-300)}`);
+    resolveDiag();
+  };
+  probe.onData((data) => (diag += data));
+  probe.onExit(done);
+  setTimeout(() => {
+    probe.kill();
+    done();
+  }, 20_000);
+});
+
 try {
   for (const variant of ['cmd', 'pwsh']) {
     const workspace = await mkdtemp(join(tmpdir(), `ferry-pty-${variant}-`));
