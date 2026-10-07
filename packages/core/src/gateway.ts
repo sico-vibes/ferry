@@ -21,6 +21,7 @@ import {
   type GatewayAttempt,
   type GatewayAttemptState,
 } from '@ferry/gateway';
+import { randomBytes } from 'node:crypto';
 import type { FerryServices } from './services.js';
 import { hasUsableProviderKey, recordProviderKeyFailure } from './services.js';
 
@@ -163,12 +164,18 @@ function routingSettings(services: FerryServices) {
 }
 
 const requestLogLimit = 200;
+const controllers = new WeakMap<FerryServices, ReturnType<typeof createGatewayController>>();
+
+export function getGatewayController(services: FerryServices) {
+  return controllers.get(services);
+}
 
 export function createGatewayController(
   services: FerryServices,
   onRequest?: (record: GatewayRequestRecord) => void,
 ) {
   let handle: GatewayHandle | undefined;
+  const internalTokens = new Map<string, { keyId: string; expiresAt: number }>();
   // Recent routed requests for the live log: metadata only, never prompt or response text.
   const requestLog: GatewayRequestRecord[] = [];
   const logRequest = (record: GatewayRequestRecord) => {
@@ -683,7 +690,7 @@ export function createGatewayController(
       ? lastError
       : new Error('All eligible providers failed before returning output');
   }
-  return {
+  const controller = {
     requests() {
       return requestLog.map((record) => ({ ...record }));
     },
@@ -701,6 +708,7 @@ export function createGatewayController(
       if (handle) return this.status;
       handle = await startGateway({
         runtime,
+        internalTokens,
         port: settings.port,
         allowLan: settings.allowLan,
         allowLanConfirmed: settings.allowLan,
@@ -716,6 +724,24 @@ export function createGatewayController(
       const created = createGatewayKey({ name, profile });
       runtime.store.put(created.key);
       return { ...created, key: { ...created.key, hash: undefined } };
+    },
+    issueInternalToken(id: string) {
+      const key = keys(services).find((entry) => entry.id === id && !entry.revokedAt);
+      if (!key) throw new Error(`Gateway key not found: ${id}`);
+      const token = randomBytes(32).toString('base64url');
+      for (const [value, grant] of internalTokens)
+        if (grant.expiresAt <= Date.now()) internalTokens.delete(value);
+      internalTokens.set(token, { keyId: id, expiresAt: Date.now() + 10 * 60_000 });
+      return token;
+    },
+    key(id: string) {
+      return this.listKeys().find((entry) => entry.id === id && !entry.revokedAt);
+    },
+    revokeInternalToken(token: string) {
+      internalTokens.delete(token);
+    },
+    activeInternalTokenCount() {
+      return internalTokens.size;
     },
     updateKey(
       id: string,
@@ -762,4 +788,6 @@ export function createGatewayController(
       return { ...settings, status: this.status };
     },
   };
+  controllers.set(services, controller);
+  return controller;
 }

@@ -76,6 +76,7 @@ export const PaidCapsSchema = z.object({
 export type PaidCaps = z.infer<typeof PaidCapsSchema>;
 export const SettingsSchema = z.object({
   storageMode: z.enum(['local', 'cloud']).default('local'),
+  cloudOnboardingChoice: z.enum(['local', 'cloud']).nullable().default(null),
   captureContent: z.boolean().optional(),
   theme: ThemeSchema,
   homeStyle: z.enum(['auto', 'hero', 'compact']).default('auto'),

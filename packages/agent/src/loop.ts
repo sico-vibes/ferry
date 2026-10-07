@@ -179,6 +179,7 @@ export interface AgentOptions {
   repairToolCalls?: boolean;
   promptCaching?: (model: ModelInfo) => boolean;
   providerBaseUrls?: Readonly<Record<string, string>>;
+  providerHeaders?: Readonly<Record<string, Record<string, string>>>;
   providerFetch?: typeof globalThis.fetch;
   providerOverrides?: (model: ModelInfo) => ProviderRequestOverrides;
   toolSources?: readonly ToolSource[];
@@ -2748,6 +2749,7 @@ export function createStepGenerator(
     AgentOptions,
     | 'apiKeys'
     | 'providerBaseUrls'
+    | 'providerHeaders'
     | 'providerFetch'
     | 'emit'
     | 'onObservation'
@@ -2795,6 +2797,11 @@ export function createStepGenerator(
       const result = streamText({
         model: createLanguageModel(model.ref, {
           apiKey: options.apiKeys[model.providerId] ?? '',
+          providerId: model.providerId,
+          ...(model.gateway ? { modelName: model.gateway.modelName } : {}),
+          ...(options.providerHeaders?.[model.providerId]
+            ? { headers: options.providerHeaders[model.providerId] }
+            : {}),
           ...(options.providerBaseUrls?.[model.providerId]
             ? { baseUrl: options.providerBaseUrls[model.providerId] }
             : {}),

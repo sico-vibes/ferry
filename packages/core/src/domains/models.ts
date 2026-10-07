@@ -14,6 +14,7 @@ import type { FerryServices } from '../services.js';
 import { hasUsableProviderKey } from '../services.js';
 import { getModelDiscovery } from './model-discovery.js';
 import { preserveCatalogBillingMetadata } from '../model-billing-metadata.js';
+import { getGatewayController } from '../gateway.js';
 import { z } from 'zod';
 
 const ModelListQuerySchema = z.object({
@@ -137,7 +138,33 @@ export function register(host: CoreHost, services: FerryServices): void {
         .map((model) => ModelInfoSchema.parse(model))
         .filter((model) => modelSupportsTools(model));
       const choices = [...enabled, ...oauthModels];
-      return choices.map((model, index) => {
+      const gatewayChoices = (getGatewayController(services)?.listKeys() ?? [])
+        .filter((key) => !key.revokedAt)
+        .map((key) =>
+          ModelInfoSchema.parse({
+            ref: `gateway/${key.id}`,
+            providerId: 'gateway',
+            name: key.name,
+            tier: 'T1',
+            contextWindow: 128_000,
+            maxOutput: 8_192,
+            toolCalling: true,
+            reasoning: false,
+            free: false,
+            priceInPerM: null,
+            priceOutPerM: null,
+            gateway: {
+              keyId: key.id,
+              keyName: key.name,
+              modelName:
+                key.profile === 'none'
+                  ? (key.allowedModels[0] ?? 'ferry/auto')
+                  : `ferry/${key.profile}`,
+            },
+          }),
+        );
+      const allChoices = [...choices, ...gatewayChoices];
+      return allChoices.map((model, index) => {
         const stepsLeft = services.quota.stepsLeft(model.providerId, model.ref);
         return ModelCandidateSchema.parse({
           ref: model.ref,
@@ -154,13 +181,21 @@ export function register(host: CoreHost, services: FerryServices): void {
       const session = services.sessions.get(sessionId);
       if (!session) return;
       if (modelRef !== 'auto') {
-        const available =
-          services.catalog.models.some((model) => model.ref === modelRef) ||
-          services.catalog.providers.some(({ provider }) =>
-            services.models.list(provider).some((model) => model.ref === modelRef),
-          ) ||
-          oauthModelCatalog.some((model) => model.ref === modelRef);
-        if (!available) throw new Error(`Unknown model: ${modelRef}`);
+        const gatewayMatch = /^gateway\/(.+)$/.exec(modelRef);
+        if (gatewayMatch) {
+          const keyId = gatewayMatch[1];
+          if (!keyId) throw new Error('Invalid Gateway key reference');
+          const key = getGatewayController(services)?.key(keyId);
+          if (!key) throw new Error(`Unknown or revoked Gateway key: ${keyId}`);
+        } else {
+          const available =
+            services.catalog.models.some((model) => model.ref === modelRef) ||
+            services.catalog.providers.some(({ provider }) =>
+              services.models.list(provider).some((model) => model.ref === modelRef),
+            ) ||
+            oauthModelCatalog.some((model) => model.ref === modelRef);
+          if (!available) throw new Error(`Unknown model: ${modelRef}`);
+        }
       }
       const updated = SessionSchema.parse({
         ...session,

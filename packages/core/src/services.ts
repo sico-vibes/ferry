@@ -115,6 +115,8 @@ export interface FerryServices {
       message: string | null;
       auth: CloudAuthStatus;
       storageMode: 'local' | 'cloud';
+      runningMode: 'local' | 'cloud';
+      pendingMode: 'local' | 'cloud' | null;
       ownerEmail: string | null;
       sync: { pending: number; failed: number; lastError: string | null; lastFlush: string | null };
     }>;
@@ -532,9 +534,12 @@ export async function createServices({
           (settings.get('global') as { storageMode?: string } | undefined)?.storageMode === 'cloud'
             ? ('cloud' as const)
             : ('local' as const);
+        const runningMode = cloudMode ? 'cloud' : 'local';
         return {
           configured: isCloudConfigured(cloudConfig),
           storageMode: currentMode,
+          runningMode,
+          pendingMode: currentMode === runningMode ? null : currentMode,
           ownerEmail: cloudConfig.ownerEmail ?? null,
           message: !isCloudConfigured(cloudConfig)
             ? 'Supabase cloud configuration is missing'

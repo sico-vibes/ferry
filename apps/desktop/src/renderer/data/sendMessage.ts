@@ -64,6 +64,11 @@ export async function sendMessage(
       await client.sessions.send(sessionId, input);
       return;
     }
+    if (rpc?.kind === 'gateway_not_running')
+      throw new Error(
+        'The Gateway is off. Start it from the Gateway page or the model picker, then send again.',
+        { cause: error },
+      );
     if (rpc?.kind === 'conflict')
       throw new Error('This chat is still working. Wait for it to finish or press Stop.', {
         cause: error,

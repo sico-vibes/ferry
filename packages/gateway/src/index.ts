@@ -148,6 +148,8 @@ export interface GatewayOptions {
   allowLan?: boolean;
   allowLanConfirmed?: boolean;
   runtime: GatewayRuntime;
+  /** Ephemeral core-issued tokens; callers must keep this map in memory only. */
+  internalTokens?: Map<string, { keyId: string; expiresAt: number }>;
 }
 export interface GatewayHandle {
   readonly port: number;
@@ -1448,6 +1450,23 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
     };
   };
   const failedAuth = new Map<string, number[]>();
+  const loopback = (address: string | undefined) =>
+    address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+  const authenticate = (req: IncomingMessage): GatewayKey | undefined => {
+    const internalToken = req.headers['x-ferry-internal-token'];
+    if (typeof internalToken === 'string' && loopback(req.socket.remoteAddress)) {
+      const grant = options.internalTokens?.get(internalToken);
+      if (grant) {
+        if (grant.expiresAt <= Date.now()) options.internalTokens?.delete(internalToken);
+        else
+          return options.runtime.store
+            .list()
+            .find((key) => key.id === grant.keyId && !key.revokedAt);
+      }
+    }
+    const token = bearer(req);
+    return token ? authenticateGatewayKey(token, options.runtime.store.list()) : undefined;
+  };
   const rejectBrowserOrigin = (req: IncomingMessage, res: ServerResponse): boolean => {
     if (!req.headers.origin) return false;
     json(res, 403, errorBody('Browser origins are not allowed by the Ferry gateway', 'forbidden'));
@@ -1484,8 +1503,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
       return;
     }
     if (req.method === 'GET' && (path === '/v1/models' || path === '/v1beta/models')) {
-      const token = bearer(req);
-      const key = token ? authenticateGatewayKey(token, options.runtime.store.list()) : undefined;
+      const key = authenticate(req);
       if (!key) {
         badAuthentication(req, res);
         return;
@@ -1533,8 +1551,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
       req.method === 'POST' &&
       (path === '/v1/chat/completions' || path === '/v1/messages' || protocol !== undefined)
     ) {
-      const token = bearer(req);
-      const key = token ? authenticateGatewayKey(token, options.runtime.store.list()) : undefined;
+      const key = authenticate(req);
       if (!key) {
         badAuthentication(req, res, protocol);
         return;

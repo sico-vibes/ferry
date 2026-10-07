@@ -20,7 +20,15 @@ export class CloudAuthService {
     });
   }
   async signInWithPassword(email: string, password: string): Promise<CloudAuthStatus> {
-    const { error } = await this.client.auth.signInWithPassword({ email, password });
+    let error: { message: string } | null;
+    try {
+      ({ error } = await this.client.auth.signInWithPassword({ email, password }));
+    } catch (cause) {
+      throw new Error(
+        friendlyAuthError(cause instanceof Error ? cause.message : 'Network unavailable', password),
+        { cause },
+      );
+    }
     if (error) throw new Error(friendlyAuthError(error.message, password));
     const status = await this.getStatus();
     this.emit(status);
@@ -74,5 +82,7 @@ export function friendlyAuthError(message: string, sensitiveValue?: string): str
   if (/invalid login credentials|invalid email or password/i.test(clean))
     return 'Email or password is incorrect.';
   if (/email not confirmed/i.test(clean)) return 'Confirm your email before signing in.';
+  if (/fetch failed|failed to fetch|network|econn|enotfound|timeout/i.test(clean))
+    return 'Could not reach Ferry Cloud. Check your internet connection and try again.';
   return `Cloud sign-in failed: ${clean}`;
 }

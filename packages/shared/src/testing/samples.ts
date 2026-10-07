@@ -310,6 +310,7 @@ export const sampleOptimizerStats: OptimizerStats = {
 };
 export const sampleSettings: Settings = {
   storageMode: 'local',
+  cloudOnboardingChoice: 'local',
   theme: 'dark',
   homeStyle: 'auto',
   fontScale: 1,

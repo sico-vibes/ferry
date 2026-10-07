@@ -154,6 +154,34 @@ describe('ComposerModelChip', () => {
     localStorage.removeItem('ferry.modelPicker.freeOnly');
   });
 
+  it('lists gateway keys in the picker and routes the chat through the chosen key', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const session = (await client.sessions.list())[0];
+    const model = (await client.models.list())[0];
+    if (!session || !model) throw new Error('Expected fixture session and model');
+    const created = await client.gateway.createKey({
+      name: 'Picker test key',
+      profile: 'auto-free',
+    });
+    const select = vi.spyOn(client.models, 'select');
+    renderChip(
+      client,
+      <ComposerModelChip
+        sessionId={session.id}
+        modelName={model.name}
+        modelRef={model.ref}
+        mode="manual"
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: model.name }));
+    const picker = await screen.findByRole('dialog', { name: 'Choose model' });
+    const keyRow = await within(picker).findByRole('option', { name: /Picker test key/ });
+    fireEvent.click(keyRow);
+    await waitFor(() => {
+      expect(select).toHaveBeenCalledWith(session.id, `gateway/${created.key.id}`);
+    });
+  });
+
   it('marks the pinned model by ref even when the chip name points to another model', async () => {
     const client = createMockFerryClient({ behavior: 'test' });
     const [models, providers] = await Promise.all([client.models.list(), client.providers.list()]);

@@ -129,7 +129,14 @@ export const MessagePartSchema = z.discriminatedUnion('type', [
         nextCapacity: z.string().optional(),
       })
       .optional(),
-    kind: z.enum(['provider', 'tool', 'permission', 'internal', 'all_candidates_exhausted']),
+    kind: z.enum([
+      'provider',
+      'tool',
+      'permission',
+      'internal',
+      'all_candidates_exhausted',
+      'gateway_not_running',
+    ]),
   }),
 ]);
 export type MessagePart = z.infer<typeof MessagePartSchema>;
@@ -142,6 +149,7 @@ export const MessageSchema = z.object({
   requestedModelRef: ModelRefSchema.or(z.literal('auto')).nullable().optional(),
   turnId: z.string().optional(),
   providerReportedModelId: z.string().nullable().optional(),
+  via: z.object({ kind: z.literal('gateway'), keyId: z.string(), keyName: z.string() }).optional(),
   interrupted: z.object({ reason: z.string(), at: z.iso.datetime() }).optional(),
   agentRole: z.enum(['planner', 'editor']).optional(),
   modelAttempts: z

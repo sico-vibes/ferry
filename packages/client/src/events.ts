@@ -114,6 +114,8 @@ export const FerryEventSchemas = {
   'settings.updated': SettingsSchema,
   'cloud.status': z.object({
     storageMode: z.enum(['local', 'cloud']),
+    runningMode: z.enum(['local', 'cloud']).optional(),
+    pendingMode: z.enum(['local', 'cloud']).nullable().optional(),
     configured: z.boolean(),
     ownerEmail: z.string().nullable(),
     message: z.string().nullable(),

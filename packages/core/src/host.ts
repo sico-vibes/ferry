@@ -115,6 +115,7 @@ export function rpcDomainError(
     | 'conflict'
     | 'permission_denied'
     | 'unavailable'
+    | 'gateway_not_running'
     | 'workspace_untrusted',
   message: string,
   details?: unknown,

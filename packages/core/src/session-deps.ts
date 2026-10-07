@@ -38,6 +38,7 @@ import {
 import { oauthModelCatalog, streamOAuthStep } from '@ferry/oauth';
 import { hasUsableProviderKey, recordProviderKeyFailure, type FerryServices } from './services.js';
 import { z } from 'zod';
+import { getGatewayController } from './gateway.js';
 
 const providerKeyPresence = new WeakMap<FerryServices, Map<string, boolean>>();
 
@@ -87,9 +88,15 @@ export function createSessionDependencies(
   providers: () => Provider[];
   apiKeys: Record<string, string>;
   providerFetch: typeof globalThis.fetch;
+  providerHeaders: Record<string, Record<string, string>>;
+  gatewayServedModel: () => string | null;
+  revokeGatewayTokens: () => void;
   observe: (observation: RawCallObservation) => void;
 } {
   const apiKeys: Record<string, string> = {};
+  const providerHeaders: Record<string, Record<string, string>> = {};
+  let lastGatewayServedModel: string | null = null;
+  let gatewayToken: string | undefined;
   const providerKeyRotation = new ProviderKeyRotation();
   const selectedProviderKeys = new Map<string, { providerId: string; keyId: string }>();
   const keyRetryAfter = new Map<string, string>();
@@ -234,8 +241,14 @@ export function createSessionDependencies(
       // QuotaEngine subscribers publish the authoritative quota.update summary.
     },
   };
-  const providerFetch: typeof globalThis.fetch = async (input, init) =>
-    globalThis.fetch(input, init);
+  const providerFetch: typeof globalThis.fetch = async (input, init) => {
+    const response = await globalThis.fetch(input, init);
+    const requestUrl =
+      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (requestUrl.includes('/v1/chat/completions'))
+      lastGatewayServedModel = response.headers.get('x-ferry-served-model');
+    return response;
+  };
   const observe = (observation: RawCallObservation) => {
     const turnId = traceContext?.turnId;
     if (turnId) {
@@ -634,6 +647,38 @@ export function createSessionDependencies(
     },
     async streamStep(req, signal) {
       const providerId = req.model.providerId;
+      if (providerId === 'gateway' && req.model.gateway) {
+        const controller = getGatewayController(services);
+        const status = controller?.status;
+        if (!controller || !status?.running || status.port === null)
+          throw Object.assign(
+            new Error('Start the local Gateway before sending through this key.'),
+            {
+              code: 'gateway_not_running',
+              kind: 'gateway_not_running',
+            },
+          );
+        const key = controller.key(req.model.gateway.keyId);
+        if (!key) throw new Error(`Unknown or revoked Gateway key: ${req.model.gateway.keyId}`);
+        gatewayToken ??= controller.issueInternalToken(key.id);
+        apiKeys.gateway = gatewayToken;
+        providerBaseUrls.gateway = `http://127.0.0.1:${String(status.port)}/v1`;
+        providerHeaders.gateway = { 'x-ferry-internal-token': gatewayToken };
+        const sessionId = traceContext?.sessionId ?? '';
+        const generator = createStepGenerator(
+          {
+            apiKeys,
+            providerBaseUrls,
+            providerHeaders,
+            providerFetch,
+            emit,
+            onObservation: observe,
+          },
+          req.model,
+          sessionId,
+        );
+        return await generator({ ...req, signal });
+      }
       if (oauthModelCatalog.some((model) => model.providerId === providerId))
         return await streamOAuthStep(services.secrets, { ...req, signal });
       const sessionId = traceContext?.sessionId ?? req.messages.at(-1)?.sessionId ?? '';
@@ -860,7 +905,23 @@ export function createSessionDependencies(
       }
     },
   };
-  return { gateway, usage, capacity, providers, apiKeys, providerFetch, observe };
+  return {
+    gateway,
+    usage,
+    capacity,
+    providers,
+    apiKeys,
+    providerFetch,
+    providerHeaders,
+    gatewayServedModel: () => lastGatewayServedModel,
+    revokeGatewayTokens() {
+      if (gatewayToken) getGatewayController(services)?.revokeInternalToken(gatewayToken);
+      gatewayToken = undefined;
+      Reflect.deleteProperty(apiKeys, 'gateway');
+      Reflect.deleteProperty(providerHeaders, 'gateway');
+    },
+    observe,
+  };
 }
 
 export function modelHintsFromRegistry(model: Pick<ModelInfo, 'capability'>): Partial<ModelHints> {

@@ -8107,3 +8107,12 @@ button:not(:disabled):active,
 .v2-settings-dialog .settings-group-card .ferry-section-title {
   margin-bottom: -4px;
 }
+
+/* User menu: account line with a quieter detail row for storage and sync state. */
+.v2-user-account-detail {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 400;
+}

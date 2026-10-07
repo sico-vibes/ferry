@@ -6,6 +6,7 @@ declare global {
       displayName: string;
       versions: { app: string; electron: string };
       getAppInfo(): Promise<{ version: string; dataDir: string }>;
+      relaunch(): Promise<void>;
       channel: string;
       commit: string;
       e2eDiagnosticsEnabled?: boolean;

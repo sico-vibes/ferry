@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { SegmentedControl, Switch, UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { useSettings } from '../data/queries';
+import { CloudSignInForm, RestartNotice, useCloudStatus } from './CloudAccount';
 
 function Section({
   title,
@@ -37,19 +38,7 @@ export function CloudSettings() {
   const client = useFerryClient();
   const cache = useQueryClient();
   const { data: settings } = useSettings();
-  const { data: status, refetch } = useQuery({
-    queryKey: ['cloud-status'],
-    queryFn: () => client.cloud.status(),
-  });
-  useEffect(
-    () =>
-      client.on('cloud.status', (nextStatus) => {
-        cache.setQueryData(['cloud-status'], nextStatus);
-      }),
-    [cache, client],
-  );
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const { data: status, refetch } = useCloudStatus();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -75,17 +64,6 @@ export function CloudSettings() {
       setBusy(false);
     }
   };
-  const signIn = async (event: React.SyntheticEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const submittedPassword = password;
-    setPassword('');
-    await run(() =>
-      client.cloud.signIn({
-        email: email.length ? email : (status?.ownerEmail ?? ''),
-        password: submittedPassword,
-      }),
-    );
-  };
   return (
     <div className="profile-settings-v3">
       <Section
@@ -104,7 +82,11 @@ export function CloudSettings() {
             { value: 'cloud', label: 'Cloud', disabled: busy },
           ]}
         />
-        <p className="muted">Restart Ferry to apply a storage mode change.</p>
+        {status?.pendingMode ? (
+          <RestartNotice status={status} />
+        ) : (
+          <p className="muted">Changing the storage mode restarts Ferry.</p>
+        )}
         {mode === 'cloud' && !status?.configured ? (
           <p className="profile-locked-note" role="status">
             <span>
@@ -115,7 +97,7 @@ export function CloudSettings() {
         ) : null}
       </Section>
 
-      {mode === 'cloud' && status?.configured ? (
+      {mode === 'cloud' && status?.configured && !status.pendingMode ? (
         <Section
           title="Cloud account"
           helper="Sign in to sync. While signed out, Ferry keeps working locally and uploads later."
@@ -177,40 +159,8 @@ export function CloudSettings() {
                 </UiV2.Button>
               </div>
             </>
-          ) : status.message?.startsWith('Restart Ferry') ? (
-            <p role="status">{status.message}</p>
           ) : (
-            <form className="profile-grid" onSubmit={(event) => void signIn(event)}>
-              <label className="v2-settings-field">
-                <span>Email</span>
-                <UiV2.Input
-                  type="email"
-                  autoComplete="username"
-                  required
-                  value={email.length ? email : (status.ownerEmail ?? '')}
-                  onChange={(event) => {
-                    setEmail(event.target.value);
-                  }}
-                />
-              </label>
-              <label className="v2-settings-field">
-                <span>Password</span>
-                <UiV2.Input
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={(event) => {
-                    setPassword(event.target.value);
-                  }}
-                />
-              </label>
-              <div>
-                <UiV2.Button disabled={busy} type="submit">
-                  {busy ? 'Signing in…' : 'Sign in'}
-                </UiV2.Button>
-              </div>
-            </form>
+            <CloudSignInForm ownerEmail={status.ownerEmail} />
           )}
         </Section>
       ) : null}

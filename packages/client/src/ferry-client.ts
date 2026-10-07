@@ -42,7 +42,7 @@ import type { FerryEvents } from './events.js';
 export interface FerryClient {
   cloud: {
     status(): Promise<CloudStatus>;
-    signIn(input: { email: string; password: string }): Promise<unknown>;
+    signIn(input: { email: string; password: string }): Promise<CloudStatus>;
     signOut(): Promise<void>;
     setStorageMode(input: {
       mode: 'local' | 'cloud';
@@ -228,7 +228,12 @@ export interface FerryClient {
 }
 
 export interface CloudStatus {
+  /** Saved choice; takes effect after a restart when it differs from runningMode. */
   storageMode: 'local' | 'cloud';
+  /** Mode this engine process started in. */
+  runningMode?: 'local' | 'cloud';
+  /** Non-null when a restart is needed to apply the saved storage mode. */
+  pendingMode?: 'local' | 'cloud' | null;
   configured: boolean;
   ownerEmail: string | null;
   message: string | null;

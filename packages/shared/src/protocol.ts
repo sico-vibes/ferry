@@ -9,6 +9,7 @@ export const DomainErrorKindSchema = z.enum([
   'conflict',
   'permission_denied',
   'unavailable',
+  'gateway_not_running',
   'not_implemented',
   'domain_error',
   'internal',

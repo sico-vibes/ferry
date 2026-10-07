@@ -898,7 +898,12 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
             </div>
           )}
           {streamingText !== null && streamingPartIsInMessage && <StreamingCursor />}
-          {message.requestedModelRef && message.requestedModelRef !== message.modelRef ? (
+          {message.via?.kind === 'gateway' ? (
+            <p className="mt-2 text-meta text-text-3">
+              via Gateway key {message.via.keyName}
+              {modelName ? ` · served ${modelName}` : ''}
+            </p>
+          ) : message.requestedModelRef && message.requestedModelRef !== message.modelRef ? (
             <p className="mt-2 text-meta text-text-3">
               Requested {requestedModelName ?? 'Auto'} · served {modelName}
             </p>

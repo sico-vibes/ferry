@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createRpcFerryClient } from '@ferry/client';
 import { createCoreHost, createMemoryTransportPair } from '../src/index.js';
-import { newId } from '@ferry/shared';
+import { ModelRefSchema, newId } from '@ferry/shared';
 import type { Message, Session } from '@ferry/shared';
 import {
   cancelAndSettle,
@@ -14,6 +14,7 @@ import {
   toolTurn,
   waitFor,
 } from './qa-w3-harness.js';
+import { getGatewayController } from '../src/gateway.js';
 
 describe('QA W3 sessions: run lifecycle and races', () => {
   it('persists picker model selection as manual and Auto selection as unpinned', async () => {
@@ -43,6 +44,88 @@ describe('QA W3 sessions: run lifecycle and races', () => {
         pinnedModelRef: null,
         modelRef: servedModel.ref,
       });
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
+
+  it('runs profile and no-profile sessions through a Gateway key and records Gateway attribution', async () => {
+    const h = await startHarness();
+    try {
+      await h.rpc.gateway.setSettings({ enabled: true, port: 0, allowLan: false });
+      const profileKey = await h.rpc.gateway.createKey({
+        name: 'Profile key',
+        profile: 'auto-free',
+      });
+      const noProfileKey = await h.rpc.gateway.createKey({
+        name: 'Picked model key',
+        profile: 'none',
+      });
+      const pickedModel = h.services.models.list('openrouter').find((model) => model.toolCalling);
+      if (!pickedModel) throw new Error('OpenRouter fixture has no tool-capable model');
+      await h.rpc.gateway.updateKey({
+        id: noProfileKey.key.id,
+        patch: { allowedModels: [pickedModel.ref] },
+      });
+      const profileSession = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      await h.rpc.models.select(
+        profileSession.id,
+        ModelRefSchema.parse(`gateway/${profileKey.key.id}`),
+      );
+      await h.rpc.sessions.send(profileSession.id, { text: 'route through the profile key' });
+      await waitFor(async () => (await sessionStatus(h.rpc, profileSession.id)) === 'idle');
+      expect(getGatewayController(h.services)?.activeInternalTokenCount()).toBe(0);
+
+      const noProfileSession = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      await h.rpc.models.select(
+        noProfileSession.id,
+        ModelRefSchema.parse(`gateway/${noProfileKey.key.id}`),
+      );
+      await h.rpc.sessions.send(noProfileSession.id, {
+        text: 'route through the picked model key',
+      });
+      await waitFor(async () => (await sessionStatus(h.rpc, noProfileSession.id)) === 'idle');
+
+      const profileAssistant = (await h.rpc.sessions.get(profileSession.id)).messages.at(-1);
+      const noProfileAssistant = (await h.rpc.sessions.get(noProfileSession.id)).messages.at(-1);
+      expect(profileAssistant).toMatchObject({
+        role: 'assistant',
+        via: { kind: 'gateway', keyId: profileKey.key.id, keyName: 'Profile key' },
+      });
+      expect(profileAssistant?.modelRef).toBeTruthy();
+      expect(profileAssistant?.modelRef).not.toBe(`gateway/${profileKey.key.id}`);
+      expect(noProfileAssistant).toMatchObject({
+        role: 'assistant',
+        via: { kind: 'gateway', keyId: noProfileKey.key.id, keyName: 'Picked model key' },
+      });
+      const requests = await h.rpc.gateway.requests();
+      expect(requests.filter((request) => request.keyId === profileKey.key.id)).toHaveLength(1);
+      expect(requests).toContainEqual(
+        expect.objectContaining({ keyId: noProfileKey.key.id, requestedModel: pickedModel.ref }),
+      );
+      expect(h.server.requests).toHaveLength(2);
+    } finally {
+      await h.close();
+    }
+  }, 60_000);
+
+  it('returns a typed gateway_not_running RPC error before starting a selected Gateway session', async () => {
+    const h = await startHarness();
+    try {
+      const key = await h.rpc.gateway.createKey({
+        name: 'Stopped gateway key',
+        profile: 'auto-free',
+      });
+      const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+      await h.rpc.models.select(session.id, ModelRefSchema.parse(`gateway/${key.key.id}`));
+      await expect(
+        h.rpc.sessions.send(session.id, { text: 'must not call upstream' }),
+      ).rejects.toMatchObject({
+        code: -32050,
+        kind: 'gateway_not_running',
+      });
+      expect(h.server.requests).toHaveLength(0);
+      expect((await h.rpc.sessions.get(session.id)).messages).toEqual([]);
     } finally {
       await h.close();
     }

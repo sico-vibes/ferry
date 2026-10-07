@@ -21,6 +21,7 @@ import {
   newId,
   newTraceId,
   ReadOutputInputSchema,
+  ModelRefSchema,
   readOutputPage,
   isProtectedWorkspacePath,
 } from '@ferry/shared';
@@ -48,6 +49,7 @@ import { createSessionDependencies } from '../session-deps.js';
 import { oauthModelCatalog } from '@ferry/oauth';
 import { z } from 'zod';
 import { canonicalPathKey } from '@ferry/shared/node-paths';
+import { getGatewayController } from '../gateway.js';
 
 const CreateSchema = z.object({
   workspaceId: z.string().min(1),
@@ -63,6 +65,34 @@ const SendSchema = z.object({
 });
 const RenameSchema = z.string().min(1).max(160);
 const BooleanSchema = z.boolean();
+
+function selectedGatewayModel(services: FerryServices, ref: string | null): ModelInfo | undefined {
+  const match = ref ? /^gateway\/(.+)$/.exec(ref) : null;
+  if (!match) return undefined;
+  const keyId = match[1];
+  if (!keyId) throw new Error('Invalid Gateway key reference');
+  const key = getGatewayController(services)?.key(keyId);
+  if (!key) throw new Error(`Unknown or revoked Gateway key: ${keyId}`);
+  return {
+    ref: ref as ModelInfo['ref'],
+    providerId: 'gateway' as ModelInfo['providerId'],
+    name: key.name,
+    tier: 'T1',
+    contextWindow: 128_000,
+    maxOutput: 8_192,
+    toolCalling: true,
+    reasoning: false,
+    free: false,
+    priceInPerM: null,
+    priceOutPerM: null,
+    gateway: {
+      keyId: key.id,
+      keyName: key.name,
+      modelName:
+        key.profile === 'none' ? (key.allowedModels[0] ?? 'ferry/auto') : `ferry/${key.profile}`,
+    },
+  };
+}
 const noModelMessage = 'No available model — add a provider key or check Explore → Providers';
 const defaultStepTimeoutMs = 120_000;
 const PaidCapsSchema = z.object({
@@ -356,6 +386,13 @@ export function register(host: CoreHost, services: FerryServices): void {
     send(rawId: unknown, rawInput: unknown) {
       const session = requireSession(rawId);
       const { text, maxSteps, verbose, routingMode, resume } = SendSchema.parse(rawInput);
+      const gatewayModel = selectedGatewayModel(services, session.pinnedModelRef);
+      if (gatewayModel && !getGatewayController(services)?.status.running)
+        throw rpcDomainError(
+          -32050,
+          'gateway_not_running',
+          'Start the local Gateway before sending through this key.',
+        );
       if (controllers.has(session.id) || shuttingDown)
         throw rpcDomainError(-32010, 'conflict', 'Session is already running', {
           sessionId: session.id,
@@ -418,6 +455,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       let timedOut = false;
       let backgroundFailed = false;
       let mcpManager: ReturnType<typeof createMcpManager> | undefined;
+      let revokeGatewayTokens: () => void = () => undefined;
       const watchdog = setTimeout(() => {
         timedOut = true;
         controller.abort(new Error(`Preparing the workspace took too long: ${preparingStep}`));
@@ -492,6 +530,7 @@ export function register(host: CoreHost, services: FerryServices): void {
               (id) => services.providers.get(id),
               (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
             );
+            if (gatewayModel) availableModels.push(gatewayModel);
             const preflightCapacity = preflight.capacity();
             const verifiedModelRefs = preflightCapacity.providers.flatMap((provider) =>
               provider.modelsVerifiedAt && provider.availableModels
@@ -566,7 +605,10 @@ export function register(host: CoreHost, services: FerryServices): void {
                   (!chain.length || isStrictFallbackNameEligible(model, verifiedModelRefs)),
               ),
             });
-            const hasAvailableModel = chainResult.models.length > 0 || routingCandidates.length > 0;
+            const hasAvailableModel =
+              Boolean(gatewayModel) ||
+              chainResult.models.length > 0 ||
+              routingCandidates.length > 0;
             if (verbose) {
               const explainCandidates = scoreModels(routingInput);
               const selectedRef = chainResult.hit?.modelRef ?? explainCandidates[0]?.ref;
@@ -677,11 +719,13 @@ export function register(host: CoreHost, services: FerryServices): void {
               } else host.emit('toast', { kind: event.tone, title: event.message, body: null });
             };
             const runtime = createSessionDependencies(services, emitAgentEvent, traceContext);
+            revokeGatewayTokens = runtime.revokeGatewayTokens;
             const sessionCatalogModels = [
               ...(services.env.NODE_ENV === 'test'
                 ? services.catalog.models
                 : configuredProviders.flatMap(({ provider: id }) => services.models.list(id))),
               ...configuredOauth,
+              ...(gatewayModel ? [gatewayModel] : []),
             ];
             const sessionCatalog = {
               ...services.catalog,
@@ -898,6 +942,7 @@ export function register(host: CoreHost, services: FerryServices): void {
               ],
               generator: (req) => runtime.gateway.streamStep(req, req.signal),
               authorizePaidCall: async (candidate, estimate, signal) => {
+                if (candidate.providerId === 'gateway') return { allowed: true };
                 const providerRecord = preflightCapacity.providers.find(
                   (item) => item.id === candidate.providerId,
                 );
@@ -1393,8 +1438,34 @@ export function register(host: CoreHost, services: FerryServices): void {
               signal: controller.signal,
               resume: resume === true,
             });
+            if (gatewayModel) {
+              const latestAssistant = [...services.messages.list()]
+                .reverse()
+                .find(
+                  (message) => message.sessionId === session.id && message.role === 'assistant',
+                );
+              const gatewayMetadata = gatewayModel.gateway;
+              if (latestAssistant && gatewayMetadata) {
+                const servedModel = runtime.gatewayServedModel();
+                const updatedMessage = MessageSchema.parse({
+                  ...latestAssistant,
+                  ...(servedModel ? { modelRef: ModelRefSchema.parse(servedModel) } : {}),
+                  via: {
+                    kind: 'gateway',
+                    keyId: gatewayMetadata.keyId,
+                    keyName: gatewayMetadata.keyName,
+                  },
+                });
+                services.messages.put(updatedMessage);
+                host.emit('session.message', { sessionId: session.id, message: updatedMessage });
+              }
+            }
           } catch (error) {
             backgroundFailed = !controller.signal.aborted;
+            const typedErrorKind =
+              typeof error === 'object' && error !== null && 'kind' in error
+                ? error.kind
+                : undefined;
             services.logger.error(
               { error: compactAgentError(error), sessionId: session.id },
               'Agent session failed',
@@ -1408,7 +1479,8 @@ export function register(host: CoreHost, services: FerryServices): void {
                     type: 'error',
                     id: PartIdSchema.parse(newId('part')),
                     message: error instanceof Error ? error.message : 'The agent run failed',
-                    kind: 'internal',
+                    kind:
+                      typedErrorKind === 'gateway_not_running' ? 'gateway_not_running' : 'internal',
                   },
                 ],
                 null,
@@ -1421,6 +1493,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             }
           } finally {
             clearTimeout(watchdog);
+            revokeGatewayTokens();
             await mcpManager?.dispose().catch((error: unknown) => {
               services.logger.warn({ err: error, sessionId: session.id }, 'MCP disposal failed');
             });

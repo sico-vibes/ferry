@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { StorageChoice } from './OnboardingStorageChoice';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FolderOpen } from 'lucide-react';
@@ -216,13 +217,11 @@ export function OnboardingCanvas() {
               </div>
               <h1>Code with Ferry.</h1>
               <p>Connect a provider, choose a project, and start your first session.</p>
-              <UiV2.Button
-                onClick={() => {
+              <StorageChoice
+                onContinue={() => {
                   setStep(1);
                 }}
-              >
-                Continue
-              </UiV2.Button>
+              />
             </div>
           )}
           {step === 1 && (

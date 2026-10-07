@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { Bell, Check, ChevronDown, Search, X } from 'lucide-react';
+import { Bell, Check, ChevronDown, Network, Search, X } from 'lucide-react';
 import { Popover as PopoverPrimitive } from 'radix-ui';
 import { Dialog, FerryMark, ProviderLogo, ShowMoreList, Skeleton, TagBadge, UiV2 } from '@ferry/ui';
 import { DIRECT_PROFILE_ID } from '@ferry/shared';
@@ -518,6 +518,21 @@ export function ComposerModelChip({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
+  const { data: gatewayKeys = [] } = useQuery({
+    queryKey: ['gateway-keys'],
+    queryFn: () => client.gateway.listKeys(),
+    enabled: open || Boolean(modelRef?.startsWith('gateway/')),
+  });
+  const { data: gatewaySettings } = useQuery({
+    queryKey: ['gateway-settings'],
+    queryFn: () => client.gateway.settings(),
+    enabled: open,
+  });
+  const usableGatewayKeys = gatewayKeys.filter((key) => key.revokedAt === null);
+  const gatewayRunning = gatewaySettings?.status.running ?? false;
+  const selectedGatewayKey = modelRef?.startsWith('gateway/')
+    ? gatewayKeys.find((key) => `gateway/${key.id}` === modelRef)
+    : undefined;
   const candidateSnapshot = useRef(candidates);
   const wasOpen = useRef(false);
   if (open && !wasOpen.current) candidateSnapshot.current = candidates;
@@ -561,11 +576,13 @@ export function ComposerModelChip({
   const pinnedRefTail = modelRef?.split('/').at(-1);
   const pinnedName =
     pinnedModel?.name ?? (modelName !== '' ? modelName : (pinnedRefTail ?? 'Choose a model'));
-  const chipLabel = pinnedUnavailable
-    ? `Pinned: ${pinnedName} (unavailable) · now ${modelName}`
-    : mode === 'auto'
-      ? `Auto · ${autoModel}`
-      : pinnedName;
+  const chipLabel = selectedGatewayKey
+    ? `Gateway · ${selectedGatewayKey.name}`
+    : pinnedUnavailable
+      ? `Pinned: ${pinnedName} (unavailable) · now ${modelName}`
+      : mode === 'auto'
+        ? `Auto · ${autoModel}`
+        : pinnedName;
   const configuredProviderIds = new Set(
     providers
       .filter(
@@ -660,6 +677,8 @@ export function ComposerModelChip({
                 <span className="v2-chip-auto">Auto</span>
                 {autoModel}
               </>
+            ) : selectedGatewayKey ? (
+              chipLabel
             ) : (
               pinnedName
             )}
@@ -780,6 +799,57 @@ export function ComposerModelChip({
                     ) : null}
                   </ModelCommand.Item>
                 </ModelCommand.Group>
+                {usableGatewayKeys.length ? (
+                  <ModelCommand.Group
+                    heading={
+                      <span className="model-group-heading">
+                        <Network aria-hidden="true" size={14} />
+                        Gateway keys
+                        {gatewaySettings && !gatewayRunning ? (
+                          <button
+                            className="model-picker-filter ml-auto"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void client.gateway
+                                .setSettings({
+                                  enabled: true,
+                                  port: gatewaySettings.port,
+                                  allowLan: gatewaySettings.allowLan,
+                                })
+                                .then(() =>
+                                  cache.invalidateQueries({ queryKey: ['gateway-settings'] }),
+                                );
+                            }}
+                          >
+                            Gateway off · Start
+                          </button>
+                        ) : null}
+                      </span>
+                    }
+                  >
+                    {usableGatewayKeys.map((key) => (
+                      <ModelCommand.Item
+                        className="model-candidate"
+                        key={key.id}
+                        value={`gateway ${key.name} ${key.id}`}
+                        onSelect={() => void select(`gateway/${key.id}` as ModelRef)}
+                        onClick={() => void select(`gateway/${key.id}` as ModelRef)}
+                      >
+                        <Network aria-hidden="true" className="model-row-logo" size={16} />
+                        <strong>{key.name}</strong>
+                        <span className="model-row-meta">
+                          {key.profile === 'none'
+                            ? `${String(key.allowedModels.length)} picked models`
+                            : `profile ${key.profile}`}
+                        </span>
+                        {modelRef === `gateway/${key.id}` ? (
+                          <Check aria-hidden="true" className="model-row-check" size={14} />
+                        ) : null}
+                      </ModelCommand.Item>
+                    ))}
+                  </ModelCommand.Group>
+                ) : null}
                 {grouped.map((providerId) => {
                   const provider = providerById.get(providerId);
                   const providerName = provider?.name ?? providerId;

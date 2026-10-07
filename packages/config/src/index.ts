@@ -111,6 +111,8 @@ export function migrateSettings(version: number, data: unknown): unknown {
       current = {
         ...DEFAULT_SETTINGS,
         ...source,
+        cloudOnboardingChoice:
+          source.cloudOnboardingChoice ?? (source.onboardingComplete ? 'local' : null),
         optimizers: { ...DEFAULT_SETTINGS.optimizers, ...source.optimizers },
         developer: { ...DEFAULT_SETTINGS.developer, ...source.developer },
       };

@@ -181,7 +181,7 @@ describe('Library, settings, and onboarding screens', () => {
     await client.settings.update({ onboardingComplete: false });
     localStorage.removeItem('ferry.onboardingStep');
     await renderRoute('onboarding', client);
-    await userEvent.click(await screen.findByRole('button', { name: /^Continue$/ }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue on this device' }));
     await userEvent.click(screen.getByText('Unavailable'));
     expect(screen.getByText('Kiro')).toBeTruthy();
     expect(screen.getByText('The free API was retired on July 30, 2026.')).toBeTruthy();

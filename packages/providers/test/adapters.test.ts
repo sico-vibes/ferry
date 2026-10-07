@@ -146,6 +146,24 @@ describe('provider adapters', () => {
     expect(fake.requests[0]?.body).toMatchObject({ model: 'nvidia/nemotron-3-super-120b' });
   });
 
+  it('sends Gateway internal tokens only in the internal header and uses the configured route model', async () => {
+    const fake = await new FakeOpenAIServer().start();
+    servers.push(fake);
+    const model = createLanguageModel(ModelRefSchema.parse('gateway/key-test'), {
+      apiKey: 'internal-token-must-not-be-a-bearer-key',
+      providerId: 'gateway',
+      modelName: 'ferry/auto-free',
+      baseUrl: `${fake.baseUrl}/v1`,
+      headers: { 'x-ferry-internal-token': 'internal-token-must-not-be-a-bearer-key' },
+    });
+    await streamText({ model, prompt: 'hello' }).text;
+    expect(fake.requests[0]?.body).toMatchObject({ model: 'ferry/auto-free' });
+    expect(fake.requests[0]?.headers['x-ferry-internal-token']).toBe(
+      'internal-token-must-not-be-a-bearer-key',
+    );
+    expect(fake.requests[0]?.headers.authorization).toBeUndefined();
+  }, 30_000);
+
   it('uses a configured Gemini base URL for API requests', async () => {
     let requestedUrl = '';
     const model = createLanguageModel(ModelRefSchema.parse('gemini/gemini-2.5-flash'), {

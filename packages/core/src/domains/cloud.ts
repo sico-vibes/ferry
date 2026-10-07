@@ -21,9 +21,10 @@ export function register(host: CoreHost, services: FerryServices): void {
         throw new Error('Restart Ferry in configured cloud mode to sign in.');
       try {
         const result = await services.cloud.auth.signInWithPassword(email, password);
+        await services.cloud.sync?.hydrate();
         services.emitAppEvent('auth.login', { userId: result.userId });
         await publish();
-        return result;
+        return await services.cloud.status();
       } catch (error) {
         services.emitAppEvent('auth.login_failed', {}, 'warn');
         throw error;

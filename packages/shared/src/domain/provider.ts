@@ -155,6 +155,7 @@ export const ModelInfoSchema = z.object({
   knowledgeCutoff: z.string().optional(),
   openWeights: z.boolean().optional(),
   inputModalities: z.array(z.string()).optional(),
+  gateway: z.object({ keyId: z.string(), keyName: z.string(), modelName: z.string() }).optional(),
 });
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 export const ModelCandidateSchema = z.object({

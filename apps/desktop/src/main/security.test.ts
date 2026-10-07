@@ -59,7 +59,7 @@ describe('Electron security boundary', () => {
   });
 
   it('guards all IPC handlers and exposes only named preload capabilities', () => {
-    expect(mainSource.match(/ipcMain\.handle\(/g)).toHaveLength(13);
+    expect(mainSource.match(/ipcMain\.handle\(/g)).toHaveLength(14);
     expect(mainSource.match(/ipcMain\.on\(/g)).toHaveLength(2);
     expect(mainSource).toContain('isTrustedSender(event)');
     expect(mainSource).toContain('event.sender === mainWindow.webContents');
@@ -80,6 +80,10 @@ describe('Electron security boundary', () => {
     expect(mainSource).toContain("ipcMain.handle('ferry:app-info'");
     expect(mainSource).toMatch(
       /ipcMain\.handle\('ferry:app-info',[\s\S]*?if \(!isTrustedSender\(event\)\) throw new Error\('Untrusted IPC sender'\);[\s\S]*?EmptyIpcArgsSchema\.parse\(args\);/,
+    );
+    expect(mainSource).toContain("ipcMain.handle('ferry:relaunch'");
+    expect(mainSource).toMatch(
+      /ipcMain\.handle\('ferry:relaunch',[\s\S]*?if \(!isTrustedSender\(event\)\) throw new Error\('Untrusted IPC sender'\);[\s\S]*?EmptyIpcArgsSchema\.parse\(args\);/,
     );
     expect(mainSource).toMatch(
       /ipcMain\.handle\('ferry:engine-status',[\s\S]*?if \(!isTrustedSender\(event\)\) throw new Error\('Untrusted IPC sender'\);[\s\S]*?EmptyIpcArgsSchema\.parse\(args\);/,

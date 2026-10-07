@@ -68,6 +68,7 @@ let restartCount = 0;
 let coreRestartTimer: NodeJS.Timeout | undefined;
 let shuttingDown = false;
 let shutdownComplete = false;
+let relaunchAfterShutdown = false;
 let updateInstallStarted = false;
 interface PendingCoreConnector {
   sender: Electron.WebContents;
@@ -428,6 +429,13 @@ ipcMain.handle('ferry:app-info', (event, ...args: unknown[]) => {
   return { version: app.getVersion(), dataDir: app.getPath('userData') };
 });
 
+ipcMain.handle('ferry:relaunch', (event, ...args: unknown[]) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  EmptyIpcArgsSchema.parse(args);
+  relaunchAfterShutdown = true;
+  app.quit();
+});
+
 ipcMain.handle('ferry:reveal-data-folder', (event, rawPath: unknown) => {
   if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
   const path = OpenFolderResultSchema.parse(rawPath);
@@ -677,7 +685,11 @@ app.on('before-quit', (event) => {
     coreProcess = null;
     shutdownComplete = true;
     if (updateInstallStarted) updateController.install();
-    else app.quit();
+    else if (relaunchAfterShutdown) {
+      relaunchAfterShutdown = false;
+      app.relaunch();
+      app.quit();
+    } else app.quit();
   });
   child.postMessage({ type: 'ferry:shutdown' });
 });

@@ -50,6 +50,8 @@ export interface ModelFactoryOptions {
   fetch?: typeof globalThis.fetch;
   headers?: Record<string, string>;
   sessionId?: string;
+  modelName?: string;
+  providerId?: string;
 }
 
 /** Combine provider catalog defaults with user settings, with user fields taking precedence. */
@@ -196,12 +198,21 @@ function openCodeHeaders(opts: ModelFactoryOptions): Record<string, string> {
 }
 
 export function createLanguageModel(ref: ModelRef, opts: ModelFactoryOptions): LanguageModel {
-  const providerId = providerFromRef(ref);
-  const modelId = ref.slice(providerId.length + 1);
+  const providerId = opts.providerId ?? providerFromRef(ref);
+  const modelId = opts.modelName ?? ref.slice(ref.indexOf('/') + 1);
   const fetchOptions = opts.fetch ? { fetch: opts.fetch } : {};
   const headers = { ...opts.headers };
 
   switch (providerId) {
+    case 'gateway':
+      if (!opts.baseUrl) throw new Error('Gateway provider requires a local base URL');
+      return createCompatible(
+        'ferry-gateway',
+        modelId,
+        { ...opts, apiKey: '' },
+        opts.baseUrl,
+        headers,
+      );
     case 'gemini':
       return createCompatible(
         providerId,

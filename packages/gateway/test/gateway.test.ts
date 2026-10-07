@@ -176,6 +176,39 @@ describe('Ferry gateway', () => {
     expect(authenticateGatewayKey(created.secret, entries)).toBeUndefined();
   });
 
+  it('accepts ephemeral internal tokens only from loopback and rejects invalid or expired tokens', async () => {
+    const token = 'ephemeral-test-token';
+    const grants = new Map([[token, { keyId: created.key.id, expiresAt: Date.now() + 30_000 }]]);
+    const handle = await startGateway({ runtime, port: 0, internalTokens: grants });
+    stop = () => handle.close();
+    const url = `http://127.0.0.1:${String(handle.port)}`;
+    const body = JSON.stringify({
+      model: 'ferry/auto-free',
+      messages: [{ role: 'user', content: 'Hi' }],
+    });
+    const accepted = await fetch(`${url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'x-ferry-internal-token': token, 'content-type': 'application/json' },
+      body,
+    });
+    expect(accepted.status).toBe(200);
+    const wrong = await fetch(`${url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'x-ferry-internal-token': 'wrong', 'content-type': 'application/json' },
+      body,
+    });
+    expect(wrong.status).toBe(401);
+    const expiredToken = 'expired-test-token';
+    grants.set(expiredToken, { keyId: created.key.id, expiresAt: Date.now() - 1 });
+    const expired = await fetch(`${url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'x-ferry-internal-token': expiredToken, 'content-type': 'application/json' },
+      body,
+    });
+    expect(expired.status).toBe(401);
+    expect(authenticateGatewayKey(token, entries)).toBeUndefined();
+  }, 30_000);
+
   it('reports the fallback model in headers and final metadata while echoing the requested model', async () => {
     const url = await server();
     runtime.complete = (input) => {

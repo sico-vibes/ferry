@@ -7,6 +7,9 @@ import {
   ChevronDown,
   ChevronUp,
   CircleHelp,
+  Cloud,
+  LogIn,
+  LogOut,
   History,
   Info,
   Keyboard,
@@ -30,6 +33,7 @@ import { useToasts } from '../state/toasts';
 import type { SessionId, SessionStatus } from '@ferry/shared';
 import { useDisplayName } from './useDisplayName';
 import { ConfirmDialog } from './ConfirmDialog';
+import { useCloudStatus } from './CloudAccount';
 
 const sessionStatusLabels: Partial<Record<SessionStatus, string>> = {
   running: 'Running',
@@ -62,6 +66,9 @@ const {
 
 export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
   const client = useFerryClient();
+  const { data: cloud } = useCloudStatus();
+  const cloudSignedIn = cloud?.auth.signedIn === true;
+  const cloudRunning = (cloud?.runningMode ?? cloud?.storageMode) === 'cloud';
   const cache = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -291,7 +298,13 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
                   <>
                     <span className="v2-user-labels">
                       <span className="v2-user-name">{displayName ?? 'Account'}</span>
-                      <span className="v2-user-tier">Free plan</span>
+                      <span className="v2-user-tier">
+                        {cloudSignedIn
+                          ? 'Ferry Cloud'
+                          : cloudRunning
+                            ? 'Cloud · signed out'
+                            : 'This device'}
+                      </span>
                     </span>
                     <ChevronDown aria-hidden="true" />
                   </>
@@ -304,9 +317,34 @@ export function V2Sidebar({ onNewChat }: { onNewChat: () => void }) {
               className="v2-user-menu"
             >
               <DropdownMenuLabel className="v2-user-account">
-                {window.ferryHost?.displayName ?? displayName ?? 'Local account'}
+                {cloudSignedIn
+                  ? (cloud.auth.email ?? 'Ferry Cloud')
+                  : (window.ferryHost?.displayName ?? displayName ?? 'Local account')}
+                <span className="v2-user-account-detail">
+                  {cloudSignedIn
+                    ? cloud.sync.lastError
+                      ? 'Sync error, open Storage & Cloud'
+                      : `${String(cloud.sync.pending)} waiting to sync`
+                    : cloudRunning
+                      ? 'Cloud sync paused until you sign in'
+                      : 'Data stays on this device'}
+                </span>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() => {
+                  useUI.getState().openSettings('Storage & Cloud');
+                }}
+              >
+                {cloudRunning && !cloudSignedIn ? <LogIn /> : <Cloud />}
+                {cloudRunning && !cloudSignedIn ? 'Sign in to Ferry Cloud' : 'Storage & Cloud'}
+              </DropdownMenuItem>
+              {cloudSignedIn ? (
+                <DropdownMenuItem onSelect={() => void client.cloud.signOut()}>
+                  <LogOut />
+                  Sign out of Ferry Cloud
+                </DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem
                 onSelect={() => {
                   useUI.getState().openSettings();
