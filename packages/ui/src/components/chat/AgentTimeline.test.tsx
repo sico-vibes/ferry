@@ -60,10 +60,32 @@ describe('AgentTimeline', () => {
     );
     const toggle = screen.getByRole('button', { name: /Worked for|Working/ });
     assert.equal(toggle.getAttribute('aria-expanded'), 'false');
-    assert.equal(screen.queryByText('28 chars · ~7 tokens'), null);
+    assert.equal(screen.queryByText('Thought'), null);
     fireEvent.click(toggle);
     assert.equal(toggle.getAttribute('aria-expanded'), 'true');
-    assert.ok(screen.getByText('28 chars · ~7 tokens'));
+    assert.ok(screen.getByText('Thought'));
+  });
+
+  it('sums usage into one row with the context meter', () => {
+    const usage = (id: string, inputTokens: number, outputTokens: number): AgentEvent => ({
+      id,
+      type: 'usage',
+      timestamp: '2026-09-30T10:00:01.000Z',
+      inputTokens,
+      outputTokens,
+    });
+    render(
+      <AgentTimeline
+        events={[usage('u1', 1_000, 50), usage('u2', 1_108, 93)]}
+        contextWindow={128_000}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Worked for/ }));
+    expect(screen.getByText('2.3k tokens')).toBeTruthy();
+    expect(screen.getByText('in 2,108')).toBeTruthy();
+    expect(screen.getByText('out 143')).toBeTruthy();
+    // Context = the last step's prompt and reply: 1,201 of 128k is under 1%, shown as 1%.
+    expect(screen.getByText('1% of 128k')).toBeTruthy();
   });
 
   it('hides tool rows, thinking, and usage until the activity disclosure is expanded', () => {
@@ -88,13 +110,13 @@ describe('AgentTimeline', () => {
     render(<AgentTimeline events={events} />);
     expect(screen.queryByText(/read file calls/)).toBeNull();
     expect(screen.queryByText(/Private reasoning details/)).toBeNull();
-    expect(screen.queryByText(/Step usage/)).toBeNull();
+    expect(screen.queryByText(/tokens$/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Worked for/ }));
     expect(screen.getByText(/3 read file calls/)).toBeTruthy();
     fireEvent.click(screen.getByText(/3 read file calls/));
     expect(screen.getAllByText('read file')).toHaveLength(3);
     expect(screen.getByText('Private reasoning details')).toBeTruthy();
-    expect(screen.getByText(/Step usage/)).toBeTruthy();
+    expect(screen.getByText('10 tokens')).toBeTruthy();
   });
 
   it('shows the active command name in the collapsed running header', () => {

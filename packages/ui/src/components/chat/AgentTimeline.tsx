@@ -69,16 +69,110 @@ export function buildTimelineLanes(events: readonly AgentEvent[]): {
   return { model, tools };
 }
 
-function countTokens(text: string): number {
-  return text.trim() ? Math.ceil(text.trim().length / 4) : 0;
-}
 function prettyTool(tool: string): string {
   return tool.replace(/^mcp__/, '').replaceAll('_', ' ');
 }
+function compactTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+  return String(value);
+}
+
+const usageSegments = [
+  { key: 'input', label: 'in', color: 'var(--ring)' },
+  { key: 'output', label: 'out', color: 'var(--success)' },
+  { key: 'reasoning', label: 'reasoning', color: 'var(--warning)' },
+] as const;
+
+/** One row for the whole reply: token split as a bar, total, and how full the context window is. */
+export function UsageSummary({
+  events,
+  contextWindow,
+}: {
+  events: readonly AgentEvent[];
+  contextWindow?: number | undefined;
+}) {
+  const usage = events.filter(
+    (event): event is Extract<AgentEvent, { type: 'usage' }> => event.type === 'usage',
+  );
+  if (!usage.length) return null;
+  const totals = {
+    input: usage.reduce((sum, event) => sum + (event.inputTokens ?? 0), 0),
+    output: usage.reduce((sum, event) => sum + (event.outputTokens ?? 0), 0),
+    reasoning: usage.reduce((sum, event) => sum + (event.reasoningTokens ?? 0), 0),
+  };
+  const total = totals.input + totals.output + totals.reasoning;
+  if (!total) return null;
+  // The last step's prompt is what the model is currently holding in its context window.
+  const last = usage.at(-1);
+  const held = (last?.inputTokens ?? 0) + (last?.outputTokens ?? 0);
+  const contextShare =
+    contextWindow && contextWindow > 0 ? Math.min(1, held / contextWindow) : undefined;
+  const exact = usageSegments
+    .filter((segment) => totals[segment.key] > 0)
+    .map((segment) => `${totals[segment.key].toLocaleString()} ${segment.label}`)
+    .join(' · ');
+  return (
+    <div className="space-y-1.5" aria-label={`Token usage: ${exact}`}>
+      <div className="flex items-center gap-3">
+        <div
+          className="flex h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted"
+          title={exact}
+        >
+          {usageSegments.map((segment) =>
+            totals[segment.key] > 0 ? (
+              <span
+                key={segment.key}
+                className="h-full"
+                style={{
+                  width: `${String((totals[segment.key] / total) * 100)}%`,
+                  background: segment.color,
+                }}
+              />
+            ) : null,
+          )}
+        </div>
+        <span className="shrink-0 text-meta tabular-nums text-text-2">
+          {compactTokens(total)} tokens
+        </span>
+        {contextShare !== undefined && contextWindow ? (
+          <span
+            className="flex shrink-0 items-center gap-1.5 text-meta tabular-nums text-text-3"
+            title={`${held.toLocaleString()} of ${contextWindow.toLocaleString()} context tokens`}
+          >
+            <span
+              aria-hidden="true"
+              className="inline-block size-3 rounded-full"
+              style={{
+                background: `conic-gradient(var(--ring) ${String(contextShare * 360)}deg, var(--muted) 0deg)`,
+              }}
+            />
+            {`${String(Math.max(contextShare > 0 ? 1 : 0, Math.round(contextShare * 100)))}% of ${compactTokens(contextWindow)}`}
+          </span>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-meta tabular-nums text-text-3">
+        {usageSegments.map((segment) =>
+          totals[segment.key] > 0 ? (
+            <span key={segment.key} className="inline-flex items-center gap-1.5">
+              <span
+                aria-hidden="true"
+                className="inline-block size-2 rounded-sm"
+                style={{ background: segment.color }}
+              />
+              {segment.label} {totals[segment.key].toLocaleString()}
+            </span>
+          ) : null,
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ThinkingEvent({ event }: { event: Extract<AgentEvent, { type: 'thinking' }> }) {
   const [open, setOpen] = useState(false);
   const summary = event.content.replace(/\s+/g, ' ').trim();
-  const length = event.content.length;
+  const seconds = event.durationMs ? Math.max(1, Math.round(event.durationMs / 1000)) : null;
   return (
     <section className="rounded-xl border border-border-hair bg-card">
       <button
@@ -94,12 +188,12 @@ function ThinkingEvent({ event }: { event: Extract<AgentEvent, { type: 'thinking
         ) : (
           <ChevronRight aria-hidden="true" size={14} />
         )}
-        <span className="min-w-0 flex-1 truncate text-label text-text-2">
-          {summary || 'Thinking'}
+        <span className="shrink-0 text-label font-medium text-text-2">
+          {seconds ? `Thought for ${String(seconds)}s` : 'Thought'}
         </span>
-        <span className="shrink-0 text-meta tabular-nums text-text-3">
-          {length} chars · ~{countTokens(event.content)} tokens
-        </span>
+        {summary ? (
+          <span className="min-w-0 flex-1 truncate text-label text-text-3">{summary}</span>
+        ) : null}
       </button>
       {open && (
         <p className="whitespace-pre-wrap px-3 pb-3 text-label leading-5 text-text-2">
@@ -208,10 +302,13 @@ export function AgentTimeline({
   isRunning,
   runningToolTitle,
   currentStep: currentStepOverride,
+  contextWindow,
 }: {
   events: readonly AgentEvent[];
   onShowFull?: (handle: string) => void;
   modelName?: string;
+  /** Context window of the model that answered, for the "4% of 128k" meter. */
+  contextWindow?: number | undefined;
   activity?: ReactNode;
   startedAt?: string;
   isRunning?: boolean;
@@ -326,19 +423,12 @@ export function AgentTimeline({
                 </p>
               ) : event.type === 'status' &&
                 event.id === lastStatus?.id &&
+                event.status !== 'completed' &&
+                event.status !== 'running' &&
                 event.reasoningAvailable !== false ? (
+                // A normal finish needs no line; stops, pauses and limits still say why.
                 <p className="text-meta text-text-3" key={event.id}>
                   {event.message ?? event.status}
-                </p>
-              ) : event.type === 'usage' ? (
-                <p className="text-meta tabular-nums text-text-3" key={event.id}>
-                  Step usage: {String(event.inputTokens ?? 0)} in ·{' '}
-                  {String(event.outputTokens ?? 0)} out
-                  {event.reasoningTokens
-                    ? ` · ${String(event.reasoningTokens)} reasoning`
-                    : ''}{' '}
-                  tokens
-                  {event.durationMs == null ? '' : ` · ${(event.durationMs / 1000).toFixed(1)}s`}
                 </p>
               ) : null,
             )}
@@ -355,6 +445,7 @@ export function AgentTimeline({
             />
           ))}
           {activity}
+          <UsageSummary events={events} contextWindow={contextWindow} />
         </div>
       )}
     </section>

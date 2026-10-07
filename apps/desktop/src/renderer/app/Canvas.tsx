@@ -659,6 +659,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   index,
   top,
   modelName,
+  contextWindow,
   requestedModelName,
   planSteps,
   timelineEvents,
@@ -674,6 +675,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   index: number;
   top: number;
   modelName: string;
+  contextWindow: number | undefined;
   /** Display name of the model the user asked for, when it differs from the one that answered. */
   requestedModelName?: string;
   planSteps: { label: string; status: 'done' | 'active' | 'pending' }[];
@@ -764,6 +766,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
           <AgentTimeline
             events={timelineEvents}
             modelName={modelName}
+            contextWindow={contextWindow}
             startedAt={message.createdAt}
             isRunning={isRunning}
             runningToolTitle={message.parts.reduce<string | null>(
@@ -1493,6 +1496,9 @@ export function SessionCanvas() {
                   index={item.index}
                   top={item.start}
                   modelName={shortModel(message.modelRef, models)}
+                  contextWindow={
+                    models.find((model) => model.ref === message.modelRef)?.contextWindow
+                  }
                   {...(message.requestedModelRef && message.requestedModelRef !== 'auto'
                     ? { requestedModelName: shortModel(message.requestedModelRef, models) }
                     : {})}
