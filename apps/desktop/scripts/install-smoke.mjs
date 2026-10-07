@@ -426,37 +426,48 @@ try {
     upgrade,
     `Registry after update: ${JSON.stringify(ferryRegistryRows())}; install dir ${installDirectory}`,
   );
-  const executableLiteral = safePowerShellLiteral(join(installDirectory, 'Ferry.exe'));
-  const running = () =>
-    powershell(
-      `@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq ${executableLiteral} }).Count`,
+  // Processes report long paths; the CI install dir is spelled with 8.3 short names (RUNNER~1),
+  // so match by canonical path instead of comparing strings in PowerShell.
+  const installedExecutable = canonicalPath(join(installDirectory, 'Ferry.exe'));
+  const ferryProcesses = () => {
+    const raw = powershell(
+      '@(Get-CimInstance Win32_Process -Filter "Name=\'Ferry.exe\'" | ForEach-Object { [PSCustomObject]@{ Id=$_.ProcessId; Path=$_.ExecutablePath } }) | ConvertTo-Json -Compress',
     );
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return (Array.isArray(parsed) ? parsed : [parsed]).filter(
+      (item) => typeof item.Path === 'string' && canonicalPath(item.Path) === installedExecutable,
+    );
+  };
+  const running = () => ferryProcesses().length;
   const relaunchDeadline = Date.now() + 30_000;
-  while (Number(running()) === 0 && Date.now() < relaunchDeadline)
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-  assert.ok(Number(running()) > 0, 'Updated installer did not relaunch Ferry.exe');
+  while (running() === 0 && Date.now() < relaunchDeadline)
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+  assert.ok(running() > 0, 'Updated installer did not relaunch Ferry.exe');
   record(
     'Real --updated /S --force-run changes version and relaunches Ferry in under 60 s',
     'PASS',
     `${upgradeWallTimeMs} ms; ${baseVersion} -> ${upgrade}`,
   );
   // Close the relaunched GUI before the persistence smoke creates its own isolated app process.
-  powershell(
-    `Get-Process | Where-Object { $_.Path -eq ${executableLiteral} } | ForEach-Object { $_.CloseMainWindow() | Out-Null }`,
-  );
+  const processIds = () => ferryProcesses().map((item) => Number(item.Id));
+  const ids = processIds();
+  if (ids.length)
+    powershell(
+      `Get-Process -Id ${ids.join(',')} -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }`,
+    );
   const closeDeadline = Date.now() + 10_000;
-  while (Number(running()) > 0 && Date.now() < closeDeadline)
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+  while (running() > 0 && Date.now() < closeDeadline)
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
   // The installer relaunches Ferry through the shell (no smoke environment), so closing the
   // window can hide it to the tray as designed; end it like Quit from the tray would.
-  if (Number(running()) > 0)
-    powershell(
-      `Get-Process | Where-Object { $_.Path -eq ${executableLiteral} } | Stop-Process -Force`,
-    );
+  const remaining = processIds();
+  if (remaining.length)
+    powershell(`Stop-Process -Id ${remaining.join(',')} -Force -ErrorAction SilentlyContinue`);
   const killDeadline = Date.now() + 10_000;
-  while (Number(running()) > 0 && Date.now() < killDeadline)
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-  assert.equal(Number(running()), 0, 'Relaunched app did not close');
+  while (running() > 0 && Date.now() < killDeadline)
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+  assert.equal(running(), 0, 'Relaunched app did not close');
   verifyPersistedRecords(databasePath, state);
   const installedFileCount = await countFiles(installDirectory);
   record(
