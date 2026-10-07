@@ -102,7 +102,11 @@ export function ModelsCanvas() {
       }),
   });
   const { items: models, total: modelTotal } = modelPage;
-  const { data: oauthProviders = [] } = useQuery({
+  const {
+    data: oauthProviders = [],
+    error: oauthError,
+    refetch: refetchOAuth,
+  } = useQuery({
     queryKey: ['oauth-providers'],
     queryFn: () => client.oauth.list(),
   });
@@ -399,6 +403,8 @@ export function ModelsCanvas() {
                 onLogin={requestOAuthAction}
                 onLogout={requestOAuthAction}
                 providers={oauthProviders}
+                loadError={oauthError ? oauthError.message : null}
+                onRetry={() => void refetchOAuth()}
               />
             </Section>
           </UiV2.TabsContent>

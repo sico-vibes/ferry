@@ -113,4 +113,32 @@ describe('OAuthProviderRows', () => {
     expect(screen.getByText('Anthropic Claude Pro/Max')).toBeTruthy();
     expect(screen.queryByText('OpenRouter')).toBeNull();
   });
+
+  it('says the list failed to load instead of showing an empty filter result', async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    render(
+      <OAuthProviderRows
+        onLogin={vi.fn()}
+        onLogout={vi.fn()}
+        providers={[]}
+        loadError="Cannot find module pi-ai"
+        onRetry={onRetry}
+      />,
+    );
+    expect(screen.getByRole('alert').textContent).toContain('Couldn’t load sign-ins');
+    expect(screen.queryByText(/No sign-ins match/)).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it('filters case-insensitively and names the query when nothing matches', async () => {
+    const user = userEvent.setup();
+    render(<OAuthProviderRows onLogin={vi.fn()} onLogout={vi.fn()} providers={rows} />);
+    await user.type(screen.getByRole('searchbox', { name: 'Filter OAuth logins' }), 'OPENROUTER');
+    expect(screen.getByText('OpenRouter')).toBeTruthy();
+    await user.clear(screen.getByRole('searchbox', { name: 'Filter OAuth logins' }));
+    await user.type(screen.getByRole('searchbox', { name: 'Filter OAuth logins' }), 'codx');
+    expect(screen.getByText('No sign-ins match “codx”.')).toBeTruthy();
+  });
 });

@@ -33,10 +33,15 @@ export function OAuthProviderRows({
   providers,
   onLogin,
   onLogout,
+  loadError,
+  onRetry,
 }: {
   providers: OAuthProvider[];
   onLogin: (provider: OAuthProvider, gateway?: string) => void;
   onLogout: (provider: OAuthProvider) => void;
+  /** Set when the sign-in list could not be loaded, so an empty list isn't mistaken for "no match". */
+  loadError?: string | null;
+  onRetry?: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [gateways, setGateways] = useState<Record<string, string>>({});
@@ -46,7 +51,7 @@ export function OAuthProviderRows({
       (provider) =>
         !value ||
         provider.name.toLowerCase().includes(value) ||
-        provider.id.includes(value) ||
+        provider.id.toLowerCase().includes(value) ||
         provider.models.some((model) => model.toLowerCase().includes(value)),
     );
   }, [providers, query]);
@@ -252,9 +257,23 @@ export function OAuthProviderRows({
           </details>
         );
       })}
-      {!visible.length && (
-        <p className="py-4 text-ui-meta text-muted-foreground">No OAuth providers match.</p>
-      )}
+      {loadError && !providers.length ? (
+        <div
+          className="flex items-center gap-3 py-4 text-ui-meta text-muted-foreground"
+          role="alert"
+        >
+          <span>Couldn’t load sign-ins: {loadError}</span>
+          {onRetry ? (
+            <button className="text-link hover:underline" onClick={onRetry} type="button">
+              Try again
+            </button>
+          ) : null}
+        </div>
+      ) : !visible.length ? (
+        <p className="py-4 text-ui-meta text-muted-foreground">
+          {query.trim() ? `No sign-ins match “${query.trim()}”.` : 'No sign-ins available.'}
+        </p>
+      ) : null}
     </div>
   );
 }

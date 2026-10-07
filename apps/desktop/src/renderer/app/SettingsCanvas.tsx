@@ -330,7 +330,11 @@ export function SettingsCanvas() {
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
-  const { data: oauthProviders = [] } = useQuery({
+  const {
+    data: oauthProviders = [],
+    error: oauthError,
+    refetch: refetchOAuth,
+  } = useQuery({
     queryKey: ['oauth-providers'],
     queryFn: () => client.oauth.list(),
   });
@@ -621,6 +625,8 @@ export function SettingsCanvas() {
           <Section title="Subscription logins" className="mt-4">
             <OAuthProviderRows
               providers={oauthProviders}
+              loadError={oauthError ? oauthError.message : null}
+              onRetry={() => void refetchOAuth()}
               onLogin={() => void navigate({ to: '/models' })}
               onLogout={(provider) =>
                 void client.oauth
