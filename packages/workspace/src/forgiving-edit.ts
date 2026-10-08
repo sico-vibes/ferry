@@ -90,7 +90,7 @@ export function findForgivingEditResult(text: string, search: string): Forgiving
   // diff-match-patch throws "Pattern too long" past Match_MaxBits (32) characters: locate the
   // block by its opening characters, then require the whole snippet to be similar below.
   const probe = search.slice(0, Math.max(1, matcher.Match_MaxBits || 32));
-  let location = -1;
+  let location: number;
   try {
     location = matcher.match_main(text, probe, 0);
   } catch {
@@ -177,7 +177,16 @@ function textSimilarity(left: string, right: string): number {
   return 1 - (previous[right.length] ?? 0) / Math.max(left.length, right.length, 1);
 }
 
+/** Ferry's markers for shortened tool output; they are never part of a real file. */
+const TRUNCATION_MARKER =
+  /\[(?:output truncated|Earlier tool output shortened|large tool arguments were omitted)/i;
+
 export function editRepairHint(text: string, search: string): string {
+  if (TRUNCATION_MARKER.test(search))
+    return (
+      "Edit block includes Ferry's truncation marker, which is not in the file. Read the exact lines with read_file (use a line range) and retry with that text." +
+      smallFileAdvice(text)
+    );
   const target = search.trim().split(/\r?\n/).find(Boolean) ?? search;
   const lines = text.split(/\r\n|\r|\n/);
   let closest = lines[0] ?? '';
@@ -193,8 +202,17 @@ export function editRepairHint(text: string, search: string): string {
   return (
     'Edit block could not be matched. Closest actual line (spaces shown as ·, tabs as →): ' +
     visible +
-    '. Re-read this region and retry with the current text.'
+    '. Re-read this region and retry with the current text.' +
+    smallFileAdvice(text)
   );
+}
+/** Files at or below this size are cheaper to rewrite whole than to keep patching. */
+const SMALL_FILE_BYTES = 32_000;
+function smallFileAdvice(text: string): string {
+  const bytes = Buffer.byteLength(text, 'utf8');
+  return bytes <= SMALL_FILE_BYTES
+    ? ` This file is small (${String(Math.max(1, Math.round(bytes / 1024)))} KB): if matching keeps failing, rewrite it completely with write_file.`
+    : '';
 }
 function lineSimilarity(left: string, right: string): number {
   if (!left && !right) return 1;

@@ -42,4 +42,13 @@ describe('forgiving edit matcher', () => {
       '··const·value·=·2;',
     );
   });
+  it('names a copied truncation marker and offers a rewrite for small files', () => {
+    const hint = editRepairHint(
+      'const posts = [];\n',
+      'const posts = [\n[output truncated; use recovery handle to retrieve the full output]',
+    );
+    expect(hint).toContain("Ferry's truncation marker");
+    expect(hint).toContain('rewrite it completely with write_file');
+    expect(editRepairHint('x'.repeat(40_000), 'y')).not.toContain('write_file');
+  });
 });
