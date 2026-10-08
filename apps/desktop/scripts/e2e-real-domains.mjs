@@ -162,7 +162,7 @@ function toolTurn(name, input, content = '') {
   };
 }
 
-function textTurn(text) {
+function textTurn(text, includeReasoningUsage = false) {
   return {
     chunks: [
       {
@@ -172,6 +172,23 @@ function textTurn(text) {
         model: 'fixture',
         choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
       },
+      ...(includeReasoningUsage
+        ? [
+            {
+              id: 'chatcmpl_e2e',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'fixture',
+              choices: [
+                {
+                  index: 0,
+                  delta: { reasoning: 'The user wants a short answer with a code sample. ' },
+                  finish_reason: null,
+                },
+              ],
+            },
+          ]
+        : []),
       {
         id: 'chatcmpl_e2e',
         object: 'chat.completion.chunk',
@@ -185,9 +202,48 @@ function textTurn(text) {
         created: 1,
         model: 'fixture',
         choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        ...(includeReasoningUsage
+          ? {
+              usage: {
+                prompt_tokens: 1108,
+                completion_tokens: 93,
+                completion_tokens_details: { reasoning_tokens: 58 },
+              },
+            }
+          : {}),
       },
     ],
   };
+}
+
+function assertGoldenTranscript(detail, expectedReplies) {
+  assert.equal(detail.session.status, 'idle');
+  assert.equal(detail.session.inFlight, false);
+  const assistants = detail.messages.filter((message) => message.role === 'assistant');
+  assert.equal(assistants.length, expectedReplies.length);
+  assert.deepEqual(
+    assistants.map((message) =>
+      message.parts
+        .filter((part) => part.type === 'text')
+        .map((part) => part.text)
+        .join(''),
+    ),
+    expectedReplies,
+  );
+  assert.ok(
+    !detail.messages.some((message) => message.parts.some((part) => part.type === 'error')),
+  );
+  const usage = detail.session.agentEvents.filter((event) => event.type === 'usage');
+  assert.equal(usage.length, expectedReplies.length);
+  for (const event of usage) {
+    assert.equal(event.inputTokens, 1108);
+    assert.equal(event.outputTokens, 93);
+    assert.equal(event.reasoningTokens, 58);
+  }
+  assert.equal(
+    detail.session.agentEvents.filter((event) => event.type === 'thinking').length,
+    expectedReplies.length,
+  );
 }
 
 function git(args, cwd, extraEnv = {}) {
@@ -367,7 +423,7 @@ async function startEmbeddedCore() {
         await window.ferryRpcClient.providers.setKey('openrouter', 'fixture-key');
         await window.ferryRpcClient.models.list('openrouter');
       });
-      fakeProvider.setResponses([textTurn('golden-recent-reply')]);
+      fakeProvider.setResponses([textTurn('golden-recent-reply', true)]);
       const recent = await callRendererRpc(page, 'sessions.start', [
         {
           text: 'Reply with golden-recent-reply',
@@ -394,6 +450,10 @@ async function startEmbeddedCore() {
           { timeout: 10000 },
         )
         .toBe(true);
+      assertGoldenTranscript(
+        await page.evaluate((id) => window.ferryRpcClient.sessions.get(id), recent.id),
+        ['golden-recent-reply'],
+      );
       const recentContent = fakeProvider.requests.at(-1).body.messages[0].content;
       const recentPrompt =
         typeof recentContent === 'string'
@@ -727,7 +787,10 @@ try {
           { timeout: 15_000 },
         )
         .toBe(true);
-      fakeProvider.setResponses([textTurn('golden-reply-one'), textTurn('golden-reply-two')]);
+      fakeProvider.setResponses([
+        textTurn('golden-reply-one', true),
+        textTurn('golden-reply-two', true),
+      ]);
       const modelRef = 'openrouter/cohere/north-mini-code:free';
       const session = await createSessionViaUi(
         page,
@@ -760,12 +823,16 @@ try {
               page.evaluate(
                 async ({ id, expectedReply }) => {
                   const detail = await window.ferryRpcClient.sessions.get(id);
-                  return detail.messages.some(
-                    (message) =>
-                      message.role === 'assistant' &&
-                      message.parts.some(
-                        (part) => part.type === 'text' && part.text.includes(expectedReply),
-                      ),
+                  return (
+                    detail.session.status === 'idle' &&
+                    !detail.session.inFlight &&
+                    detail.messages.some(
+                      (message) =>
+                        message.role === 'assistant' &&
+                        message.parts.some(
+                          (part) => part.type === 'text' && part.text.includes(expectedReply),
+                        ),
+                    )
                   );
                 },
                 { id: session.id, expectedReply: reply },
@@ -780,6 +847,10 @@ try {
       };
       await sendAndWait('Reply with golden-reply-one', 'golden-reply-one');
       await sendAndWait('Reply with golden-reply-two', 'golden-reply-two');
+      assertGoldenTranscript(
+        await page.evaluate((id) => window.ferryRpcClient.sessions.get(id), session.id),
+        ['golden-reply-one', 'golden-reply-two'],
+      );
 
       failureStep = 'golden-cloud';
       await page.getByRole('button', { name: 'User menu' }).click();

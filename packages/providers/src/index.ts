@@ -2,6 +2,7 @@ export * from './normalization.js';
 export * from './key-rotation.js';
 export * from './reasoning.js';
 import { reasoningTransportOptions } from './reasoning.js';
+import { normalizeOpenRouterResponse } from './openrouter-response.js';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
@@ -238,7 +239,8 @@ export function createLanguageModel(ref: ModelRef, opts: ModelFactoryOptions): L
         apiKey: opts.apiKey,
         headers,
         ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
-        ...fetchOptions,
+        fetch: async (input, init) =>
+          normalizeOpenRouterResponse(await (opts.fetch ?? globalThis.fetch)(input, init)),
       })(modelId);
     }
     case 'opencode-go': {

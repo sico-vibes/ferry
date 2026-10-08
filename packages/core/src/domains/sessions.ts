@@ -571,6 +571,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       let preparingStep = 'routing';
       let timedOut = false;
       let backgroundFailed = false;
+      let transcriptFailureRecorded = false;
       let mcpManager: ReturnType<typeof createMcpManager> | undefined;
       let agentEventHandler: (event: AgentEvent) => void = () => undefined;
       const runtime = createSessionDependencies(
@@ -819,6 +820,7 @@ export function register(host: CoreHost, services: FerryServices): void {
                 });
               else if (event.type === 'agent.event') host.emit('agent.event', event);
               else if (event.type === 'session.part') {
+                if (event.part.type === 'error') transcriptFailureRecorded = true;
                 host.emit('session.part', event);
                 if (event.part.type === 'approval_request' && event.part.state === 'pending')
                   host.emit('approval.request', event);
@@ -1600,7 +1602,7 @@ export function register(host: CoreHost, services: FerryServices): void {
               { error: compactAgentError(error), sessionId: session.id },
               'Agent session failed',
             );
-            if (!controller.signal.aborted && !timedOut) {
+            if (!controller.signal.aborted && !timedOut && !transcriptFailureRecorded) {
               const errorMessage = store.appendMessage(
                 session.id,
                 'assistant',

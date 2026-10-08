@@ -134,6 +134,7 @@ describe('step usage and thinking timing', () => {
           modelHints: { toolProtocol: 'native' },
         });
         expect(generated.reasoningTokens).toBe(7);
+        expect(generated.finishReason).toBe('stop');
       }
       expect(bodies[0]?.reasoning_effort).toBe('high');
       expect(bodies[1]).not.toHaveProperty('reasoning_effort');

@@ -2984,6 +2984,7 @@ export function createStepGenerator(
         }),
         inputTokens: usage.inputTokens ?? 0,
         outputTokens: usage.outputTokens ?? 0,
+        finishReason: finalStep.finishReason,
       };
     };
     try {
