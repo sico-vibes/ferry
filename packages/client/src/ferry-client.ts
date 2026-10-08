@@ -155,8 +155,15 @@ export interface FerryClient {
     }): Promise<Session>;
     send(
       id: SessionId,
-      i: { text: string; maxSteps?: number; verbose?: boolean; routingMode?: 'auto_for_step' },
+      i: {
+        text: string;
+        attachments?: { name: string; text: string }[];
+        maxSteps?: number;
+        verbose?: boolean;
+        routingMode?: 'auto_for_step';
+      },
     ): Promise<void>;
+    compact(id: SessionId): Promise<Session>;
     resume(id: SessionId, options?: { retryInterruptedTool?: boolean }): Promise<void>;
     cancel(id: SessionId): Promise<void>;
     rename(id: SessionId, title: string): Promise<Session>;

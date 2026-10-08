@@ -52,6 +52,11 @@ import type { FerryServices } from '../services.js';
 import { hasUsableProviderKey } from '../services.js';
 import { preserveCatalogBillingMetadata } from '../model-billing-metadata.js';
 import { createSessionDependencies } from '../session-deps.js';
+import {
+  COMPACTION_PROMPT,
+  createContextStore,
+  saveContextSummary,
+} from '../context-compaction.js';
 import { oauthModelCatalog } from '@ferry/oauth';
 import { z } from 'zod';
 import { canonicalPathKey } from '@ferry/shared/node-paths';
@@ -69,6 +74,7 @@ const SendSchema = z.object({
   verbose: z.boolean().optional(),
   routingMode: z.enum(['auto_for_step']).optional(),
   resume: z.boolean().optional(),
+  compactContext: z.boolean().optional(),
 });
 const RenameSchema = z.string().min(1).max(160);
 const BooleanSchema = z.boolean();
@@ -158,6 +164,10 @@ export function register(host: CoreHost, services: FerryServices): void {
     messages: services.messages,
     tasks: services.tasks,
   });
+  const contextStore = createContextStore(
+    { sessions: services.sessions, messages: services.messages, tasks: services.tasks },
+    services,
+  );
   const profileList = (): Profile[] => {
     const saved = services.settings.get('profiles');
     const custom = Array.isArray(saved) ? saved.map((item) => ProfileSchema.parse(item)) : [];
@@ -474,9 +484,18 @@ export function register(host: CoreHost, services: FerryServices): void {
       host.emit('session.status', session);
       return session;
     },
+    async compact(rawId: unknown) {
+      const session = requireSession(rawId);
+      return await host.dispatch({
+        jsonrpc: '2.0',
+        id: 'compact-send',
+        method: 'sessions.send',
+        params: [session.id, { text: COMPACTION_PROMPT, maxSteps: 1, compactContext: true }],
+      });
+    },
     send(rawId: unknown, rawInput: unknown) {
       const session = requireSession(rawId);
-      const { text, attachments, maxSteps, verbose, routingMode, resume } =
+      const { text, attachments, maxSteps, verbose, routingMode, resume, compactContext } =
         SendSchema.parse(rawInput);
       const gatewayModel = selectedGatewayModel(services, session.pinnedModelRef);
       if (gatewayModel && !getGatewayController(services)?.status.running)
@@ -885,7 +904,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             mcpManager = await connectWorkspaceMcp(services, host, workspace.path);
             if (isRunAborted()) throw controller.signal.reason;
             const loop = new AgentLoop({
-              store,
+              store: contextStore,
               workspace: workspace.path,
               recent: !session.workspaceId,
               dataDir: services.paths.home,
@@ -921,6 +940,9 @@ export function register(host: CoreHost, services: FerryServices): void {
               repairToolCalls: savedToolCallRepair,
               permissionMode: effectivePermissionMode,
               ...(maxSteps === undefined ? {} : { maxSteps }),
+              ...(compactContext
+                ? { pinnedTurns: store.load(session.id)?.messages.length ?? 4 }
+                : {}),
               resilienceState: (() => {
                 const parsed = z
                   .array(ResilienceEntrySchema)
@@ -1034,7 +1056,19 @@ export function register(host: CoreHost, services: FerryServices): void {
                 adaptExtensionTools(skillManager.toolSource()),
                 adaptExtensionTools(mcpManager.toolSource()),
               ],
-              generator: (req) => runtime.gateway.streamStep(req, req.signal),
+              generator: (req) =>
+                runtime.gateway
+                  .streamStep(
+                    compactContext ? { ...req, system: COMPACTION_PROMPT, tools: [] } : req,
+                    req.signal,
+                  )
+                  .then((result) => {
+                    if (compactContext && result.toolCalls?.length)
+                      throw new Error(
+                        'Context summary attempted a tool call; context was not compacted.',
+                      );
+                    return result;
+                  }),
               authorizePaidCall: async (candidate, estimate, signal) => {
                 if (candidate.providerId === 'gateway') return { allowed: true };
                 const providerRecord = preflightCapacity.providers.find(
@@ -1554,6 +1588,8 @@ export function register(host: CoreHost, services: FerryServices): void {
                 host.emit('session.message', { sessionId: session.id, message: updatedMessage });
               }
             }
+            if (compactContext && !controller.signal.aborted)
+              saveContextSummary(store, services, session.id);
           } catch (error) {
             backgroundFailed = !controller.signal.aborted;
             const typedErrorKind =

@@ -122,6 +122,8 @@ try {
         },
       );
       child.onData((data) => (output += data));
+      // Subscribe before navigation: a fast exit must not be lost while waiting for cmd's prompt.
+      const exited = new Promise((resolveExit) => child.onExit(resolveExit));
       const waitFor = async (value, timeout = 30_000) => {
         const deadline = Date.now() + timeout;
         while (!output.includes(value) && Date.now() < deadline)
@@ -135,12 +137,35 @@ try {
       child.write('y\r');
       // First render waits for the engine to start in a fresh data folder; CI runners are slower.
       await waitFor('›', 120_000);
+      child.write('/model\r');
+      await waitFor('options · ↑/↓ navigate');
+      // Auto and No profile precede the one verified fake model.
+      child.write('\x1b[B');
+      await waitFor('› No profile');
+      child.write('\x1b[B');
+      await waitFor('› Qwen3.8 27B');
+      child.write('\r');
+      await waitFor(`Model set to openrouter/${model}`);
       child.write('hello\r');
       await waitFor('scripted reply', 60_000);
       await waitFor('bundledHighlight', 15_000);
       assert.ok(!output.includes('ERROR'), `${variant}: markdown rendering failed:\n${output}`);
       // The CLI labels each reply with the Ferry model that served it.
       await waitFor(`via openrouter/${model}`, 15_000);
+      const previousOutput = output;
+      output = '';
+      child.write('/sessions\r');
+      await waitFor('Filter: type to search');
+      assert.match(
+        output,
+        /hello/i,
+        `${variant}: sessions picker did not list the chat:\n${output}`,
+      );
+      const sessionOutput = output;
+      output = '';
+      child.write('\x1b');
+      await waitFor('Enter sends');
+      output = previousOutput + sessionOutput + output;
       child.write('\x03');
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 150));
       child.write('\x03');
@@ -161,7 +186,7 @@ ${output.slice(-1500)}`,
             ),
           10_000,
         );
-        child.onExit(({ exitCode: code }) => {
+        void exited.then(({ exitCode: code }) => {
           clearTimeout(timer);
           resolvePromise(code);
         });
@@ -183,7 +208,7 @@ ${output.slice(-1500)}`,
     }
   }
   console.log(
-    'PASS installed-style interactive CLI renders, streams a reply, labels its model, and exits on Ctrl+C twice (cmd and pwsh).',
+    'PASS installed-style interactive CLI picks a verified model with arrows, renders a code-block reply and its model, lists the chat in /sessions, and exits on Ctrl+C twice (cmd and pwsh).',
   );
 } finally {
   await fake.stop();

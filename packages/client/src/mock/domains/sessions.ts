@@ -39,6 +39,28 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
   };
   return {
     list,
+    async compact(id) {
+      await before();
+      const current = session(id);
+      if (current.status === 'running' || current.status === 'awaiting_approval')
+        throw new Error('Session is already running');
+      const summary = (state.messages.get(id) ?? [])
+        .flatMap((message) =>
+          message.parts
+            .filter((part) => part.type === 'text')
+            .map((part) => `${message.role}: ${part.text}`),
+        )
+        .join('\n');
+      const task = state.taskRecords.get(id);
+      if (task)
+        task.decisions.push({
+          text: summary || 'No conversation yet.',
+          why: 'Mock context compaction',
+          at: clock.now().toISOString(),
+        });
+      persist();
+      return structuredClone(current);
+    },
     async search(q = {}) {
       const { query: _query, ...filters } = q;
       const sessions = await list(filters);

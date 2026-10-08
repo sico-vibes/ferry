@@ -350,7 +350,10 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       return await gatewayCommand(flags.positionals.slice(1), json, client, dataDir, flags.values);
     if (!command) {
       const { interactive } = await import('./interactive.js');
-      return await interactive(client, cwd, engine);
+      return await interactive(client, cwd, engine, {
+        noProject: flags.values['no-project'] === true,
+        continue: flags.values.continue === true,
+      });
     }
     if (command === 'run') {
       if (engine === 'local') await assertLocalProvidersConfigured(client);
@@ -1175,7 +1178,8 @@ function readFlags(argv: string[]): Flags {
     const [rawKey, inline] = token.slice(2).split('=', 2);
     const key = rawKey ?? '';
     if (inline !== undefined) values[key] = inline;
-    else if (['yes-paid', 'dry-run', 'print'].includes(key)) values[key] = true;
+    else if (['yes-paid', 'dry-run', 'print', 'no-project', 'continue'].includes(key))
+      values[key] = true;
     else if (argv[i + 1] && !argv[i + 1]?.startsWith('--')) values[key] = argv[++i] ?? '';
     else if (VALUE_FLAGS.has(key)) throw new CliError(2, `Missing value for --${key}`);
     else values[key] = true;

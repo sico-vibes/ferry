@@ -31,6 +31,7 @@ export const FERRY_METHODS = [
   'sessions.create',
   'sessions.start',
   'sessions.send',
+  'sessions.compact',
   'sessions.resume',
   'sessions.cancel',
   'sessions.rename',
@@ -114,6 +115,7 @@ export const FERRY_METHOD_PARAMS_SCHEMAS: Readonly<
   Record<string, z.ZodType<unknown[]> | undefined>
 > = {
   'sessions.readOutput': z.tuple([ReadOutputInputSchema]),
+  'sessions.compact': z.tuple([SessionIdSchema]),
   'sessions.setEffort': z.tuple([SessionIdSchema, EffortSchema.nullable()]),
   'sessions.archive': z.tuple([SessionIdSchema, z.boolean()]),
   'sessions.move': z.tuple([SessionIdSchema, WorkspaceIdSchema.nullable()]),

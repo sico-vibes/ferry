@@ -10,6 +10,7 @@ export async function interactive(
   client: FerryClient,
   cwd: string,
   engine: 'local' | 'mock' = 'local',
+  options: { noProject?: boolean; continue?: boolean } = {},
 ): Promise<number> {
   const terminal = selectTerminalStreams();
   if (!terminal) {
@@ -18,11 +19,11 @@ export async function interactive(
     );
     return 2;
   }
-  const workspace = await client.workspaces.open(cwd);
+  const workspace = options.noProject ? null : await client.workspaces.open(cwd);
   const profiles = await client.profiles.list();
   const settings = await client.settings.get();
   const profile = profiles.find((item) => item.id === settings.activeProfileId) ?? profiles[0];
-  if (!workspace.trusted) {
+  if (workspace && !workspace.trusted) {
     if (workspace.riskyRoot)
       terminal.stdout.write(`Warning: ${workspace.path} is a risky workspace root.\n`);
     const prompt = createInterface({ input: terminal.stdin, output: terminal.stdout });
@@ -37,14 +38,25 @@ export async function interactive(
       terminal.dispose();
       return 0;
     }
-    await client.workspaces.trust(workspace.id);
+    Object.assign(workspace, await client.workspaces.trust(workspace.id));
   }
   terminal.stdout.write(
     `${gradient('Ferry — your coding companion')}\n${muted('Use /help for commands · Ctrl+C twice exits')}\n`,
   );
   try {
+    const initialSession = options.continue
+      ? (await client.sessions.list({ workspaceId: workspace?.id ?? null })).toSorted((a, b) =>
+          b.updatedAt.localeCompare(a.updatedAt),
+        )[0]
+      : undefined;
     const app = render(
-      <Chat client={client} workspace={workspace} profile={profile} engine={engine} />,
+      <Chat
+        client={client}
+        workspace={workspace}
+        profile={profile}
+        engine={engine}
+        {...(initialSession ? { initialSession } : {})}
+      />,
       // selectTerminalStreams already proved this is a console. Without this, Ink stops drawing
       // whenever CI is set (GitHub runners, some shells) and the chat never appears.
       { stdin: terminal.stdin, stdout: terminal.stdout, interactive: true },

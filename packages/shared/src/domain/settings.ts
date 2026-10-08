@@ -79,6 +79,7 @@ export const SettingsSchema = z.object({
   cloudOnboardingChoice: z.enum(['local', 'cloud']).nullable().default(null),
   captureContent: z.boolean().optional(),
   theme: ThemeSchema,
+  notifications: z.boolean().optional(),
   homeStyle: z.enum(['auto', 'hero', 'compact']).default('auto'),
   fontScale: z.number().min(0.85).max(1.3),
   restoreTabs: z.boolean(),

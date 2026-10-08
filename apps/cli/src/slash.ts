@@ -22,6 +22,32 @@ export interface ParsedSlashCommand {
   args: string[];
 }
 
+export const SLASH_COMMANDS = [
+  { name: '/model', usage: '[number|ref]', description: 'Choose a verified model or Gateway key' },
+  { name: '/profile', usage: '[name]', description: 'Choose a routing profile' },
+  { name: '/effort', description: 'Choose supported reasoning effort' },
+  { name: '/sessions', description: 'Search project chats and Recents, then resume' },
+  { name: '/project', description: 'Switch project or choose No project' },
+  { name: '/settings', description: 'Change saved Ferry settings' },
+  { name: '/new', description: 'Start a chat and choose its project' },
+  { name: '/clear', description: 'Start a fresh chat in the same project' },
+  { name: '/compact', description: 'Summarize model context through the engine' },
+  { name: '/free', description: 'Toggle the free-only model filter' },
+  { name: '/status', description: 'Show engine, providers, and cloud status' },
+  { name: '/plan', description: 'Show the current task plan' },
+  { name: '/diff', description: 'Show changes since the latest checkpoint' },
+  { name: '/undo', description: 'Restore the latest checkpoint' },
+  { name: '/delegate', usage: '<lane> <brief>', description: 'Start a delegation run' },
+  { name: '/quota', description: 'Show provider quota windows' },
+  { name: '/optimize', usage: 'on|off|stats', description: 'Configure optimizers or show savings' },
+  { name: '/skills', description: 'List configured skills' },
+  { name: '/mcp', description: 'List MCP servers and tools' },
+  { name: '/login', usage: '<email>', description: 'Sign in to Ferry Cloud' },
+  { name: '/logout', description: 'Sign out of Ferry Cloud' },
+  { name: '/help', description: 'Show this command list' },
+  { name: '/exit', description: 'Exit Ferry' },
+] as const;
+
 export function parseSlashCommand(command: string): ParsedSlashCommand {
   const [name = '', ...args] = command.trim().split(/\s+/);
   return { name: name.toLowerCase(), args };
@@ -31,7 +57,9 @@ export async function executeSlashCommand(context: SlashContext, command: string
   const { name, args: words } = parseSlashCommand(command);
   const { client, sessionId } = context;
   if (name === '/help')
-    return '/model [number|ref] · /profile [name] · /free · /status · /login <email> · /logout · /new · /help · /exit · /plan · /diff · /undo · /delegate <lane> <brief> · /quota · /optimize on|off|stats · /skills · /mcp · /compact · /clear';
+    return SLASH_COMMANDS.map(
+      (row) => `${row.name}${'usage' in row ? ` ${row.usage}` : ''} · ${row.description}`,
+    ).join('\n');
   if (name === '/free') {
     const freeOnly = !(context.freeOnly ?? false);
     context.onFreeOnly?.(freeOnly);
@@ -176,11 +204,8 @@ export async function executeSlashCommand(context: SlashContext, command: string
     );
   }
   if (name === '/compact') {
-    const { messages } = await client.sessions.get(sessionId);
-    const count = messages.reduce((total, message) => total + message.parts.length, 0);
-    const summary = `Transcript compacted locally · ${count} message parts; session history is still stored by the client.`;
-    context.onCompact(summary);
-    return summary;
+    await client.sessions.compact(sessionId);
+    return 'Context summary requested through the engine. The full transcript remains available.';
   }
   if (name === '/clear') {
     await context.onClear();
