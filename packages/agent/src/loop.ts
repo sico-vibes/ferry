@@ -332,6 +332,8 @@ export interface RunResult {
   status: 'completed' | 'paused' | 'cancelled' | 'limit';
   warnings?: string[];
   report?: RunReport | undefined;
+  /** User messages the model saw in its last step; any later ones still need an answer. */
+  seenUserMessageIds?: string[];
 }
 
 export class AgentLoop {
@@ -359,6 +361,8 @@ export class AgentLoop {
   private readonly retiredModels: Set<string>;
   private readonly softQuotaBypasses = new Map<string, Set<string>>();
   private readonly proactiveHandoverSteps = new Map<string, number>();
+  /** User messages included in each session's most recent step, for mid-turn messages. */
+  private readonly contextUserIds = new Map<string, Set<string>>();
   private readonly sessionBadKeys = new Map<string, Set<string>>();
   private readonly pinnedHandoverModels = new Map<string, ModelRef>();
   private readonly pinnedHandoverSourcePins = new Map<string, ModelRef>();
@@ -639,6 +643,12 @@ export class AgentLoop {
         if (!loaded) throw new Error('Session disappeared during run');
         session = loaded.session;
         messages = loaded.messages.filter((message) => !rejectedPlannerMessageIds.has(message.id));
+        this.contextUserIds.set(
+          sessionId,
+          new Set(
+            messages.filter((message) => message.role === 'user').map((message) => message.id),
+          ),
+        );
         if (resume && !resumedTranscript) {
           for (const message of loaded.messages) {
             for (const part of message.parts) {
@@ -2723,6 +2733,12 @@ export class AgentLoop {
             rolesEnabled = false;
             continue;
           }
+          // The user wrote while this step ran: answer that message before finishing.
+          const seen = this.contextUserIds.get(sessionId);
+          const unseen = (this.options.store.load(sessionId)?.messages ?? []).some(
+            (message) => message.role === 'user' && seen && !seen.has(message.id),
+          );
+          if (unseen && stepCount < maxSteps && totalTokens < budget) continue;
           return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'completed');
         }
       }
@@ -3169,7 +3185,18 @@ export class AgentLoop {
       timestamp: new Date().toISOString(),
     });
     this.options.emit({ type: 'session.updated', session });
-    return { session, taskRecord, steps, tokens, status, report, warnings: report?.warnings ?? [] };
+    const seenUserMessageIds = [...(this.contextUserIds.get(sessionId) ?? [])];
+    this.contextUserIds.delete(sessionId);
+    return {
+      session,
+      taskRecord,
+      steps,
+      tokens,
+      status,
+      report,
+      warnings: report?.warnings ?? [],
+      seenUserMessageIds,
+    };
   }
 
   private recordSuccessfulStep(

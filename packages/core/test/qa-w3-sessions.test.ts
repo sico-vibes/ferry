@@ -131,23 +131,42 @@ describe('QA W3 sessions: run lifecycle and races', () => {
     }
   }, 30_000);
 
-  it('rejects a second send while a run is active instead of starting a second loop', async () => {
+  it('queues a second send into the running turn instead of starting a second loop', async () => {
     const h = await startHarness({
-      turns: [textTurn('one two three four five', { delayMs: 200 })],
+      turns: [
+        textTurn('one two three four five', { delayMs: 200 }),
+        textTurn('Answered the follow-up.'),
+      ],
     });
     try {
       const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
       const first = h.rpc.sessions.send(session.id, { text: 'first prompt' });
-      await waitFor(async () => (await sessionStatus(h.rpc, session.id)) === 'running');
-      await expect(
-        h.rpc.sessions.send(session.id, { text: 'second prompt' }),
-      ).rejects.toMatchObject({
-        code: -32010,
-        kind: 'conflict',
-        details: { sessionId: session.id, status: 'running' },
-      });
+      // Send once the first step is already generating, so the model has not seen it yet.
+      await waitFor(async () =>
+        (await h.rpc.sessions.get(session.id)).messages.some(
+          (message) => message.role === 'assistant',
+        ),
+      );
+      await h.rpc.sessions.send(session.id, { text: 'second prompt' });
       await first;
-      await cancelAndSettle(h, session.id);
+      const answered = async () =>
+        (await h.rpc.sessions.get(session.id)).messages.some((message) =>
+          message.parts.some(
+            (part) => part.type === 'text' && part.text.includes('Answered the follow-up.'),
+          ),
+        );
+      await waitFor(answered);
+      await waitFor(async () => (await sessionStatus(h.rpc, session.id)) === 'idle');
+      const messages = (await h.rpc.sessions.get(session.id)).messages;
+      const texts = messages.map(
+        (message) =>
+          `${message.role}:${message.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')}`,
+      );
+      expect(texts.filter((text) => text === 'user:second prompt')).toHaveLength(1);
+      const followUp = texts.indexOf('user:second prompt');
+      expect(
+        texts.slice(followUp + 1).some((text) => text.includes('Answered the follow-up.')),
+      ).toBe(true);
     } finally {
       await h.close();
     }

@@ -191,6 +191,8 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
       updateSession(s);
       emit('session.message', { sessionId: id, message: m });
       persist();
+      // Like the core: a message sent mid-run joins the running turn instead of starting another.
+      if (controllers.has(id)) return;
       const ctrl = new AbortController();
       controllers.set(id, ctrl);
       void scenarioRunner

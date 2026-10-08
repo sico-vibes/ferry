@@ -114,8 +114,8 @@ export function Composer({
   function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      if (running) onStop();
-      else if (value.trim()) onSend();
+      // While the agent works, Enter queues the message into the running turn; it never stops it.
+      if (value.trim()) onSend();
     }
   }
   return (
@@ -213,9 +213,19 @@ export function Composer({
                 )))}
           </div>
           <div className="v2-composer-send">
-            {running ? (
+            {running && !value.trim() ? (
               <button aria-label="Stop" className="v2-send-button" onClick={onStop} type="button">
                 <Square aria-hidden="true" />
+              </button>
+            ) : running ? (
+              <button
+                aria-label="Send now (the agent reads it at its next step)"
+                className="v2-send-button"
+                onClick={onSend}
+                title="Send now: the agent reads it at its next step"
+                type="button"
+              >
+                <Send aria-hidden="true" />
               </button>
             ) : (
               <button

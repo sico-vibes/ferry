@@ -1688,6 +1688,46 @@ describe('@ferry/agent', () => {
     }
   });
 
+  it('answers a message the user sent while the final step was running', async () => {
+    const state = await setup();
+    try {
+      const prompts: string[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        resolveCandidates: () => [state.model],
+        generator: async ({ messages }) => {
+          const lastUser = messages.filter((message) => message.role === 'user').at(-1);
+          prompts.push(
+            lastUser?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('') ??
+              '',
+          );
+          if (prompts.length === 1)
+            state.store.appendMessage(
+              state.session.id,
+              'user',
+              [{ type: 'text', id: PartIdSchema.parse(newId('part')), text: 'Also add a test.' }],
+              null,
+            );
+          return { text: prompts.length === 1 ? 'Done.' : 'Added the test.', finishReason: 'stop' };
+        },
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.status).toBe('completed');
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).toBe('Also add a test.');
+    } finally {
+      state.database.close();
+    }
+  });
+
   it('labels a mid-run switch caused by an exhausted quota as quota, not error', async () => {
     const state = await setup();
     try {

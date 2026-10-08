@@ -1,7 +1,7 @@
 import { Children, isValidElement, useEffect, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Clipboard } from 'lucide-react';
+import { Check, Clipboard } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { focusRingClass } from '../primitives';
 
@@ -49,15 +49,13 @@ export function MarkdownContent({ content }: { content: string }) {
             return <pre>{children}</pre>;
           const code = child.props.children;
           return (
-            <pre>
-              <CodeBlock
-                {...(child.props.className ? { className: child.props.className } : {})}
-                code={(typeof code === 'string' || typeof code === 'number'
-                  ? String(code)
-                  : ''
-                ).replace(/\n$/, '')}
-              />
-            </pre>
+            <CodeBlock
+              {...(child.props.className ? { className: child.props.className } : {})}
+              code={(typeof code === 'string' || typeof code === 'number'
+                ? String(code)
+                : ''
+              ).replace(/\n$/, '')}
+            />
           );
         },
         code: ({ children, className }) => (
@@ -76,14 +74,21 @@ export function normalizeFencedCode(content: string): string {
   return content.replace(/([^\n])([ \t]*)```(?=[\w+-]*\r?\n)/g, '$1\n\n```');
 }
 
+/** Lines shown before a long snippet collapses behind "Show more". */
+const COLLAPSED_LINES = 24;
+
 function CodeBlock({ code, className }: { code: string; className?: string }) {
   const [html, setHtml] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [theme, setTheme] = useState(() =>
     typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light'
       ? 'github-light-default'
       : 'github-dark-default',
   );
   const language = /language-(\w+)/.exec(className ?? '')?.[1] ?? 'text';
+  const lineCount = code.split('\n').length;
+  const long = lineCount > COLLAPSED_LINES;
   useEffect(() => {
     const root = document.documentElement;
     const updateTheme = () => {
@@ -103,7 +108,7 @@ function CodeBlock({ code, className }: { code: string; className?: string }) {
         setHtml(
           highlighter
             .codeToHtml(code, { lang: language, theme })
-            .replace(/background-color:[^;]+;/, 'background-color:var(--bg-card);'),
+            .replace(/background-color:[^;]+;/, 'background-color:transparent;'),
         );
       } catch {
         setHtml('');
@@ -114,18 +119,46 @@ function CodeBlock({ code, className }: { code: string; className?: string }) {
     };
   }, [code, language, theme]);
   return (
-    <code className={cn(className, 'relative block font-mono text-[12px] leading-5')}>
-      <button
-        aria-label="Copy code"
-        className={`absolute right-2 top-2 z-10 rounded-md bg-raised p-1.5 text-text-2 opacity-0 transition hover:opacity-100 focus:opacity-100 ${focusRingClass}`}
-        onClick={() => {
-          void navigator.clipboard.writeText(code);
-        }}
-        type="button"
-      >
-        <Clipboard size={14} />
-      </button>
-      {html ? <span dangerouslySetInnerHTML={{ __html: html }} /> : code}
-    </code>
+    <div className={cn('code-block', long && !expanded && 'is-collapsed')}>
+      <div className="code-block-header">
+        <span>{language === 'text' ? 'Code' : language}</span>
+        <button
+          aria-label={copied ? 'Copied' : 'Copy code'}
+          className={`code-block-copy ${focusRingClass}`}
+          onClick={() => {
+            void navigator.clipboard.writeText(code).then(() => {
+              setCopied(true);
+              window.setTimeout(() => {
+                setCopied(false);
+              }, 1500);
+            });
+          }}
+          type="button"
+        >
+          {copied ? <Check size={14} /> : <Clipboard size={14} />}
+          <span>{copied ? 'Copied' : 'Copy'}</span>
+        </button>
+      </div>
+      <div className={cn(className, 'code-block-body')}>
+        {html ? (
+          <div dangerouslySetInnerHTML={{ __html: html }} />
+        ) : (
+          <pre>
+            <code>{code}</code>
+          </pre>
+        )}
+      </div>
+      {long && (
+        <button
+          className={`code-block-more ${focusRingClass}`}
+          onClick={() => {
+            setExpanded(!expanded);
+          }}
+          type="button"
+        >
+          {expanded ? 'Show less' : `Show all ${String(lineCount)} lines`}
+        </button>
+      )}
+    </div>
   );
 }

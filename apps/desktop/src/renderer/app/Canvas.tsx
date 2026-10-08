@@ -22,6 +22,7 @@ import type {
   SessionId,
 } from '@ferry/shared';
 import {
+  ActivityRow,
   ApprovalCard,
   AgentTimeline,
   AssistantMessage,
@@ -37,7 +38,6 @@ import {
   ReasoningPart,
   StreamingCursor,
   ToolCallBlock,
-  ToolStepGroup,
   dataUseStatus,
   groupParts,
   UserMessage,
@@ -54,11 +54,12 @@ import { FullOutputDialog } from './FullOutputDialog';
 import { useDisplayName } from './useDisplayName';
 import { ConfirmDialog } from './ConfirmDialog';
 import { HomeStats } from './HomeStats';
+import { ContextStrip } from './ContextStrip';
 import { WorkspaceMenu } from './WorkspaceMenu';
 import { greeting } from './usageSummary';
 import { canScroll, isLatestVisible, readTailGeometry } from './transcriptScroll';
 import { ensureWorkspaceTrusted, SendCancelledError, sendMessage } from '../data/sendMessage';
-import { Check, Copy } from 'lucide-react';
+import { ArrowDown, Check, Copy } from 'lucide-react';
 
 const warnedOAuthRuns = new Set<string>();
 const warnedTrainingSessions = new Set<string>();
@@ -670,6 +671,15 @@ function DelegationRunView({
   );
 }
 
+/** "38s", "2m 05s", "1h 02m" for run durations shown in the message footer. */
+function formatRunDuration(durationMs: number): string {
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  if (seconds < 60) return `${String(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${String(minutes)}m ${String(seconds % 60).padStart(2, '0')}s`;
+  return `${String(Math.floor(minutes / 60))}h ${String(minutes % 60).padStart(2, '0')}m`;
+}
+
 const TranscriptMessageRow = memo(function TranscriptMessageRow({
   message,
   index,
@@ -779,6 +789,112 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
         </div>
       ) : (
         <AssistantMessage {...(message.agentRole ? { agentRole: message.agentRole } : {})}>
+          {/* Parts render in the order they happened: narration, then a one-line summary of the
+              tool work that followed, then more narration (Claude Code style). */}
+          {groupParts(message.parts).flatMap((part) => {
+            if (part.type === 'text')
+              return [
+                <div className="message-answer" key={part.id}>
+                  <PartView
+                    part={part}
+                    sessionId={sessionId}
+                    canRetry={canRetry}
+                    isStreaming={part.id === streamPartId}
+                    onFull={onFullOutput}
+                    onDiff={() => {
+                      setRightTab('changes');
+                    }}
+                    onReview={openReview}
+                    onCancel={(id) => void client.delegation.cancel(id)}
+                    onPickAnother={onPickModel}
+                  />
+                </div>,
+              ];
+            if (part.type === 'tool_group' || part.type === 'tool_call') {
+              const tools = part.type === 'tool_group' ? part.parts : [part];
+              return [
+                <ActivityRow
+                  key={tools[0]?.id ?? 'activity'}
+                  parts={tools}
+                  renderSteps={() =>
+                    tools.map((tool) => (
+                      <ToolCallBlock
+                        key={tool.id}
+                        {...tool}
+                        grouped
+                        onShowFull={(handle) => {
+                          onFullOutput(handle);
+                        }}
+                        onOpenDiff={() => {
+                          setRightTab('changes');
+                        }}
+                      />
+                    ))
+                  }
+                />,
+              ];
+            }
+            if (part.type === 'handoff_marker')
+              return [
+                <HandoffMarker
+                  key={part.id}
+                  from={shortModel(part.from, [])}
+                  to={shortModel(part.to, [])}
+                  fromRef={part.from}
+                  toRef={part.to}
+                  reason={handoffReasonLabel(part.reason)}
+                  briefingTokens={part.briefingTokens}
+                  explanation={part.explanation}
+                />,
+              ];
+            if (
+              (part.type === 'approval_request' && part.state === 'pending') ||
+              part.type === 'delegation' ||
+              part.type === 'checkpoint' ||
+              part.type === 'error'
+            )
+              return [
+                <div key={part.id}>
+                  <PartView
+                    part={part}
+                    sessionId={sessionId}
+                    canRetry={canRetry}
+                    isStreaming={part.id === streamPartId}
+                    onFull={onFullOutput}
+                    onDiff={() => {
+                      setRightTab('changes');
+                    }}
+                    onReview={openReview}
+                    onCancel={(id) => void client.delegation.cancel(id)}
+                    onPickAnother={onPickModel}
+                  />
+                </div>,
+              ];
+            return [];
+          })}
+          {!hasMessageAnswer && streamingText === null && answerText && (
+            <div className="message-answer">
+              <MarkdownPart content={answerText} />
+            </div>
+          )}
+          {streamingText !== null && !streamingPartIsInMessage && (
+            <div className="message-answer whitespace-pre-wrap break-words">
+              {streamingText}
+              <StreamingCursor />
+            </div>
+          )}
+          {streamingText !== null && streamingPartIsInMessage && <StreamingCursor />}
+          {message.via?.kind === 'gateway' ? (
+            <p className="mt-2 text-meta text-text-3">
+              via Gateway key {message.via.keyName}
+              {modelName ? ` · served ${modelName}` : ''}
+            </p>
+          ) : message.requestedModelRef && message.requestedModelRef !== message.modelRef ? (
+            <p className="mt-2 text-meta text-text-3">
+              Requested {requestedModelName ?? 'Auto'} · served {modelName}
+            </p>
+          ) : null}
+          {message.interrupted ? <InterruptedFooter reason={message.interrupted.reason} /> : null}
           <AgentTimeline
             events={timelineEvents}
             report={message.runReport}
@@ -786,6 +902,9 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
             contextWindow={contextWindow}
             startedAt={message.createdAt}
             isRunning={isRunning}
+            waitingForApproval={message.parts.some(
+              (part) => part.type === 'approval_request' && part.state === 'pending',
+            )}
             runningToolTitle={message.parts.reduce<string | null>(
               (title, part) =>
                 part.type === 'tool_call' && part.status === 'running' ? part.title : title,
@@ -800,26 +919,11 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
                 part.type === 'checkpoint' ||
                 part.type === 'tool_group' ||
                 part.type === 'tool_call' ||
+                part.type === 'handoff_marker' ||
                 part.type === 'error'
               )
                 return [];
               if (timelineHasThinking && part.type === 'reasoning') return [];
-              if (part.type === 'handoff_marker') {
-                const from = shortModel(part.from, []);
-                const to = shortModel(part.to, []);
-                return [
-                  <HandoffMarker
-                    key={part.id}
-                    from={from}
-                    to={to}
-                    fromRef={part.from}
-                    toRef={part.to}
-                    reason={handoffReasonLabel(part.reason)}
-                    briefingTokens={part.briefingTokens}
-                    explanation={part.explanation}
-                  />,
-                ];
-              }
               if (part.type === 'approval_request') {
                 const label = `${part.state === 'denied' ? 'Denied' : 'Allowed'}: ${part.detail}`;
                 return [
@@ -847,88 +951,6 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
                 }
               : {})}
           />
-          {groupParts(message.parts).flatMap((part) => {
-            if (
-              (part.type !== 'approval_request' || part.state !== 'pending') &&
-              part.type !== 'delegation' &&
-              part.type !== 'checkpoint' &&
-              part.type !== 'tool_call' &&
-              part.type !== 'error' &&
-              part.type !== 'tool_group'
-            )
-              return [];
-            if (part.type === 'tool_group')
-              return [
-                <ToolStepGroup
-                  key={part.parts[0]?.id ?? 'tool-group'}
-                  parts={part.parts}
-                  onShowFull={onFullOutput}
-                  onOpenDiff={() => {
-                    setRightTab('changes');
-                  }}
-                />,
-              ];
-            return [
-              <div key={part.id}>
-                <PartView
-                  part={part}
-                  sessionId={sessionId}
-                  canRetry={canRetry}
-                  isStreaming={part.id === streamPartId}
-                  onFull={onFullOutput}
-                  onDiff={() => {
-                    setRightTab('changes');
-                  }}
-                  onReview={openReview}
-                  onCancel={(id) => void client.delegation.cancel(id)}
-                  onPickAnother={onPickModel}
-                />
-              </div>,
-            ];
-          })}
-          {groupParts(message.parts).flatMap((part) => {
-            if (part.type !== 'text') return [];
-            return [
-              <div className="message-answer" key={part.id}>
-                <PartView
-                  part={part}
-                  sessionId={sessionId}
-                  canRetry={canRetry}
-                  isStreaming={part.id === streamPartId}
-                  onFull={onFullOutput}
-                  onDiff={() => {
-                    setRightTab('changes');
-                  }}
-                  onReview={openReview}
-                  onCancel={(id) => void client.delegation.cancel(id)}
-                  onPickAnother={onPickModel}
-                />
-              </div>,
-            ];
-          })}
-          {!hasMessageAnswer && streamingText === null && answerText && (
-            <div className="message-answer">
-              <MarkdownPart content={answerText} />
-            </div>
-          )}
-          {streamingText !== null && !streamingPartIsInMessage && (
-            <div className="message-answer whitespace-pre-wrap break-words">
-              {streamingText}
-              <StreamingCursor />
-            </div>
-          )}
-          {streamingText !== null && streamingPartIsInMessage && <StreamingCursor />}
-          {message.via?.kind === 'gateway' ? (
-            <p className="mt-2 text-meta text-text-3">
-              via Gateway key {message.via.keyName}
-              {modelName ? ` · served ${modelName}` : ''}
-            </p>
-          ) : message.requestedModelRef && message.requestedModelRef !== message.modelRef ? (
-            <p className="mt-2 text-meta text-text-3">
-              Requested {requestedModelName ?? 'Auto'} · served {modelName}
-            </p>
-          ) : null}
-          {message.interrupted ? <InterruptedFooter reason={message.interrupted.reason} /> : null}
         </AssistantMessage>
       )}
       <div className={`v2-message-actions${message.role === 'user' ? ' is-user' : ''}`}>
@@ -949,6 +971,23 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
           <button aria-label="Retry response" onClick={() => void retryMessage()} type="button">
             Retry
           </button>
+        )}
+        {message.role === 'assistant' && (
+          <span className="v2-message-meta">
+            {[
+              modelName,
+              message.runReport
+                ? `${String(message.runReport.steps)} ${message.runReport.steps === 1 ? 'step' : 'steps'}`
+                : null,
+              message.runReport ? formatRunDuration(message.runReport.durationMs) : null,
+              new Date(message.createdAt).toLocaleTimeString([], {
+                hour: 'numeric',
+                minute: '2-digit',
+              }),
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </span>
         )}
       </div>
     </div>
@@ -1396,12 +1435,11 @@ export function SessionCanvas() {
       onStop={() => void client.sessions.cancel(sessionId)}
       running={running}
       banner={
-        data?.session.status === 'running'
+        // While working, the status line in the transcript and the Stop button say enough;
+        // the banner only covers the short gap before the first step starts.
+        data?.session.status === 'running' && data.session.runPhase === 'preparing'
           ? {
-              text:
-                data.session.runPhase === 'preparing'
-                  ? 'Preparing… Ferry is getting this chat ready.'
-                  : 'Working… replies and tool steps appear above as they happen.',
+              text: 'Preparing… Ferry is getting this chat ready.',
               actionLabel: 'Stop',
               onAction: () => void client.sessions.cancel(sessionId),
             }
@@ -1562,15 +1600,6 @@ export function SessionCanvas() {
             })}
           </div>
         </div>
-        {!atBottom && initialTailReady && (
-          <button
-            aria-label={`Jump to latest${newOutputCount > 0 ? `, ${String(newOutputCount)} new` : ''}`}
-            className="jump-latest"
-            onClick={jumpToLatest}
-          >
-            Jump to latest{newOutputCount > 0 ? ` · ${String(newOutputCount)} new` : ''}
-          </button>
-        )}
         {data?.session.status === 'interrupted' && (
           <div className="session-resume-banner" role="status">
             <span>
@@ -1581,7 +1610,26 @@ export function SessionCanvas() {
             </button>
           </div>
         )}
-        {messages.length > 0 && renderComposer()}
+        {messages.length > 0 && (
+          <div className="v2-composer-dock">
+            {!atBottom && initialTailReady && (
+              <button
+                aria-label={`Jump to latest${newOutputCount > 0 ? `, ${String(newOutputCount)} new` : ''}`}
+                className={`jump-latest${newOutputCount > 0 ? ' has-new' : ''}`}
+                onClick={jumpToLatest}
+                title="Jump to latest"
+                type="button"
+              >
+                <ArrowDown aria-hidden="true" size={16} strokeWidth={1.75} />
+              </button>
+            )}
+            <ContextStrip
+              workspace={workspaces.find((item) => item.id === data?.session.workspaceId)}
+              messages={messages}
+            />
+            {renderComposer()}
+          </div>
+        )}
         {fullOutput !== null && data?.session && (
           <FullOutputDialog
             client={client}

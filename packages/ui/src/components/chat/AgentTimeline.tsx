@@ -1,5 +1,5 @@
 import { Children, useEffect, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, LoaderCircle, Wrench } from 'lucide-react';
+import { ChevronDown, ChevronRight, CircleDot, LoaderCircle, Wrench } from 'lucide-react';
 import { formatRunReport, type AgentEvent, type RunReport } from '@ferry/shared';
 import { cn } from '../../lib/cn';
 import { focusRingClass } from '../primitives';
@@ -304,6 +304,7 @@ export function AgentTimeline({
   currentStep: currentStepOverride,
   contextWindow,
   report,
+  waitingForApproval = false,
 }: {
   events: readonly AgentEvent[];
   report?: RunReport | undefined;
@@ -316,6 +317,8 @@ export function AgentTimeline({
   isRunning?: boolean;
   runningToolTitle?: string | null;
   currentStep?: string | null;
+  /** A pending approval is holding the run; say so instead of counting up. */
+  waitingForApproval?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -381,17 +384,16 @@ export function AgentTimeline({
       : activeTool
         ? (runningToolTitle ?? activeToolStep)
         : currentStepOverride;
+  const liveLabel = waitingForApproval
+    ? 'Waiting for your approval'
+    : `Working… ${elapsed}${currentStep ? ` · ${currentStep}` : ''}`;
   const unavailable = lanes.model.some(
     (event) => event.type === 'status' && event.reasoningAvailable === false,
   );
   return (
     <section aria-label="Agent activity" className="space-y-2">
       <button
-        aria-label={
-          running
-            ? `Working... ${elapsed}${currentStep ? ` - ${currentStep}` : ''}`
-            : `Worked for ${elapsed}`
-        }
+        aria-label={running ? liveLabel : `Worked for ${elapsed}`}
         aria-expanded={open}
         className={cn(
           'flex w-full items-center gap-2 text-left text-label text-text-3',
@@ -402,7 +404,9 @@ export function AgentTimeline({
         }}
         type="button"
       >
-        {running ? (
+        {running && waitingForApproval ? (
+          <CircleDot aria-hidden="true" className="text-warn" size={14} />
+        ) : running ? (
           <LoaderCircle
             aria-hidden="true"
             className="animate-spin motion-reduce:animate-none"
@@ -413,8 +417,18 @@ export function AgentTimeline({
         ) : (
           <ChevronRight aria-hidden="true" size={14} />
         )}
-        <span>{running ? `Working... ${elapsed}` : `Worked for ${elapsed}`}</span>
-        {running && currentStep && <span className="text-text-2"> - {currentStep}</span>}
+        {running && waitingForApproval ? (
+          <span className="text-text-2">Waiting for your approval</span>
+        ) : (
+          <>
+            <span className="tabular-nums">
+              {running ? `Working… ${elapsed}` : `Worked for ${elapsed}`}
+            </span>
+            {running && currentStep && (
+              <span className="min-w-0 truncate text-text-2">· {currentStep}</span>
+            )}
+          </>
+        )}
         {modelName && <span className="ml-auto text-meta text-text-3">{modelName}</span>}
       </button>
       {open && (

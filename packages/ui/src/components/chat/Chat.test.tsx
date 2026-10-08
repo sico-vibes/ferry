@@ -102,9 +102,11 @@ describe('transcript components', () => {
         />
       </>,
     );
-    const approvalCard = screen.getByText('Run tests?').closest('section');
-    expect(approvalCard?.className).toContain('flex-col');
-    expect(approvalCard?.className).toContain('gap-3');
+    const approvalCard = screen.getByRole('region', { name: 'Approval needed: Run tests?' });
+    expect(approvalCard.className).toContain('approval-card');
+    expect(screen.getByText('Low risk')).toBeTruthy();
+    fireEvent.keyDown(approvalCard, { key: 'Escape' });
+    expect(respond).toHaveBeenCalledWith('deny');
     expect(screen.queryByText('Inspect the flaky timer.')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Thinking/ }));
     expect(screen.getByText('Inspect the flaky timer.')).toBeTruthy();

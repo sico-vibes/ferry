@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowLeftRight,
   Check,
@@ -40,6 +40,7 @@ import { Pill, focusRingClass } from '../primitives';
 import { Tooltip } from '../forms';
 import { AgentTimeline } from './AgentTimeline';
 export { AgentTimeline, buildTimelineLanes } from './AgentTimeline';
+export { ActivityRow, activityDiff, summarizeActivity } from './ActivityRow';
 
 const MarkdownContent = lazy(() =>
   import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })),
@@ -444,34 +445,71 @@ export function ApprovalCard({
   onRespond?: (decision: ApprovalDecision) => void;
 }) {
   const resolved = state !== 'pending';
+  const allowRef = useRef<HTMLButtonElement>(null);
+  // Take keyboard focus only when nothing else has it, so Enter/Esc answer the prompt
+  // without stealing focus from a half-typed message.
+  useEffect(() => {
+    if (resolved) return;
+    const active = document.activeElement;
+    if (!active || active === document.body) allowRef.current?.focus({ preventScroll: true });
+  }, [resolved]);
   return (
-    <section className="flex flex-col gap-3 rounded-xl border border-warn/30 bg-warn/5 p-3.5">
-      <div className="flex items-center gap-2">
-        <ShieldAlert size={16} className="text-warn" />
-        <span className="text-label font-medium">{summary}</span>
-        <span className="ml-auto rounded-pill bg-raised px-2 py-1 text-meta capitalize text-text-2">
-          {risk} risk
+    <section
+      aria-label={`Approval needed: ${summary}`}
+      className={cn('approval-card', `is-${risk}`)}
+      onKeyDown={(event) => {
+        if (resolved || event.defaultPrevented) return;
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          onRespond?.('deny');
+        }
+      }}
+    >
+      <div className="approval-card-header">
+        <ShieldAlert aria-hidden="true" size={16} />
+        <span className="approval-card-summary">{summary}</span>
+        <span className="approval-card-risk">
+          {risk === 'high' ? 'High risk' : risk === 'medium' ? 'Medium risk' : 'Low risk'}
         </span>
       </div>
-      <p className="text-label text-text-2">{kind}</p>
-      <pre className="whitespace-pre-wrap break-all rounded-lg bg-input p-2 font-mono text-[11px] text-text-3">
-        {detail}
-      </pre>
+      {detail && detail !== summary && <pre className="approval-card-detail">{detail}</pre>}
       {resolved ? (
-        <p className="text-label text-text-3">{state.replace('_', ' ')} · resolved</p>
+        <p className="approval-card-resolved">
+          {state === 'denied'
+            ? 'Denied'
+            : state === 'allowed_always'
+              ? 'Always allowed'
+              : 'Allowed once'}
+        </p>
       ) : (
-        <div className="flex gap-2">
-          <Pill size="sm" onClick={() => onRespond?.('allow_once')}>
+        <div className="approval-card-actions">
+          <button
+            className={`approval-button is-primary ${focusRingClass}`}
+            onClick={() => onRespond?.('allow_once')}
+            ref={allowRef}
+            type="button"
+          >
             Allow once
-          </Pill>
+          </button>
           {kind !== 'paid_model' && (
-            <Pill size="sm" onClick={() => onRespond?.('always_allow')}>
+            <button
+              className={`approval-button ${focusRingClass}`}
+              onClick={() => onRespond?.('always_allow')}
+              type="button"
+            >
               Always allow
-            </Pill>
+            </button>
           )}
-          <Pill size="sm" variant="warm-outline" onClick={() => onRespond?.('deny')}>
+          <button
+            className={`approval-button ${focusRingClass}`}
+            onClick={() => onRespond?.('deny')}
+            type="button"
+          >
             Deny
-          </Pill>
+          </button>
+          <span className="approval-card-hint" aria-hidden="true">
+            <kbd>Enter</kbd> allow · <kbd>Esc</kbd> deny
+          </span>
         </div>
       )}
     </section>
@@ -680,7 +718,7 @@ export function StreamingCursor() {
   return (
     <span
       aria-label="Streaming"
-      className="inline-block h-4 w-1.5 animate-pulse bg-blue-500 align-middle motion-reduce:animate-none"
+      className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[2px] animate-pulse rounded-full bg-primary align-baseline motion-reduce:animate-none"
     />
   );
 }

@@ -221,7 +221,7 @@ describe('AgentTimeline', () => {
     );
     expect(
       screen.getByRole('button', {
-        name: /Working\.\.\. (?:\d+s|>1h) - Bound retry delay and add jitter/,
+        name: /Working… (?:\d+s|>1h) · Bound retry delay and add jitter/,
       }),
     ).toBeTruthy();
   });
@@ -241,8 +241,22 @@ describe('AgentTimeline', () => {
       />,
     );
     expect(
-      screen.getByRole('button', { name: /Working\.\.\. (?:\d+s|>1h) - Trace the retry policy/ }),
+      screen.getByRole('button', { name: /Working… (?:\d+s|>1h) · Trace the retry policy/ }),
     ).toBeTruthy();
+  });
+  it('says it is waiting for approval instead of counting up', () => {
+    render(
+      <AgentTimeline
+        events={[]}
+        isRunning
+        waitingForApproval
+        modelName="Gemini 3.8 Flash"
+        startedAt="2026-09-30T10:00:00.000Z"
+        currentStep="Run the suite"
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Waiting for your approval' })).toBeTruthy();
+    expect(screen.queryByText(/Working…/)).toBeNull();
   });
   it('keeps the reasoning-unavailable note inside the collapsed activity', () => {
     render(

@@ -206,6 +206,29 @@ export function register(host: CoreHost, services: FerryServices): void {
     host.emit('session.status', updated);
     return updated;
   };
+  /** Messages sent while the agent was working that its last step never saw get their own run. */
+  const answerQueuedMessage = (id: SessionId, seen: ReadonlySet<string> | null) => {
+    if (!seen) return;
+    const unseen = (store.load(id)?.messages ?? []).filter(
+      (message) => message.role === 'user' && !seen.has(message.id),
+    );
+    const text = unseen
+      .flatMap((message) =>
+        message.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])),
+      )
+      .join('\n\n');
+    if (!text.trim()) return;
+    void host
+      .dispatch({
+        jsonrpc: '2.0',
+        id: `queued-${id}`,
+        method: 'sessions.send',
+        params: [id, { text, resume: true }],
+      })
+      .catch((error: unknown) => {
+        services.logger.warn({ error, sessionId: id }, 'Queued message could not start a run');
+      });
+  };
   const deleteSession = (id: SessionId) => {
     services.messages
       .list()
@@ -510,11 +533,32 @@ export function register(host: CoreHost, services: FerryServices): void {
           'gateway_not_running',
           'Start the local Gateway before sending through this key.',
         );
-      if (controllers.has(session.id) || shuttingDown)
+      if (shuttingDown)
         throw rpcDomainError(-32010, 'conflict', 'Session is already running', {
           sessionId: session.id,
           status: session.status,
         });
+      if (controllers.has(session.id)) {
+        // Sent while the agent is working: keep it in the conversation now. The running loop
+        // reads it at its next step; if the run ends first, the follow-up below answers it.
+        if (resume)
+          throw rpcDomainError(-32010, 'conflict', 'Session is already running', {
+            sessionId: session.id,
+            status: session.status,
+          });
+        const queued = store.appendMessage(
+          session.id,
+          'user',
+          [{ type: 'text', id: PartIdSchema.parse(newId('part')), text }],
+          session.modelRef,
+          services.clock.now(),
+        );
+        host.emit('session.message', {
+          sessionId: session.id,
+          message: MessageSchema.parse(queued),
+        });
+        return Promise.resolve(requireSession(session.id));
+      }
       const workspace = sessionWorkspace(services, session);
       if (!workspace.trusted)
         throw rpcDomainError(
@@ -541,6 +585,8 @@ export function register(host: CoreHost, services: FerryServices): void {
       services.activeTraceContexts.set(session.id, traceContext);
       controllers.set(session.id, controller);
       let resolveRun!: () => void;
+      // Filled when the agent loop finishes; messages queued after its last step are answered next.
+      let seenUserMessageIds: ReadonlySet<string> | null = null;
       const run = new Promise<void>((resolve) => {
         resolveRun = resolve;
       });
@@ -1633,11 +1679,12 @@ export function register(host: CoreHost, services: FerryServices): void {
                 inFlight: true,
               });
             clearTimeout(watchdog);
-            await loop.run({
+            const outcome = await loop.run({
               sessionId: session.id,
               signal: controller.signal,
               resume: resume === true,
             });
+            seenUserMessageIds = new Set(outcome.seenUserMessageIds ?? []);
             if (gatewayModel) {
               const latestAssistant = [...services.messages.list()]
                 .reverse()
@@ -1729,6 +1776,8 @@ export function register(host: CoreHost, services: FerryServices): void {
               }
             }
             resolveRun();
+            if (ownsRun && !shuttingDown && !controller.signal.aborted && !timedOut)
+              answerQueuedMessage(session.id, seenUserMessageIds);
           }
         })();
       });

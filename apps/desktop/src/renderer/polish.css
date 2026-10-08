@@ -1,0 +1,614 @@
+/* Ferry 1.1 polish layer. Loaded after styles.css; later sections override earlier rules on purpose.
+   Values come from the DESIGN-v2 scale (4 px spacing, radii 6/10/14, tokens only). */
+
+/* ---------- Chat: transcript scrolls the whole main column (scrollbar at the window edge) ---------- */
+.v2-chat-route .transcript-viewport,
+.v2-session-canvas > .transcript-viewport {
+  width: 100%;
+  align-self: stretch;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 200ms ease-out;
+}
+.v2-chat-route .transcript-viewport:hover,
+.v2-session-canvas > .transcript-viewport:hover,
+.v2-session-canvas > .transcript-viewport:focus-within {
+  scrollbar-color: color-mix(in srgb, var(--foreground) 22%, transparent) transparent;
+}
+.v2-chat-route .transcript-message {
+  width: min(768px, calc(100% - 64px)) !important;
+  padding-bottom: 24px;
+}
+.v2-chat-route .transcript-viewport.is-empty .session-empty,
+.v2-session-canvas > .transcript-viewport .session-empty {
+  width: min(768px, calc(100% - 64px));
+  margin-inline: auto;
+}
+
+/* Composer dock: owns the fade above the composer and the jump-to-latest button. */
+.v2-composer-dock {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  width: 100%;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+}
+.v2-composer-dock::before {
+  position: absolute;
+  top: -32px;
+  right: 0;
+  left: 0;
+  height: 32px;
+  background: linear-gradient(to bottom, transparent, var(--background));
+  content: '';
+  pointer-events: none;
+}
+.v2-composer-dock > .v2-composer-wrap {
+  width: min(768px, calc(100% - 64px));
+}
+.v2-composer-dock .v2-composer {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+:root.light .v2-composer-dock .v2-composer {
+  box-shadow: 0 8px 24px rgba(23, 21, 30, 0.1);
+}
+.v2-composer-dock > .jump-latest {
+  position: absolute;
+  z-index: 4;
+  top: -48px;
+  right: auto;
+  bottom: auto;
+  left: 50%;
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  padding: 0;
+  color: var(--foreground);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  transition: background-color 150ms ease-out;
+}
+:root.light .v2-composer-dock > .jump-latest {
+  box-shadow: 0 8px 24px rgba(23, 21, 30, 0.1);
+}
+.v2-composer-dock > .jump-latest:hover {
+  background: var(--muted);
+}
+.v2-composer-dock > .jump-latest.has-new::after {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--background);
+  border-radius: 999px;
+  background: var(--primary);
+  content: '';
+}
+
+/* ---------- Chat: activity rows (one quiet line per stretch of tool work) ---------- */
+.activity-row {
+  display: grid;
+  gap: 8px;
+}
+.activity-row-toggle {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+  justify-self: start;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 2px 0;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 22px;
+  text-align: left;
+  transition: color 150ms ease-out;
+}
+.activity-row-toggle:hover {
+  color: var(--foreground);
+}
+.activity-row-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-row.is-running .activity-row-label {
+  background: linear-gradient(
+      90deg,
+      var(--muted-foreground) 0%,
+      var(--foreground) 50%,
+      var(--muted-foreground) 100%
+    )
+    0 0 / 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: activity-shimmer 1.8s linear infinite;
+}
+@keyframes activity-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+.activity-row-spinner {
+  flex: none;
+  animation: activity-spin 1s linear infinite;
+}
+@keyframes activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.activity-row-chevron {
+  flex: none;
+  opacity: 0.7;
+  transition: transform 150ms ease-out;
+}
+.activity-row.is-open .activity-row-chevron {
+  transform: rotate(90deg);
+}
+.activity-row-failed {
+  color: var(--destructive);
+  font-size: 13px;
+}
+.activity-row-denied {
+  color: var(--warning);
+  font-size: 13px;
+}
+.activity-row-diff {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  border-radius: 6px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+}
+.activity-row-diff > span {
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.activity-row-diff .is-add {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
+}
+.activity-row-diff .is-del {
+  background: color-mix(in srgb, var(--destructive) 16%, transparent);
+  color: var(--destructive);
+}
+/* Expanded steps: flat rows on a hairline rail instead of nested cards. */
+.activity-steps {
+  display: grid;
+  gap: 2px;
+  margin-left: 6px;
+  border-left: 1px solid var(--border);
+  padding-left: 14px;
+}
+.activity-steps > section {
+  border: 0 !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+}
+.activity-steps > section > button {
+  padding: 6px 8px !important;
+  border-radius: 10px;
+}
+.activity-steps > section > button:hover {
+  background: var(--muted);
+}
+.activity-steps > section > button > span:first-of-type {
+  color: var(--muted-foreground);
+  font-weight: 450;
+}
+.activity-steps > section > div {
+  border-top: 0 !important;
+  padding: 4px 8px 10px 33px !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-row.is-running .activity-row-label {
+    animation: none;
+    color: var(--foreground);
+    background: none;
+  }
+  .activity-row-spinner {
+    animation: none;
+  }
+}
+
+/* ---------- Chat: model switches read as a quiet centred divider ---------- */
+.v2-chat-route .handoff-chip,
+.transcript-message .handoff-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  padding: 2px 10px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 16px;
+}
+.transcript-message .handoff-chip b {
+  color: var(--foreground);
+  font-weight: 550;
+}
+.transcript-message .my-1.text-center:has(> button.handoff-chip),
+.transcript-message .my-1.text-center:has(> * > button.handoff-chip) {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0;
+}
+.transcript-message .my-1.text-center:has(.handoff-chip)::before,
+.transcript-message .my-1.text-center:has(.handoff-chip)::after {
+  height: 1px;
+  flex: 1;
+  background: var(--border);
+  content: '';
+}
+
+/* ---------- Chat: compact approval prompt ---------- */
+.approval-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--warning) 28%, transparent);
+  border-radius: 14px;
+  background: var(--card);
+  padding: 12px 14px;
+}
+.approval-card-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 20px;
+}
+.approval-card-header > svg {
+  flex: none;
+  color: var(--warning);
+}
+.approval-card-summary {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.approval-card-risk {
+  flex: none;
+  border-radius: 999px;
+  background: var(--muted);
+  padding: 2px 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+.approval-card.is-high .approval-card-risk {
+  background: color-mix(in srgb, var(--destructive) 16%, transparent);
+  color: var(--destructive);
+}
+.approval-card-detail {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--muted);
+  padding: 8px 10px;
+  color: var(--foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12.5px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.approval-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.approval-button {
+  height: 32px;
+  border: 1px solid var(--input);
+  border-radius: 10px;
+  background: transparent;
+  padding: 0 12px;
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 550;
+  transition: background-color 150ms ease-out;
+}
+.approval-button:hover {
+  background: var(--muted);
+}
+.approval-button.is-primary {
+  border-color: transparent;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.approval-button.is-primary:hover {
+  background: color-mix(in srgb, var(--primary) 88%, white);
+}
+.approval-card-hint {
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.approval-card-hint kbd {
+  border-radius: 6px;
+  background: var(--muted);
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 11.5px;
+}
+.approval-card-resolved {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+/* ---------- Chat: Markdown that reads like a document ---------- */
+.message-answer {
+  font-size: 15px;
+  line-height: 24px;
+}
+.message-answer :where(p) {
+  margin: 0 0 12px;
+}
+.message-answer :where(p:last-child, ul:last-child, ol:last-child) {
+  margin-bottom: 0;
+}
+.message-answer :where(ul, ol) {
+  margin: 4px 0 12px;
+  padding-left: 22px;
+}
+.message-answer :where(ul) {
+  list-style: disc;
+}
+.message-answer :where(ol) {
+  list-style: decimal;
+}
+.message-answer :where(li) {
+  margin: 4px 0;
+  padding-left: 2px;
+}
+.message-answer :where(li)::marker {
+  color: var(--muted-foreground);
+}
+.message-answer :where(h1, h2, h3, h4) {
+  margin: 20px 0 8px;
+  color: var(--foreground);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.message-answer :where(h1) {
+  font-size: 20px;
+  line-height: 28px;
+}
+.message-answer :where(h2) {
+  font-size: 17px;
+  line-height: 26px;
+}
+.message-answer :where(h3, h4) {
+  font-size: 15px;
+  line-height: 24px;
+}
+.message-answer :where(h1, h2, h3, h4):first-child {
+  margin-top: 0;
+}
+.message-answer :where(blockquote) {
+  margin: 12px 0;
+  border-left: 2px solid var(--border);
+  padding-left: 14px;
+  color: var(--muted-foreground);
+}
+.message-answer :where(hr) {
+  margin: 20px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.message-answer :where(table) {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 12px 0;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 20px;
+}
+.message-answer :where(th, td) {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 14px 8px 0;
+  text-align: left;
+  vertical-align: top;
+}
+.message-answer :where(th) {
+  color: var(--muted-foreground);
+  font-weight: 550;
+}
+.message-answer :where(a) {
+  color: var(--accent-foreground);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent-foreground) 40%, transparent);
+  text-underline-offset: 3px;
+}
+.message-answer :where(:not(pre) > code) {
+  border-radius: 6px;
+  background: var(--muted);
+  padding: 1px 6px;
+  font-size: 0.88em;
+}
+
+/* One surface per code block: header (language + copy) above the highlighted code. */
+.code-block {
+  position: relative;
+  margin: 12px 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+.code-block-header {
+  display: flex;
+  height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding: 0 6px 0 12px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 16px;
+}
+.code-block-copy {
+  display: inline-flex;
+  height: 24px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0 8px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 12px;
+}
+.code-block-copy:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.code-block-body {
+  overflow-x: auto;
+}
+.code-block-body pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  padding: 12px 14px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12.5px;
+  line-height: 20px;
+}
+.code-block.is-collapsed .code-block-body {
+  max-height: 480px;
+  overflow-y: hidden;
+  mask-image: linear-gradient(to bottom, black calc(100% - 64px), transparent);
+}
+.code-block-more {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  padding: 8px 0;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.code-block-more:hover {
+  color: var(--foreground);
+}
+
+/* ---------- Chat: hover footer ---------- */
+.v2-message-actions {
+  align-items: center;
+  margin-top: 6px;
+}
+/* Your message's copy button floats under the bubble instead of reserving a row. */
+.v2-message-actions.is-user {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  margin: 0;
+}
+.v2-message-actions.is-user .v2-message-copy {
+  width: 24px;
+  height: 24px;
+}
+.v2-message-meta {
+  margin-left: 4px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+}
+
+/* ---------- Chat: context strip above the composer ---------- */
+.v2-context-strip {
+  display: flex;
+  width: min(768px, calc(100% - 64px));
+  min-width: 0;
+  align-items: center;
+  gap: 14px;
+  padding: 0 4px 8px;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  line-height: 18px;
+}
+.v2-context-item {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.v2-context-item.is-mono {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.v2-context-diff {
+  display: inline-flex;
+  gap: 2px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.v2-context-diff > span {
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.v2-context-diff .is-add {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
+}
+.v2-context-diff .is-del {
+  background: color-mix(in srgb, var(--destructive) 16%, transparent);
+  color: var(--destructive);
+}
+.v2-context-action {
+  margin-left: auto;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 2px 8px;
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.v2-context-action:hover {
+  background: var(--muted);
+}

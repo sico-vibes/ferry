@@ -15,6 +15,7 @@ import { FerryProvider } from './data/client';
 import { AppRouter } from './router';
 import { isExpectedCorePortOrigin } from '../shared/core-port-origin';
 import './styles.css';
+import './polish.css';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 20_000, refetchOnWindowFocus: false } },
