@@ -20,6 +20,24 @@ describe('provider request normalization', () => {
     );
     expect(messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'a\uFFFDb' }] }]);
   });
+  it('drops reasoning from Groq assistant history but keeps the tool call', () => {
+    const history = [
+      {
+        role: 'assistant' as const,
+        content: [
+          { type: 'reasoning' as const, text: 'Listing the folder first.' },
+          { type: 'tool-call' as const, toolCallId: 'c1', toolName: 'list_dir', input: {} },
+        ],
+      },
+    ];
+    expect(sanitizeProviderMessages(history, 'groq')).toEqual([
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'list_dir', input: {} }],
+      },
+    ]);
+    expect(JSON.stringify(sanitizeProviderMessages(history, 'openai'))).toContain('Listing');
+  });
   it('adds Mistral assistant bridge and stable tool identifiers', () => {
     const messages = sanitizeProviderMessages(
       [

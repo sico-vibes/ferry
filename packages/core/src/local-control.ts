@@ -9,7 +9,14 @@ import type { CoreHost, CoreTransport } from './host.js';
 const endpointFileName = 'core.endpoint.json';
 const authMethod = 'ferry.local-auth';
 const maxAuthLineBytes = 4096;
+/** Requests into the core from an authenticated local client. */
 const maxRpcLineBytes = 1_000_000;
+/**
+ * Replies from the core to its own client. Real data is large (providers.list carries every
+ * provider's discovered model list, ~MBs with OpenRouter), and a 1 MB cap made `ferry run` fail
+ * whenever the CLI attached to the running desktop engine.
+ */
+const maxResponseLineBytes = 64_000_000;
 
 export interface LocalControlEndpoint {
   version: 1;
@@ -342,7 +349,7 @@ class LocalControlClientTransport implements LocalControlRpcTransport {
   #onData(socket: Socket, chunk: Buffer): void {
     if (socket !== this.#socket) return;
     this.#buffer += chunk.toString('utf8');
-    if (Buffer.byteLength(this.#buffer, 'utf8') > maxRpcLineBytes) {
+    if (Buffer.byteLength(this.#buffer, 'utf8') > maxResponseLineBytes) {
       socket.destroy(new Error('Local Ferry core response exceeded the size limit'));
       return;
     }

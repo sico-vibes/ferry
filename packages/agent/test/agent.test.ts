@@ -1683,6 +1683,77 @@ describe('@ferry/agent', () => {
     }
   });
 
+  it('labels a mid-run switch caused by an exhausted quota as quota, not error', async () => {
+    const state = await setup();
+    try {
+      const alternate = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gemini/test-model',
+        providerId: 'gemini',
+        name: 'Gemini',
+      });
+      const alternateProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: 'gemini',
+        name: 'Gemini',
+      });
+      const exhaustedWindow = {
+        id: 'openai-minute-tokens',
+        scope: 'provider' as const,
+        modelRef: null,
+        metric: 'tokens' as const,
+        kind: 'rolling' as const,
+        periodLabel: 'per minute',
+        used: 8_000,
+        limit: 8_000,
+        remaining: 0,
+        resetAt: new Date(Date.now() + 60_000).toISOString(),
+        confidence: 'exact' as const,
+        observedAt: new Date().toISOString(),
+        durationMs: 60_000,
+      };
+      let exhausted = false;
+      const handoffs: string[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [state.model, alternate] },
+        capacity: () => ({
+          providers: [
+            { ...state.provider, windows: exhausted ? [exhaustedWindow] : [] },
+            alternateProvider,
+          ],
+        }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        emit: () => {},
+        onHandoff: (reason) => handoffs.push(reason),
+        resolveCandidates: () => [state.model, alternate],
+        generator: async ({ model }) => {
+          if (model.ref === state.model.ref) {
+            exhausted = true;
+            return {
+              toolCalls: [{ name: 'read_file', input: { path: 'README.md' } }],
+              finishReason: 'tool-calls',
+            };
+          }
+          return { text: 'Done.', finishReason: 'stop' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      const marker = state.store
+        .load(state.session.id)
+        ?.messages.flatMap((message) => message.parts)
+        .find((part) => part.type === 'handoff_marker');
+      expect(marker).toMatchObject({ reason: 'quota', to: alternate.ref, trigger: 'proactive' });
+      expect(handoffs).toEqual(['quota']);
+    } finally {
+      state.database.close();
+    }
+  });
+
   it('reroutes an HTTP ResourceExhausted response from the fake OpenAI server', async () => {
     const state = await setup();
     const success = {

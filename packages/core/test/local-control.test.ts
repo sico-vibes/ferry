@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CoreHost } from '../src/index.js';
 import {
+  connectLocalControl,
   localControlEndpointPath,
   localControlSocketAddress,
   readLocalControlEndpoint,
@@ -94,6 +95,50 @@ describe('core local control channel', () => {
       expect(secondEndpoint.token).not.toBe(firstEndpoint.token);
     } finally {
       await second.stop();
+    }
+  }, 30_000);
+
+  it('delivers replies larger than 1 MB to an attached client', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ferry-core-local-control-large-'));
+    dataDirectories.push(dataDir);
+    // Real provider lists carry every discovered model; with OpenRouter they pass 1 MB.
+    const big = Array.from({ length: 30_000 }, (_, index) => ({
+      ref: `openrouter/vendor/model-${String(index)}`,
+      name: `Model ${String(index)} with a reasonably long display name`,
+    }));
+    const core = new CoreHost({ dataDir, localControl: true });
+    core.registerDomain('settings', {
+      get() {
+        return { models: big };
+      },
+    });
+    await core.start();
+    try {
+      const transport = await connectLocalControl(core.dataDir);
+      try {
+        const reply = await new Promise<unknown>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            reject(new Error('Large reply timed out'));
+          }, 15_000);
+          transport.subscribe((message) => {
+            const value = message as { id?: unknown; result?: unknown };
+            if (value.id !== 'large') return;
+            clearTimeout(timer);
+            resolve(value.result);
+          });
+          transport.onClose((reason) => {
+            clearTimeout(timer);
+            reject(reason ?? new Error('closed'));
+          });
+          transport.send({ jsonrpc: '2.0', id: 'large', method: 'settings.get', params: [] });
+        });
+        expect(JSON.stringify(reply).length).toBeGreaterThan(2_000_000);
+        expect((reply as { models: unknown[] }).models).toHaveLength(30_000);
+      } finally {
+        transport.close?.();
+      }
+    } finally {
+      await core.stop();
     }
   }, 30_000);
 

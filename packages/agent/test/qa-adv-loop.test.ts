@@ -380,6 +380,31 @@ describe('QA adv: quota leases', () => {
     }
   }, 30_000);
 
+  it('keeps falling back past local reservation refusals that never reached a provider', async () => {
+    const state = await setup();
+    try {
+      const refused = [1, 2, 3, 4, 5].map((index) => model(`openai/full-${String(index)}`));
+      const open = model('groq/open');
+      const groq = ProviderSchema.parse({ ...state.provider, id: 'groq', name: 'Groq' });
+      const served: string[] = [];
+      const loop = makeLoop(state, routedSettings({ quotaReservations: true }), {
+        catalog: { ...state.catalog, models: [...refused, open] },
+        capacity: () => ({ providers: [state.provider, groq] }),
+        resolveCandidates: () => [...refused, open],
+        acquireQuotaLease: (selected) => (selected.providerId === 'groq' ? () => {} : null),
+        generator: async ({ model: selected }) => {
+          served.push(selected.ref);
+          return { text: 'done', finishReason: 'stop' };
+        },
+      });
+      const result = await loop.run({ sessionId: state.session.id });
+      expect(result.status).toBe('completed');
+      expect(served).toEqual([open.ref]);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
   it('releases the lease when the generator throws', async () => {
     const state = await setup();
     try {

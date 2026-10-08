@@ -1,6 +1,6 @@
 import type { ModelMessage } from 'ai';
 export type MessageNormalizationProvider =
-  'anthropic' | 'openai' | 'mistral' | 'deepseek' | 'generic';
+  'anthropic' | 'openai' | 'mistral' | 'deepseek' | 'groq' | 'generic';
 export function sanitizeProviderMessages(
   messages: readonly ModelMessage[],
   provider: MessageNormalizationProvider,
@@ -56,6 +56,8 @@ export function sanitizeProviderMessages(
           (part) =>
             part &&
             typeof part === 'object' &&
+            // Groq rejects reasoning on assistant history ("property 'reasoning_content' is unsupported").
+            !(provider === 'groq' && (part as Record<string, unknown>).type === 'reasoning') &&
             !(
               ['text', 'reasoning'].includes(String((part as Record<string, unknown>).type)) &&
               !((part as Record<string, unknown>).text as string | undefined)?.trim()

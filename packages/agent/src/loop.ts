@@ -673,6 +673,8 @@ export class AgentLoop {
             );
           }
         }
+        // Why routing moved off the model it would otherwise use this step, if it did.
+        let routeSwitchReason: 'quota' | undefined;
         if (selectedModel) {
           const quotaProvider = this.options
             .capacity()
@@ -705,6 +707,7 @@ export class AgentLoop {
             );
             if (rerouted && rerouted.ref !== previous.ref) {
               selectedModel = rerouted;
+              routeSwitchReason = 'quota';
               this.proactiveHandoverSteps.set(sessionId, stepCount);
               this.options.telemetry?.log({
                 id: newId('evt'),
@@ -767,6 +770,7 @@ export class AgentLoop {
                 this.pinnedHandoverSourcePins.set(sessionId, pin);
                 this.pinnedHandoverModels.set(sessionId, fallback.ref);
                 selectedModel = fallback;
+                routeSwitchReason = 'quota';
                 this.options.telemetry?.log({
                   id: newId('evt'),
                   ts: new Date().toISOString(),
@@ -807,6 +811,7 @@ export class AgentLoop {
               );
               if (rerouted && rerouted.ref !== previous.ref) {
                 selectedModel = rerouted;
+                routeSwitchReason = 'quota';
                 this.options.telemetry?.log({
                   id: newId('evt'),
                   ts: new Date().toISOString(),
@@ -981,19 +986,28 @@ export class AgentLoop {
             {
               from: previousAssistant.modelRef,
               to: model.ref,
-              reason: livePinnedRef ? 'manual model selection' : 'automatic routing boundary',
+              reason:
+                routeSwitchReason === 'quota'
+                  ? 'previous model is near its usage limit'
+                  : livePinnedRef
+                    ? 'manual model selection'
+                    : 'automatic routing boundary',
               ...(omittedNote ? { omittedContext: omittedNote } : {}),
             },
           );
-          const handoffReason = livePinnedRef ? 'manual' : 'error';
+          // A plain step-to-step routing change is a capability choice, not a failure.
+          const handoffReason: 'quota' | 'manual' | 'capability' =
+            routeSwitchReason ?? (livePinnedRef ? 'manual' : 'capability');
           const marker = createHandoffMarker(
             previousAssistant.modelRef,
             model.ref,
             handoffReason,
             briefing,
-            livePinnedRef
-              ? `You selected ${model.name} for the next step.`
-              : `Automatic routing selected ${model.name} for the next step.`,
+            handoffReason === 'quota'
+              ? `${model.name} continues because the previous model is near its usage limit.`
+              : livePinnedRef
+                ? `You selected ${model.name} for the next step.`
+                : `Automatic routing selected ${model.name} for the next step.`,
           );
           this.addPart(sessionId, {
             type: 'handoff_marker',
@@ -1003,9 +1017,9 @@ export class AgentLoop {
             reason: marker.reason,
             briefingTokens: marker.briefingTokens,
             explanation: marker.explanation,
-            trigger: livePinnedRef ? 'manual' : 'proactive',
+            trigger: livePinnedRef && !routeSwitchReason ? 'manual' : 'proactive',
           });
-          this.options.onHandoff?.(livePinnedRef ? 'manual' : 'error', marker.from, marker.to);
+          this.options.onHandoff?.(handoffReason, marker.from, marker.to);
           system += `\n\n[Ferry handover packet]\n${briefing.text}`;
           let packetInputTokens = Math.ceil(
             (this.estimates(system) +
@@ -1802,7 +1816,9 @@ export class AgentLoop {
               });
             }
             attemptedModels.add(fallback.ref);
-            handoffsThisStep++;
+            // A local reservation refusal never reached the provider; it must not use up the
+            // switch budget that protects against slow or failing upstream requests.
+            if (!localQuotaReservation) handoffsThisStep++;
             const currentPin =
               this.options.getPinnedModelRef?.() ?? this.pinnedModelRefFor(sessionId);
             if (currentPin) {
@@ -2698,6 +2714,7 @@ export class AgentLoop {
       });
     const session = this.options.store.updateSession(sessionId, {
       status: 'idle',
+      runPhase: undefined,
       inFlight: false,
     });
     this.emitStructuredEvent(sessionId, {
@@ -3431,7 +3448,9 @@ function isInvalidSignatureOrThinkingError(error: unknown): boolean {
   const message = providerErrorMessage(error).toLowerCase();
   return (
     /(?:invalid|missing|unknown|mismatch|malformed|unsupported)/.test(message) &&
-    /(?:thought.?signature|signature|thinking(?:_block| block|_signature)?)/.test(message)
+    /(?:thought.?signature|signature|thinking(?:_block| block|_signature)?|reasoning(?:_content)?)/.test(
+      message,
+    )
   );
 }
 
