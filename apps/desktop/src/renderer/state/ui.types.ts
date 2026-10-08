@@ -12,6 +12,7 @@ export const settingsSections = [
   'Delegation',
   'Permissions',
   'Gateway',
+  'Integrations',
   'Data & privacy',
   'Storage & Cloud',
   'Shortcuts',

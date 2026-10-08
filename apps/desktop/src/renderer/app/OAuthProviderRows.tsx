@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { Popover } from 'radix-ui';
 import type { OAuthProvider } from '@ferry/shared';
-import { ShowMoreList } from '@ferry/ui';
+import { ShowMoreList, SkeletonRows } from '@ferry/ui';
 
 const groupLabels = [
   ['official', 'Official OAuth'],
@@ -31,12 +31,14 @@ function validGatewayUrl(value: string): boolean {
 
 export function OAuthProviderRows({
   providers,
+  loading = false,
   onLogin,
   onLogout,
   loadError,
   onRetry,
 }: {
   providers: OAuthProvider[];
+  loading?: boolean;
   onLogin: (provider: OAuthProvider, gateway?: string) => void;
   onLogout: (provider: OAuthProvider) => void;
   /** Set when the sign-in list could not be loaded, so an empty list isn't mistaken for "no match". */
@@ -55,6 +57,7 @@ export function OAuthProviderRows({
         provider.models.some((model) => model.toLowerCase().includes(value)),
     );
   }, [providers, query]);
+  if (loading) return <SkeletonRows rows={4} />;
   return (
     <div className="grid gap-3">
       <label className="flex h-9 items-center gap-2 rounded-control border border-input bg-background px-3 text-muted-foreground">
@@ -90,7 +93,7 @@ export function OAuthProviderRows({
                 const available = provider.actionAvailable !== false;
                 return (
                   <li
-                    className="grid min-h-[52px] grid-cols-[minmax(150px,1.5fr)_minmax(130px,1fr)_minmax(90px,.7fr)_auto] items-center gap-3 rounded-card bg-card px-3 py-2 max-sm:grid-cols-[1fr_auto]"
+                    className="grid min-h-[52px] grid-cols-[minmax(150px,1.5fr)_minmax(130px,1fr)_minmax(90px,.7fr)_auto] items-center gap-3 oauth-setting-row py-2 max-sm:grid-cols-[1fr_auto]"
                     key={provider.id}
                   >
                     <div className="flex min-w-0 items-center gap-2">
@@ -127,9 +130,10 @@ export function OAuthProviderRows({
                     </span>
                     <span
                       className={`w-fit rounded-full px-2 py-1 text-ui-meta ${provider.riskLevel === 'high' ? 'bg-warning/10 text-warning' : provider.riskLevel === 'medium' ? 'bg-muted text-muted-foreground' : 'bg-success/10 text-success'}`}
-                      aria-label={`${provider.riskLevel} risk`}
+                      aria-label={`${provider.riskLevel.charAt(0).toUpperCase() + provider.riskLevel.slice(1)} risk`}
                     >
-                      {provider.riskLevel} risk
+                      {provider.riskLevel.charAt(0).toUpperCase() + provider.riskLevel.slice(1)}{' '}
+                      risk
                     </span>
                     <div className="flex items-center justify-end gap-1">
                       {provider.advanced && available && !provider.connected ? (
@@ -138,7 +142,7 @@ export function OAuthProviderRows({
                             aria-label={`Configure ${provider.name} gateway`}
                             className="inline-flex h-8 cursor-pointer items-center rounded-control px-2 text-ui-meta text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
-                            Configure…
+                            Set up
                           </Popover.Trigger>
                           <Popover.Portal>
                             <Popover.Content
@@ -184,7 +188,7 @@ export function OAuthProviderRows({
                           rel="noreferrer"
                           target="_blank"
                         >
-                          Coming soon <ExternalLink aria-hidden="true" size={13} />
+                          <ExternalLink aria-hidden="true" size={13} />
                         </a>
                       ) : available ? (
                         <button
@@ -214,9 +218,7 @@ export function OAuthProviderRows({
                               ? 'Refresh'
                               : 'Log in'}
                         </button>
-                      ) : (
-                        <span className="px-2 text-meta text-text-3">No login action</span>
-                      )}
+                      ) : null}
                       <Popover.Root>
                         <Popover.Trigger
                           aria-label={`More options for ${provider.name}`}

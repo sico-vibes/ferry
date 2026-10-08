@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Provider } from '@ferry/shared';
 import { ArrowDown, ArrowUp, Trash2, X } from 'lucide-react';
-import { UiV2 } from '@ferry/ui';
+import { UiV2, SkeletonRows } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { useSettings } from '../data/queries';
 import { ProviderStatusBadge } from './ProviderStatusBadge';
@@ -24,7 +24,7 @@ export function ProviderKeyDialog({
 }) {
   const client = useFerryClient();
   const { data: settings } = useSettings();
-  const { data: providerKeys = [] } = useQuery({
+  const { data: providerKeys = [], isPending: keysPending } = useQuery({
     queryKey: ['provider-keys', provider?.id],
     enabled: open && Boolean(provider),
     queryFn: async () => (provider ? client.providers.listKeys(provider.id) : []),
@@ -329,100 +329,104 @@ export function ProviderKeyDialog({
               Use keys you own under one provider account, such as separate project keys. Pooling
               accounts to multiply free tiers may violate provider terms; Ferry does not support it.
             </p>
-            {providerKeys.length > 0 && (
-              <section className="grid gap-2" aria-label="Saved provider keys">
-                <h3 className="text-ui-label">Saved keys</h3>
-                {providerKeys.map((item, index) => (
-                  <div
-                    className="grid gap-2 border-b border-border py-3 last:border-b-0"
-                    key={item.id}
-                  >
-                    <div className="flex min-w-0 flex-wrap items-center gap-3">
-                      <div className="grid min-w-0 flex-1 gap-1">
-                        <div className="flex min-w-0 flex-wrap items-center gap-2">
-                          <span className="text-ui-label">
-                            {item.label} (ending {item.lastFour})
-                          </span>
-                          <ProviderStatusBadge
-                            status={item.status}
-                            cooldownUntil={item.cooldownUntil}
-                            enabled={item.enabled}
+            {keysPending ? (
+              <SkeletonRows rows={3} />
+            ) : (
+              providerKeys.length > 0 && (
+                <section className="grid gap-2" aria-label="Saved provider keys">
+                  <h3 className="text-ui-label">Saved keys</h3>
+                  {providerKeys.map((item, index) => (
+                    <div
+                      className="grid gap-2 border-b border-border py-3 last:border-b-0"
+                      key={item.id}
+                    >
+                      <div className="flex min-w-0 flex-wrap items-center gap-3">
+                        <div className="grid min-w-0 flex-1 gap-1">
+                          <div className="flex min-w-0 flex-wrap items-center gap-2">
+                            <span className="text-ui-label">
+                              {item.label} (ending {item.lastFour})
+                            </span>
+                            <ProviderStatusBadge
+                              status={item.status}
+                              cooldownUntil={item.cooldownUntil}
+                              enabled={item.enabled}
+                            />
+                          </div>
+                          <p className="text-meta text-text-3">
+                            {numberFormat.format(item.usageToday.requests)} requests /{' '}
+                            {numberFormat.format(item.usageToday.tokens)} tokens today
+                          </p>
+                          {item.lastError && (
+                            <p className="text-meta text-text-3">{item.lastError}</p>
+                          )}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <span className="text-ui-label">Enabled</span>
+                          <Switch
+                            aria-label={`Enable ${item.label}`}
+                            checked={item.enabled}
+                            disabled={busy}
+                            onCheckedChange={(enabled) => {
+                              void changeKeyEnabled(item.id, enabled);
+                            }}
                           />
                         </div>
-                        <p className="text-meta text-text-3">
-                          {numberFormat.format(item.usageToday.requests)} requests /{' '}
-                          {numberFormat.format(item.usageToday.tokens)} tokens today
-                        </p>
-                        {item.lastError && (
-                          <p className="text-meta text-text-3">{item.lastError}</p>
-                        )}
+                        <UiV2.TooltipProvider>
+                          <UiV2.Tooltip>
+                            <UiV2.TooltipTrigger asChild>
+                              <Button
+                                aria-label={`Move up ${item.label}`}
+                                disabled={busy || index === 0}
+                                onClick={() => void moveKeyUp(index)}
+                                size="icon"
+                                variant="ghost"
+                              >
+                                <ArrowUp aria-hidden="true" size={16} strokeWidth={1.75} />
+                              </Button>
+                            </UiV2.TooltipTrigger>
+                            <UiV2.TooltipContent>Move up</UiV2.TooltipContent>
+                          </UiV2.Tooltip>
+                        </UiV2.TooltipProvider>
+                        <UiV2.TooltipProvider>
+                          <UiV2.Tooltip>
+                            <UiV2.TooltipTrigger asChild>
+                              <Button
+                                aria-label={`Move down ${item.label}`}
+                                disabled={busy || index === providerKeys.length - 1}
+                                onClick={() => void moveKeyDown(index)}
+                                size="icon"
+                                variant="ghost"
+                              >
+                                <ArrowDown aria-hidden="true" size={16} strokeWidth={1.75} />
+                              </Button>
+                            </UiV2.TooltipTrigger>
+                            <UiV2.TooltipContent>Move down</UiV2.TooltipContent>
+                          </UiV2.Tooltip>
+                        </UiV2.TooltipProvider>
+                        <UiV2.TooltipProvider>
+                          <UiV2.Tooltip>
+                            <UiV2.TooltipTrigger asChild>
+                              <Button
+                                aria-label={`Remove ${item.label}`}
+                                disabled={busy}
+                                onClick={() => {
+                                  setConfirmRemoveKeyId(item.id);
+                                }}
+                                size="icon"
+                                variant="ghost"
+                                className="text-destructive hover:text-destructive"
+                              >
+                                <Trash2 aria-hidden="true" size={16} strokeWidth={1.75} />
+                              </Button>
+                            </UiV2.TooltipTrigger>
+                            <UiV2.TooltipContent>Remove key</UiV2.TooltipContent>
+                          </UiV2.Tooltip>
+                        </UiV2.TooltipProvider>
                       </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <span className="text-ui-label">Enabled</span>
-                        <Switch
-                          aria-label={`Enable ${item.label}`}
-                          checked={item.enabled}
-                          disabled={busy}
-                          onCheckedChange={(enabled) => {
-                            void changeKeyEnabled(item.id, enabled);
-                          }}
-                        />
-                      </div>
-                      <UiV2.TooltipProvider>
-                        <UiV2.Tooltip>
-                          <UiV2.TooltipTrigger asChild>
-                            <Button
-                              aria-label={`Move up ${item.label}`}
-                              disabled={busy || index === 0}
-                              onClick={() => void moveKeyUp(index)}
-                              size="icon"
-                              variant="ghost"
-                            >
-                              <ArrowUp aria-hidden="true" size={16} strokeWidth={1.75} />
-                            </Button>
-                          </UiV2.TooltipTrigger>
-                          <UiV2.TooltipContent>Move up</UiV2.TooltipContent>
-                        </UiV2.Tooltip>
-                      </UiV2.TooltipProvider>
-                      <UiV2.TooltipProvider>
-                        <UiV2.Tooltip>
-                          <UiV2.TooltipTrigger asChild>
-                            <Button
-                              aria-label={`Move down ${item.label}`}
-                              disabled={busy || index === providerKeys.length - 1}
-                              onClick={() => void moveKeyDown(index)}
-                              size="icon"
-                              variant="ghost"
-                            >
-                              <ArrowDown aria-hidden="true" size={16} strokeWidth={1.75} />
-                            </Button>
-                          </UiV2.TooltipTrigger>
-                          <UiV2.TooltipContent>Move down</UiV2.TooltipContent>
-                        </UiV2.Tooltip>
-                      </UiV2.TooltipProvider>
-                      <UiV2.TooltipProvider>
-                        <UiV2.Tooltip>
-                          <UiV2.TooltipTrigger asChild>
-                            <Button
-                              aria-label={`Remove ${item.label}`}
-                              disabled={busy}
-                              onClick={() => {
-                                setConfirmRemoveKeyId(item.id);
-                              }}
-                              size="icon"
-                              variant="ghost"
-                              className="text-destructive hover:text-destructive"
-                            >
-                              <Trash2 aria-hidden="true" size={16} strokeWidth={1.75} />
-                            </Button>
-                          </UiV2.TooltipTrigger>
-                          <UiV2.TooltipContent>Remove key</UiV2.TooltipContent>
-                        </UiV2.Tooltip>
-                      </UiV2.TooltipProvider>
                     </div>
-                  </div>
-                ))}
-              </section>
+                  ))}
+                </section>
+              )
             )}
             {showRoutingControls && (
               <section className="grid gap-3" aria-label="Provider routing">
@@ -630,7 +634,7 @@ export function ProviderKeyDialog({
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-border pt-3">
-          {providerKeys.length === 0 && provider?.keyStatus !== 'missing' && (
+          {!keysPending && providerKeys.length === 0 && provider?.keyStatus !== 'missing' && (
             <Button
               disabled={busy}
               onClick={() => {
@@ -641,10 +645,10 @@ export function ProviderKeyDialog({
               Remove key
             </Button>
           )}
-          <Button disabled={busy} onClick={() => void test()} variant="secondary">
+          <Button disabled={busy || keysPending} onClick={() => void test()} variant="secondary">
             {busy ? 'Testing…' : 'Test connection'}
           </Button>
-          <Button disabled={busy} onClick={() => void save()}>
+          <Button disabled={busy || keysPending} onClick={() => void save()}>
             {busy ? 'Saving…' : providerKeys.length ? 'Add key' : 'Save key'}
           </Button>
         </div>

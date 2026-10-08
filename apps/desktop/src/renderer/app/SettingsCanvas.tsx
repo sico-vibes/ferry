@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useFerryClient } from '../data/client';
@@ -15,6 +15,8 @@ import {
   Slider,
   Switch,
   PageHeader,
+  SkeletonRows,
+  SkeletonStat,
 } from '@ferry/ui';
 import { FERRY_DOMAINS } from '@ferry/shared';
 import {
@@ -27,6 +29,8 @@ import type { UpdateSnapshot } from '../../main/update-state.js';
 import type { ShellPreferences } from '../../main/desktop-shell.js';
 import {
   Bell,
+  Plug,
+  AlertTriangle,
   Cloud,
   Eye,
   EyeOff,
@@ -47,6 +51,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
+import { shortcutLabels } from './KeyboardShortcutsDialog';
 import { ProfilesSettings } from './ProfilesSettings';
 import { ProvidersTable } from './ProvidersTable';
 import { OAuthProviderRows } from './OAuthProviderRows';
@@ -64,6 +69,7 @@ const settingsSectionIcons: Record<SettingsSection, LucideIcon> = {
   Delegation: Workflow,
   Permissions: ShieldCheck,
   Gateway: Network,
+  Integrations: Plug,
   'Data & privacy': LockKeyhole,
   'Storage & Cloud': Cloud,
   Shortcuts: Keyboard,
@@ -78,8 +84,9 @@ const settingsSectionKeywords: Record<SettingsSection, string[]> = {
   Optimizers: ['optimizer', 'terse', 'tokens', 'context', 'compression', 'rtk'],
   Delegation: ['delegation', 'codex', 'opencode', 'claude', 'agent', 'lane'],
   Permissions: ['permission', 'approval', 'rules', 'auto-edit'],
+  Integrations: ['mcp', 'servers', 'workflows', 'skills'],
   Gateway: ['gateway', 'api', 'port', 'lan', 'openai', 'anthropic'],
-  'Data & privacy': ['data', 'privacy', 'logs', 'retention', 'mcp', 'skills', 'integrations'],
+  'Data & privacy': ['data', 'privacy', 'logs', 'retention'],
   'Storage & Cloud': ['storage', 'cloud', 'sync', 'account', 'capture'],
   Shortcuts: ['shortcut', 'keybinding', 'keyboard'],
   About: ['about', 'version', 'update', 'license', 'notices'],
@@ -216,6 +223,7 @@ function SettingsInput({
   masked = false,
   placeholder,
   type = 'text',
+  hideLabel = false,
 }: {
   label: string;
   value: string;
@@ -225,11 +233,12 @@ function SettingsInput({
   masked?: boolean;
   placeholder?: string;
   type?: string;
+  hideLabel?: boolean;
 }) {
   const [shown, setShown] = useState(false);
   return (
     <label className="v2-settings-field">
-      <span>{label}</span>
+      {!hideLabel && <span>{label}</span>}
       <span className="v2-settings-input-wrap">
         <UiV2.Input
           type={masked && !shown ? 'password' : type}
@@ -238,6 +247,7 @@ function SettingsInput({
           onChange={(event) => {
             onChange(event.target.value);
           }}
+          aria-label={label}
           aria-invalid={Boolean(error)}
         />
         {masked && (
@@ -274,6 +284,10 @@ export function SettingsCanvas() {
     setKeybindingsDraft(keybindings.content);
   }, [keybindings.content]);
   const section = useUI((state) => state.settingsSection);
+  const contentRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (contentRef.current) contentRef.current.scrollTop = 0;
+  }, [section]);
   const [sectionQuery, setSectionQuery] = useState('');
   const [confirm, setConfirm] = useState('');
   const [confirmAction, setConfirmAction] = useState<(() => void | Promise<void>) | null>(null);
@@ -334,31 +348,35 @@ export function SettingsCanvas() {
         developer: { ...settingsData.developer, ...pendingSettings?.developer },
       }
     : undefined;
-  const { data: providers = [] } = useQuery({
+  const { data: providers = [], isPending: providersPending } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
   const {
     data: oauthProviders = [],
+    isPending: oauthProvidersPending,
     error: oauthError,
     refetch: refetchOAuth,
   } = useQuery({
     queryKey: ['oauth-providers'],
     queryFn: () => client.oauth.list(),
   });
-  const { data: lanes = [] } = useQuery({
+  const { data: lanes = [], isPending: lanesPending } = useQuery({
     queryKey: ['lanes'],
     queryFn: () => client.delegation.lanes(),
   });
-  const { data: acpAgents = [] } = useQuery({
+  const { data: acpAgents = [], isPending: acpAgentsPending } = useQuery({
     queryKey: ['delegation', 'detected-agents'],
     queryFn: () => client.delegation.detectAgents(),
   });
-  const { data: skills = [] } = useQuery({
+  const { data: skills = [], isPending: skillsPending } = useQuery({
     queryKey: ['skills'],
     queryFn: () => client.skills.list(),
   });
-  const { data: mcps = [] } = useQuery({ queryKey: keys.mcp, queryFn: () => client.mcp.list() });
+  const { data: mcps = [], isPending: mcpsPending } = useQuery({
+    queryKey: keys.mcp,
+    queryFn: () => client.mcp.list(),
+  });
   const { data: optimizerStats } = useQuery({
     queryKey: ['optimizer-stats'],
     queryFn: () => client.optimizer.stats(),
@@ -493,6 +511,25 @@ export function SettingsCanvas() {
     await cache.invalidateQueries({ queryKey: keys.mcp });
   };
   const body = () => {
+    if (
+      !settings &&
+      ![
+        'Profiles',
+        'Providers & keys',
+        'Integrations',
+        'Delegation',
+        'Gateway',
+        'Storage & Cloud',
+        'About',
+        'Notifications',
+      ].includes(section)
+    )
+      return (
+        <Group title={section}>
+          <SkeletonRows rows={5} />
+        </Group>
+      );
+
     if (section === 'General' || section === 'Shortcuts')
       return (
         <>
@@ -539,6 +576,24 @@ export function SettingsCanvas() {
                   <span>{(settings?.fontScale ?? 1).toFixed(2)}×</span>
                 </div>
               </SettingRow>
+              <SettingRow title="Layout" helper="Reset sidebar and panel sizes">
+                <UiV2.Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setConfirm('Reset layout?');
+                    setConfirmDescription(
+                      'This restores the sidebar and panel sizes to their defaults.',
+                    );
+                    setConfirmDestructive(false);
+                    setConfirmAction(() => () => {
+                      useUI.getState().resetLayout();
+                    });
+                  }}
+                >
+                  Reset layout
+                </UiV2.Button>{' '}
+              </SettingRow>
               <SettingRow title="First run" helper="Review the provider and workspace setup again.">
                 <UiV2.Button
                   size="sm"
@@ -556,58 +611,96 @@ export function SettingsCanvas() {
               </SettingRow>
             </Group>
           )}
-          <Group title="Keyboard shortcuts">
-            <p className="muted">
-              Edit keybindings.json in Ferry's config folder. Changes reload automatically.
-            </p>
-            {keybindings.errors.map((error) => (
-              <p className="text-meta text-warn" key={error}>
-                {error}
-              </p>
-            ))}
-            <label className="grid gap-2 text-label" htmlFor="keybindings-json">
-              keybindings.json
-            </label>
-            <textarea
-              id="keybindings-json"
-              className="w-full min-h-36 rounded-control border border-line bg-panel p-3 font-mono text-meta text-text-1"
-              value={keybindingsDraft}
-              onChange={(event) => {
-                setKeybindingsDraft(event.target.value);
-                setKeybindingsSaved(false);
-                setKeybindingsSaveError(null);
-              }}
-            />
-            {keybindingsDraft !== keybindings.content && (
-              <UiV2.Button
-                size="sm"
-                onClick={() => {
-                  saveKeybindings(keybindingsDraft)
-                    .then((errors) => {
-                      if (errors.length) setKeybindingsSaveError(errors.join('; '));
-                      else setKeybindingsSaved(true);
-                    })
-                    .catch((error: unknown) => {
-                      setKeybindingsSaveError(
-                        error instanceof Error ? error.message : String(error),
-                      );
-                    });
-                }}
-              >
-                Save changes
-              </UiV2.Button>
-            )}
-            {keybindingsSaved && (
-              <span aria-label="Saved" className="v2-settings-save-success" role="status">
-                Saved
-              </span>
-            )}
-            {keybindingsSaveError && (
-              <span className="v2-settings-save-error" role="alert">
-                Could not save: {keybindingsSaveError}
-              </span>
-            )}
-          </Group>
+          {section === 'Shortcuts' && (
+            <>
+              {[
+                ['Chats', ['chat.new', 'search.open', 'tab.close', 'tab.next']],
+                [
+                  'Navigation',
+                  [
+                    'sidebar.toggle',
+                    'panel.toggle',
+                    'terminal.toggle',
+                    'palette.open',
+                    'shortcuts.open',
+                    'settings.open',
+                  ],
+                ],
+                ['Files and projects', ['folder.open', 'files.search']],
+                [
+                  'Custom commands',
+                  keybindings.bindings
+                    .map((binding) => binding.command)
+                    .filter((command) => !Object.hasOwn(shortcutLabels, command)),
+                ],
+              ]
+                .filter(([, commands]) => commands?.length)
+                .map(([area, commands]) => (
+                  <Group title={String(area)} key={String(area)}>
+                    {keybindings.bindings
+                      .filter((binding) => commands?.includes(binding.command))
+                      .map((binding) => (
+                        <div className="setting-row" key={binding.command}>
+                          <strong>{shortcutLabels[binding.command] ?? binding.command}</strong>
+                          <UiV2.Kbd>{binding.key}</UiV2.Kbd>
+                        </div>
+                      ))}
+                  </Group>
+                ))}
+              <Group title="Custom keybindings">
+                <p className="muted">
+                  Edit keybindings.json in Ferry's config folder. Changes reload automatically.
+                </p>
+                {keybindings.errors.map((error) => (
+                  <p className="text-meta text-warn" key={error}>
+                    {error}
+                  </p>
+                ))}
+                <label className="grid gap-2 text-label" htmlFor="keybindings-json">
+                  keybindings.json
+                </label>
+                <textarea
+                  id="keybindings-json"
+                  className="w-full min-h-[200px] rounded-control border border-line bg-panel p-3 font-mono text-meta text-text-1"
+                  value={keybindingsDraft}
+                  onChange={(event) => {
+                    setKeybindingsDraft(event.target.value);
+                    setKeybindingsSaved(false);
+                    setKeybindingsSaveError(null);
+                  }}
+                />
+                {keybindingsDraft !== keybindings.content && (
+                  <UiV2.Button
+                    size="sm"
+                    onClick={() => {
+                      saveKeybindings(keybindingsDraft)
+                        .then((errors) => {
+                          if (errors.length) setKeybindingsSaveError(errors.join('; '));
+                          else setKeybindingsSaved(true);
+                        })
+                        .catch((error: unknown) => {
+                          setKeybindingsSaveError(
+                            error instanceof Error ? error.message : String(error),
+                          );
+                        });
+                    }}
+                  >
+                    Save changes
+                  </UiV2.Button>
+                )}
+                {keybindingsSaved && (
+                  <span aria-label="Saved" className="v2-settings-save-success" role="status">
+                    Saved
+                  </span>
+                )}
+                {keybindingsSaveError && (
+                  <span className="v2-settings-save-error" role="alert">
+                    Could not save: {keybindingsSaveError}
+                  </span>
+                )}
+              </Group>{' '}
+            </>
+          )}
         </>
       );
     if (section === 'Profiles') return <ProfilesSettings />;
@@ -615,24 +708,28 @@ export function SettingsCanvas() {
     if (section === 'Notifications') return <NotificationSettings />;
     if (section === 'Providers & keys')
       return (
-        <Group>
-          <p className="muted">
-            Keys are stored locally. Use keys you own under one account; pooling accounts to
-            multiply free tiers may violate provider terms.
-          </p>
-          <ProvidersTable
-            onManage={setKeyProvider}
-            onTest={(provider) => void testProvider(provider)}
-            onToggle={(provider, enabled) =>
-              void client.providers
-                .setEnabled(provider.id, enabled)
-                .then(() => cache.invalidateQueries({ queryKey: ['providers'] }))
-            }
-            providers={providers.filter((provider) => provider.tag !== 'subscription_oauth')}
-            testing={testingProvider}
-          />
-          <Section title="Subscription logins" className="mt-4">
+        <>
+          <Group title="Provider access">
+            <p className="muted">
+              Keys are stored locally. Use keys you own under one account; pooling accounts to
+              multiply free tiers may violate provider terms.
+            </p>
+            <ProvidersTable
+              loading={providersPending}
+              onManage={setKeyProvider}
+              onTest={(provider) => void testProvider(provider)}
+              onToggle={(provider, enabled) =>
+                void client.providers
+                  .setEnabled(provider.id, enabled)
+                  .then(() => cache.invalidateQueries({ queryKey: ['providers'] }))
+              }
+              providers={providers.filter((provider) => provider.tag !== 'subscription_oauth')}
+              testing={testingProvider}
+            />
+          </Group>
+          <Group title="Subscription logins">
             <OAuthProviderRows
+              loading={oauthProvidersPending}
               providers={oauthProviders}
               loadError={oauthError ? oauthError.message : null}
               onRetry={() => void refetchOAuth()}
@@ -643,60 +740,72 @@ export function SettingsCanvas() {
                   .then(() => cache.invalidateQueries({ queryKey: ['oauth-providers'] }))
               }
             />
-          </Section>
-          {providers.some((provider) => provider.tag === 'trial') && (
-            <>
-              <h3>Trial credits</h3>
-              <p className="muted">
-                Trial providers are excluded from automatic routing until you opt in. Using trial
-                credits can consume a limited balance.
-              </p>
-              {providers
-                .filter((provider) => provider.tag === 'trial')
-                .map((provider) => {
-                  const optedIn =
-                    settings?.routing.trialOptInProviders.includes(provider.id) ?? false;
-                  return (
-                    <SettingRow
-                      key={provider.id}
-                      title={provider.name}
-                      helper="Allow Auto-Free, planner/editor roles, and the gateway to use this provider's trial credits."
-                    >
-                      <Switch
-                        label={`Use trial credits for ${provider.name}`}
-                        checked={optedIn}
-                        onCheckedChange={(enabled) => {
-                          if (!settings) return;
-                          const trialOptInProviders = enabled
-                            ? [...new Set([...settings.routing.trialOptInProviders, provider.id])]
-                            : settings.routing.trialOptInProviders.filter(
-                                (id) => id !== provider.id,
-                              );
-                          void update({
-                            routing: { ...settings.routing, trialOptInProviders },
-                          });
-                        }}
-                      />
-                    </SettingRow>
-                  );
-                })}
-            </>
-          )}
-          <SettingRow
-            title="Allow subscription OAuth models in routing"
-            helper="When off, Auto-Free and Best Available never choose subscription logins. OAuth models remain available for manual selection."
-          >
-            <Switch
-              label="Allow subscription OAuth models in routing"
-              checked={settings?.allowSubscriptionOAuthRouting ?? false}
-              onCheckedChange={(allowSubscriptionOAuthRouting) =>
-                void update({ allowSubscriptionOAuthRouting })
-              }
-            />
-          </SettingRow>
-          <UiV2.Button size="sm" variant="outline" onClick={() => void navigate({ to: '/models' })}>
-            Open Models
-          </UiV2.Button>
+          </Group>
+          <Group title="Routing access">
+            {providers.some((provider) => provider.tag === 'trial') && (
+              <>
+                <h3>Trial credits</h3>
+                <p className="muted">
+                  Trial providers are excluded from automatic routing until you opt in. Using trial
+                  credits can consume a limited balance.
+                </p>
+                {providers
+                  .filter((provider) => provider.tag === 'trial')
+                  .map((provider) => {
+                    const optedIn =
+                      settings?.routing.trialOptInProviders.includes(provider.id) ?? false;
+                    return (
+                      <SettingRow
+                        key={provider.id}
+                        title={provider.name}
+                        helper="Allow Auto-Free, planner/editor roles, and the gateway to use this provider's trial credits."
+                      >
+                        <Switch
+                          label={`Use trial credits for ${provider.name}`}
+                          checked={optedIn}
+                          onCheckedChange={(enabled) => {
+                            if (!settings) return;
+                            const trialOptInProviders = enabled
+                              ? [...new Set([...settings.routing.trialOptInProviders, provider.id])]
+                              : settings.routing.trialOptInProviders.filter(
+                                  (id) => id !== provider.id,
+                                );
+                            void update({
+                              routing: { ...settings.routing, trialOptInProviders },
+                            });
+                          }}
+                        />
+                      </SettingRow>
+                    );
+                  })}
+              </>
+            )}
+            <SettingRow
+              title="Allow subscription OAuth models in routing"
+              helper="When off, Auto-Free and Best Available never choose subscription logins. OAuth models remain available for manual selection."
+            >
+              <Switch
+                label="Allow subscription OAuth models in routing"
+                checked={settings?.allowSubscriptionOAuthRouting ?? false}
+                onCheckedChange={(allowSubscriptionOAuthRouting) =>
+                  void update({ allowSubscriptionOAuthRouting })
+                }
+              />
+            </SettingRow>
+            <UiV2.Button
+              size="sm"
+              variant="outline"
+              onClick={() => void navigate({ to: '/models' })}
+            >
+              Open Models
+            </UiV2.Button>
+          </Group>
+        </>
+      );
+    if (section === 'Gateway' && !gateway)
+      return (
+        <Group title="Local API gateway">
+          <SkeletonRows rows={3} />
         </Group>
       );
     if (section === 'Gateway')
@@ -719,9 +828,10 @@ export function SettingsCanvas() {
             </SettingRow>
             <SettingRow
               title="Port"
-              helper={`Status: ${gatewayStatus?.running ? `Running at ${String(gatewayStatus.url)}` : 'Stopped'}${gatewayStatus?.port && gatewayStatus.port !== gatewayPort ? ` Port ${String(gatewayPort)} was busy; using ${String(gatewayStatus.port)}` : ''}`}
+              helper={`${gatewayStatus?.running ? `Running at ${String(gatewayStatus.url)}` : 'Stopped'}${gatewayStatus?.port && gatewayStatus.port !== gatewayPort ? ` Port ${String(gatewayPort)} was busy; using ${String(gatewayStatus.port)}` : ''}`}
             >
               <SettingsInput
+                hideLabel
                 label="Port"
                 value={String(gatewayPort)}
                 onChange={(value) => {
@@ -733,7 +843,7 @@ export function SettingsCanvas() {
             </SettingRow>
             <SettingRow
               title="Allow LAN connections"
-              helper="Binds on all network interfaces. Only enable this on a trusted network, and do not share gateway keys."
+              helper="Binds on all network interfaces. Only enable this on a trusted network. Providers’ free tiers are per person; don’t share gateway keys."
             >
               <Switch
                 label="Allow LAN connections"
@@ -741,9 +851,6 @@ export function SettingsCanvas() {
                 onCheckedChange={(allowLan) => void updateGateway({ allowLan })}
               />
             </SettingRow>
-            <p className="settings-helper">
-              Providers’ free tiers are per person. Don’t share Ferry gateway keys.
-            </p>
           </Group>
           <Group title="Keys and connected tools">
             <SettingRow
@@ -764,11 +871,285 @@ export function SettingsCanvas() {
     if (section === 'Routing')
       return (
         <>
-          <Group title="Paid spending caps">
+          <Group title="Model selection">
+            <SettingRow
+              title="When a picked model runs out"
+              helper="If the model you picked hits a usage limit or fails, Ferry can hand the task to the next eligible model with a handover note, ask you first, or stop."
+            >
+              <SegmentedControl
+                label="When a picked model runs out"
+                value={settings?.routing.pinnedExhaustion ?? 'handover'}
+                onValueChange={(value) =>
+                  settings &&
+                  void update({
+                    routing: {
+                      ...settings.routing,
+                      pinnedExhaustion: value as typeof settings.routing.pinnedExhaustion,
+                    },
+                  })
+                }
+                options={[
+                  { value: 'handover', label: 'Hand over' },
+                  { value: 'ask', label: 'Ask me' },
+                  { value: 'fail', label: 'Stop' },
+                ]}
+              />
+            </SettingRow>
+            <SettingRow
+              title="Planner/editor roles"
+              helper="Role model selection uses catalog quality priors, context fit, tool support, and observed reliability."
+            >
+              <button
+                type="button"
+                className="v2-link-button"
+                onClick={() => {
+                  useUI.getState().setSettingsSection('Profiles');
+                }}
+              >
+                Configure per profile
+              </button>
+            </SettingRow>
+            <SettingRow
+              title="Benchmark quality weight"
+              helper="Give published coding and tool-use scores more or less influence. Models without scores remain neutral."
+            >
+              <div className="range-control">
+                <Slider
+                  label="Benchmark quality weight"
+                  min={0}
+                  max={12}
+                  step={1}
+                  value={settings?.routing.qualityWeight ?? 4}
+                  onValueChange={(value) =>
+                    settings &&
+                    void update({ routing: { ...settings.routing, qualityWeight: value } })
+                  }
+                />
+                <span>{settings?.routing.qualityWeight ?? 4}</span>
+              </div>
+            </SettingRow>
+            <SettingRow
+              title="Tool-call repair for weaker models"
+              helper="Automatically recover tool calls written as text when native tool calling is unreliable."
+            >
+              <Switch
+                label="Tool-call repair for weaker models"
+                checked={settings?.toolCallRepair ?? true}
+                onCheckedChange={(toolCallRepair) => void update({ toolCallRepair })}
+              />
+            </SettingRow>
+          </Group>
+          <Group title="Rate limits and reliability">
+            <p className="muted">
+              Choose how Ferry balances continuity, reliability, and provider capacity.
+            </p>
+            <SettingRow
+              title="Wait for short rate limits"
+              helper="Stay on the same model while a per-minute limit refills."
+            >
+              <Switch
+                label="Wait for short rate limits"
+                checked={settings?.routing.paceShortLimits ?? true}
+                onCheckedChange={(paceShortLimits) => {
+                  if (settings) void update({ routing: { ...settings.routing, paceShortLimits } });
+                }}
+              />
+            </SettingRow>
+            <SettingRow
+              title="Maximum wait"
+              helper="Longer waits switch to another available model."
+            >
+              <div className="range-control">
+                <Slider
+                  label="Maximum wait for short rate limits in seconds"
+                  min={0}
+                  max={120}
+                  step={1}
+                  value={settings?.routing.paceMaxWaitSeconds ?? 30}
+                  onValueChange={(paceMaxWaitSeconds) => {
+                    if (settings)
+                      void update({
+                        routing: {
+                          ...settings.routing,
+                          paceMaxWaitSeconds: Math.round(paceMaxWaitSeconds),
+                        },
+                      });
+                  }}
+                />
+                <span className="whitespace-nowrap">
+                  {settings?.routing.paceMaxWaitSeconds ?? 30} s
+                </span>
+              </div>
+            </SettingRow>
+            <SettingRow
+              title="First-response timeout"
+              helper="Try another provider if no response begins. Local models are exempt."
+            >
+              <div className="range-control">
+                <Slider
+                  label="First response timeout in seconds"
+                  min={1}
+                  max={120}
+                  step={1}
+                  value={settings?.routing.firstTokenTimeoutSeconds ?? 25}
+                  onValueChange={(firstTokenTimeoutSeconds) => {
+                    if (settings)
+                      void update({
+                        routing: {
+                          ...settings.routing,
+                          firstTokenTimeoutSeconds: Math.round(firstTokenTimeoutSeconds),
+                        },
+                      });
+                  }}
+                />
+                <span className="whitespace-nowrap">
+                  {settings?.routing.firstTokenTimeoutSeconds ?? 25} s
+                </span>
+              </div>
+            </SettingRow>
+            <SettingRow
+              title="Pause a provider after N failed requests"
+              helper="Different requests since the last success, within 24 hours. Rate limits and quota never count. 0 = never."
+            >
+              <UiV2.Input
+                type="number"
+                min={0}
+                step={1}
+                className="w-20"
+                aria-label="Pause a provider after N failed requests"
+                value={settings?.routing.autoPauseAfterFailedRequests ?? 5}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  if (settings && Number.isSafeInteger(value) && value >= 0)
+                    void update({
+                      routing: { ...settings.routing, autoPauseAfterFailedRequests: value },
+                    });
+                }}
+              />
+            </SettingRow>
+            {routingRows
+              .filter((row) => row.key === 'stickySessions')
+              .map((row) => (
+                <SettingRow key={row.key} title={row.title} helper={row.helper}>
+                  <div className="inline-control">
+                    <Switch
+                      label={row.title}
+                      checked={settings?.routing[row.key] ?? true}
+                      onCheckedChange={(value) => {
+                        if (settings)
+                          void update({ routing: { ...settings.routing, [row.key]: value } });
+                      }}
+                    />
+                  </div>
+                </SettingRow>
+              ))}
+
+            <SettingRow
+              title="Sticky session TTL"
+              helper="How long a conversation keeps its selected model."
+            >
+              <div className="range-control">
+                <Slider
+                  label="Sticky session TTL in minutes"
+                  min={1}
+                  max={120}
+                  step={1}
+                  value={settings?.routing.stickyTtlMinutes ?? 30}
+                  onValueChange={(value) =>
+                    settings &&
+                    void update({
+                      routing: { ...settings.routing, stickyTtlMinutes: Math.round(value) },
+                    })
+                  }
+                />
+                <span>{settings?.routing.stickyTtlMinutes ?? 30} min</span>
+              </div>
+            </SettingRow>
+            {routingRows
+              .filter((row) => row.key !== 'stickySessions')
+              .sort(
+                (a, b) =>
+                  Number(a.key === 'textToolFallbackEnabled') -
+                  Number(b.key === 'textToolFallbackEnabled'),
+              )
+              .map((row) => (
+                <SettingRow key={row.key} title={row.title} helper={row.helper}>
+                  <div className="inline-control">
+                    <Switch
+                      label={row.title}
+                      checked={settings?.routing[row.key] ?? true}
+                      onCheckedChange={(value) => {
+                        if (settings)
+                          void update({ routing: { ...settings.routing, [row.key]: value } });
+                      }}
+                    />
+                  </div>
+                </SettingRow>
+              ))}
+
+            <SettingRow
+              title="Ramp start"
+              helper="Begin gradual demotion below this fraction of quota remaining."
+            >
+              <div className="range-control">
+                <Slider
+                  label="Quota ramp start"
+                  min={0.05}
+                  max={0.5}
+                  step={0.01}
+                  value={settings?.routing.rampStart ?? 0.2}
+                  onValueChange={(value) =>
+                    settings && void update({ routing: { ...settings.routing, rampStart: value } })
+                  }
+                />
+                <span>{Math.round((settings?.routing.rampStart ?? 0.2) * 100)}%</span>
+              </div>
+            </SettingRow>
+            <SettingRow
+              title="Ramp floor"
+              helper="Keep at least this routing score while quota is low."
+            >
+              <div className="range-control">
+                <Slider
+                  label="Quota ramp floor"
+                  min={0}
+                  max={0.5}
+                  step={0.01}
+                  value={settings?.routing.rampFloor ?? 0.1}
+                  onValueChange={(value) =>
+                    settings && void update({ routing: { ...settings.routing, rampFloor: value } })
+                  }
+                />
+                <span>{Math.round((settings?.routing.rampFloor ?? 0.1) * 100)}%</span>
+              </div>
+            </SettingRow>
+            <UiV2.Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                settings &&
+                void update({
+                  routing: {
+                    ...settings.routing,
+                    stickyTtlMinutes: 30,
+                    paceShortLimits: true,
+                    paceMaxWaitSeconds: 30,
+                    firstTokenTimeoutSeconds: 25,
+                    qualityWeight: 4,
+                    rampStart: 0.2,
+                    rampFloor: 0.1,
+                  },
+                })
+              }
+            >
+              Reset tune defaults
+            </UiV2.Button>
+          </Group>
+          <Group title="Spending caps">
             <p className="muted">
               Global limits apply across every profile. Profile limits can make these stricter.
             </p>
-            <div className="form-grid">
+            <div className="settings-caps-grid">
               <SettingsInput
                 label="Global session cap ($)"
                 value={settings?.paidCaps.sessionUsd?.toString() ?? ''}
@@ -804,267 +1185,14 @@ export function SettingsCanvas() {
               />
             </div>
           </Group>
-          <Group title="Routing behavior">
-            <SettingRow
-              title="Pause a provider after N failed requests"
-              helper="Different requests since the last success, within 24 hours. Rate limits and quota never count. 0 = never."
-            >
-              <UiV2.Input
-                type="number"
-                min={0}
-                step={1}
-                className="w-20"
-                aria-label="Pause a provider after N failed requests"
-                value={settings?.routing.autoPauseAfterFailedRequests ?? 5}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
-                  if (settings && Number.isSafeInteger(value) && value >= 0)
-                    void update({
-                      routing: { ...settings.routing, autoPauseAfterFailedRequests: value },
-                    });
-                }}
-              />
-            </SettingRow>
-            <SettingRow
-              title="When a picked model runs out"
-              helper="If the model you picked hits a usage limit or fails, Ferry can hand the task to the next eligible model with a handover note, ask you first, or stop."
-            >
-              <SegmentedControl
-                label="When a picked model runs out"
-                value={settings?.routing.pinnedExhaustion ?? 'handover'}
-                onValueChange={(value) =>
-                  settings &&
-                  void update({
-                    routing: {
-                      ...settings.routing,
-                      pinnedExhaustion: value as typeof settings.routing.pinnedExhaustion,
-                    },
-                  })
-                }
-                options={[
-                  { value: 'handover', label: 'Hand over' },
-                  { value: 'ask', label: 'Ask me' },
-                  { value: 'fail', label: 'Stop' },
-                ]}
-              />
-            </SettingRow>
-            <SettingRow
-              title="Planner/editor roles"
-              helper="Role model selection uses catalog quality priors, context fit, tool support, and observed reliability."
-            >
-              <span className="muted">Configure per profile</span>
-            </SettingRow>
-            <SettingRow
-              title="Benchmark quality weight"
-              helper="Give published coding and tool-use scores more or less influence. Models without scores remain neutral."
-            >
-              <div className="range-control">
-                <Slider
-                  label="Benchmark quality weight"
-                  min={0}
-                  max={12}
-                  step={1}
-                  value={settings?.routing.qualityWeight ?? 4}
-                  onValueChange={(value) =>
-                    settings &&
-                    void update({ routing: { ...settings.routing, qualityWeight: value } })
-                  }
-                />
-                <span>{settings?.routing.qualityWeight ?? 4}</span>
-              </div>
-            </SettingRow>
-            <SettingRow
-              title="Tool-call repair for weaker models"
-              helper="Automatically recover tool calls written as text when native tool calling is unreliable."
-            >
-              <Switch
-                label="Tool-call repair for weaker models"
-                checked={settings?.toolCallRepair ?? true}
-                onCheckedChange={(toolCallRepair) => void update({ toolCallRepair })}
-              />
-            </SettingRow>
-          </Group>
           {settings && (
             <RoutingMappingsEditor
               routing={settings.routing}
+              loadingProviders={providersPending}
               providers={providers}
               update={(routing) => void update({ routing })}
             />
           )}
-          <Group title="Routing">
-            <p className="muted">
-              Choose how Ferry balances continuity, reliability, and provider capacity.
-            </p>
-            <SettingRow
-              title={`Wait for short rate limits (up to ${String(settings?.routing.paceMaxWaitSeconds ?? 30)} s)`}
-              helper="Stay on the same model while a per-minute limit refills."
-            >
-              <Switch
-                label="Wait for short rate limits"
-                checked={settings?.routing.paceShortLimits ?? true}
-                onCheckedChange={(paceShortLimits) => {
-                  if (settings) void update({ routing: { ...settings.routing, paceShortLimits } });
-                }}
-              />
-            </SettingRow>
-            <SettingRow
-              title="Maximum wait for short rate limits"
-              helper="Longer waits switch to another available model."
-            >
-              <div className="range-control">
-                <Slider
-                  label="Maximum wait for short rate limits in seconds"
-                  min={0}
-                  max={120}
-                  step={1}
-                  value={settings?.routing.paceMaxWaitSeconds ?? 30}
-                  onValueChange={(paceMaxWaitSeconds) => {
-                    if (settings)
-                      void update({
-                        routing: {
-                          ...settings.routing,
-                          paceMaxWaitSeconds: Math.round(paceMaxWaitSeconds),
-                        },
-                      });
-                  }}
-                />
-                <span className="whitespace-nowrap">
-                  {settings?.routing.paceMaxWaitSeconds ?? 30} s
-                </span>
-              </div>
-            </SettingRow>
-            <SettingRow
-              title={`Give up on a provider that doesn't answer within ${String(settings?.routing.firstTokenTimeoutSeconds ?? 25)} s`}
-              helper="Try another provider if no response begins. Local models are exempt."
-            >
-              <div className="range-control">
-                <Slider
-                  label="First response timeout in seconds"
-                  min={1}
-                  max={120}
-                  step={1}
-                  value={settings?.routing.firstTokenTimeoutSeconds ?? 25}
-                  onValueChange={(firstTokenTimeoutSeconds) => {
-                    if (settings)
-                      void update({
-                        routing: {
-                          ...settings.routing,
-                          firstTokenTimeoutSeconds: Math.round(firstTokenTimeoutSeconds),
-                        },
-                      });
-                  }}
-                />
-                <span className="whitespace-nowrap">
-                  {settings?.routing.firstTokenTimeoutSeconds ?? 25} s
-                </span>
-              </div>
-            </SettingRow>
-            {routingRows.map((row) => (
-              <SettingRow key={row.key} title={row.title} helper={row.helper}>
-                <div className="inline-control">
-                  <span
-                    className="routing-info"
-                    role="img"
-                    title={row.info}
-                    aria-label={`${row.title} trade-off`}
-                  >
-                    <Info size={15} />
-                  </span>
-                  <Switch
-                    label={row.title}
-                    checked={settings?.routing[row.key] ?? true}
-                    onCheckedChange={(value) => {
-                      if (settings)
-                        void update({ routing: { ...settings.routing, [row.key]: value } });
-                    }}
-                  />
-                </div>
-              </SettingRow>
-            ))}
-            <details className="routing-tune">
-              <summary>Tune</summary>
-              <SettingRow
-                title="Sticky session TTL"
-                helper="How long a conversation keeps its selected model."
-              >
-                <div className="range-control">
-                  <Slider
-                    label="Sticky session TTL in minutes"
-                    min={1}
-                    max={120}
-                    step={1}
-                    value={settings?.routing.stickyTtlMinutes ?? 30}
-                    onValueChange={(value) =>
-                      settings &&
-                      void update({
-                        routing: { ...settings.routing, stickyTtlMinutes: Math.round(value) },
-                      })
-                    }
-                  />
-                  <span>{settings?.routing.stickyTtlMinutes ?? 30} min</span>
-                </div>
-              </SettingRow>
-              <SettingRow
-                title="Ramp start"
-                helper="Begin gradual demotion below this fraction of quota remaining."
-              >
-                <div className="range-control">
-                  <Slider
-                    label="Quota ramp start"
-                    min={0.05}
-                    max={0.5}
-                    step={0.01}
-                    value={settings?.routing.rampStart ?? 0.2}
-                    onValueChange={(value) =>
-                      settings &&
-                      void update({ routing: { ...settings.routing, rampStart: value } })
-                    }
-                  />
-                  <span>{Math.round((settings?.routing.rampStart ?? 0.2) * 100)}%</span>
-                </div>
-              </SettingRow>
-              <SettingRow
-                title="Ramp floor"
-                helper="Keep at least this routing score while quota is low."
-              >
-                <div className="range-control">
-                  <Slider
-                    label="Quota ramp floor"
-                    min={0}
-                    max={0.5}
-                    step={0.01}
-                    value={settings?.routing.rampFloor ?? 0.1}
-                    onValueChange={(value) =>
-                      settings &&
-                      void update({ routing: { ...settings.routing, rampFloor: value } })
-                    }
-                  />
-                  <span>{Math.round((settings?.routing.rampFloor ?? 0.1) * 100)}%</span>
-                </div>
-              </SettingRow>
-              <UiV2.Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  settings &&
-                  void update({
-                    routing: {
-                      ...settings.routing,
-                      stickyTtlMinutes: 30,
-                      paceShortLimits: true,
-                      paceMaxWaitSeconds: 30,
-                      firstTokenTimeoutSeconds: 25,
-                      qualityWeight: 4,
-                      rampStart: 0.2,
-                      rampFloor: 0.1,
-                    },
-                  })
-                }
-              >
-                Reset tune defaults
-              </UiV2.Button>
-            </details>
-          </Group>
         </>
       );
     if (section === 'Optimizers') {
@@ -1076,96 +1204,143 @@ export function SettingsCanvas() {
         ultra: 'Only essential changes, risks, and the next action.',
       }[terse];
       return (
-        <Group title="Optimizers">
-          <SettingRow title="Terse level" helper={preview}>
-            <SegmentedControl
-              label="Terse level"
-              value={terse}
-              onValueChange={(value) => {
-                if (settings)
-                  void update({
-                    optimizers: { ...settings.optimizers, terse: value as typeof terse },
-                  });
-              }}
-              options={['off', 'lite', 'full', 'ultra'].map((value) => ({
-                value,
-                label: value.charAt(0).toUpperCase() + value.slice(1),
-              }))}
-            />
-          </SettingRow>
-          <SettingRow title="Tool-output filters" helper="Trim repeated build and test output.">
-            <Switch
-              label="Tool-output filters"
-              checked={settings?.optimizers.toolOutputFilters ?? false}
-              onCheckedChange={() => {
-                toggleOptimizer('toolOutputFilters');
-              }}
-            />
-          </SettingRow>
-          <SettingRow title="Recovery handles" helper="Keep a way to recover filtered output.">
-            <Switch
-              label="Recovery handles"
-              checked={settings?.optimizers.recoveryHandles ?? false}
-              onCheckedChange={() => {
-                toggleOptimizer('recoveryHandles');
-              }}
-            />
-          </SettingRow>
-          <SettingRow title="Context hygiene" helper="Remove stale context between steps.">
-            <Switch
-              label="Context hygiene"
-              checked={settings?.optimizers.contextHygiene ?? false}
-              onCheckedChange={() => {
-                toggleOptimizer('contextHygiene');
-              }}
-            />
-          </SettingRow>
-          <SettingRow title="RTK" helper="Downloads a pinned, checksum-verified binary.">
-            <Switch
-              label="RTK"
-              checked={settings?.optimizers.rtk ?? false}
-              onCheckedChange={() => {
-                toggleOptimizer('rtk');
-              }}
-            />
-          </SettingRow>
-          <SettingRow title="Benchmark mode" helper="Show measured changes for optimizer choices.">
-            <Switch
-              label="Benchmark mode"
-              checked={benchmarkMode}
-              onCheckedChange={(value) => {
-                setBenchmarkMode(value);
-                localStorage.setItem('ferry.benchmarkMode', String(value));
-              }}
-            />
-          </SettingRow>
-          <div className="stats-summary">
-            {!optimizerStats || optimizerStats.demo ? (
-              <>
-                <strong>No optimizer measurements yet</strong>
-                <span>Only recorded token counts appear here.</span>
-              </>
-            ) : (
-              <>
-                <strong>
-                  {optimizerStats.today.savedTokens.toLocaleString()} measured tokens saved today
-                </strong>
-                <span>
-                  {optimizerStats.today.percent}% · {optimizerStats.today.samples} recorded events
-                </span>
-              </>
-            )}
-          </div>
-          {optimizerStats?.cavemanLastRun ? (
+        <>
+          <Group title="Global defaults">
             <p className="muted">
-              Caveman · last measured run:{' '}
-              {optimizerStats.cavemanLastRun.savedTokens.toLocaleString()} estimated input tokens
-              saved ({optimizerStats.cavemanLastRun.percent.toFixed(1)}%) across{' '}
-              {optimizerStats.cavemanLastRun.samples} steps. Reply savings are not measurable per
-              response.
+              Profiles can override these.{' '}
+              <button
+                className="v2-link-button"
+                type="button"
+                onClick={() => {
+                  useUI.getState().setSettingsSection('Profiles');
+                }}
+              >
+                Open Profiles
+              </button>
             </p>
-          ) : null}
-        </Group>
+            <SettingRow title="Reply style" helper={preview}>
+              <SegmentedControl
+                label="Reply style"
+                value={terse}
+                onValueChange={(value) => {
+                  if (settings)
+                    void update({
+                      optimizers: { ...settings.optimizers, terse: value as typeof terse },
+                    });
+                }}
+                options={['off', 'lite', 'full', 'ultra'].map((value) => ({
+                  value,
+                  label:
+                    value === 'off' ? 'Normal' : value.charAt(0).toUpperCase() + value.slice(1),
+                }))}
+              />
+            </SettingRow>
+            <SettingRow
+              title="Compress older conversation (Caveman)"
+              helper="Keep recent messages intact and compress older conversation to save input tokens."
+            >
+              <SegmentedControl
+                label="Compress older conversation (Caveman)"
+                value={settings?.optimizers.cavemanInput ?? 'off'}
+                options={[
+                  { value: 'off', label: 'Off' },
+                  { value: 'lite', label: 'Lite' },
+                  { value: 'standard', label: 'Standard' },
+                ]}
+                onValueChange={(value) =>
+                  settings &&
+                  void update({
+                    optimizers: {
+                      ...settings.optimizers,
+                      cavemanInput: value as NonNullable<
+                        typeof settings
+                      >['optimizers']['cavemanInput'],
+                    },
+                  })
+                }
+              />
+            </SettingRow>
+            <SettingRow title="Tool-output filters" helper="Trim repeated build and test output.">
+              <Switch
+                label="Tool-output filters"
+                checked={settings?.optimizers.toolOutputFilters ?? false}
+                onCheckedChange={() => {
+                  toggleOptimizer('toolOutputFilters');
+                }}
+              />
+            </SettingRow>
+            <SettingRow title="Recovery handles" helper="Keep a way to recover filtered output.">
+              <Switch
+                label="Recovery handles"
+                checked={settings?.optimizers.recoveryHandles ?? false}
+                onCheckedChange={() => {
+                  toggleOptimizer('recoveryHandles');
+                }}
+              />
+            </SettingRow>
+            <SettingRow title="Context hygiene" helper="Remove stale context between steps.">
+              <Switch
+                label="Context hygiene"
+                checked={settings?.optimizers.contextHygiene ?? false}
+                onCheckedChange={() => {
+                  toggleOptimizer('contextHygiene');
+                }}
+              />
+            </SettingRow>
+            <SettingRow title="RTK" helper="Downloads a pinned, checksum-verified binary.">
+              <Switch
+                label="RTK"
+                checked={settings?.optimizers.rtk ?? false}
+                onCheckedChange={() => {
+                  toggleOptimizer('rtk');
+                }}
+              />
+            </SettingRow>
+            <SettingRow
+              title="Benchmark mode"
+              helper="Show measured changes for optimizer choices."
+            >
+              <Switch
+                label="Benchmark mode"
+                checked={benchmarkMode}
+                onCheckedChange={(value) => {
+                  setBenchmarkMode(value);
+                  localStorage.setItem('ferry.benchmarkMode', String(value));
+                }}
+              />
+            </SettingRow>
+          </Group>
+          <Group title="Measurements">
+            <div className="stats-summary">
+              {!optimizerStats ? (
+                <SkeletonRows rows={2} />
+              ) : optimizerStats.demo ? (
+                <>
+                  <strong>No optimizer measurements yet</strong>
+                  <span>Only recorded token counts appear here.</span>
+                </>
+              ) : (
+                <>
+                  <strong>
+                    {optimizerStats.today.savedTokens.toLocaleString()} measured tokens saved today
+                  </strong>
+                  <span>
+                    {optimizerStats.today.percent}% · {optimizerStats.today.samples} recorded events
+                  </span>
+                </>
+              )}
+            </div>
+            {optimizerStats?.cavemanLastRun ? (
+              <p className="muted">
+                Caveman · last measured run:{' '}
+                {optimizerStats.cavemanLastRun.savedTokens.toLocaleString()} estimated input tokens
+                saved ({optimizerStats.cavemanLastRun.percent.toFixed(1)}%) across{' '}
+                {optimizerStats.cavemanLastRun.samples} steps. Reply savings are not measurable per
+                response.
+              </p>
+            ) : null}
+          </Group>
+        </>
       );
     }
     if (section === 'Delegation')
@@ -1193,22 +1368,30 @@ export function SettingsCanvas() {
             <p className="muted">
               Agents Ferry can hand work to, merged from your user and project configuration.
             </p>
-            <ul className="v2-list" aria-label="Merged lanes">
-              {lanes.map((lane) => (
-                <li className="v2-list-row" key={lane.name}>
-                  <span className="v2-list-main">
-                    <strong>{lane.name}</strong>
-                    <small>
-                      {lane.implementer} · {lane.model ?? lane.effort ?? lane.variant ?? 'Default'}
-                    </small>
-                  </span>
-                  <span className="v2-list-meta">{lane.source}</span>
-                  <span className="v2-status-pill" data-tone={lane.trusted ? 'success' : 'warning'}>
-                    {lane.trusted ? 'Trusted' : 'Untrusted'}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            {lanesPending ? (
+              <SkeletonRows rows={3} />
+            ) : (
+              <ul className="v2-list" aria-label="Merged lanes">
+                {lanes.map((lane) => (
+                  <li className="v2-list-row" key={lane.name}>
+                    <span className="v2-list-main">
+                      <strong>{lane.name}</strong>
+                      <small>
+                        {lane.implementer} ·{' '}
+                        {lane.model ?? lane.effort ?? lane.variant ?? 'Default'}
+                      </small>
+                    </span>
+                    <span className="v2-list-meta">{lane.source}</span>
+                    <span
+                      className="v2-status-pill"
+                      data-tone={lane.trusted ? 'success' : 'warning'}
+                    >
+                      {lane.trusted ? 'Trusted' : 'Untrusted'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
             {lanes.some((lane) => lane.implementer === 'opencode' && !lane.model?.trim()) && (
               <p className="muted" role="status">
                 Choose a model for the OpenCode lane in its lane configuration, or set a default
@@ -1218,67 +1401,81 @@ export function SettingsCanvas() {
           </Group>
           <Group title="Coding CLIs">
             <p className="muted">Command-line agents Ferry found on this computer.</p>
-            <ul className="v2-list" aria-label="Coding CLIs">
-              {providers
-                .filter((provider) => provider.kind === 'cli')
-                .map((provider) => (
-                  <li className="v2-list-row" key={provider.id}>
-                    <span className="v2-list-main">
-                      <strong>{provider.name}</strong>
-                      <small>
-                        {provider.keyStatus === 'not_applicable'
-                          ? 'Detected and ready'
-                          : 'Installed; sign-in not verified'}
-                      </small>
-                    </span>
-                    <span
-                      className="v2-status-pill"
-                      data-tone={provider.keyStatus === 'not_applicable' ? 'success' : 'muted'}
-                    >
-                      {provider.keyStatus === 'not_applicable' ? 'Available' : 'Installed'}
-                    </span>
-                  </li>
-                ))}
-            </ul>
+            {providersPending ? (
+              <SkeletonRows rows={3} />
+            ) : (
+              <ul className="v2-list" aria-label="Coding CLIs">
+                {providers
+                  .filter((provider) => provider.kind === 'cli')
+                  .map((provider) => (
+                    <li className="v2-list-row" key={provider.id}>
+                      <span className="v2-list-main">
+                        <strong>{provider.name}</strong>
+                        <small>
+                          {provider.keyStatus === 'not_applicable'
+                            ? 'Detected and ready'
+                            : 'Installed; sign-in not verified'}
+                        </small>
+                      </span>
+                      <span
+                        className="v2-status-pill"
+                        data-tone={provider.keyStatus === 'not_applicable' ? 'success' : 'muted'}
+                      >
+                        {provider.keyStatus === 'not_applicable' ? 'Available' : 'Installed'}
+                      </span>
+                    </li>
+                  ))}
+              </ul>
+            )}
           </Group>
           <Group title="ACP agent detection">
             <p className="muted">
               Agents that speak the Agent Client Protocol. Ferry checks PATH and the version
               command; Pi credentials remain managed by Pi.
             </p>
-            <ul className="v2-list" aria-label="ACP agents">
-              {acpAgents.map((agent) => {
-                const configured = lanes.some(
-                  (lane) => lane.implementer === 'acp' && lane.agent === agent.id,
-                );
-                return (
-                  <li className="v2-list-row" key={agent.id}>
-                    <span className="v2-list-main">
-                      <strong>{agent.name}</strong>
-                      <small>
-                        {agent.available
-                          ? `${agent.version ?? agent.executable ?? agent.command}${configured ? ' · Configured in a lane' : ''}`
-                          : agent.installHint}
-                      </small>
-                    </span>
-                    {agent.verified && (
-                      <span className="v2-list-meta">Verified {agent.verifiedAt}</span>
-                    )}
-                    {agent.caution && (
-                      <span className="v2-status-pill" data-tone="warning">
-                        {agent.cautionNote ?? 'Use caution'}
+            {acpAgentsPending ? (
+              <SkeletonRows rows={3} />
+            ) : (
+              <ul className="v2-list" aria-label="ACP agents">
+                {acpAgents.map((agent) => {
+                  const configured = lanes.some(
+                    (lane) => lane.implementer === 'acp' && lane.agent === agent.id,
+                  );
+                  return (
+                    <li className="v2-list-row" key={agent.id}>
+                      <span className="v2-list-main">
+                        <strong>{agent.name}</strong>
+                        <small>
+                          {agent.available
+                            ? `${agent.version ?? agent.executable ?? agent.command}${configured ? ' · Configured in a lane' : ''}`
+                            : agent.installHint}
+                        </small>
+                        {agent.caution && (
+                          <small className="settings-warning">
+                            <AlertTriangle size={14} aria-hidden="true" />
+                            {agent.cautionNote ?? 'Use caution'}
+                          </small>
+                        )}
                       </span>
-                    )}
-                    <span
-                      className="v2-status-pill"
-                      data-tone={agent.available ? 'success' : 'muted'}
-                    >
-                      {agent.available ? 'Installed' : 'Not installed'}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
+                      {agent.verified && (
+                        <span className="v2-list-meta">Verified {agent.verifiedAt}</span>
+                      )}
+                      {agent.caution && (
+                        <span className="v2-status-pill" data-tone="warning">
+                          Caution
+                        </span>
+                      )}
+                      <span
+                        className="v2-status-pill"
+                        data-tone={agent.available ? 'success' : 'muted'}
+                      >
+                        {agent.available ? 'Installed' : 'Not installed'}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </Group>
         </>
       );
@@ -1314,15 +1511,19 @@ export function SettingsCanvas() {
                 }
               />
             </SettingRow>
-            {providers
-              .filter((provider) => provider.dataUse)
-              .map((provider) => (
-                <SettingRow
-                  key={provider.id}
-                  title={provider.name}
-                  helper={provider.dataUse ?? ''}
-                />
-              ))}
+            {providersPending ? (
+              <SkeletonRows rows={3} />
+            ) : (
+              providers
+                .filter((provider) => provider.dataUse)
+                .map((provider) => (
+                  <SettingRow
+                    key={provider.id}
+                    title={provider.name}
+                    helper={provider.dataUse ?? ''}
+                  />
+                ))
+            )}
             <SettingRow
               title="Log retention"
               helper="Choose how long local activity stays available."
@@ -1342,78 +1543,90 @@ export function SettingsCanvas() {
                 ]}
               />
             </SettingRow>
-            <div className="button-row">
-              <UiV2.Button size="sm" disabled>
-                Export data
-              </UiV2.Button>
-              <UiV2.Button size="sm" disabled>
-                Delete local data
-              </UiV2.Button>
-            </div>
+            <SettingRow title="Your data" helper="Export or delete data stored on this device.">
+              <div className="button-row">
+                <UiV2.Button size="sm" variant="outline" disabled>
+                  Export data
+                </UiV2.Button>
+                <UiV2.Button size="sm" variant="destructive" disabled>
+                  Delete local data
+                </UiV2.Button>
+              </div>
+            </SettingRow>
           </Group>
-          <Group title="Integrations">
+        </>
+      );
+    if (section === 'Integrations')
+      return (
+        <>
+          {' '}
+          <Group title="MCP servers">
             <p className="muted">Connect local tools through Model Context Protocol.</p>
-            {mcps.map((server) => (
-              <SettingRow
-                key={server.id}
-                title={server.name}
-                helper={`${server.transport} - ${String(server.toolCount)} tools`}
-              >
-                <div className="inline-control">
-                  <span className="status-pill">{server.status}</span>
-                  <Switch
-                    label={server.name}
-                    checked={server.status === 'connected'}
-                    onCheckedChange={(value) => void toggleMcp(server.id, value)}
-                  />
-                </div>
-              </SettingRow>
-            ))}
+            {mcpsPending ? (
+              <SkeletonRows rows={3} />
+            ) : (
+              mcps.map((server) => (
+                <SettingRow
+                  key={server.id}
+                  title={server.name}
+                  helper={`${server.transport} - ${String(server.toolCount)} tools`}
+                >
+                  <div className="inline-control">
+                    <span
+                      className="v2-status-pill"
+                      data-tone={server.status === 'connected' ? 'success' : 'muted'}
+                    >
+                      {server.status === 'connected' ? 'Connected' : 'Disconnected'}
+                    </span>
+                    <Switch
+                      label={server.name}
+                      checked={server.status === 'connected'}
+                      onCheckedChange={(value) => void toggleMcp(server.id, value)}
+                    />
+                  </div>
+                </SettingRow>
+              ))
+            )}
+            {!mcpsPending && mcps.length === 0 && (
+              <p className="muted">No MCP servers yet. Add a server to connect local tools.</p>
+            )}
             <UiV2.Button
               size="sm"
+              variant="outline"
               onClick={() => {
                 setAddMcp(true);
               }}
             >
-              Add server
+              <Plus aria-hidden="true" /> Add server
             </UiV2.Button>
           </Group>
           <Group title="Local workflows">
             <p className="muted">Enable local instructions and reusable workflows.</p>
-            {skills.map((skill) => (
-              <SettingRow key={skill.id} title={skill.name} helper={skill.description}>
-                <Switch
-                  label={skill.name}
-                  checked={skill.enabled}
-                  onCheckedChange={(value) => void toggleSkill(skill.id, value)}
-                />
-              </SettingRow>
-            ))}
+            {skillsPending ? (
+              <SkeletonRows rows={3} />
+            ) : (
+              skills.map((skill) => (
+                <SettingRow
+                  key={skill.id}
+                  title={skill.name.charAt(0).toUpperCase() + skill.name.slice(1)}
+                  helper={skill.description}
+                >
+                  <Switch
+                    label={skill.name}
+                    checked={skill.enabled}
+                    onCheckedChange={(value) => void toggleSkill(skill.id, value)}
+                  />
+                </SettingRow>
+              ))
+            )}
           </Group>
+          {!skillsPending && skills.length === 0 && (
+            <p className="muted">No local workflows yet.</p>
+          )}
         </>
       );
     return (
       <>
-        <details className="settings-developer-details">
-          <summary>Developer diagnostics</summary>
-          <DeveloperSettings
-            providerHealth={providers}
-            mockLatency={settings?.developer.mockLatency ?? false}
-            injectErrors={settings?.developer.injectErrors ?? false}
-            realDomains={settings?.developer.realDomains ?? []}
-            availableDomains={window.ferryEngineHello?.realDomains ?? []}
-            update={(patch) =>
-              void update({
-                developer: {
-                  showReferenceOverlay: settings?.developer.showReferenceOverlay ?? false,
-                  mockLatency: patch.mockLatency ?? settings?.developer.mockLatency ?? false,
-                  injectErrors: patch.injectErrors ?? settings?.developer.injectErrors ?? false,
-                  realDomains: patch.realDomains ?? settings?.developer.realDomains ?? [],
-                },
-              })
-            }
-          />
-        </details>
         <Group title="About Ferry">
           <div className="about-card">
             <div className="ferry-mark-large">
@@ -1421,11 +1634,17 @@ export function SettingsCanvas() {
             </div>
             <div>
               <strong>Ferry</strong>
-              <p>Version {appVersion ?? info?.version ?? 'unknown'}</p>
-              <p>
-                Channel {window.ferryHost?.channel ?? 'beta'} · Commit{' '}
-                {window.ferryHost?.commit ?? 'unknown'}
-              </p>
+              {!info && !appVersion ? (
+                <SkeletonStat />
+              ) : (
+                <p>Version {appVersion ?? info?.version}</p>
+              )}
+              {info && (
+                <p>
+                  Channel {window.ferryHost?.channel ?? 'beta'} · Commit{' '}
+                  {window.ferryHost?.commit ?? 'unknown'}
+                </p>
+              )}
             </div>
           </div>
           {window.ferryHost && (
@@ -1511,15 +1730,37 @@ export function SettingsCanvas() {
               )}
             </>
           )}
-          <h3>Notices</h3>
+        </Group>
+        <Group title="Notices">
           <div className="notice-list">
             <span>React Bits · MIT + Commons Clause</span>
             <span>lucide · ISC</span>
             <span>simple-icons · CC0</span>
             <span>LobeHub icons · MIT</span>
-            <span>Inter · OFL</span>
+            <span>Geist and Geist Mono · OFL</span>
+            <span>OmniRoute Caveman rules · MIT</span>
           </div>
         </Group>
+        <details className="settings-developer-details">
+          <summary>Developer diagnostics</summary>
+          <DeveloperSettings
+            providerHealth={providers}
+            mockLatency={settings?.developer.mockLatency ?? false}
+            injectErrors={settings?.developer.injectErrors ?? false}
+            realDomains={settings?.developer.realDomains ?? []}
+            availableDomains={window.ferryEngineHello?.realDomains ?? []}
+            update={(patch) =>
+              void update({
+                developer: {
+                  showReferenceOverlay: settings?.developer.showReferenceOverlay ?? false,
+                  mockLatency: patch.mockLatency ?? settings?.developer.mockLatency ?? false,
+                  injectErrors: patch.injectErrors ?? settings?.developer.injectErrors ?? false,
+                  realDomains: patch.realDomains ?? settings?.developer.realDomains ?? [],
+                },
+              })
+            }
+          />
+        </details>
       </>
     );
   };
@@ -1576,7 +1817,7 @@ export function SettingsCanvas() {
           )}
         </nav>
       </aside>
-      <div className="v2-settings-content">
+      <div className="v2-settings-content" ref={contentRef}>
         <UiV2.Button
           aria-label="Close settings"
           className="v2-settings-close"
@@ -1615,24 +1856,6 @@ export function SettingsCanvas() {
             section === 'General' ||
             (section !== 'Profiles' && saveFeedback[section]) ? (
               <div className="v2-settings-actions">
-                {section === 'General' && (
-                  <UiV2.Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setConfirm('Reset layout?');
-                      setConfirmDescription(
-                        'This restores the sidebar and panel sizes to their defaults.',
-                      );
-                      setConfirmDestructive(false);
-                      setConfirmAction(() => () => {
-                        useUI.getState().resetLayout();
-                      });
-                    }}
-                  >
-                    Reset layout
-                  </UiV2.Button>
-                )}
                 {pendingSettings && (
                   <UiV2.Button size="sm" variant="default" onClick={() => void saveSettings()}>
                     Save changes
@@ -1702,6 +1925,7 @@ export function SettingsCanvas() {
           />
           <div className="button-row dialog-actions">
             <UiV2.Button
+              variant="outline"
               onClick={() => {
                 setAddMcp(false);
               }}
@@ -1726,22 +1950,21 @@ export function SettingsCanvas() {
 }
 
 function Group({ title, children }: { title?: string; children: React.ReactNode }) {
-  const section = useUI((state) => state.settingsSection);
-  const sectionTitle = settingsPageCopy[section]?.title;
-  const visibleTitle = title === sectionTitle ? undefined : title;
   return (
-    <Section {...(visibleTitle ? { title: visibleTitle } : {})} className="settings-group-card">
+    <Section {...(title ? { title } : {})} level={3} className="settings-group-card">
       {children}
     </Section>
   );
 }
 
 function RoutingMappingsEditor({
+  loadingProviders,
   routing,
   providers,
   update,
 }: {
   routing: RoutingSettings;
+  loadingProviders: boolean;
   providers: Provider[];
   update: (routing: RoutingSettings) => void;
 }) {
@@ -1768,7 +1991,7 @@ function RoutingMappingsEditor({
 
   return (
     <>
-      <Group title="Logical model mappings">
+      <Group title="Model mappings">
         <p className="muted">
           Give one model name to multiple upstream models. Gateway requests still use normal routing
           eligibility and free-first scoring.
@@ -1780,6 +2003,7 @@ function RoutingMappingsEditor({
             <span role="columnheader">Upstream ID</span>
             <span />
           </div>
+          {routing.logicalModelMappings.length === 0 && <p className="muted">No mappings yet</p>}
           {routing.logicalModelMappings.map((mapping, index) => (
             <div
               className="routing-mapping-row"
@@ -1849,63 +2073,73 @@ function RoutingMappingsEditor({
           Add mapping
         </UiV2.Button>
       </Group>
-      <Group title="Provider request overrides">
-        <p className="muted">
-          Strip or force request parameters, add headers, or map an upstream error status. Catalog
-          defaults are included when no user value replaces them.
-        </p>
-        <div className="v2-settings-field">
-          <span>Provider</span>
-          <Select
-            label="Provider"
-            value={providerId}
-            onValueChange={setProviderId}
-            options={providers.map((provider) => ({ value: provider.id, label: provider.name }))}
-          />
-        </div>
-        <label className="v2-settings-field">
-          <span>Overrides (JSON)</span>
-          <textarea
-            aria-label="Provider request overrides JSON"
-            className="routing-overrides-editor"
-            spellCheck={false}
-            value={overrideDraft}
-            onChange={(event) => {
-              setOverrideDraft(event.target.value);
-            }}
-          />
-        </label>
-        {overrideError && (
-          <p className="text-destructive" role="alert">
-            {overrideError}
+      <details className="settings-developer-details">
+        <summary>Provider request overrides</summary>
+        <Group title="Advanced request parameters">
+          <p className="muted">
+            Strip or force request parameters, add headers, or map an upstream error status. Catalog
+            defaults are included when no user value replaces them.
           </p>
-        )}
-        <UiV2.Button
-          size="sm"
-          variant="outline"
-          onClick={() => {
-            try {
-              const parsed: unknown = JSON.parse(overrideDraft);
-              const validated = ProviderRequestOverridesSchema.parse(parsed);
-              update({
-                ...routing,
-                providerOverrides: { ...routing.providerOverrides, [providerId]: validated },
-              });
-              setOverrideError('');
-            } catch (error) {
-              setOverrideError(error instanceof Error ? error.message : String(error));
-            }
-          }}
-        >
-          Apply override
-        </UiV2.Button>
-      </Group>
+          <div className="v2-settings-field">
+            <span>Provider</span>
+            {loadingProviders ? (
+              <SkeletonRows rows={1} />
+            ) : (
+              <Select
+                label="Provider"
+                value={providerId}
+                onValueChange={setProviderId}
+                options={providers.map((provider) => ({
+                  value: provider.id,
+                  label: provider.name,
+                }))}
+              />
+            )}
+          </div>
+          <label className="v2-settings-field">
+            <span>Overrides (JSON)</span>
+            <textarea
+              aria-label="Provider request overrides JSON"
+              className="routing-overrides-editor"
+              spellCheck={false}
+              value={overrideDraft}
+              onChange={(event) => {
+                setOverrideDraft(event.target.value);
+              }}
+            />
+          </label>
+          {overrideError && (
+            <p className="text-destructive" role="alert">
+              {overrideError}
+            </p>
+          )}
+          <UiV2.Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              try {
+                const parsed: unknown = JSON.parse(overrideDraft);
+                const validated = ProviderRequestOverridesSchema.parse(parsed);
+                update({
+                  ...routing,
+                  providerOverrides: { ...routing.providerOverrides, [providerId]: validated },
+                });
+                setOverrideError('');
+              } catch (error) {
+                setOverrideError(error instanceof Error ? error.message : String(error));
+              }
+            }}
+          >
+            Apply override
+          </UiV2.Button>
+        </Group>
+      </details>
     </>
   );
 }
 
 /** Desktop-only preferences kept by the main process (tray, close button, OS notifications). */
-function NotificationSettings() {
+export function NotificationSettings() {
   const [preferences, setPreferences] = useState<ShellPreferences | null>(null);
   useEffect(() => {
     void window.ferryHost?.getShellPreferences().then(setPreferences);
@@ -1919,6 +2153,12 @@ function NotificationSettings() {
         <p className="muted">Notifications and the tray are available in the desktop app.</p>
       </Group>
     );
+  if (!preferences)
+    return (
+      <Group title="Notify me">
+        <SkeletonRows rows={3} />
+      </Group>
+    );
   return (
     <>
       <Group title="Notify me">
@@ -1928,7 +2168,7 @@ function NotificationSettings() {
         >
           <Switch
             label="Notify when a chat finishes"
-            checked={preferences?.notifyChatFinished ?? true}
+            checked={preferences.notifyChatFinished}
             onCheckedChange={(enabled) => {
               change({ notifyChatFinished: enabled });
             }}
@@ -1940,7 +2180,7 @@ function NotificationSettings() {
         >
           <Switch
             label="Notify when a chat needs approval"
-            checked={preferences?.notifyApproval ?? true}
+            checked={preferences.notifyApproval}
             onCheckedChange={(enabled) => {
               change({ notifyApproval: enabled });
             }}
@@ -1954,7 +2194,7 @@ function NotificationSettings() {
         >
           <SegmentedControl
             label="Close button"
-            value={(preferences?.closeToTray ?? true) ? 'tray' : 'quit'}
+            value={preferences.closeToTray ? 'tray' : 'quit'}
             onValueChange={(value) => {
               change({ closeToTray: value === 'tray' });
             }}
@@ -2030,6 +2270,9 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
         <span>Pattern</span>
         <span />
       </div>
+      {rules.length === 0 && (
+        <p className="muted">No rules yet. Add a rule to customize tool permissions.</p>
+      )}
       {rules.map((rule, index) => (
         <div className="rule-row" key={index}>
           <Select
@@ -2038,7 +2281,10 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
             onValueChange={(value) => {
               persist(rules.map((item, i) => (i === index ? { ...item, effect: value } : item)));
             }}
-            options={['allow', 'ask', 'deny'].map((value) => ({ value, label: value }))}
+            options={['ask', 'allow', 'deny'].map((value) => ({
+              value,
+              label: value.charAt(0).toUpperCase() + value.slice(1),
+            }))}
           />
           <Select
             label="Rule tool"
@@ -2047,7 +2293,10 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
               persist(rules.map((item, i) => (i === index ? { ...item, tool: value } : item)));
             }}
             options={['run_command', 'read_file', 'edit_file', 'write_file', 'delegate', 'mcp'].map(
-              (value) => ({ value, label: value }),
+              (value) => ({
+                value,
+                label: value.replaceAll('_', ' ').replace(/^./, (char) => char.toUpperCase()),
+              }),
             )}
           />
           <input
@@ -2062,15 +2311,23 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
               );
             }}
           />
-          <button
-            className="quiet-icon"
-            aria-label="Remove rule"
-            onClick={() => {
-              persist(rules.filter((_, i) => i !== index));
-            }}
-          >
-            ×
-          </button>
+          <UiV2.TooltipProvider>
+            <UiV2.Tooltip>
+              <UiV2.TooltipTrigger asChild>
+                <UiV2.Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label="Remove rule"
+                  onClick={() => {
+                    persist(rules.filter((_, i) => i !== index));
+                  }}
+                >
+                  <X aria-hidden="true" />
+                </UiV2.Button>
+              </UiV2.TooltipTrigger>
+              <UiV2.TooltipContent>Remove rule</UiV2.TooltipContent>
+            </UiV2.Tooltip>
+          </UiV2.TooltipProvider>
         </div>
       ))}
       <UiV2.Button

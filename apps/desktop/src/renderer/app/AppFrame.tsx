@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { ChevronRight, SlidersHorizontal } from 'lucide-react';
-import { Dialog, UiV2 } from '@ferry/ui';
+import { Dialog, UiV2, setTheme } from '@ferry/ui';
 import type { Session, SessionId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { useFerryEvents } from '../data/events';
@@ -220,11 +220,17 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const { data: settings } = useSettings();
   useEffect(() => {
     if (!settings) return;
+    setTheme(settings.theme);
     const root = document.documentElement;
     const media = window.matchMedia('(prefers-color-scheme: light)');
     const apply = () => {
       const theme =
         settings.theme === 'system' ? (media.matches ? 'light' : 'dark') : settings.theme;
+      try {
+        localStorage.setItem('ferry.resolvedTheme', theme);
+      } catch {
+        /* Storage can be unavailable. */
+      }
       root.dataset.theme = theme;
       root.classList.toggle('light', theme === 'light');
       root.classList.toggle('dark', theme === 'dark');

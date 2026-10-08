@@ -8397,3 +8397,307 @@ button:not(:disabled):active,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Settings audit: one card and row system shared by every section. */
+.v2-settings-page .settings-group-card,
+.v2-settings-page .profile-section,
+.v2-settings-page .settings-developer-details {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  padding: var(--space-5);
+  box-shadow: none;
+  margin: 0;
+  min-width: 0;
+}
+.v2-settings-dialog .v2-settings-header {
+  border: 0;
+  box-shadow: none;
+  margin-bottom: 0;
+}
+.v2-settings-page .settings-group-card .ferry-section-title,
+.v2-settings-page .profile-section > header h3 {
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+}
+.v2-settings-page .profile-section > header p {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--muted-foreground);
+  margin: 0 0 var(--space-3);
+}
+.v2-settings-page .setting-row {
+  min-height: 56px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-3) 0;
+  border: 0;
+}
+.v2-settings-page .setting-row + .setting-row {
+  border-top: 1px solid var(--border);
+}
+.v2-settings-page .setting-row > :last-child:not(:first-child) {
+  justify-self: end;
+  max-width: 100%;
+}
+.v2-settings-page .setting-row strong {
+  font-size: 13.5px;
+  line-height: 20px;
+  font-weight: 500;
+}
+.v2-settings-page .setting-row small {
+  display: block;
+  max-width: 60ch;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--muted-foreground);
+}
+.v2-settings-page .v2-list {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.v2-settings-page .v2-list-row {
+  padding-inline: 0;
+  gap: var(--space-3);
+  min-height: 56px;
+}
+.v2-settings-page .v2-list-main small {
+  white-space: normal;
+  overflow: visible;
+}
+.v2-settings-page .settings-warning {
+  display: flex;
+  align-items: start;
+  gap: var(--space-2);
+  color: var(--warning);
+  margin-top: var(--space-2);
+}
+.settings-warning svg {
+  flex: none;
+}
+.v2-settings-page .oauth-setting-row {
+  border-radius: 0;
+  border-top: 1px solid var(--border);
+}
+.v2-settings-page .oauth-setting-row:first-child {
+  border-top: 0;
+}
+.v2-settings-page .settings-caps-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.v2-settings-page .range-control {
+  width: 220px;
+}
+.v2-settings-page #keybindings-json {
+  min-height: 200px;
+  resize: vertical;
+  line-height: 20px;
+}
+.v2-settings-page .settings-developer-details > summary {
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.v2-settings-page .settings-developer-details > .settings-group-card {
+  border: 0;
+  padding: var(--space-4) 0 0;
+  margin: 0;
+}
+.v2-settings-page .rule-row,
+.v2-settings-page .rule-columns {
+  grid-template-columns: minmax(72px, 0.7fr) minmax(112px, 1fr) minmax(0, 1.5fr) 32px;
+  gap: var(--space-2);
+}
+.v2-settings-page .rule-row > * {
+  min-width: 0;
+}
+@media (max-width: 1100px) {
+  .v2-settings-page .settings-group-card,
+  .v2-settings-page .profile-section,
+  .v2-settings-page .settings-developer-details {
+    padding: var(--space-4);
+  }
+  .v2-settings-dialog .v2-settings-content {
+    padding: var(--space-6);
+  }
+  .v2-settings-page .setting-row {
+    gap: var(--space-3);
+  }
+  .v2-settings-page .range-control {
+    width: 160px;
+  }
+  .v2-settings-page .oauth-setting-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .v2-settings-page .oauth-setting-row > :nth-child(3) {
+    grid-column: 1;
+  }
+}
+@media (max-width: 850px) {
+  .v2-settings-dialog .v2-settings-page {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+  .v2-settings-page .setting-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .v2-settings-page .setting-row > :last-child:not(:first-child) {
+    justify-self: end;
+  }
+  .v2-settings-page .rule-row,
+  .v2-settings-page .rule-columns {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 1.4fr) 32px;
+  }
+}
+
+.v2-settings-dialog .settings-group-card > .setting-row + .setting-row {
+  margin-top: 0;
+}
+.v2-settings-page .profile-section {
+  gap: 0;
+}
+.v2-settings-page .profile-section > header + .setting-row {
+  border-top: 0;
+}
+.v2-settings-page .settings-group-card > .setting-row {
+  margin: 0;
+}
+.v2-settings-page .settings-group-card {
+  gap: var(--space-3);
+}
+.v2-settings-dialog .settings-group-card > .setting-row + .setting-row {
+  margin-top: calc(-1 * var(--space-3));
+}
+
+/* Provider tables retain their columns in narrow Settings dialogs; names wrap. */
+.v2-settings-page .v2-provider-cell {
+  max-width: none;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.v2-settings-page .v2-provider-name {
+  flex: 1;
+  min-width: 6ch;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.v2-settings-page .oauth-setting-row .truncate {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+@container providers-table (max-width: 600px) {
+  .v2-settings-page .v2-providers-table {
+    table-layout: fixed;
+  }
+  .v2-settings-page .v2-providers-table .v2-col-status {
+    width: 40px;
+  }
+  .v2-settings-page .v2-providers-table .v2-col-usage {
+    width: 108px;
+    white-space: normal;
+  }
+  .v2-settings-page .v2-providers-table .v2-col-enabled {
+    width: 40px;
+  }
+  .v2-settings-page .v2-providers-table .v2-col-actions {
+    width: 72px;
+  }
+  .v2-settings-page .v2-provider-usage-empty {
+    white-space: normal;
+  }
+  .v2-settings-page .v2-providers-table :is(thead th, tbody td) {
+    padding: var(--space-2) var(--space-2);
+  }
+  .v2-settings-page .v2-providers-table .v2-col-enabled {
+    padding-inline: 0;
+  }
+  .v2-settings-page .v2-providers-table .v2-col-actions {
+    padding-inline: 0;
+  }
+}
+
+/* Dialog navigation stays vertical; the page-only mobile nav must not leak in. */
+.v2-settings-dialog .v2-settings-page {
+  grid-template-rows: minmax(0, 1fr);
+}
+.v2-settings-dialog .v2-settings-nav {
+  flex-direction: column;
+  overflow-x: visible;
+}
+.v2-settings-dialog .v2-settings-content {
+  gap: var(--space-6);
+}
+@media (min-width: 1101px) {
+  .v2-settings-dialog .v2-settings-content {
+    padding: var(--space-8);
+  }
+}
+
+.v2-settings-page .setting-row > strong:first-child {
+  justify-self: start;
+}
+.v2-settings-page .stats-summary,
+.v2-settings-page .about-card {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+.v2-settings-page .stats-summary {
+  align-items: start;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.v2-settings-page .stats-summary strong {
+  font-size: 13.5px;
+  line-height: 20px;
+  font-weight: 500;
+}
+.v2-settings-page .stats-summary span {
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--muted-foreground);
+}
+.v2-settings-page .routing-mapping-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 1.3fr) 32px;
+}
+.v2-settings-page .routing-mapping-row > * {
+  min-width: 0;
+}
+
+.v2-home-stat .ferry-skeleton-chart {
+  height: 56px;
+}
+.v2-home-stat .ferry-skeleton-content-row {
+  min-height: 24px;
+}
+.v2-home-stat .ferry-skeleton-avatar {
+  width: var(--space-4);
+  height: var(--space-4);
+}
+.v2-home-stat .ferry-skeleton-helper {
+  display: none;
+}
+
+@media (max-width: 1100px) {
+  .v2-settings-dialog {
+    top: calc(50% + var(--space-6));
+    height: min(720px, calc(100dvh - 4 * var(--space-6)));
+  }
+}
+
+.v2-settings-page .lucide {
+  stroke-width: 1.75;
+}

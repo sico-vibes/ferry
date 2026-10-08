@@ -42,6 +42,7 @@ describe('SettingsCanvas', () => {
       ['Delegation', 'Delegation'],
       ['Permissions', 'Permissions'],
       ['Gateway', 'Gateway'],
+      ['Integrations', 'Integrations'],
       ['Data & privacy', 'Data & privacy'],
       ['Storage & Cloud', 'Storage & Cloud'],
       ['Shortcuts', 'Shortcuts'],
@@ -58,7 +59,7 @@ describe('SettingsCanvas', () => {
     }
   });
 
-  it('resets the persisted layout from Settings → General', () => {
+  it('resets the persisted layout from Settings → General', async () => {
     useUI.setState({
       settingsSection: 'General',
       leftCollapsed: true,
@@ -68,7 +69,7 @@ describe('SettingsCanvas', () => {
       bottomHeight: 400,
     });
     mount();
-    fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset layout' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     expect(useUI.getState()).toMatchObject({
       ...DEFAULT_LAYOUT,
@@ -109,7 +110,6 @@ describe('SettingsCanvas', () => {
         "Reserve capacity before sending so parallel tasks don't overshoot a provider's limits.",
       ),
     ).toBeTruthy();
-    fireEvent.click(screen.getByText('Tune'));
     expect(screen.getByRole('slider', { name: 'Quota ramp start' })).toBeTruthy();
   });
 
@@ -245,7 +245,7 @@ describe('SettingsCanvas', () => {
       },
     } as never;
     mount();
-    fireEvent.click(screen.getByText('Developer diagnostics'));
+    fireEvent.click(await screen.findByText('Developer diagnostics'));
     expect((await screen.findByText('connected')).textContent).toBe('connected');
     expect(screen.getByText('connected · PID 4321 · ferry/1').textContent).toContain('4321');
     expect(

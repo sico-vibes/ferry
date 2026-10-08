@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
+import { Skeleton as UiSkeleton } from '../ui';
 import { AlertTriangle, ArrowRight, Inbox } from 'lucide-react';
 
 export function EmptyState({
@@ -55,12 +56,67 @@ export function ErrorState({
   );
 }
 
-export function Skeleton({ rows = 3 }: { rows?: number }) {
+function LoadingRegion({ children, className = '' }: { children: ReactNode; className?: string }) {
+  const id = useId();
   return (
-    <div aria-label="Loading" className="skeleton-stack" role="status">
-      {Array.from({ length: rows }, (_, index) => (
-        <span className="skeleton-row" key={index} />
-      ))}
+    <div aria-busy="true" role="status" aria-labelledby={id} className={className}>
+      <span id={id} className="sr-only">
+        Loading
+      </span>
+      {children}
     </div>
+  );
+}
+
+/** Content-shaped loading placeholders. One announcement per loading region. */
+export function Skeleton({ rows = 3 }: { rows?: number }) {
+  return <SkeletonRows rows={rows} />;
+}
+export function SkeletonRows({ rows = 3 }: { rows?: number }) {
+  return (
+    <LoadingRegion className="skeleton-stack">
+      {Array.from({ length: rows }, (_, index) => (
+        <div aria-hidden="true" className="ferry-skeleton-content-row" key={index}>
+          <UiSkeleton className="ferry-skeleton-avatar" />
+          <div className="ferry-skeleton-copy">
+            <UiSkeleton />
+            <UiSkeleton className="ferry-skeleton-helper" />
+          </div>
+          <UiSkeleton className="ferry-skeleton-control" />
+        </div>
+      ))}
+    </LoadingRegion>
+  );
+}
+export function SkeletonTable({ rows = 5, columns = 4 }: { rows?: number; columns?: number }) {
+  return (
+    <LoadingRegion className="skeleton-stack">
+      {Array.from({ length: rows }, (_, row) => (
+        <div
+          aria-hidden="true"
+          className="ferry-skeleton-table-row"
+          style={{ gridTemplateColumns: `repeat(${String(columns)}, minmax(0, 1fr))` }}
+          key={row}
+        >
+          {Array.from({ length: columns }, (_, column) => (
+            <UiSkeleton key={column} />
+          ))}
+        </div>
+      ))}
+    </LoadingRegion>
+  );
+}
+export function SkeletonStat() {
+  return (
+    <LoadingRegion>
+      <UiSkeleton aria-hidden="true" className="ferry-skeleton-stat" />
+    </LoadingRegion>
+  );
+}
+export function SkeletonChart() {
+  return (
+    <LoadingRegion>
+      <UiSkeleton aria-hidden="true" className="ferry-skeleton-chart" />
+    </LoadingRegion>
   );
 }

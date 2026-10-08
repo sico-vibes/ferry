@@ -18,6 +18,9 @@ describe('page feedback states', () => {
       </>,
     );
     expect(screen.getByRole('alert').textContent).toContain('Provider probe failed');
-    expect(screen.getByRole('status', { name: 'Loading' }).children).toHaveLength(2);
+    const loading = screen.getByRole('status', { name: 'Loading' });
+    expect(loading.getAttribute('aria-busy')).toBe('true');
+    expect(loading.querySelectorAll('.ferry-skeleton-content-row')).toHaveLength(2);
+    expect(loading.querySelectorAll('.sr-only')).toHaveLength(1);
   });
 });

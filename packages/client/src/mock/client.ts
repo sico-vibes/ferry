@@ -58,15 +58,17 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
   const gatewayRequests: GatewayRequestRecord[] = [];
   const client: FerryClient = {
     cloud: {
-      status: () =>
-        Promise.resolve({
+      status: async () => {
+        await deps.before();
+        return {
           storageMode: 'local',
           configured: false,
           ownerEmail: null,
           message: null,
           auth: { signedIn: false, email: null, userId: null, isOwner: false },
           sync: { pending: 0, failed: 0, lastError: null, lastFlush: null },
-        }),
+        };
+      },
       signIn: () => Promise.reject(new Error('Cloud sign-in is unavailable in mock mode.')),
       signOut: () => Promise.resolve(),
       setStorageMode: ({ mode }) => Promise.resolve({ mode, restartRequired: true }),
@@ -79,8 +81,9 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
         gatewayKeys.some((key) => key.id === id && !key.revokedAt)
           ? Promise.resolve('ferry-gw-mock-once')
           : Promise.reject(new Error('Unknown or revoked Gateway key')),
-      settings: () =>
-        Promise.resolve({
+      settings: async () => {
+        await deps.before();
+        return {
           ...gatewaySettings,
           status: {
             running: gatewaySettings.enabled,
@@ -90,15 +93,16 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
               ? `http://127.0.0.1:${String(gatewaySettings.port)}`
               : null,
           },
-        }),
+        };
+      },
       setSettings: async (input) => {
         gatewaySettings = input;
         return client.gateway.settings();
       },
-      listKeys: () =>
-        Promise.resolve(
-          gatewayKeys.map((key) => ({ ...key, allowedModels: [...key.allowedModels] })),
-        ),
+      listKeys: async () => {
+        await deps.before();
+        return gatewayKeys.map((key) => ({ ...key, allowedModels: [...key.allowedModels] }));
+      },
       createKey: (input) => {
         const key = {
           id: crypto.randomUUID(),
@@ -132,7 +136,10 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
         if (key) key.revokedAt = new Date().toISOString();
         return Promise.resolve(undefined);
       },
-      requests: () => Promise.resolve(gatewayRequests.map((record) => ({ ...record }))),
+      requests: async () => {
+        await deps.before();
+        return gatewayRequests.map((record) => ({ ...record }));
+      },
       start: async () => {
         gatewaySettings = { ...gatewaySettings, enabled: true };
         return client.gateway.settings();

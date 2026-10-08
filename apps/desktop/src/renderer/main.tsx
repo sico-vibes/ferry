@@ -1,3 +1,4 @@
+import './theme-bootstrap';
 import '@ferry/ui/styles.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -31,7 +32,8 @@ const speedParam = new URLSearchParams(location.search).get('speed');
 const configuredSpeed = speedParam === null ? undefined : Number(speedParam);
 const previewParams = new URLSearchParams(location.search);
 const webPreview =
-  import.meta.env.DEV && (previewParams.get('preview') === 'web' || location.port === '5199');
+  import.meta.env.DEV &&
+  (previewParams.get('preview') === 'web' || ['5199', '5211'].includes(location.port));
 const previewScenario = previewParams.get('scenario') ?? 'busy';
 // `?latency=1500` slows every mock call in the web preview so loading states can be reviewed.
 const previewLatency = webPreview ? Number(previewParams.get('latency') ?? Number.NaN) : Number.NaN;

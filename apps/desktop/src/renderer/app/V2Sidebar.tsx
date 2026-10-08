@@ -1,3 +1,4 @@
+import { SkeletonRows } from '@ferry/ui';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
@@ -68,7 +69,7 @@ export function V2Sidebar({
   const collapsed = useUI((state) => state.leftCollapsed);
   const { data: settings } = useSettings();
   const displayName = useDisplayName();
-  const { data: limits = [] } = useLimits();
+  const { data: limits = [], isPending: limitsPending } = useLimits();
   const pushToast = useToasts((state) => state.push);
   const [aboutOpen, setAboutOpen] = useState(false);
   const { data: systemInfo } = useQuery({
@@ -157,7 +158,9 @@ export function V2Sidebar({
         <div className="v2-sidebar-bottom">
           {!collapsed && !pathname.startsWith('/models') && (
             <section className="v2-capacity-card" aria-label="Daily limits">
-              {tightest ? (
+              {limitsPending ? (
+                <SkeletonRows rows={1} />
+              ) : tightest ? (
                 <>
                   <div className="v2-capacity-top">
                     <span className="truncate">{tightest.providerName}</span>

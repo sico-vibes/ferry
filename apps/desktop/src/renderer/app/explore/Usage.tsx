@@ -1,6 +1,13 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ResetsTimeline, ShowMoreList, UsageChart } from '@ferry/ui';
+import {
+  SkeletonRows,
+  SkeletonChart,
+  SkeletonStat,
+  ResetsTimeline,
+  ShowMoreList,
+  UsageChart,
+} from '@ferry/ui';
 import { useFerryClient } from '../../data/client';
 import { usesRealDomain } from '../../data/realDomains';
 import { useLimits } from '../../data/queries';
@@ -17,16 +24,16 @@ const number = (value: number) => new Intl.NumberFormat().format(value);
 export function UsageTab() {
   const client = useFerryClient();
   const realQuota = usesRealDomain('quota');
-  const { data: providers = [] } = useQuery({
+  const { data: providers = [], isPending: providersPending } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
-  const { data: capacity } = useQuery({
+  const { data: capacity, isPending: capacityPending } = useQuery({
     queryKey: ['usage', 'capacity'],
     queryFn: () => client.quota.capacity(),
   });
-  const { data: limits = [] } = useLimits();
-  const { data: history = [] } = useQuery({
+  const { data: limits = [], isPending: limitsPending } = useLimits();
+  const { data: history = [], isPending: historyPending } = useQuery({
     queryKey: ['usage', 'history', 14],
     queryFn: () => client.quota.history(14),
   });
@@ -84,75 +91,86 @@ export function UsageTab() {
               rest.
             </p>
           </div>
-          <ShowMoreList
-            items={limits.filter((item) => usableProviderIds.has(item.providerId))}
-            groupKey="models:usage:limits"
-            label="providers"
-            listClassName="grid gap-4"
-            renderItem={(provider) => {
-              const { rows, untouched } = summarizeProviderWindows(provider);
-              return (
-                <li className="grid min-w-0 gap-2" key={provider.providerId}>
-                  <div className="flex min-w-0 justify-between gap-3 text-ui-label">
-                    <span className="min-w-0 truncate font-medium">{provider.providerName}</span>
-                    {provider.state !== 'known' && (
-                      <span className="text-ui-meta text-muted-foreground">
-                        {provider.state === 'paid_no_limit'
-                          ? 'Pay as you go · no daily limit'
-                          : 'No published limit'}
-                      </span>
-                    )}
-                  </div>
-                  {rows.map((window, index) => {
-                    const share = remainingShare(window);
-                    const reset = describeReset(window);
-                    return (
-                      <div
-                        className="grid min-w-0 gap-1"
-                        key={`${window.metric}-${window.period}-${window.model ?? ''}-${String(index)}`}
-                      >
-                        <div className="flex min-w-0 justify-between gap-3 text-ui-meta">
-                          <span
-                            className="min-w-0 truncate text-muted-foreground"
-                            title={window.model ?? undefined}
-                          >
-                            {window.model ? `${window.model.split('/').slice(1).join('/')} · ` : ''}
-                            {describeWindow(window)}
-                          </span>
-                          {reset ? (
-                            <span className="shrink-0 text-muted-foreground">{reset}</span>
-                          ) : null}
-                        </div>
-                        {share !== null && (
-                          <div
-                            aria-label={`${provider.providerName}: ${describeWindow(window)}`}
-                            aria-valuemax={100}
-                            aria-valuemin={0}
-                            aria-valuenow={Math.round(share * 100)}
-                            className="h-1.5 overflow-hidden rounded-full bg-muted"
-                            role="progressbar"
-                            title={`Source: ${describeSource(window)}`}
-                          >
+          {limitsPending || providersPending ? (
+            <SkeletonRows rows={4} />
+          ) : (
+            <ShowMoreList
+              items={limits.filter((item) => usableProviderIds.has(item.providerId))}
+              groupKey="models:usage:limits"
+              label="providers"
+              listClassName="grid gap-4"
+              renderItem={(provider) => {
+                const { rows, untouched } = summarizeProviderWindows(provider);
+                return (
+                  <li className="grid min-w-0 gap-2" key={provider.providerId}>
+                    <div className="flex min-w-0 justify-between gap-3 text-ui-label">
+                      <span className="min-w-0 truncate font-medium">{provider.providerName}</span>
+                      {provider.state !== 'known' && (
+                        <span className="text-ui-meta text-muted-foreground">
+                          {provider.state === 'paid_no_limit'
+                            ? 'Pay as you go · no daily limit'
+                            : 'No published limit'}
+                        </span>
+                      )}
+                    </div>
+                    {rows.map((window, index) => {
+                      const share = remainingShare(window);
+                      const reset = describeReset(window);
+                      return (
+                        <div
+                          className="grid min-w-0 gap-1"
+                          key={`${window.metric}-${window.period}-${window.model ?? ''}-${String(index)}`}
+                        >
+                          <div className="flex min-w-0 justify-between gap-3 text-ui-meta">
                             <span
-                              className="block h-full rounded-full bg-primary"
-                              style={{ width: `${String(share * 100)}%` }}
-                            />
+                              className="min-w-0 truncate text-muted-foreground"
+                              title={window.model ?? undefined}
+                            >
+                              {window.model
+                                ? `${window.model.split('/').slice(1).join('/')} · `
+                                : ''}
+                              {describeWindow(window)}
+                            </span>
+                            {reset ? (
+                              <span className="shrink-0 text-muted-foreground">{reset}</span>
+                            ) : null}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {untouched.map((group) => (
-                    <p className="truncate text-ui-meta text-muted-foreground" key={group.text}>
-                      {group.text}
-                    </p>
-                  ))}
-                </li>
-              );
-            }}
-          />
+                          {share !== null && (
+                            <div
+                              aria-label={`${provider.providerName}: ${describeWindow(window)}`}
+                              aria-valuemax={100}
+                              aria-valuemin={0}
+                              aria-valuenow={Math.round(share * 100)}
+                              className="h-1.5 overflow-hidden rounded-full bg-muted"
+                              role="progressbar"
+                              title={`Source: ${describeSource(window)}`}
+                            >
+                              <span
+                                className="block h-full rounded-full bg-primary"
+                                style={{ width: `${String(share * 100)}%` }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {untouched.map((group) => (
+                      <p className="truncate text-ui-meta text-muted-foreground" key={group.text}>
+                        {group.text}
+                      </p>
+                    ))}
+                  </li>
+                );
+              }}
+            />
+          )}
         </section>
-        {timeline ? (
+        {capacityPending || providersPending ? (
+          <section aria-label="Reset timeline" className="grid gap-4 rounded-card bg-card p-5">
+            <h2 className="text-ui-section font-semibold">Resets</h2>
+            <SkeletonRows rows={3} />
+          </section>
+        ) : timeline ? (
           <ResetsTimeline providerNames={providerNames} summary={timeline} />
         ) : (
           <section aria-label="Reset timeline" className="min-h-40 rounded-card bg-card p-5">
@@ -177,10 +195,19 @@ export function UsageTab() {
             </span>
           )}
         </header>
-        <UsageChart data={history} metric="tokens" providerNames={providerNames} />
-        <p className="text-ui-meta text-muted-foreground">
-          Cached input tokens: <span className="tabular-nums">{number(cachedTokens)}</span>
-        </p>
+        {historyPending ? (
+          <SkeletonChart />
+        ) : (
+          <UsageChart data={history} metric="tokens" providerNames={providerNames} />
+        )}
+        <div className="text-ui-meta text-muted-foreground">
+          Cached input tokens:{' '}
+          {historyPending ? (
+            <SkeletonStat />
+          ) : (
+            <span className="tabular-nums">{number(cachedTokens)}</span>
+          )}
+        </div>
         <ShowMoreList
           ariaLabel="Providers in chart"
           items={[...new Set(history.map((item) => item.providerId))]}

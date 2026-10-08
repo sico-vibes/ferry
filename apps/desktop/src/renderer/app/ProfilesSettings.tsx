@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Copy, GripVertical, Plus, Trash2, X } from 'lucide-react';
 import { listAllModels } from '@ferry/client';
-import { ProviderLogo, SegmentedControl, Select, Switch, UiV2 } from '@ferry/ui';
+import { SkeletonRows, ProviderLogo, SegmentedControl, Select, Switch, UiV2 } from '@ferry/ui';
 import {
   DIRECT_PROFILE_ID,
   type Profile,
@@ -97,13 +97,13 @@ function capValue(value: string): number | null {
 export function ProfilesSettings() {
   const client = useFerryClient();
   const cache = useQueryClient();
-  const { data: allProfiles = [] } = useProfiles();
+  const { data: allProfiles = [], isPending: profilesPending } = useProfiles();
   const { data: settings } = useSettings();
-  const { data: providers = [] } = useQuery({
+  const { data: providers = [], isPending: providersPending } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
-  const { data: models = [] } = useQuery({
+  const { data: models = [], isPending: modelsPending } = useQuery({
     queryKey: ['models'],
     queryFn: () => listAllModels(client),
   });
@@ -147,7 +147,7 @@ export function ProfilesSettings() {
     setDraft(structuredClone(profile));
   };
   const save = async () => {
-    if (!draft) return;
+    if (!draft || providersPending || modelsPending || !settings) return;
     try {
       const result = await client.profiles.save(draft);
       await cache.invalidateQueries({ queryKey: keys.profiles });
@@ -171,10 +171,18 @@ export function ProfilesSettings() {
     setFeedback(null);
     setDraft(newProfileFrom(source, name, Date.now()));
   };
-  if (!draft)
+  if (!draft || providersPending || modelsPending || !settings)
     return (
       <div className="profile-settings-v3">
-        <p className="muted">Loading profiles…</p>
+        {profilesPending || providersPending || modelsPending || !settings ? (
+          <section className="profile-section">
+            <SkeletonRows rows={5} />
+          </section>
+        ) : (
+          <section className="profile-section">
+            <p className="muted">No profiles yet. Create a profile to choose models and limits.</p>
+          </section>
+        )}
       </div>
     );
   const locked = draft.builtin;

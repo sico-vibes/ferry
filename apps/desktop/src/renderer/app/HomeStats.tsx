@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ProviderLogo, UiV2 } from '@ferry/ui';
+import { SkeletonRows, SkeletonChart, SkeletonStat, ProviderLogo, UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { activityLevel, summarizeUsage } from './usageSummary';
 import { formatTokens } from './modelFacts';
@@ -15,12 +15,29 @@ export function HomeStats() {
     queryFn: () => client.quota.history(30),
     staleTime: 60_000,
   });
-  const { data: providers = [] } = useQuery({
+  const { data: providers = [], isPending: providersPending } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
   const stats = useMemo(() => (history ? summarizeUsage(history) : null), [history]);
-  if (!stats) return null;
+  if (!stats || providersPending)
+    return (
+      <section aria-label="Usage summary" className="v2-home-stats">
+        <div className="v2-home-stat">
+          <header>Activity</header>
+          <SkeletonChart />
+        </div>
+        <div className="v2-home-stat">
+          <header>Usage</header>
+          <SkeletonStat />
+          <SkeletonRows rows={2} />
+        </div>
+        <div className="v2-home-stat">
+          <header>Top providers</header>
+          <SkeletonRows rows={3} />
+        </div>
+      </section>
+    );
   const busiest = Math.max(...stats.daily.map((day) => day.requests));
   if (busiest === 0)
     return (

@@ -2,7 +2,7 @@ import { createRoute } from '@tanstack/react-router';
 import { lazy, Suspense } from 'react';
 import { useSettings } from '../../data/queries';
 import { rootRoute } from './root';
-import { RouteLoading } from './RouteLoading';
+import { HomeLoading } from './RouteLoading';
 
 const HomeCanvas = lazy(() =>
   import('../Canvas').then((module) => ({ default: module.HomeCanvas })),
@@ -13,9 +13,9 @@ const OnboardingCanvas = lazy(() =>
 
 function HomeRoute() {
   const { data: settings } = useSettings();
-  if (!settings) return <RouteLoading />;
+  if (!settings) return <HomeLoading />;
   return (
-    <Suspense fallback={<RouteLoading />}>
+    <Suspense fallback={<HomeLoading />}>
       {!settings.onboardingComplete ? <OnboardingCanvas /> : <HomeCanvas />}
     </Suspense>
   );

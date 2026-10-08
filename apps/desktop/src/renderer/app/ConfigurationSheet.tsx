@@ -1,3 +1,4 @@
+import { SkeletonRows } from '@ferry/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { Check, SlidersHorizontal } from 'lucide-react';
 import { Pill, Select, Sheet, Switch } from '@ferry/ui';
@@ -96,7 +97,7 @@ export function ConfigurationSheet({
       contentClassName="configuration-sheet"
     >
       {!settings ? (
-        <p className="configuration-loading">Loading configuration…</p>
+        <SkeletonRows rows={5} />
       ) : (
         <div className="configuration-content">
           <section className="configuration-section">
