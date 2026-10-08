@@ -1,6 +1,6 @@
 # Ferry status
 
-Last updated: 2026-10-04. Ferry is a Windows-first desktop + CLI coding agent: local core over JSON-RPC,
+Last updated: 2026-10-09. Ferry is a Windows-first desktop + CLI coding agent: local core over JSON-RPC,
 SQLite storage, free-first provider routing with quota tracking and handoffs, workspace tools with
 checkpoints, measured token optimizers, delegation to Codex / OpenCode / Claude / ACP agents, a local
 OpenAI/Anthropic-compatible Gateway, and subscription OAuth (opt-in). Public beta channel on GitHub
@@ -11,6 +11,7 @@ Releases (`v0.9.0-beta.N`, auto-published on every merge to `main`; installed ap
 1. **Original master plan: complete** (integrated on `main` 2026-09-30; milestones below).
 2. **v0.10 upgrade waves: first batch on `main`** (`41eb69c`, beta `v0.9.0-beta.10`): P0/P2, P1, U1, U5, U2. P3/P6 parked (see below).
 3. **UI remake v2: complete on `main`** (2026-10-02, `a649d0a`): UI-0 foundation, UI-1 shell/Home/Session/drawer (user-approved at checkpoint C-UI, with seamless tone-based separation), UI-2 Library/Models/Settings/Onboarding/Review/palette/states, UI-3 legacy cleanup + polish. Gates: check 63/63, e2e 5/5 phases, 20/20 web flows, screenshots `design/screenshots/v2/` (both themes, 1440 and 1024). Remaining v0.10 work is listed below.
+5. **1.1 reliability + UX (`release/1.1-reliability`, 2026-10-09): implemented, gates green locally.** v1-G routing reliability (pace short limits, owner model, first-token timeout, never fail finished work, run report), v1-H failure ledger + provider auto-pause after 5 failed requests, v1-I requirement checklist + `check_page`, v1-J Caveman input compression and reply styles, v1-K Ferry Bench + nightly live conformance, v1-UI settings audit + skeleton loaders, v1-UX Claude-style chat (activity rows, window-edge scrollbar, mid-turn messages, context strip), flat grouped Settings, What's new, `ui:invariants` CI gate.
 4. **v0.11 (`docs/plans/v0.11-fixes-and-gateway.md`): complete.** Wave F, N1–N5, CLI parity with v0.11 settings, and shared free-model classification are integrated. `v0.9.0-beta.36` (`24b4851`) is the first green release since N3–N5; N1/N2 integration and the final main-green fixes are included. CLI parity (`e8c60ce`) and free consistency (`826d3a8`) landed after beta.36 on `feat/cli-parity`.
 
 ## Current state
