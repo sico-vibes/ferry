@@ -70,7 +70,7 @@ function EditProjectForm({ project, onDone }: { project: Workspace; onDone: () =
   };
   return (
     <form
-      className="grid gap-5"
+      className="grid min-w-0 gap-5"
       onSubmit={(event) => {
         event.preventDefault();
         void save();

@@ -4,7 +4,13 @@ import { ResetsTimeline, ShowMoreList, UsageChart } from '@ferry/ui';
 import { useFerryClient } from '../../data/client';
 import { usesRealDomain } from '../../data/realDomains';
 import { useLimits } from '../../data/queries';
-import { describeReset, describeSource, describeWindow, remainingShare } from '../../data/limits';
+import {
+  describeReset,
+  describeSource,
+  describeWindow,
+  remainingShare,
+  summarizeProviderWindows,
+} from '../../data/limits';
 
 const number = (value: number) => new Intl.NumberFormat().format(value);
 
@@ -83,56 +89,67 @@ export function UsageTab() {
             groupKey="models:usage:limits"
             label="providers"
             listClassName="grid gap-4"
-            renderItem={(provider) => (
-              <li className="grid gap-2" key={provider.providerId}>
-                <div className="flex justify-between gap-3 text-ui-label">
-                  <span className="truncate font-medium">{provider.providerName}</span>
-                  {provider.state !== 'known' && (
-                    <span className="text-ui-meta text-muted-foreground">
-                      {provider.state === 'paid_no_limit'
-                        ? 'Pay as you go · no daily limit'
-                        : 'No published limit'}
-                    </span>
-                  )}
-                </div>
-                {provider.windows.map((window, index) => {
-                  const share = remainingShare(window);
-                  const reset = describeReset(window);
-                  return (
-                    <div
-                      className="grid gap-1"
-                      key={`${window.metric}-${window.period}-${window.model ?? ''}-${String(index)}`}
-                    >
-                      <div className="flex justify-between gap-3 text-ui-meta">
-                        <span className="truncate text-muted-foreground">
-                          {window.model ? `${window.model} · ` : ''}
-                          {describeWindow(window)}
-                        </span>
-                        {reset ? (
-                          <span className="shrink-0 text-muted-foreground">{reset}</span>
-                        ) : null}
-                      </div>
-                      {share !== null && (
-                        <div
-                          aria-label={`${provider.providerName}: ${describeWindow(window)}`}
-                          aria-valuemax={100}
-                          aria-valuemin={0}
-                          aria-valuenow={Math.round(share * 100)}
-                          className="h-1.5 overflow-hidden rounded-full bg-muted"
-                          role="progressbar"
-                          title={`Source: ${describeSource(window)}`}
-                        >
+            renderItem={(provider) => {
+              const { rows, untouched } = summarizeProviderWindows(provider);
+              return (
+                <li className="grid min-w-0 gap-2" key={provider.providerId}>
+                  <div className="flex min-w-0 justify-between gap-3 text-ui-label">
+                    <span className="min-w-0 truncate font-medium">{provider.providerName}</span>
+                    {provider.state !== 'known' && (
+                      <span className="text-ui-meta text-muted-foreground">
+                        {provider.state === 'paid_no_limit'
+                          ? 'Pay as you go · no daily limit'
+                          : 'No published limit'}
+                      </span>
+                    )}
+                  </div>
+                  {rows.map((window, index) => {
+                    const share = remainingShare(window);
+                    const reset = describeReset(window);
+                    return (
+                      <div
+                        className="grid min-w-0 gap-1"
+                        key={`${window.metric}-${window.period}-${window.model ?? ''}-${String(index)}`}
+                      >
+                        <div className="flex min-w-0 justify-between gap-3 text-ui-meta">
                           <span
-                            className="block h-full rounded-full bg-primary"
-                            style={{ width: `${String(share * 100)}%` }}
-                          />
+                            className="min-w-0 truncate text-muted-foreground"
+                            title={window.model ?? undefined}
+                          >
+                            {window.model ? `${window.model.split('/').slice(1).join('/')} · ` : ''}
+                            {describeWindow(window)}
+                          </span>
+                          {reset ? (
+                            <span className="shrink-0 text-muted-foreground">{reset}</span>
+                          ) : null}
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </li>
-            )}
+                        {share !== null && (
+                          <div
+                            aria-label={`${provider.providerName}: ${describeWindow(window)}`}
+                            aria-valuemax={100}
+                            aria-valuemin={0}
+                            aria-valuenow={Math.round(share * 100)}
+                            className="h-1.5 overflow-hidden rounded-full bg-muted"
+                            role="progressbar"
+                            title={`Source: ${describeSource(window)}`}
+                          >
+                            <span
+                              className="block h-full rounded-full bg-primary"
+                              style={{ width: `${String(share * 100)}%` }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {untouched.map((group) => (
+                    <p className="truncate text-ui-meta text-muted-foreground" key={group.text}>
+                      {group.text}
+                    </p>
+                  ))}
+                </li>
+              );
+            }}
           />
         </section>
         {timeline ? (

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ProviderLimits } from '@ferry/shared';
-import { describeReset, describeWindow, remainingShare, tightestDailyWindow } from './limits';
+import {
+  describeReset,
+  describeWindow,
+  remainingShare,
+  summarizeProviderWindows,
+  tightestDailyWindow,
+} from './limits';
 
 type Window = ProviderLimits['windows'][number];
 const window = (patch: Partial<Window>): Window => ({
@@ -38,6 +44,22 @@ describe('limit formatting', () => {
       'resets in 3h 20m',
     );
     expect(describeReset(window({ resetAt: '2026-10-07T09:00:00Z' }), now)).toBeNull();
+  });
+
+  it('collapses untouched per-model windows into one line per limit', () => {
+    const summary = summarizeProviderWindows(
+      provider('OpenRouter', [
+        window({ limit: 200, used: 3, remaining: 197 }),
+        window({ model: 'openrouter/a:free', used: 2, remaining: 48 }),
+        ...Array.from({ length: 37 }, (_, index) =>
+          window({ model: `openrouter/m${String(index)}:free`, used: 0, remaining: 50 }),
+        ),
+      ]),
+    );
+    expect(summary.rows).toHaveLength(2);
+    expect(summary.untouched).toEqual([
+      { count: 37, text: '50 requests a day each for 37 other models' },
+    ]);
   });
 
   it('picks the daily window closest to running out, ignoring monthly and unknown ones', () => {

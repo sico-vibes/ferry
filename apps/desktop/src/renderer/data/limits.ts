@@ -52,6 +52,43 @@ export function describeReset(window: LimitWindow, now = Date.now()): string | n
 }
 
 /**
+ * What the Usage page shows for one provider: its own windows and any per-model window you've
+ * used, while untouched per-model windows with the same limit collapse into one summary line
+ * (OpenRouter publishes the same daily limit for every free model).
+ */
+export function summarizeProviderWindows(provider: ProviderLimits): {
+  rows: LimitWindow[];
+  untouched: { count: number; text: string }[];
+} {
+  const rows: LimitWindow[] = [];
+  const groups = new Map<string, { count: number; window: LimitWindow }>();
+  for (const window of provider.windows) {
+    if (!window.model || window.used > 0) {
+      rows.push(window);
+      continue;
+    }
+    const key = `${window.metric}:${window.period}:${String(window.limit)}`;
+    const group = groups.get(key);
+    if (group) group.count += 1;
+    else groups.set(key, { count: 1, window });
+  }
+  const untouched = [...groups.values()].map(({ count, window }) => {
+    const unit = metricLabels[window.metric];
+    const period = window.period === 'day' ? 'a day' : 'a month';
+    const limit =
+      window.limit === null ? 'No published limit' : `${String(window.limit)} ${unit} ${period}`;
+    return {
+      count,
+      text:
+        count === 1
+          ? `${window.model ?? ''} · ${limit}`
+          : `${limit} each for ${String(count)} other models`,
+    };
+  });
+  return { rows, untouched };
+}
+
+/**
  * The daily window closest to running out, for the sidebar. Only windows you've used today count:
  * an untouched free plan at 100% says nothing about your day.
  */

@@ -8372,6 +8372,28 @@ button:not(:disabled):active,
   color: var(--muted-foreground);
 }
 .v2-edit-project-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-width: none;
   max-height: min(720px, calc(100vh - 48px));
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+/* The Library-page form rows assumed a wide page; inside the dialog, fields shrink to fit. */
+.v2-edit-project-dialog .v2-project-form-row {
+  max-width: none;
+  grid-template-columns: 128px minmax(0, 1fr);
+  margin-bottom: 0;
+}
+.v2-edit-project-dialog .v2-project-form-row > *,
+.v2-edit-project-dialog .ferry-select-trigger {
+  min-width: 0;
+}
+.v2-edit-project-dialog .v2-gate-add {
+  max-width: none;
+}
+.v2-edit-project-dialog [data-slot='dialog-description'],
+.v2-edit-project-dialog .v2-project-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
