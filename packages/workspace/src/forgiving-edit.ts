@@ -87,7 +87,15 @@ export function findForgivingEditResult(text: string, search: string): Forgiving
   const matcher = new DiffMatchPatch();
   matcher.Match_Threshold = 0.4;
   matcher.Match_Distance = 1000;
-  const location = matcher.match_main(text, search, 0);
+  // diff-match-patch throws "Pattern too long" past Match_MaxBits (32) characters: locate the
+  // block by its opening characters, then require the whole snippet to be similar below.
+  const probe = search.slice(0, Math.max(1, matcher.Match_MaxBits || 32));
+  let location = -1;
+  try {
+    location = matcher.match_main(text, probe, 0);
+  } catch {
+    location = -1;
+  }
   if (location >= 0) {
     const snippet = text.slice(location, location + search.length);
     const match = makeMatch(text, location, snippet.length, 1);

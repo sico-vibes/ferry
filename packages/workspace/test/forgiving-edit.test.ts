@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { findForgivingEdit, editRepairHint } from '../src/forgiving-edit.js';
+import {
+  editRepairHint,
+  findForgivingEdit,
+  findForgivingEditResult,
+} from '../src/forgiving-edit.js';
 describe('forgiving edit matcher', () => {
   it.each([
     ['line-trimmed', '  alpha  \n beta  ', 'alpha\nbeta'],
@@ -9,6 +13,24 @@ describe('forgiving edit matcher', () => {
     ['trimmed-boundary', 'alpha beta', 'alpha beta'],
   ])('matches %s edits', (_name, actual, search) => {
     expect(findForgivingEdit(actual, search)?.count).toBe(1);
+  });
+  it('never throws on long search blocks that only match approximately', () => {
+    const file = [
+      '<script>',
+      "  let posts = JSON.parse(localStorage.getItem('posts') || '[]');",
+      '  if (posts.length === 0) {',
+      "    posts = [{ id: 1, title: 'Welcome' }];",
+      '    save();',
+      '  }',
+      "  const app = document.getElementById('app');",
+      '</script>',
+    ].join('\n');
+    const search = [
+      "        let posts = JSON.parse(localStorage.getItem('posts') || '[]');",
+      "        const app = document.getElementById('app');",
+      '        renderEverything();',
+    ].join('\n');
+    expect(() => findForgivingEditResult(file, search)).not.toThrow();
   });
   it('reports exact repeated matches and refuses a disproportionate block', () => {
     const match = findForgivingEdit('x\nx\n', 'x');

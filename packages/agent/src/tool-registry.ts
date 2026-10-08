@@ -160,7 +160,8 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
   const defs: AgentTool[] = [
     {
       name: 'check_page',
-      title: 'Check web page in a headless browser',
+      title:
+        'Check a web page in a headless browser. target: the workspace path of the .html file, e.g. "blog.html" (opened directly, no server needed), or a localhost URL',
       schema: CheckPageSchema,
       permission: {
         path: (a) => {

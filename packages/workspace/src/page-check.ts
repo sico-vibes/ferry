@@ -2,7 +2,7 @@ import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
@@ -30,15 +30,17 @@ export function parsePageTarget(target: string): { url: string } | { file: strin
       throw new Error('check_page only accepts localhost or 127.0.0.1 URLs');
     return { url: url.href };
   }
+  // file:// URLs and absolute paths are accepted; the workspace jail rejects anything outside.
+  const file = /^file:\/\//i.test(target) ? fileURLToPath(target) : target;
   if (
-    /^[a-z][a-z\d+.-]*:/i.test(target) ||
-    path.isAbsolute(target) ||
-    path.win32.isAbsolute(target) ||
-    !/\.html$/i.test(target) ||
-    target.split(/[\\/]/).includes('..')
+    (/^[a-z][a-z\d+.-]*:/i.test(file) && !path.win32.isAbsolute(file)) ||
+    !/\.html?$/i.test(file) ||
+    file.split(/[\\/]/).includes('..')
   )
-    throw new Error('check_page requires a workspace-relative .html path');
-  return { file: target };
+    throw new Error(
+      'check_page needs an .html file in the workspace (for example "blog.html"; no server needed) or a localhost URL',
+    );
+  return { file };
 }
 
 export async function findBrowser(): Promise<string | null> {

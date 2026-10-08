@@ -2776,7 +2776,13 @@ export class AgentLoop {
           )
             ? 'all available models were busy (rate limits)'
             : message;
-        const warning = `Final check skipped (${taskRecord.nextStep ?? runState.lastStep}): ${reason}`;
+        const attempted = taskRecord.nextStep ?? runState.lastStep;
+        // Internal role/handover wording ("Editor should apply…") is not meaningful to the user.
+        const stepLabel =
+          !attempted || /planner|editor|handoff|briefing/i.test(attempted)
+            ? 'last step'
+            : attempted;
+        const warning = `Final check skipped (${stepLabel}): ${reason}`;
         runState.report.warnings.push(warning);
         this.addPart(sessionId, {
           type: 'text',

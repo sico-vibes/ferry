@@ -82,11 +82,12 @@ describe('check_page parsers', () => {
       'http://localhost.example.com',
       'http://user@localhost',
       '../blog.html',
-      'C:\\blog.html',
-      'file:///blog.html',
       'blog.js',
     ])
       expect(() => parsePageTarget(target)).toThrow();
+    // Absolute paths and file URLs parse; the workspace jail rejects ones outside the workspace.
+    expect(parsePageTarget('C:\\work\\blog.html')).toEqual({ file: 'C:\\work\\blog.html' });
+    expect('file' in parsePageTarget('file:///C:/work/blog.html')).toBe(true);
     expect(() => CheckPageSchema.parse({ target: 'blog.html', waitMs: 5001 })).toThrow();
   });
 });
