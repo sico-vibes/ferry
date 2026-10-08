@@ -6,7 +6,14 @@ import { PlanItemSchema } from '../src/domain/session.js';
 
 describe('requirements checklist', () => {
   it('keeps the blog prompt bullet wording and all four requirements', () => {
-    const prompt = readFileSync(new URL('../../../.dev/blog-prompt.txt', import.meta.url), 'utf8');
+    // The blog prompt is committed with the Ferry Bench task (the .dev copy is local-only).
+    const task = JSON.parse(
+      readFileSync(
+        new URL('../../../scripts/bench/tasks/blog-html/task.json', import.meta.url),
+        'utf8',
+      ),
+    ) as { prompt: string };
+    const prompt = task.prompt;
     const bullets = prompt
       .split(/\r?\n/)
       .filter((line) => line.startsWith('- '))
