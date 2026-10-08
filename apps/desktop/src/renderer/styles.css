@@ -3375,6 +3375,14 @@ body {
 .command-palette .palette-chat {
   padding-left: 34px;
 }
+.command-palette .palette-snippet {
+  display: block;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .command-palette [cmdk-item] kbd {
   flex: none;
 }

@@ -34,6 +34,7 @@ export const DEFAULT_KEYBINDINGS: Keybinding[] = [
   { command: 'tab.next', key: 'Ctrl+Tab', when: [] },
   { command: 'settings.open', key: 'Ctrl+,', when: [] },
   { command: 'folder.open', key: 'Ctrl+O', when: ['isDesktop'] },
+  { command: 'files.search', key: 'Ctrl+P', when: [] },
 ];
 
 export function parseKeybindings(raw: unknown): KeybindingsValidation {

@@ -49,6 +49,7 @@ import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
 import { ComposerModelChip } from './SessionPowerControls';
 import { EffortChip } from './EffortChip';
+import { useComposerInsert } from '../data/composerInsert';
 import { FullOutputDialog } from './FullOutputDialog';
 import { useDisplayName } from './useDisplayName';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -269,6 +270,7 @@ export function HomeCanvas() {
   const { data: settings } = useSettings();
   const displayName = useDisplayName();
   const [prompt, setPrompt] = useState('');
+  useComposerInsert(setPrompt);
   const [draftProfileId, setDraftProfileId] = useState<string | null>(null);
   const [draftModelRef, setDraftModelRef] = useState<ModelRef | null>(null);
   const [draftEffort, setDraftEffort] = useState<Effort | null>(null);
@@ -976,6 +978,7 @@ export function SessionCanvas() {
   });
   const { data: profiles = [] } = useProfiles();
   const [prompt, setPrompt] = useState('');
+  useComposerInsert(setPrompt);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const openModelPicker = useCallback(() => {
     setModelPickerOpen(true);

@@ -5,7 +5,10 @@ import {
   Bell,
   Check,
   ChevronDown,
+  FileSearch,
+  FileText,
   FolderOpen,
+  MessageSquareText,
   Network,
   Search,
   Settings2,
@@ -23,6 +26,7 @@ import { useToasts } from '../state/toasts';
 import { useUI, type SettingsSection } from '../state/ui';
 import { settingsSections } from '../state/ui.types';
 import { openProjectFolder } from '../data/projects';
+import { insertIntoComposer } from '../data/composerInsert';
 import { ModelDetailsCard } from './ModelDetailsCard';
 import { formatTokens } from './modelFacts';
 import { matchesKeybinding } from '@ferry/config/keybindings';
@@ -170,6 +174,9 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
   const density = useUI((state) => state.density);
   const [open, setOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
+  // "files" searches the current project's files and inserts an @mention into the composer.
+  const [mode, setMode] = useState<'all' | 'files'>('all');
+  const selectedWorkspaceId = useUI((state) => state.selectedWorkspaceId);
   const actionAfterClose = useRef<(() => void | Promise<void>) | null>(null);
   const { bindings } = useKeybindings();
   const PaletteCommand = useCmdk(open);
@@ -181,22 +188,28 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
         (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
       const terminalFocus =
         target instanceof HTMLElement && Boolean(target.closest('.xterm, [data-terminal-focus]'));
+      const context = {
+        editableFocus,
+        terminalFocus,
+        paletteOpen: open,
+        isDesktop: Boolean(window.ferryHost),
+      };
       const binding = bindings.find((item) => item.command === 'palette.open');
-      if (
-        binding &&
-        matchesKeybinding(binding, event, {
-          editableFocus,
-          terminalFocus,
-          paletteOpen: open,
-          isDesktop: Boolean(window.ferryHost),
-        })
-      ) {
+      const filesBinding = bindings.find((item) => item.command === 'files.search');
+      if (binding && matchesKeybinding(binding, event, context)) {
         event.preventDefault();
+        setMode('all');
         setOpen((value) => !value);
+      } else if (filesBinding && matchesKeybinding(filesBinding, event, context)) {
+        event.preventDefault();
+        setSearchValue('');
+        setMode('files');
+        setOpen(true);
       }
     };
     window.addEventListener('keydown', handler);
     const openPalette = () => {
+      setMode('all');
       setOpen(true);
     };
     window.addEventListener('ferry:open-command-palette', openPalette);
@@ -305,6 +318,24 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
   };
   const query = searchValue.trim();
   const searching = query.length > 0;
+  // Files come from the open chat's project, or the project picked for the next chat.
+  const currentProjectId =
+    sessions.find((session) => session.id === activeId)?.workspaceId ?? selectedWorkspaceId;
+  const currentProject = workspaces.find((workspace) => workspace.id === currentProjectId);
+  const { data: fileResults = [] } = useQuery({
+    queryKey: ['palette-files', currentProject?.id, query],
+    queryFn: () =>
+      currentProject
+        ? client.workspaces.searchFiles({ workspaceId: currentProject.id, query, limit: 30 })
+        : Promise.resolve([]),
+    enabled: open && mode === 'files' && Boolean(currentProject),
+  });
+  // Message text matches (titles are already matched client-side).
+  const { data: messageResults = [] } = useQuery({
+    queryKey: ['palette-message-search', query],
+    queryFn: () => client.sessions.search({ query }),
+    enabled: open && mode === 'all' && query.length >= 2 && !query.startsWith('>'),
+  });
   const allChats = sessions.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   // Idle: a few recent chats so actions and settings stay in view; searching covers every chat.
   const recentChats = searching ? allChats : allChats.slice(0, 6);
@@ -319,7 +350,7 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
   };
   // Alt+1…6 opens the matching recent chat while the palette is open (shown next to each row).
   useEffect(() => {
-    if (!open || searching) return;
+    if (!open || searching || mode !== 'all') return;
     const onKey = (event: KeyboardEvent) => {
       if (!event.altKey || event.ctrlKey || event.metaKey) return;
       const digit = Number(event.key);
@@ -336,6 +367,7 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
   const quickActions: { id: string; label: string; shortcut: string; icon: typeof Search }[] = [
     { id: 'new', label: 'New chat', shortcut: 'Ctrl+N', icon: SquarePen },
     { id: 'folder', label: 'Open folder', shortcut: 'Ctrl+O', icon: FolderOpen },
+    { id: 'files', label: 'Search files', shortcut: 'Ctrl+P', icon: FileSearch },
   ];
   const settingsShortcuts: SettingsSection[] = searching
     ? [...settingsSections]
@@ -365,7 +397,10 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
       open={open}
       onOpenChange={(value) => {
         setOpen(value);
-        if (!value) setSearchValue('');
+        if (!value) {
+          setSearchValue('');
+          setMode('all');
+        }
       }}
       title="Command palette"
       description="Find a Ferry action, session, or workspace."
@@ -389,12 +424,42 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
               autoFocus
               value={searchValue}
               onValueChange={setSearchValue}
-              placeholder="Search chats"
+              placeholder={
+                mode === 'files'
+                  ? currentProject
+                    ? `Search files in ${currentProject.name}`
+                    : 'Search files'
+                  : 'Search chats'
+              }
             />
           </div>
           <PaletteCommand.List>
-            <PaletteCommand.Empty>No results.</PaletteCommand.Empty>
-            {!query.startsWith('>') && recentChats.length > 0 && (
+            <PaletteCommand.Empty>
+              {mode === 'files' && !currentProject
+                ? 'Open a chat in a project, or pick a project, to search its files.'
+                : 'No results.'}
+            </PaletteCommand.Empty>
+            {mode === 'files' && fileResults.length > 0 && (
+              <PaletteCommand.Group heading="Files">
+                {fileResults.map((file) => (
+                  <PaletteCommand.Item
+                    key={file.path}
+                    // The engine already ranked these by the query; keep them all visible.
+                    value={`${query} ${file.path}`}
+                    onSelect={() => {
+                      closeThenRun(() => {
+                        insertIntoComposer(`@${file.path} `);
+                      });
+                    }}
+                  >
+                    <FileText aria-hidden="true" />
+                    <span className="palette-label">{file.name}</span>
+                    <span className="palette-meta">{file.path}</span>
+                  </PaletteCommand.Item>
+                ))}
+              </PaletteCommand.Group>
+            )}
+            {mode === 'all' && !query.startsWith('>') && recentChats.length > 0 && (
               <PaletteCommand.Group heading="Chats">
                 {recentChats.map((session, index) => (
                   <PaletteCommand.Item
@@ -412,7 +477,28 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
                 ))}
               </PaletteCommand.Group>
             )}
-            {searching && !query.startsWith('>') && workspaces.length > 0 && (
+            {mode === 'all' && messageResults.length > 0 && (
+              <PaletteCommand.Group heading="In messages">
+                {messageResults.slice(0, 8).map((session) => (
+                  <PaletteCommand.Item
+                    key={`message-${session.id}`}
+                    // The engine matched the query in the message text; keep the row visible.
+                    value={`${query} ${session.title} ${session.match} message-${session.id}`}
+                    onSelect={() => {
+                      openChat(session.id, session.title);
+                    }}
+                  >
+                    <MessageSquareText aria-hidden="true" />
+                    <span className="palette-label">
+                      {session.title}
+                      <small className="palette-snippet">{session.match}</small>
+                    </span>
+                    <span className="palette-meta">{projectName(session.workspaceId)}</span>
+                  </PaletteCommand.Item>
+                ))}
+              </PaletteCommand.Group>
+            )}
+            {mode === 'all' && searching && !query.startsWith('>') && workspaces.length > 0 && (
               <PaletteCommand.Group heading="Projects">
                 {workspaces.map((workspace) => (
                   <PaletteCommand.Item
@@ -433,38 +519,45 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
                 ))}
               </PaletteCommand.Group>
             )}
-            <PaletteCommand.Group heading="Quick actions">
-              {quickActions.map(({ id, label, shortcut, icon: Icon }) => (
-                <PaletteCommand.Item
-                  key={id}
-                  value={label}
-                  aria-label={label}
-                  onSelect={() => {
-                    run(id);
-                  }}
-                >
-                  <Icon aria-hidden="true" />
-                  <span className="palette-label">{label}</span>
-                  <kbd>{shortcut}</kbd>
-                </PaletteCommand.Item>
-              ))}
-            </PaletteCommand.Group>
-            <PaletteCommand.Group heading="Settings">
-              {settingsShortcuts.map((section) => (
-                <PaletteCommand.Item
-                  key={section}
-                  value={`Settings ${section}`}
-                  aria-label={`Settings ${section}`}
-                  onSelect={() => {
-                    run(`settings:${section}`);
-                  }}
-                >
-                  <Settings2 aria-hidden="true" />
-                  <span className="palette-label">{section}</span>
-                </PaletteCommand.Item>
-              ))}
-            </PaletteCommand.Group>
-            {searching && (
+            {mode === 'all' && (
+              <PaletteCommand.Group heading="Quick actions">
+                {quickActions.map(({ id, label, shortcut, icon: Icon }) => (
+                  <PaletteCommand.Item
+                    key={id}
+                    value={label}
+                    aria-label={label}
+                    onSelect={() => {
+                      if (id === 'files') {
+                        setSearchValue('');
+                        setMode('files');
+                      } else run(id);
+                    }}
+                  >
+                    <Icon aria-hidden="true" />
+                    <span className="palette-label">{label}</span>
+                    <kbd>{shortcut}</kbd>
+                  </PaletteCommand.Item>
+                ))}
+              </PaletteCommand.Group>
+            )}
+            {mode === 'all' && (
+              <PaletteCommand.Group heading="Settings">
+                {settingsShortcuts.map((section) => (
+                  <PaletteCommand.Item
+                    key={section}
+                    value={`Settings ${section}`}
+                    aria-label={`Settings ${section}`}
+                    onSelect={() => {
+                      run(`settings:${section}`);
+                    }}
+                  >
+                    <Settings2 aria-hidden="true" />
+                    <span className="palette-label">{section}</span>
+                  </PaletteCommand.Item>
+                ))}
+              </PaletteCommand.Group>
+            )}
+            {mode === 'all' && searching && (
               <PaletteCommand.Group heading="Commands">
                 {actions.map(({ id, label, shortcut }) => (
                   <PaletteCommand.Item
