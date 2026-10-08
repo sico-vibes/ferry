@@ -641,8 +641,9 @@ try {
     }
   }
   if (tempRoot) {
-    const resolvedTemp = resolve(tempRoot);
-    const resolvedSystemTemp = resolve(tmpdir());
+    // Compare long forms: tempRoot is created long, CI's TEMP is spelled short (RUNNER~1).
+    const resolvedTemp = canonicalPath(tempRoot);
+    const resolvedSystemTemp = canonicalPath(tmpdir());
     if (!resolvedTemp.toLowerCase().startsWith(`${resolvedSystemTemp.toLowerCase()}\\`)) {
       record(
         'Remove temporary install profiles',
