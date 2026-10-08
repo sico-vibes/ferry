@@ -269,6 +269,11 @@ Var UnFerryIsUpdated
   ${IfNot} ${Errors}
     StrCpy $ForceDeleteUserData 1
   ${EndIf}
+  ; Ferry may be hidden in the tray, and its engine runs as more processes from this folder. Stop
+  ; them all and wait until they are gone, so file removal never races an exiting process (which
+  ; left Ferry.exe behind). The uninstaller itself runs from a temporary copy, not $INSTDIR.
+  nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "$$dir='$INSTDIR'; $$deadline=(Get-Date).AddSeconds(15); do { $$running=@(Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith($$dir, [StringComparison]::OrdinalIgnoreCase) }); if ($$running.Count -eq 0) { break }; $$running | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 300 } while ((Get-Date) -lt $$deadline)"`
+  Pop $0
 !macroend
 
 !macro customUnWelcomePage

@@ -42,6 +42,15 @@ describe('NSIS update preservation', () => {
     expect(macro('FerryDeleteUserData')).toContain('RMDir /r "$APPDATA\\@ferry\\desktop"');
   });
 
+  it('stops every process from the install folder and waits before files are removed', () => {
+    const init = macro('customUnInit');
+    // A Ferry hidden in the tray (and its engine processes) must be gone, not just signalled.
+    expect(init).toContain("$$dir='$INSTDIR'");
+    expect(init).toContain('Stop-Process -Id $$_.ProcessId -Force');
+    expect(init).toContain('while ((Get-Date) -lt $$deadline)');
+    expect(init).toContain('[StringComparison]::OrdinalIgnoreCase');
+  });
+
   it('bounds every environment broadcast and detects existing per-user installations', () => {
     const broadcasts = installer.split('\n').filter((line) => line.includes('SendMessage'));
     expect(broadcasts).toHaveLength(3);
