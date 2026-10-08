@@ -165,6 +165,8 @@ export interface StepGeneratorInput {
   onReasoning?: (text: string) => void;
   onToolDelta?: () => void;
   modelHints: ModelHints;
+  /** "required": the model must call a tool this step (used for requirement verification). */
+  toolChoice?: 'auto' | 'required';
 }
 export type StepGenerator = (input: StepGeneratorInput) => Promise<GeneratedStep>;
 
@@ -685,6 +687,8 @@ export class AgentLoop {
           terseLevel: this.options.terseLevel ?? this.options.profile.optimizers.terse,
           ...(this.options.promptSections ? { sections: this.options.promptSections } : {}),
         });
+        // A verification round must use tools (check, read, update_plan), not restate the summary.
+        const verifying = Boolean(verificationNote);
         if (verificationNote) {
           system += `\n\n${verificationNote}`;
           verificationNote = undefined;
@@ -1411,6 +1415,7 @@ export class AgentLoop {
           ),
           messages: contextMessages,
           tools: requestedRole === 'planner' && stepKind === 'plan' ? [] : tools,
+          ...(verifying && tools.length ? { toolChoice: 'required' as const } : {}),
           modelHints: this.options.modelHints?.(selected) ?? {
             toolProtocol: 'native',
             editFormat: 'search_replace',
@@ -2729,7 +2734,7 @@ export class AgentLoop {
               return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
             verificationRounds++;
             // Inject one system turn without inventing a user request.
-            verificationNote = `Verification round ${String(verificationRounds)}/2: before finishing, check these pending items with tools and call update_plan with status + evidence (or skipped with a reason):\n${pending.map((item) => `- ${item.id}: ${item.text}`).join('\n')}\nThen give a short summary.`;
+            verificationNote = `Verification round ${String(verificationRounds)}/2: before finishing, check these pending items with tools and call update_plan with status + evidence (or skipped with a reason). For web pages, read the visible text from check_page against each item (for example raw Markdown symbols where formatted text is expected) and fix what does not match:\n${pending.map((item) => `- ${item.id}: ${item.text}`).join('\n')}\nThen give a short summary.`;
             rolesEnabled = false;
             continue;
           }
@@ -3577,6 +3582,7 @@ export function createStepGenerator(
           model.providerId as import('@ferry/providers').MessageNormalizationProvider,
         ),
         tools: sdkTools as unknown as ToolSet,
+        ...(input.toolChoice === 'required' ? { toolChoice: 'required' as const } : {}),
         abortSignal: signal,
         maxRetries: 0,
         onError: () => undefined,

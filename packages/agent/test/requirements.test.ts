@@ -172,16 +172,20 @@ describe('verification before finishing', () => {
   it('ends after exactly two unanswered verification rounds', async () => {
     await fixture(async (options, sessionId) => {
       const systems: string[] = [];
+      const toolChoices: (string | undefined)[] = [];
       const result = await new AgentLoop({
         ...options,
-        generator: ({ system }) => {
+        generator: ({ system, toolChoice }) => {
           systems.push(system);
+          toolChoices.push(toolChoice);
           return Promise.resolve({ text: 'Done.' });
         },
       }).run({ sessionId });
       expect(systems).toHaveLength(3);
       expect(systems[1]).toContain('Verification round 1/2');
       expect(systems[2]).toContain('Verification round 2/2');
+      // Verification rounds must use tools; ordinary steps leave the choice to the model.
+      expect(toolChoices).toEqual([undefined, 'required', 'required']);
       expect(
         result.taskRecord.plan.every(
           (item) => item.status === 'skipped' && item.evidence === 'not verified',
