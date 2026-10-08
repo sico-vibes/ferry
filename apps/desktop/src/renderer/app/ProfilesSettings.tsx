@@ -628,13 +628,57 @@ export function ProfilesSettings() {
               ]}
             />
           </div>
+        </ProfileSection>
+        <ProfileSection
+          title="Optimization"
+          helper="Save tokens in older conversation and choose how Ferry replies."
+        >
           <div className="setting-row">
             <div>
-              <strong>Terse replies</strong>
-              <small>How much routine detail Ferry keeps in responses.</small>
+              <strong>Compress older conversation (Caveman)</strong>
+              <small>
+                {
+                  {
+                    off: 'Keep conversation text unchanged.',
+                    lite: 'Remove filler from older prose; preserve technical details.',
+                    standard: 'Shorten older prose further; preserve technical details.',
+                  }[draft.optimizers.cavemanInput]
+                }
+              </small>
             </div>
             <SegmentedControl
-              label="Profile terse level"
+              label="Compress older conversation (Caveman)"
+              value={draft.optimizers.cavemanInput}
+              onValueChange={(value) => {
+                patch('optimizers', {
+                  ...draft.optimizers,
+                  cavemanInput: value as Profile['optimizers']['cavemanInput'],
+                });
+              }}
+              options={[
+                { value: 'off', label: 'Off' },
+                { value: 'lite', label: 'Lite' },
+                { value: 'standard', label: 'Standard' },
+              ]}
+            />
+          </div>
+          <div className="setting-row">
+            <div>
+              <strong>Reply style</strong>
+              <small>
+                {
+                  {
+                    off: 'Normal prose with full response detail.',
+                    lite: 'Concise, complete sentences without filler.',
+                    full: 'Short fragments with all technical substance.',
+                    ultra: 'Telegraphic replies with common prose abbreviations.',
+                  }[draft.optimizers.terse]
+                }{' '}
+                Tool arguments and file contents stay complete.
+              </small>
+            </div>
+            <SegmentedControl
+              label="Reply style"
               value={draft.optimizers.terse}
               onValueChange={(value) => {
                 patch('optimizers', {
@@ -644,7 +688,7 @@ export function ProfilesSettings() {
               }}
               options={['off', 'lite', 'full', 'ultra'].map((value) => ({
                 value,
-                label: value.charAt(0).toUpperCase() + value.slice(1),
+                label: value === 'off' ? 'Normal' : value.charAt(0).toUpperCase() + value.slice(1),
               }))}
             />
           </div>

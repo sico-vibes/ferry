@@ -25,7 +25,8 @@ import {
   compactContext,
   optimizeContextMessages,
   estimateTokens as estimateOptimizerTokens,
-  TERSE_LEVEL_TEXT,
+  compressCavemanMessages,
+  type CavemanInputCache,
 } from '@ferry/optimizer';
 import {
   classifyStep,
@@ -109,6 +110,7 @@ export type AgentEvent =
   | {
       type: 'optimizer.event';
       kind: string;
+      runId?: string;
       beforeTokens: number;
       afterTokens: number;
       recoveryHandle: string | null;
@@ -316,6 +318,7 @@ export interface RunResult {
 export class AgentLoop {
   private readonly estimates: (text: string) => number;
   private readonly recoveryStore = new InMemoryBlobStore();
+  private readonly cavemanCache: CavemanInputCache = new Map();
   private readonly resilience: ResilienceLedger;
   private readonly sessionModelLocks = new Map<string, Set<string>>();
   private readonly requestTooLargeAt = new Map<ModelRef, number>();
@@ -385,6 +388,7 @@ export class AgentLoop {
   }
 
   async run({ sessionId, signal: outerSignal, resume = false }: RunInput): Promise<RunResult> {
+    const cavemanRunId = newId('run');
     const traceContext = this.options.traceContext ?? { traceId: newTraceId() };
     const traceId = traceContext.traceId;
     let requestGroupId: string;
@@ -594,7 +598,7 @@ export class AgentLoop {
           workspace: this.options.workspace,
           sessionId,
           task: taskRecord,
-          ...(this.options.terseLevel ? { terseLevel: this.options.terseLevel } : {}),
+          terseLevel: this.options.terseLevel ?? this.options.profile.optimizers.terse,
           ...(this.options.promptSections ? { sections: this.options.promptSections } : {}),
         });
         system +=
@@ -1182,6 +1186,19 @@ export class AgentLoop {
             data: {},
           });
         };
+        const cavemanContext = compressCavemanMessages(
+          contextMessages,
+          this.options.profile.optimizers.cavemanInput,
+          this.cavemanCache,
+          (context) => estimateOptimizerTokens(JSON.stringify(toModelMessages(context, model))),
+        );
+        contextMessages = cavemanContext.messages;
+        if (cavemanContext.event)
+          this.options.emit({
+            type: 'optimizer.event',
+            ...cavemanContext.event,
+            runId: cavemanRunId,
+          });
         const stepRequest = (
           selected: ModelInfo,
           stepSignal: AbortSignal,
@@ -1969,33 +1986,6 @@ export class AgentLoop {
           }
         }
         this.activeMessageParts.delete(sessionId);
-        if (this.options.terseLevel && this.options.terseLevel !== 'off') {
-          const tersePromptTokens = estimateOptimizerTokens(
-            TERSE_LEVEL_TEXT[
-              this.options.terseLevel === 'lite'
-                ? 'Lite'
-                : this.options.terseLevel === 'full'
-                  ? 'Full'
-                  : 'Ultra'
-            ],
-          );
-          this.options.emit({
-            type: 'optimizer.event',
-            kind: 'terse-prompt',
-            beforeTokens: estimateOptimizerTokens(TERSE_LEVEL_TEXT.Off),
-            afterTokens: tersePromptTokens,
-            recoveryHandle: null,
-          });
-          const responseTokens =
-            generated.outputTokens ?? estimateOptimizerTokens(generated.text ?? '');
-          this.options.emit({
-            type: 'optimizer.event',
-            kind: 'terse-response',
-            beforeTokens: responseTokens,
-            afterTokens: responseTokens,
-            recoveryHandle: null,
-          });
-        }
         this.options.onUsage?.({
           id: pendingPaidUsageId ?? newId('usage'),
           providerId: model.providerId,

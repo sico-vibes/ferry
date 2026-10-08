@@ -229,6 +229,7 @@ export const sampleUsageHistoryPoint: UsageHistoryPoint = {
 };
 export const sampleHandoffStat: HandoffStat = { reason: 'quota', count: 1 };
 export const sampleOptimizerToggles: OptimizerToggles = {
+  cavemanInput: 'off',
   terse: 'lite',
   toolOutputFilters: true,
   recoveryHandles: true,

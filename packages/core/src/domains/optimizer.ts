@@ -13,6 +13,7 @@ export function register(host: CoreHost, services: FerryServices): void {
               id: string;
               sessionId: string;
               kind: string;
+              runId?: string;
               beforeTokens?: number;
               afterTokens?: number;
               timestamp?: string;
@@ -33,15 +34,31 @@ export function register(host: CoreHost, services: FerryServices): void {
         group.count += 1;
         groups.set(event.kind, group);
       }
+      const cavemanEvents = realEvents.filter((event) => event.kind === 'caveman-input');
+      const latestCaveman = cavemanEvents.reduce<(typeof cavemanEvents)[number] | undefined>(
+        (latest, event) =>
+          !latest || (event.timestamp ?? '') >= (latest.timestamp ?? '') ? event : latest,
+        undefined,
+      );
+      const lastRun = latestCaveman
+        ? cavemanEvents.filter(
+            (event) =>
+              event.sessionId === latestCaveman.sessionId && event.runId === latestCaveman.runId,
+          )
+        : [];
+      const lastBefore = lastRun.reduce((sum, event) => sum + (event.beforeTokens ?? 0), 0);
+      const lastAfter = lastRun.reduce((sum, event) => sum + (event.afterTokens ?? 0), 0);
       const byOptimizer = [...groups].map(([id, group]) => {
         const enabled =
-          id === 'recovery-read'
-            ? settings.optimizers.recoveryHandles
-            : id.startsWith('terse-')
-              ? settings.optimizers.terse !== 'off'
-              : id === 'context-hygiene' || id === 'context-compaction'
-                ? settings.optimizers.contextHygiene
-                : settings.optimizers.toolOutputFilters;
+          id === 'caveman-input'
+            ? true // Profile-driven; global toggles may be off while Auto-Free uses it.
+            : id === 'recovery-read'
+              ? settings.optimizers.recoveryHandles
+              : id.startsWith('terse-')
+                ? settings.optimizers.terse !== 'off'
+                : id === 'context-hygiene' || id === 'context-compaction'
+                  ? settings.optimizers.contextHygiene
+                  : settings.optimizers.toolOutputFilters;
         return {
           id,
           name: id.replaceAll('-', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
@@ -63,6 +80,18 @@ export function register(host: CoreHost, services: FerryServices): void {
           percent: before === 0 ? 0 : Math.min(100, (savedTokens / before) * 100),
           samples: todayEvents.length,
         },
+        cavemanLastRun: latestCaveman
+          ? {
+              sessionId: latestCaveman.sessionId,
+              ...(latestCaveman.runId ? { runId: latestCaveman.runId } : {}),
+              savedTokens: Math.max(0, lastBefore - lastAfter),
+              percent:
+                lastBefore === 0
+                  ? 0
+                  : Math.max(0, Math.min(100, ((lastBefore - lastAfter) / lastBefore) * 100)),
+              samples: lastRun.length,
+            }
+          : null,
         byOptimizer,
       });
     },

@@ -844,6 +844,7 @@ export function register(host: CoreHost, services: FerryServices): void {
                   id,
                   sessionId: session.id,
                   kind: event.kind,
+                  ...(event.runId ? { runId: event.runId } : {}),
                   beforeTokens: event.beforeTokens,
                   afterTokens: event.afterTokens,
                   timestamp: services.clock.now().toISOString(),

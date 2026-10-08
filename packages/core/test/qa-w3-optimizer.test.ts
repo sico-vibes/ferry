@@ -5,6 +5,7 @@ interface StoredEvent {
   id: string;
   sessionId: string;
   kind: string;
+  runId?: string;
   beforeTokens?: number;
   afterTokens?: number;
   timestamp?: string;
@@ -19,6 +20,49 @@ function putEvent(h: CoreHarness, event: StoredEvent): void {
 }
 
 describe('QA W3 optimizer: honest stats', () => {
+  it('shows Caveman savings for the latest measured run, independently of global settings', async () => {
+    const h = await startHarness();
+    try {
+      putEvent(h, {
+        id: 'opt_old_run',
+        sessionId: 'session_same',
+        runId: 'run_old',
+        kind: 'caveman-input',
+        beforeTokens: 1000,
+        afterTokens: 500,
+        timestamp: '2026-10-08T01:00:00.000Z',
+      });
+      putEvent(h, {
+        id: 'opt_latest_first',
+        sessionId: 'session_same',
+        runId: 'run_latest',
+        kind: 'caveman-input',
+        beforeTokens: 100,
+        afterTokens: 60,
+        timestamp: '2026-10-08T02:00:00.000Z',
+      });
+      putEvent(h, {
+        id: 'opt_latest_second',
+        sessionId: 'session_same',
+        runId: 'run_latest',
+        kind: 'caveman-input',
+        beforeTokens: 200,
+        afterTokens: 100,
+        timestamp: '2026-10-08T02:01:00.000Z',
+      });
+      const stats = await h.rpc.optimizer.stats();
+      expect(stats.cavemanLastRun).toMatchObject({
+        sessionId: 'session_same',
+        runId: 'run_latest',
+        savedTokens: 140,
+        samples: 2,
+      });
+      expect(stats.cavemanLastRun?.percent).toBeCloseTo((140 / 300) * 100);
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
+
   it('reports demo data before any real optimizer event exists', async () => {
     const h = await startHarness();
     try {

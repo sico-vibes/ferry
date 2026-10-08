@@ -1089,6 +1089,15 @@ export function SettingsCanvas() {
               </>
             )}
           </div>
+          {optimizerStats?.cavemanLastRun ? (
+            <p className="muted">
+              Caveman · last measured run:{' '}
+              {optimizerStats.cavemanLastRun.savedTokens.toLocaleString()} estimated input tokens
+              saved ({optimizerStats.cavemanLastRun.percent.toFixed(1)}%) across{' '}
+              {optimizerStats.cavemanLastRun.samples} steps. Reply savings are not measurable per
+              response.
+            </p>
+          ) : null}
         </Group>
       );
     }

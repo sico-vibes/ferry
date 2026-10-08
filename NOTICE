@@ -4,6 +4,14 @@ Third-party software and attribution notices
 Code adaptations
 ----------------
 
+packages/optimizer/src/caveman/ adapts the English Caveman rules, preservation,
+language detection, and output modes from OmniRoute, MIT License,
+Copyright (c) 2026 diegosouzapw:
+https://github.com/diegosouzapw/OmniRoute
+Output style contract: JuliusBrussee/caveman, MIT License.
+https://github.com/JuliusBrussee/caveman
+The MIT license text below applies to these adaptations.
+
 packages/router/src/resilience.ts adapts 429 classification and reset-hint
 patterns from OmniRoute, MIT License:
 https://github.com/diegosouzapw/OmniRoute/blob/release/v3.8.51/src/shared/utils/classify429.ts

@@ -11,6 +11,11 @@ export function createProfiles(): Profile[] {
       icon: ['lightbulb', 'sparkles', 'zap', 'book-open'][i] ?? 'lightbulb',
       pinned: true,
       paidAllowed: i !== 1,
+      optimizers: {
+        ...sampleProfile.optimizers,
+        cavemanInput: i === 1 ? 'lite' : 'off',
+        terse: i === 1 ? 'lite' : 'off',
+      },
       caps: { dailyUsd: i === 0 ? 2 : null, monthlyUsd: i === 0 ? 20 : null },
       roles: {
         enabled: i === 0 || i === 1,
@@ -49,6 +54,7 @@ export function createProfiles(): Profile[] {
       long_context: ['T1', 'T2', 'T3'],
     },
     paidAllowed: true,
+    optimizers: { ...sampleProfile.optimizers, cavemanInput: 'off', terse: 'off' },
     caps: { sessionUsd: null, dailyUsd: null, monthlyUsd: null },
     roles: {
       enabled: false,

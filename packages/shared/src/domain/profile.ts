@@ -8,6 +8,7 @@ export const FallbackChainEntrySchema = z.object({
 export type FallbackChainEntry = z.infer<typeof FallbackChainEntrySchema>;
 export const OptimizerTogglesSchema = z.object({
   terse: z.enum(['off', 'lite', 'full', 'ultra']),
+  cavemanInput: z.enum(['off', 'lite', 'standard']).default('off'),
   toolOutputFilters: z.boolean(),
   recoveryHandles: z.boolean(),
   contextHygiene: z.boolean(),

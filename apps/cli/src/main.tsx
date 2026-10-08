@@ -1476,6 +1476,18 @@ async function oauth(
 export async function profiles(client: FerryClient, args: string[], json = false) {
   const [action, name] = args;
   const rows = await client.profiles.list();
+  if (action === 'show') {
+    const profile = rows.find(
+      (item) => item.name.toLowerCase() === (name ?? 'Auto-Free').toLowerCase() || item.id === name,
+    );
+    if (!profile) throw new CliError(2, `Profile not found: ${name ?? 'Auto-Free'}`);
+    writeResult(
+      json,
+      profile,
+      `${profile.name} · ${profile.description}\nCaveman input: ${profile.optimizers.cavemanInput}\nReply style: ${profile.optimizers.terse === 'off' ? 'normal' : profile.optimizers.terse}\n`,
+    );
+    return 0;
+  }
   if (action === 'affinity') {
     const profileName = name;
     const affinity = args[2];
@@ -1614,7 +1626,16 @@ export async function profiles(client: FerryClient, args: string[], json = false
     writeResult(json, { activeProfileId: profile.id, name: profile.name }, '');
     return 0;
   }
-  writeResult(json, rows, rows.map((p) => `${p.name} · ${p.description}`).join('\n') + '\n');
+  writeResult(
+    json,
+    rows,
+    rows
+      .map(
+        (p) =>
+          `${p.name} · ${p.description} · Caveman input: ${p.optimizers.cavemanInput} · reply: ${p.optimizers.terse === 'off' ? 'normal' : p.optimizers.terse}`,
+      )
+      .join('\n') + '\n',
+  );
   return 0;
 }
 async function skills(client: FerryClient, args: string[], json = false) {

@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { hostname, platform, release } from 'node:os';
 import path from 'node:path';
 import type { TaskRecord } from '@ferry/shared';
+import { cavemanOutputInstruction } from '@ferry/optimizer';
 
 export interface PromptSection {
   id: string;
@@ -105,9 +106,7 @@ export async function assembleSystemPrompt(options: PromptAssemblyOptions): Prom
     blocks.push(`Project instructions (${instructions.name})\n${instructions.text}`);
   blocks.push(`Task record\n${renderTask(options.task)}`);
   if (options.terseLevel && options.terseLevel !== 'off')
-    blocks.push(
-      `Optimizer terse level: ${options.terseLevel}. Keep routine wording concise while retaining essential reasoning and results.`,
-    );
+    blocks.push(cavemanOutputInstruction(options.terseLevel));
   for (const section of options.sections ?? []) {
     const content = await section.provide(options);
     if (content?.trim()) blocks.push(`Extension: ${section.id}\n${content.trim()}`);
