@@ -4,6 +4,7 @@ import type {
   MessageId,
   MessagePart,
   PartId,
+  ProviderHealthSnapshot,
   Session,
   SessionDetail,
   SessionId,
@@ -48,6 +49,13 @@ export function useFerryEvents(): void {
     const off = [
       client.on('quota.updated', (capacity) => cache.setQueryData(keys.capacity, capacity)),
       client.on('quota.limits.updated', (limits) => cache.setQueryData(keys.limits, limits)),
+      client.on('providers.health.updated', (snapshot) =>
+        cache.setQueryData<ProviderHealthSnapshot[]>(keys.health, (current) =>
+          current?.some((item) => item.providerId === snapshot.providerId)
+            ? current.map((item) => (item.providerId === snapshot.providerId ? snapshot : item))
+            : [...(current ?? []), snapshot],
+        ),
+      ),
       client.on('session.updated', (session) => {
         const previous = lastStatus.get(session.id);
         lastStatus.set(session.id, session.status);

@@ -9,6 +9,7 @@ export const keys = {
   settings: ['settings'] as const,
   capacity: ['capacity'] as const,
   limits: ['quota', 'limits'] as const,
+  health: ['providers', 'health'] as const,
   mcp: ['mcp'] as const,
   workspaces: ['workspaces'] as const,
   system: ['system'] as const,

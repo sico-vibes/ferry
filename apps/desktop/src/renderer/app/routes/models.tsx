@@ -16,4 +16,5 @@ export const modelsRoutes = [
   createRoute({ getParentRoute: () => rootRoute, path: '/models', component: ModelsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/models/catalog', component: ModelsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/models/usage', component: ModelsPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/models/health', component: ModelsPage }),
 ] as const;

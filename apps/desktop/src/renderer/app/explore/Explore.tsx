@@ -23,6 +23,7 @@ import { useUI } from '../../state/ui';
 import { ProviderKeyDialog } from '../ProviderKeyDialog';
 import { OAuthProviderRows } from '../OAuthProviderRows';
 import { UsageTab } from './Usage';
+import { HealthTab } from './Health';
 
 type ModelSort =
   | 'name'
@@ -45,9 +46,11 @@ export function ModelsCanvas() {
   const routeTab =
     pathname === '/models/usage'
       ? 'usage'
-      : pathname === '/models/catalog'
-        ? 'models'
-        : 'providers';
+      : pathname === '/models/health'
+        ? 'health'
+        : pathname === '/models/catalog'
+          ? 'models'
+          : 'providers';
   const [selectedTab, setSelectedTab] = useState(routeTab);
   const cache = useQueryClient();
   const pushToast = useToasts((state) => state.push);
@@ -298,9 +301,11 @@ export function ModelsCanvas() {
             const path =
               value === 'usage'
                 ? '/models/usage'
-                : value === 'models'
-                  ? '/models/catalog'
-                  : '/models';
+                : value === 'health'
+                  ? '/models/health'
+                  : value === 'models'
+                    ? '/models/catalog'
+                    : '/models';
             void navigate({ to: path });
           }}
           value={selectedTab}
@@ -309,6 +314,7 @@ export function ModelsCanvas() {
             <UiV2.TabsTrigger value="providers">Providers</UiV2.TabsTrigger>
             <UiV2.TabsTrigger value="models">Models</UiV2.TabsTrigger>
             <UiV2.TabsTrigger value="usage">Usage</UiV2.TabsTrigger>
+            <UiV2.TabsTrigger value="health">Health</UiV2.TabsTrigger>
           </UiV2.TabsList>
           <UiV2.TabsContent className="grid gap-6" value="providers">
             <div className="flex flex-wrap items-center gap-4">
@@ -640,6 +646,9 @@ export function ModelsCanvas() {
           </UiV2.TabsContent>
           <UiV2.TabsContent value="usage">
             <UsageTab />
+          </UiV2.TabsContent>
+          <UiV2.TabsContent value="health">
+            <HealthTab />
           </UiV2.TabsContent>
         </UiV2.Tabs>
       </div>
