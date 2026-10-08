@@ -5,10 +5,12 @@ export interface SectionProps {
   children: ReactNode;
   className?: string;
   ariaLabel?: string;
+  level?: 2 | 3;
 }
 
-export function Section({ title, children, className = '', ariaLabel }: SectionProps) {
+export function Section({ title, children, className = '', ariaLabel, level = 2 }: SectionProps) {
   const titleId = useId();
+  const Title = level === 3 ? 'h3' : 'h2';
   return (
     <section
       aria-label={ariaLabel}
@@ -16,9 +18,9 @@ export function Section({ title, children, className = '', ariaLabel }: SectionP
       className={`ferry-section ${className}`.trim()}
     >
       {title && (
-        <h2 className="ferry-section-title" id={titleId}>
+        <Title className="ferry-section-title" id={titleId}>
           {title}
-        </h2>
+        </Title>
       )}
       {children}
     </section>

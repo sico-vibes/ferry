@@ -1,6 +1,6 @@
 import { Dialog, UiV2 } from '@ferry/ui';
 import { useKeybindings } from '../state/keybindings';
-const labels: Record<string, string> = {
+export const shortcutLabels: Record<string, string> = {
   'chat.new': 'New chat',
   'sidebar.toggle': 'Toggle sidebar',
   'panel.toggle': 'Toggle right panel',
@@ -11,6 +11,8 @@ const labels: Record<string, string> = {
   'tab.close': 'Close tab',
   'tab.next': 'Next tab',
   'settings.open': 'Open settings',
+  'folder.open': 'Open folder',
+  'files.search': 'Search files',
 };
 
 export function KeyboardShortcutsDialog({
@@ -35,7 +37,7 @@ export function KeyboardShortcutsDialog({
       <div className="grid gap-2">
         {keybindings.bindings.map((binding) => (
           <div className="setting-row" key={binding.command}>
-            <span>{labels[binding.command] ?? binding.command}</span>
+            <span>{shortcutLabels[binding.command] ?? binding.command}</span>
             <kbd>{binding.key}</kbd>
             <small>{keybindings.sources[binding.command] ?? 'Default'}</small>
           </div>

@@ -1,3 +1,4 @@
+import { SkeletonRows } from '@ferry/ui';
 import { useEffect, useRef, useState } from 'react';
 import type { FerryClient } from '@ferry/client';
 import type { SessionId } from '@ferry/shared';
@@ -100,7 +101,7 @@ export function FullOutputDialog({
           </button>
         </header>
         {loading ? (
-          <p aria-live="polite">Loading output…</p>
+          <SkeletonRows rows={5} />
         ) : error ? (
           <p aria-live="assertive">{error}</p>
         ) : page ? (

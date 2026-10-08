@@ -1,3 +1,4 @@
+import { SkeletonRows } from '@ferry/ui';
 import {
   memo,
   useCallback,
@@ -642,12 +643,13 @@ function DelegationRunView({
   onFull: (handle: string) => void;
 }) {
   const client = useFerryClient();
-  const { data: runs = [] } = useQuery({
+  const { data: runs = [], isPending: runsPending } = useQuery({
     queryKey: ['delegation', sessionId],
     queryFn: () => client.delegation.runs(sessionId),
   });
   const run = runs.find((item) => item.id === runId);
-  if (!run) return <div className="text-label text-text-3">Loading delegated work…</div>;
+  if (runsPending) return <SkeletonRows rows={3} />;
+  if (!run) return <p className="muted">This delegated run is no longer available.</p>;
   return (
     <DelegationCard
       lane={run.lane}
@@ -1559,14 +1561,18 @@ export function SessionCanvas() {
             }
           }}
         >
-          {messages.length === 0 && (
-            <div className="session-empty">
-              <div className="session-empty-greeting">
-                <FerryMark size={32} variant="brand" />
-                <span>What would you like to work on?</span>
+          {isLoading ? (
+            <SkeletonRows rows={6} />
+          ) : (
+            messages.length === 0 && (
+              <div className="session-empty">
+                <div className="session-empty-greeting">
+                  <FerryMark size={32} variant="brand" />
+                  <span>What would you like to work on?</span>
+                </div>
+                {renderComposer()}
               </div>
-              {renderComposer()}
-            </div>
+            )
           )}
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map((item) => {

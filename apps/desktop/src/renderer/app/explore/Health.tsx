@@ -1,3 +1,4 @@
+import { SkeletonRows, SkeletonStat } from '@ferry/ui';
 import { FailuresSection, PausedProviders } from './Failures';
 import { useQuery } from '@tanstack/react-query';
 import type { ProviderHealthSnapshot } from '@ferry/shared';
@@ -33,7 +34,7 @@ function relative(iso: string | null, now = Date.now()): string | null {
 /** Provider health: circuit breaker, key cooldowns, locked models and latency, live. */
 export function HealthTab() {
   const client = useFerryClient();
-  const { data: providers = [] } = useQuery({
+  const { data: providers = [], isPending: providersPending } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
@@ -80,13 +81,14 @@ export function HealthTab() {
                   className="inline-block size-2 rounded-full"
                   style={{ background: stateColors[state] }}
                 />
-                {String(counts[state])} {stateLabels[state].toLowerCase()}
+                {isLoading || providersPending ? <SkeletonStat /> : String(counts[state])}{' '}
+                {stateLabels[state].toLowerCase()}
               </span>
             ))}
           </div>
         </div>
-        {isLoading ? (
-          <p className="text-ui-secondary text-muted-foreground">Checking providers…</p>
+        {isLoading || providersPending ? (
+          <SkeletonRows rows={4} />
         ) : rows.length === 0 ? (
           <p className="text-ui-secondary text-muted-foreground">
             No connected providers yet. Add a key on the Providers tab.

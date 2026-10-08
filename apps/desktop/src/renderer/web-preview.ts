@@ -10,6 +10,7 @@ export async function seedWebPreview(client: MockFerryClient, scenario: string):
   const params = new URLSearchParams(location.search);
   const theme = params.get('theme');
   if (theme === 'light' || theme === 'dark' || theme === 'system') store.settings.theme = theme;
+  if (Number(params.get('latency')) > 0) store.settings.developer.mockLatency = true;
 
   if (chosen === 'empty') {
     store.sessions.splice(0);

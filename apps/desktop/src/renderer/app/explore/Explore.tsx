@@ -1,3 +1,4 @@
+import { SkeletonTable, SkeletonStat } from '@ferry/ui';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
@@ -91,7 +92,7 @@ export function ModelsCanvas() {
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
-  const { data: modelPage = { items: [], total: 0 } } = useQuery({
+  const { data: modelPage = { items: [], total: 0 }, isPending: modelsPending } = useQuery({
     queryKey: ['models', modelSearch, modelTier, modelKind, sort, modelOffset, effectiveModelLimit],
     queryFn: () =>
       client.models.page({
@@ -108,6 +109,7 @@ export function ModelsCanvas() {
   const { items: models, total: modelTotal } = modelPage;
   const {
     data: oauthProviders = [],
+    isPending: oauthPending,
     error: oauthError,
     refetch: refetchOAuth,
   } = useQuery({
@@ -418,6 +420,7 @@ export function ModelsCanvas() {
               <OAuthProviderRows
                 onLogin={requestOAuthAction}
                 onLogout={requestOAuthAction}
+                loading={oauthPending}
                 providers={oauthProviders}
                 loadError={oauthError ? oauthError.message : null}
                 onRetry={() => void refetchOAuth()}
@@ -485,9 +488,13 @@ export function ModelsCanvas() {
                   aria-live="polite"
                   className="text-ui-meta tabular-nums text-muted-foreground"
                 >
-                  {modelTotal === 0
-                    ? '0 models'
-                    : `${String(modelOffset + 1)}–${String(Math.min(modelOffset + effectiveModelLimit, modelTotal))} of ${new Intl.NumberFormat().format(modelTotal)}`}
+                  {modelsPending ? (
+                    <SkeletonStat />
+                  ) : modelTotal === 0 ? (
+                    '0 models'
+                  ) : (
+                    `${String(modelOffset + 1)}–${String(Math.min(modelOffset + effectiveModelLimit, modelTotal))} of ${new Intl.NumberFormat().format(modelTotal)}`
+                  )}
                 </span>
                 <span className="flex items-center gap-2 text-ui-meta text-muted-foreground">
                   Rows
@@ -629,10 +636,14 @@ export function ModelsCanvas() {
                     ))}
                   </tbody>
                 </table>
-                {visibleModels.length === 0 && (
-                  <p className="p-5 text-center text-ui-body text-muted-foreground">
-                    No models match these filters.
-                  </p>
+                {modelsPending ? (
+                  <SkeletonTable rows={8} columns={7} />
+                ) : (
+                  visibleModels.length === 0 && (
+                    <p className="p-5 text-center text-ui-body text-muted-foreground">
+                      No models match these filters.
+                    </p>
+                  )
                 )}
               </div>
               <nav aria-label="Models pages" className="flex items-center justify-end gap-2">

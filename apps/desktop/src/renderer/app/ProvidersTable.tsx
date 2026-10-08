@@ -20,6 +20,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import {
+  SkeletonTable,
   dataUseStatus,
   formatQuotaValue,
   ProviderLogo,
@@ -134,6 +135,7 @@ function UsageMeter({ window }: { window: QuotaWindow | null }) {
 
 export function ProvidersTable({
   providers,
+  loading = false,
   testing,
   onTest,
   onManage,
@@ -142,6 +144,7 @@ export function ProvidersTable({
   emptyLabel = 'No providers',
 }: {
   providers: Provider[];
+  loading?: boolean;
   testing?: string | null;
   /** Latest connection-test result per provider id. */
   feedback?: Record<string, string | undefined>;
@@ -195,6 +198,7 @@ export function ProvidersTable({
   );
   const ariaSort = (key: SortKey) =>
     sort?.key === key ? (sort.ascending ? 'ascending' : 'descending') : undefined;
+  if (loading) return <SkeletonTable rows={6} columns={6} />;
   return (
     <UiV2.TooltipProvider delayDuration={0}>
       <div className="v2-providers-table-wrap">

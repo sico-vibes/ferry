@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { SegmentedControl, Switch, UiV2 } from '@ferry/ui';
+import { SkeletonRows, SegmentedControl, Switch, UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { useSettings } from '../data/queries';
 import { CloudSignInForm, RestartNotice, useCloudStatus } from './CloudAccount';
@@ -64,30 +64,38 @@ export function CloudSettings() {
       setBusy(false);
     }
   };
+  if (!status || !settings)
+    return (
+      <section className="profile-section">
+        <SkeletonRows rows={3} />
+      </section>
+    );
   return (
     <div className="profile-settings-v3">
       <Section
         title="Storage mode"
         helper="Local keeps everything on this device. Cloud also syncs sessions, settings, logs and API keys to your Ferry account."
       >
-        <SegmentedControl
-          label="Storage mode"
-          value={mode}
-          onValueChange={(value) => {
-            if (value !== mode)
-              void run(() => client.cloud.setStorageMode({ mode: value as 'local' | 'cloud' }));
-          }}
-          options={[
-            { value: 'local', label: 'Local', disabled: busy },
-            { value: 'cloud', label: 'Cloud', disabled: busy },
-          ]}
-        />
-        {status?.pendingMode ? (
-          <RestartNotice status={status} />
-        ) : (
-          <p className="muted">Changing the storage mode restarts Ferry.</p>
-        )}
-        {mode === 'cloud' && !status?.configured ? (
+        <div className="setting-row">
+          <div>
+            <strong>Storage mode</strong>
+            <small>Changing the storage mode restarts Ferry.</small>
+          </div>
+          <SegmentedControl
+            label="Storage mode"
+            value={mode}
+            onValueChange={(value) => {
+              if (value !== mode)
+                void run(() => client.cloud.setStorageMode({ mode: value as 'local' | 'cloud' }));
+            }}
+            options={[
+              { value: 'local', label: 'Local', disabled: busy },
+              { value: 'cloud', label: 'Cloud', disabled: busy },
+            ]}
+          />
+        </div>
+        {status.pendingMode ? <RestartNotice status={status} /> : null}
+        {mode === 'cloud' && !status.configured ? (
           <p className="profile-locked-note" role="status">
             <span>
               Cloud is not configured on this device. Add FERRY_SUPABASE_URL and
@@ -97,7 +105,7 @@ export function CloudSettings() {
         ) : null}
       </Section>
 
-      {mode === 'cloud' && status?.configured && !status.pendingMode ? (
+      {mode === 'cloud' && status.configured && !status.pendingMode ? (
         <Section
           title="Cloud account"
           helper="Sign in to sync. While signed out, Ferry keeps working locally and uploads later."
@@ -120,7 +128,7 @@ export function CloudSettings() {
                 <div className="button-row">
                   <UiV2.Button
                     size="sm"
-                    variant="secondary"
+                    variant="outline"
                     disabled={busy}
                     onClick={() => void run(() => client.cloud.syncNow())}
                   >
@@ -151,7 +159,7 @@ export function CloudSettings() {
                 </div>
                 <UiV2.Button
                   size="sm"
-                  variant="secondary"
+                  variant="outline"
                   disabled={busy}
                   onClick={() => void run(() => client.cloud.migrateLocalKeys())}
                 >

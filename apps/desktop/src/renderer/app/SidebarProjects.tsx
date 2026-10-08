@@ -1,3 +1,4 @@
+import { SkeletonRows } from '@ferry/ui';
 import { useMemo, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -74,11 +75,11 @@ export function SidebarProjects({
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const pushToast = useToasts((state) => state.push);
-  const { data: sessions = [] } = useQuery({
+  const { data: sessions = [], isPending: sessionsPending } = useQuery({
     queryKey: keys.sessions,
     queryFn: () => client.sessions.list(),
   });
-  const { data: workspaces = [] } = useWorkspaces();
+  const { data: workspaces = [], isPending: workspacesPending } = useWorkspaces();
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [collapsedProjects, setCollapsedProjects] = useState(readCollapsed);
   const [expandedLists, setExpandedLists] = useState<Set<string>>(new Set());
@@ -234,7 +235,9 @@ export function SidebarProjects({
           </button>
         </div>
         {projectsOpen &&
-          (projects.length === 0 ? (
+          (workspacesPending ? (
+            <SkeletonRows rows={3} />
+          ) : projects.length === 0 ? (
             <button
               className="v2-project-empty"
               type="button"
@@ -369,7 +372,9 @@ export function SidebarProjects({
                     </button>
                   </div>
                   {open &&
-                    (chats.length ? (
+                    (sessionsPending ? (
+                      <SkeletonRows rows={2} />
+                    ) : chats.length ? (
                       chatList(project.id, chats, 5, true)
                     ) : (
                       <p className="v2-project-no-chats">No chats yet</p>
@@ -383,7 +388,9 @@ export function SidebarProjects({
         <div className="v2-section-label">
           <span>Recents</span>
         </div>
-        {recents.length ? (
+        {sessionsPending ? (
+          <SkeletonRows rows={4} />
+        ) : recents.length ? (
           chatList('recents', recents, 10, false)
         ) : (
           <p className="v2-project-no-chats is-flat">Chats without a project appear here.</p>

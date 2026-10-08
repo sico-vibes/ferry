@@ -1,3 +1,4 @@
+import { SkeletonRows, SkeletonTable, SkeletonStat } from '@ferry/ui';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { GatewayRequestRecord } from '@ferry/shared';
@@ -418,11 +419,11 @@ export function GatewayCanvas() {
     queryKey: ['gateway-settings'],
     queryFn: () => client.gateway.settings(),
   });
-  const { data: keys = [] } = useQuery({
+  const { data: keys = [], isPending: keysPending } = useQuery({
     queryKey: ['gateway-keys'],
     queryFn: () => client.gateway.listKeys(),
   });
-  const { data: initialRequests = [] } = useQuery({
+  const { data: initialRequests, isPending: requestsPending } = useQuery({
     queryKey: ['gateway-requests'],
     queryFn: () => client.gateway.requests(),
   });
@@ -436,7 +437,7 @@ export function GatewayCanvas() {
   const [editing, setEditing] = useState<GatewayKeyRow | null>(null);
   const [revoking, setRevoking] = useState<GatewayKeyRow | null>(null);
   useEffect(() => {
-    setRequests(initialRequests);
+    if (initialRequests) setRequests(initialRequests);
   }, [initialRequests]);
   useEffect(
     () =>
@@ -512,7 +513,13 @@ export function GatewayCanvas() {
           primaryAction={
             <div className="v2-gateway-header-actions">
               <span className="v2-status-pill" data-tone={running ? 'success' : 'muted'}>
-                {running ? `Running on port ${String(port)}` : 'Stopped'}
+                {!gateway ? (
+                  <SkeletonStat />
+                ) : running ? (
+                  `Running on port ${String(port)}`
+                ) : (
+                  'Stopped'
+                )}
               </span>
               <UiV2.Switch
                 aria-label="Enable Gateway"
@@ -542,8 +549,8 @@ export function GatewayCanvas() {
           ].map(([label, value, hint]) => (
             <div className="v2-gateway-stat" key={label}>
               <span>{label}</span>
-              <strong>{value}</strong>
-              <small>{hint}</small>
+              <strong>{keysPending ? <SkeletonStat /> : value}</strong>
+              <small>{keysPending ? <span aria-hidden="true">—</span> : hint}</small>
             </div>
           ))}
         </div>
@@ -568,18 +575,26 @@ export function GatewayCanvas() {
                 </p>
               </div>
             </header>
-            <EndpointRow
-              hint="OpenAI-compatible tools"
-              label="OpenAI base URL"
-              value={`${baseUrl}/v1`}
-            />
-            <EndpointRow hint="Claude Code" label="Anthropic base URL" value={baseUrl} />
-            <div className="v2-gateway-models">
-              <span>Models</span>
-              {['ferry/auto-free', 'ferry/best', 'ferry/fast', 'ferry/long-context'].map((id) => (
-                <code key={id}>{id}</code>
-              ))}
-            </div>
+            {!gateway ? (
+              <SkeletonRows rows={3} />
+            ) : (
+              <>
+                <EndpointRow
+                  hint="OpenAI-compatible tools"
+                  label="OpenAI base URL"
+                  value={`${baseUrl}/v1`}
+                />
+                <EndpointRow hint="Claude Code" label="Anthropic base URL" value={baseUrl} />
+                <div className="v2-gateway-models">
+                  <span>Models</span>
+                  {['ferry/auto-free', 'ferry/best', 'ferry/fast', 'ferry/long-context'].map(
+                    (id) => (
+                      <code key={id}>{id}</code>
+                    ),
+                  )}
+                </div>
+              </>
+            )}
           </section>
           <section aria-label="Connect a tool" className="v2-gateway-card">
             <header className="v2-gateway-card-header">
@@ -603,13 +618,17 @@ export function GatewayCanvas() {
                 </button>
               ))}
             </div>
-            {snippet && (
-              <div className="v2-gateway-code" role="tabpanel">
-                <pre>
-                  <code>{snippet.code}</code>
-                </pre>
-                <CopyButton label={`Copy ${snippet.label} setup`} value={snippet.code} />
-              </div>
+            {!gateway ? (
+              <SkeletonRows rows={4} />
+            ) : (
+              snippet && (
+                <div className="v2-gateway-code" role="tabpanel">
+                  <pre>
+                    <code>{snippet.code}</code>
+                  </pre>
+                  <CopyButton label={`Copy ${snippet.label} setup`} value={snippet.code} />
+                </div>
+              )
             )}
           </section>
         </div>
@@ -629,7 +648,9 @@ export function GatewayCanvas() {
               Create key
             </UiV2.Button>
           </header>
-          {keys.length === 0 ? (
+          {keysPending ? (
+            <SkeletonTable rows={3} columns={6} />
+          ) : keys.length === 0 ? (
             <p className="v2-gateway-empty">
               No keys yet. Create one, then paste it into your tool's API key field.
             </p>
@@ -715,7 +736,14 @@ export function GatewayCanvas() {
             </div>
           )}
         </section>
-        <RequestLog keyNames={keys.map((key) => key.name)} now={now} requests={requests} />
+        {requestsPending ? (
+          <section aria-label="Recent requests" className="v2-gateway-card">
+            <h2>Recent requests</h2>
+            <SkeletonTable rows={5} />
+          </section>
+        ) : (
+          <RequestLog keyNames={keys.map((key) => key.name)} now={now} requests={requests} />
+        )}
       </div>
       <UiV2.Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <UiV2.DialogContent className="v2-gateway-dialog">

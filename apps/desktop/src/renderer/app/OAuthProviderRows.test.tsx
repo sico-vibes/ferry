@@ -93,7 +93,7 @@ describe('OAuthProviderRows', () => {
     ).toBe(false);
     expect(screen.queryByRole('button', { name: 'Log in to Gemini CLI' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Log in to Kilo' })).toBeNull();
-    await user.click(screen.getByText('Configure…'));
+    await user.click(screen.getByText('Set up'));
     expect(screen.getByRole('textbox', { name: 'Radius gateway URL' })).toBeTruthy();
     const radiusLogin = screen.getByRole('button', { name: 'Log in to Radius' });
     expect(radiusLogin.hasAttribute('disabled')).toBe(true);
