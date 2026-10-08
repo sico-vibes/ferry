@@ -119,7 +119,7 @@ describe('V2Sidebar new chat', () => {
     expect(queryClient.getQueryData(keys.settings)).toEqual(updatedSettings);
   });
 
-  it('opens About with version, channel, engine, data folder, and license details', async () => {
+  it('opens About with version, channel, data folder, and license details', async () => {
     const client = createDemoFerryClient({ speed: 0, latencyMs: 0 });
     const workspace = (await client.workspaces.list())[0];
     if (!workspace) throw new Error('Workspace fixture missing');
@@ -166,10 +166,12 @@ describe('V2Sidebar new chat', () => {
     expect(screen.getByRole('img', { name: 'Ferry' }).style.width).toBe('18px');
     await userEvent.click(await screen.findByRole('button', { name: /^User menu$/ }));
     await userEvent.click(await screen.findByRole('menuitem', { name: /^About Ferry$/ }));
-    const dialog = await screen.findByRole('dialog', { name: /^About Ferry$/ });
-    expect(dialog.textContent).toContain(window.ferryHost.versions.app);
+    const dialog = await screen.findByRole('dialog', { name: /^Ferry for (Windows|macOS|Linux)$/ });
+    expect(dialog.textContent).toContain(`Version ${window.ferryHost.versions.app}`);
     expect(dialog.textContent).toContain('beta');
-    expect(dialog.textContent).toContain(systemInfo.version);
+    // The engine version is listed only when it differs from the app's.
+    if (systemInfo.version !== window.ferryHost.versions.app)
+      expect(dialog.textContent).toContain(systemInfo.version);
     expect(dialog.textContent).toContain(systemInfo.dataDir);
     expect(dialog.textContent).toContain('MIT');
     await userEvent.keyboard('{Escape}');

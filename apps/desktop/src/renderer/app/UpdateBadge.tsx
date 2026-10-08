@@ -7,7 +7,8 @@ import { useUI } from '../state/ui';
  * Title-bar update pill, next to the window buttons. Hidden unless an update is on its way:
  * "Update available" downloads it, then "Restart to update" installs it.
  */
-export function UpdateBadge() {
+/** Live updater state from the main process, plus a "user clicked" busy flag. */
+export function useUpdateState() {
   const [state, setState] = useState<UpdateSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -26,6 +27,45 @@ export function UpdateBadge() {
       off();
     };
   }, []);
+  return { state, busy, setBusy };
+}
+
+/**
+ * Sidebar footer line, like Claude's: "Downloading update…" while it downloads, then a
+ * "Restart to update" action. Hidden when there is nothing to do.
+ */
+export function SidebarUpdateRow() {
+  const { state, busy, setBusy } = useUpdateState();
+  if (!state?.version || (state.status !== 'available' && state.status !== 'downloaded'))
+    return null;
+  const downloaded = state.status === 'downloaded';
+  const downloading = !downloaded && (state.autoDownload || busy);
+  if (downloading)
+    return (
+      <div className="v2-sidebar-update" role="status">
+        <Loader2 aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+        <span>Downloading update…</span>
+      </div>
+    );
+  return (
+    <button
+      className="v2-sidebar-update is-action"
+      onClick={() => {
+        setBusy(true);
+        if (downloaded) void window.ferryHost?.installUpdate();
+        else void window.ferryHost?.downloadUpdate();
+      }}
+      title={`Ferry ${state.version}`}
+      type="button"
+    >
+      {downloaded ? <RotateCw aria-hidden="true" /> : <ArrowDownCircle aria-hidden="true" />}
+      <span>{downloaded ? 'Restart to update' : `Update to ${state.version}`}</span>
+    </button>
+  );
+}
+
+export function UpdateBadge() {
+  const { state, busy, setBusy } = useUpdateState();
   if (state?.status === 'error' && state.version)
     return (
       <button

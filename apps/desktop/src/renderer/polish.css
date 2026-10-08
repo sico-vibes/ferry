@@ -1,3 +1,23 @@
+/* Transcript column width (Settings → General → Transcript width). */
+:root {
+  --transcript-max: 768px;
+}
+:root[data-transcript='narrow'] {
+  --transcript-max: 680px;
+}
+:root[data-transcript='wide'] {
+  --transcript-max: 960px;
+}
+/* Settings → General → Motion: Reduced turns animation off even when the system allows it. */
+:root[data-motion='reduced'] *,
+:root[data-motion='reduced'] *::before,
+:root[data-motion='reduced'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.01ms !important;
+}
+
 /* Ferry 1.1 polish layer. Loaded after styles.css; later sections override earlier rules on purpose.
    Values come from the DESIGN-v2 scale (4 px spacing, radii 6/10/14, tokens only). */
 
@@ -16,12 +36,12 @@
   scrollbar-color: color-mix(in srgb, var(--foreground) 22%, transparent) transparent;
 }
 .v2-chat-route .transcript-message {
-  width: min(768px, calc(100% - 64px)) !important;
+  width: min(var(--transcript-max), calc(100% - 64px)) !important;
   padding-bottom: 24px;
 }
 .v2-chat-route .transcript-viewport.is-empty .session-empty,
 .v2-session-canvas > .transcript-viewport .session-empty {
-  width: min(768px, calc(100% - 64px));
+  width: min(var(--transcript-max), calc(100% - 64px));
   margin-inline: auto;
 }
 
@@ -46,7 +66,7 @@
   pointer-events: none;
 }
 .v2-composer-dock > .v2-composer-wrap {
-  width: min(768px, calc(100% - 64px));
+  width: min(var(--transcript-max), calc(100% - 64px));
 }
 .v2-composer-dock .v2-composer {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
@@ -557,7 +577,7 @@
 /* ---------- Chat: context strip above the composer ---------- */
 .v2-context-strip {
   display: flex;
-  width: min(768px, calc(100% - 64px));
+  width: min(var(--transcript-max), calc(100% - 64px));
   min-width: 0;
   align-items: center;
   gap: 14px;
@@ -611,4 +631,308 @@
 }
 .v2-context-action:hover {
   background: var(--muted);
+}
+
+/* ---------- Settings: flat sections like Claude's settings (title, hairline rows, space) ---------- */
+.v2-settings-dialog .v2-settings-content {
+  gap: 36px;
+}
+.v2-settings-page .settings-group-card,
+.v2-settings-page .profile-section,
+.v2-settings-page .settings-developer-details {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+.v2-settings-page .settings-developer-details > .settings-group-card {
+  padding-top: 12px;
+}
+.v2-settings-page .settings-group-card .ferry-section-title,
+.v2-settings-page .profile-section > header h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+.v2-settings-page .settings-group-card > :is(p, .muted, .settings-helper),
+.v2-settings-page .profile-section > header p {
+  margin-bottom: 8px;
+}
+@media (max-width: 1100px) {
+  .v2-settings-page .settings-group-card,
+  .v2-settings-page .profile-section,
+  .v2-settings-page .settings-developer-details {
+    padding: 0;
+  }
+}
+/* Grouped navigation with quiet group headings. */
+.v2-settings-nav {
+  gap: 0;
+}
+.v2-settings-nav-group {
+  display: grid;
+  gap: 2px;
+}
+.v2-settings-nav-group + .v2-settings-nav-group {
+  margin-top: 16px;
+}
+.v2-settings-nav-group > .v2-settings-sidebar-label {
+  padding: 4px 10px 6px;
+}
+
+/* ---------- Shell: calm sidebar footer ---------- */
+.v2-capacity-line {
+  display: grid;
+  width: 100%;
+  gap: 6px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  padding: 8px 10px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 150ms ease-out;
+}
+.v2-capacity-line:hover {
+  background: var(--muted);
+}
+.v2-capacity-line-top {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 18px;
+}
+.v2-capacity-line-top > :first-child {
+  color: var(--foreground);
+  font-weight: 500;
+}
+.v2-capacity-line-value {
+  flex: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.v2-capacity-line [role='progressbar'] {
+  height: 3px;
+}
+.v2-sidebar-update {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--muted);
+  padding: 0 10px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.v2-sidebar-update svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.v2-sidebar-update.is-action {
+  background: var(--accent);
+  color: var(--accent-foreground);
+  cursor: pointer;
+  font-weight: 550;
+}
+.v2-sidebar-update.is-action:hover {
+  background: color-mix(in srgb, var(--accent-foreground) 18%, transparent);
+}
+
+/* ---------- Shell: About (centred, like Claude's) and What's new ---------- */
+.v2-about-dialog {
+  width: min(360px, calc(100vw - 48px)) !important;
+  max-width: 360px !important;
+  justify-items: center;
+  gap: 16px !important;
+  padding: 32px 24px 20px !important;
+  text-align: center;
+}
+.v2-about-hero {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+}
+.v2-about-hero > svg {
+  margin-bottom: 10px;
+}
+.v2-about-hero h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 28px;
+}
+.v2-about-hero p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.v2-about-actions {
+  display: grid;
+  width: 100%;
+  gap: 8px;
+}
+.v2-about-actions > button {
+  width: 100%;
+}
+.v2-about-folder {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.v2-about-folder > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.v2-about-folder > button {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent-foreground);
+  cursor: pointer;
+  font-size: 12px;
+}
+.v2-about-license {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.v2-whats-new {
+  width: min(560px, calc(100vw - 48px)) !important;
+  max-width: 560px !important;
+  max-height: min(720px, calc(100vh - 96px));
+  grid-template-rows: auto minmax(0, 1fr);
+  padding: 24px 0 0 !important;
+}
+.v2-whats-new > [class*='DialogHeader'],
+.v2-whats-new h2 {
+  padding: 0 24px;
+}
+.v2-whats-new h2 {
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.v2-whats-new-body {
+  display: grid;
+  gap: 28px;
+  overflow-y: auto;
+  padding: 4px 24px 24px;
+}
+.v2-whats-new-body header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.v2-whats-new-body h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.v2-whats-new-version {
+  border-radius: 6px;
+  background: var(--muted);
+  padding: 2px 8px;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.v2-whats-new-group + .v2-whats-new-group {
+  margin-top: 12px;
+}
+.v2-whats-new-group h4 {
+  margin: 0 0 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+.v2-whats-new-group ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+  list-style: disc;
+  font-size: 14px;
+  line-height: 21px;
+}
+.v2-whats-new-group li::marker {
+  color: var(--muted-foreground);
+}
+.v2-whats-new-group code {
+  border-radius: 4px;
+  background: var(--muted);
+  padding: 0 4px;
+  font-size: 0.9em;
+}
+
+/* ---------- Models → Usage: headline and refresh line ---------- */
+.usage-headline {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 28px;
+}
+.usage-updated {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+}
+.usage-updated button {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.usage-updated button:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+/* Diff counts: text blended toward the foreground so it passes AA on its tinted chip. */
+.activity-row-diff .is-add,
+.v2-context-diff .is-add {
+  color: color-mix(in srgb, var(--success) 72%, var(--foreground));
+}
+.activity-row-diff .is-del,
+.v2-context-diff .is-del {
+  color: color-mix(in srgb, var(--destructive) 62%, var(--foreground));
+}
+
+/* Light theme: status text on tinted chips is darkened toward the foreground to pass AA. */
+:root.light .text-success {
+  color: color-mix(in srgb, var(--success) 78%, var(--foreground));
+}
+:root.light .text-warn,
+:root.light .text-warning {
+  color: color-mix(in srgb, var(--warning) 70%, var(--foreground));
 }

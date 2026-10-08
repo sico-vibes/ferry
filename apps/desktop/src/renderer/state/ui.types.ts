@@ -5,19 +5,29 @@ export type Density = 'comfortable' | 'compact';
 export const settingsSections = [
   'General',
   'Notifications',
+  'Shortcuts',
   'Profiles',
-  'Providers & keys',
   'Routing',
   'Optimizers',
-  'Delegation',
   'Permissions',
+  'Providers & keys',
   'Gateway',
   'Integrations',
+  'Delegation',
   'Data & privacy',
   'Storage & Cloud',
-  'Shortcuts',
   'About',
 ] as const;
+/** Settings navigation groups, in display order (Claude-style group headings). */
+export const settingsSectionGroups: readonly {
+  label: string;
+  sections: readonly (typeof settingsSections)[number][];
+}[] = [
+  { label: 'Settings', sections: ['General', 'Notifications', 'Shortcuts'] },
+  { label: 'Agent', sections: ['Profiles', 'Routing', 'Optimizers', 'Permissions'] },
+  { label: 'Connections', sections: ['Providers & keys', 'Gateway', 'Integrations', 'Delegation'] },
+  { label: 'This computer', sections: ['Data & privacy', 'Storage & Cloud', 'About'] },
+];
 export type SettingsSection = (typeof settingsSections)[number];
 export interface OpenTab {
   id: SessionId;
@@ -37,6 +47,10 @@ export interface UIState extends PersistedLayout {
   pendingComposerFocus: boolean;
   rightTab: RightTab;
   density: Density;
+  /** Maximum width of the transcript and composer column. */
+  transcriptWidth: 'narrow' | 'medium' | 'wide';
+  /** "reduced" turns off non-essential animation regardless of the system setting. */
+  motion: 'system' | 'reduced';
   selectedWorkspaceId: string | null;
   settingsSection: SettingsSection;
   settingsOpen: boolean;
@@ -51,6 +65,8 @@ export interface UIState extends PersistedLayout {
   toggleRight: () => void;
   setRightTab: (tab: RightTab) => void;
   setDensity: (density: Density) => void;
+  setTranscriptWidth: (width: UIState['transcriptWidth']) => void;
+  setMotion: (motion: UIState['motion']) => void;
   setRightWidth: (width: number) => void;
   toggleBottom: () => void;
   setBottomHeight: (height: number) => void;

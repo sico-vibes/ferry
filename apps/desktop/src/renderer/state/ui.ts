@@ -6,13 +6,15 @@ import type { UIState } from './ui.types';
 
 export { clampBottomHeight, clampRightWidth, parsePersistedLayout } from './ui-layout';
 export type { Density, OpenTab, RightTab, SettingsSection } from './ui.types';
-export { settingsSections } from './ui.types';
+export { settingsSectionGroups, settingsSections } from './ui.types';
 
 interface PersistedUI {
   tabs: UIState['tabs'];
   activeId: UIState['activeId'];
   rightTab: UIState['rightTab'];
   density: UIState['density'];
+  transcriptWidth: UIState['transcriptWidth'];
+  motion: UIState['motion'];
   selectedWorkspaceId: UIState['selectedWorkspaceId'];
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -45,6 +47,8 @@ export const useUI = create<UIState>((set) => {
             rightCollapsed: merged.rightCollapsed,
             rightTab: merged.rightTab,
             density: merged.density,
+            transcriptWidth: merged.transcriptWidth,
+            motion: merged.motion,
             selectedWorkspaceId: merged.selectedWorkspaceId,
             rightWidth: merged.rightWidth,
             bottomOpen: merged.bottomOpen,
@@ -70,6 +74,11 @@ export const useUI = create<UIState>((set) => {
     ...savedLayout,
     rightTab: saved.rightTab === 'plan' || saved.rightTab === 'changes' ? saved.rightTab : 'chats',
     density: saved.density === 'compact' ? 'compact' : 'comfortable',
+    transcriptWidth:
+      saved.transcriptWidth === 'narrow' || saved.transcriptWidth === 'wide'
+        ? saved.transcriptWidth
+        : 'medium',
+    motion: saved.motion === 'reduced' ? 'reduced' : 'system',
     selectedWorkspaceId:
       typeof saved.selectedWorkspaceId === 'string' ? saved.selectedWorkspaceId : null,
     settingsSection: 'General',

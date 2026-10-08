@@ -28,3 +28,6 @@ design/reference/
 !apps/desktop/build/
 .env.*
 !.env.example
+
+# UI invariant screenshots and report (CI artifact)
+apps/desktop/ui-invariants/

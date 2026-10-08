@@ -18,6 +18,7 @@
     "lint": "eslint src *.config.ts",
     "test": "vitest run",
     "shot": "node scripts/shot.mjs",
+    "ui:invariants": "node scripts/ui-invariants.mjs",
     "shots:v2": "node scripts/shots-v2.mjs",
     "perf:start": "node scripts/perf-startup.mjs",
     "perf:long": "node scripts/perf-long-transcript.mjs",

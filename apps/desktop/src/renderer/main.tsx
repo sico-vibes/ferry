@@ -45,6 +45,11 @@ const mock = createDemoFerryClient({
     ? { speed: configuredSpeed }
     : {}),
 });
+// Web demo only (the desktop app always has a host bridge): `?theme=light|dark|system` picks the
+// theme, so screenshots and UI checks can cover both themes.
+const demoTheme = previewParams.get('theme');
+if (!window.ferryHost && (demoTheme === 'light' || demoTheme === 'dark' || demoTheme === 'system'))
+  void mock.settings.update({ theme: demoTheme });
 let coreConnectionAttempt = 0;
 let rpcClientSequence = 0;
 const connectCorePort = async (

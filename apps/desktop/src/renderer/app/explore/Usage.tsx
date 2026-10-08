@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { RotateCw } from 'lucide-react';
 import {
   SkeletonRows,
   SkeletonChart,
@@ -10,14 +11,27 @@ import {
 } from '@ferry/ui';
 import { useFerryClient } from '../../data/client';
 import { usesRealDomain } from '../../data/realDomains';
-import { useLimits } from '../../data/queries';
+import { keys, useLimits } from '../../data/queries';
 import {
   describeReset,
   describeSource,
   describeWindow,
   remainingShare,
   summarizeProviderWindows,
+  tightestDailyWindow,
 } from '../../data/limits';
+
+/** One plain sentence about today's tightest limit, like Claude's "Fresh week. 9% … used." */
+export function usageHeadline(tightest: ReturnType<typeof tightestDailyWindow>): string {
+  if (!tightest) return 'Fresh day. No daily limits used yet.';
+  const used = Math.round((1 - tightest.share) * 100);
+  const reset = describeReset(tightest.window);
+  if (used >= 80)
+    return `Running low. ${tightest.providerName} has used ${String(used)}% of today's limit${reset ? `; ${reset.toLowerCase()}` : ''}.`;
+  if (used >= 50)
+    return `Halfway through the day. ${tightest.providerName} is at ${String(used)}% of its daily limit.`;
+  return `Plenty left today. ${tightest.providerName} is at ${String(used)}% of its daily limit.`;
+}
 
 const number = (value: number) => new Intl.NumberFormat().format(value);
 
@@ -32,7 +46,8 @@ export function UsageTab() {
     queryKey: ['usage', 'capacity'],
     queryFn: () => client.quota.capacity(),
   });
-  const { data: limits = [], isPending: limitsPending } = useLimits();
+  const { data: limits = [], isPending: limitsPending, dataUpdatedAt, isFetching } = useLimits();
+  const cache = useQueryClient();
   const { data: history = [], isPending: historyPending } = useQuery({
     queryKey: ['usage', 'history', 14],
     queryFn: () => client.quota.history(14),
@@ -82,6 +97,11 @@ export function UsageTab() {
 
   return (
     <div aria-label="Usage dashboard" className="grid gap-8" role="region">
+      {limitsPending ? (
+        <SkeletonRows rows={1} />
+      ) : (
+        <p className="usage-headline">{usageHeadline(tightestDailyWindow(limits))}</p>
+      )}
       <div className="grid gap-6 md:grid-cols-2">
         <section aria-label="Provider limits" className="grid gap-4 rounded-card bg-card p-5">
           <div>
@@ -225,6 +245,25 @@ export function UsageTab() {
           )}
         />
       </section>
+      <p className="usage-updated">
+        {dataUpdatedAt
+          ? `Last updated ${new Date(dataUpdatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+          : 'Not updated yet'}
+        <button
+          aria-label="Refresh usage"
+          disabled={isFetching}
+          onClick={() => {
+            void Promise.all([
+              cache.invalidateQueries({ queryKey: keys.limits }),
+              cache.invalidateQueries({ queryKey: ['usage'] }),
+              cache.invalidateQueries({ queryKey: ['providers'] }),
+            ]);
+          }}
+          type="button"
+        >
+          <RotateCw aria-hidden="true" className={isFetching ? 'animate-spin' : ''} size={13} />
+        </button>
+      </p>
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useFerryClient } from '../data/client';
 import { keys, useSettings } from '../data/queries';
 import { useToasts } from '../state/toasts';
-import { settingsSections, useUI } from '../state/ui';
+import { settingsSectionGroups, settingsSections, useUI } from '../state/ui';
 import {
   Dialog,
   FerryMark,
@@ -560,6 +560,39 @@ export function SettingsCanvas() {
                     { value: 'auto', label: 'Auto' },
                     { value: 'hero', label: 'Hero' },
                     { value: 'compact', label: 'Compact' },
+                  ]}
+                />
+              </SettingRow>
+              <SettingRow
+                title="Transcript width"
+                helper="Maximum width of the chat transcript and composer."
+              >
+                <SegmentedControl
+                  label="Transcript width"
+                  value={transcriptWidth}
+                  onValueChange={(value) => {
+                    useUI.getState().setTranscriptWidth(value as typeof transcriptWidth);
+                  }}
+                  options={[
+                    { value: 'narrow', label: 'Narrow' },
+                    { value: 'medium', label: 'Medium' },
+                    { value: 'wide', label: 'Wide' },
+                  ]}
+                />
+              </SettingRow>
+              <SettingRow
+                title="Motion"
+                helper="Reduce animation in streaming replies and other interface elements."
+              >
+                <SegmentedControl
+                  label="Motion"
+                  value={motion}
+                  onValueChange={(value) => {
+                    useUI.getState().setMotion(value as typeof motion);
+                  }}
+                  options={[
+                    { value: 'system', label: 'System' },
+                    { value: 'reduced', label: 'Reduced' },
                   ]}
                 />
               </SettingRow>
@@ -1764,6 +1797,8 @@ export function SettingsCanvas() {
       </>
     );
   };
+  const transcriptWidth = useUI((state) => state.transcriptWidth);
+  const motion = useUI((state) => state.motion);
   const pageCopy = settingsPageCopy[section] ?? {
     title: section,
     description: 'Adjust how Ferry works across your workspaces.',
@@ -1793,23 +1828,31 @@ export function SettingsCanvas() {
             value={sectionQuery}
           />
         </label>
-        <span className="v2-settings-sidebar-label">Settings</span>
         <nav className="v2-settings-nav" aria-label="Settings sections">
-          {visibleSections.map((name) => {
-            const Icon = settingsSectionIcons[name];
+          {settingsSectionGroups.map((group) => {
+            const names = group.sections.filter((name) => visibleSections.includes(name));
+            if (!names.length) return null;
             return (
-              <button
-                aria-current={section === name ? 'page' : undefined}
-                className={section === name ? 'active' : ''}
-                key={name}
-                onClick={() => {
-                  useUI.getState().setSettingsSection(name);
-                }}
-                type="button"
-              >
-                <Icon aria-hidden="true" />
-                {name}
-              </button>
+              <div className="v2-settings-nav-group" key={group.label}>
+                <span className="v2-settings-sidebar-label">{group.label}</span>
+                {names.map((name) => {
+                  const Icon = settingsSectionIcons[name];
+                  return (
+                    <button
+                      aria-current={section === name ? 'page' : undefined}
+                      className={section === name ? 'active' : ''}
+                      key={name}
+                      onClick={() => {
+                        useUI.getState().setSettingsSection(name);
+                      }}
+                      type="button"
+                    >
+                      <Icon aria-hidden="true" />
+                      {name}
+                    </button>
+                  );
+                })}
+              </div>
             );
           })}
           {visibleSections.length === 0 && (

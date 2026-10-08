@@ -623,7 +623,7 @@ export function GatewayCanvas() {
             ) : (
               snippet && (
                 <div className="v2-gateway-code" role="tabpanel">
-                  <pre>
+                  <pre aria-label="Configuration snippet" tabIndex={0}>
                     <code>{snippet.code}</code>
                   </pre>
                   <CopyButton label={`Copy ${snippet.label} setup`} value={snippet.code} />

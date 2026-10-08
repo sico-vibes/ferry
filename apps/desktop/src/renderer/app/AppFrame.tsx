@@ -121,6 +121,13 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [engineRestarting, setEngineRestarting] = useState(false);
   const [titlebarReserve, setTitlebarReserve] = useState(0);
+  const transcriptWidth = useUI((state) => state.transcriptWidth);
+  const motion = useUI((state) => state.motion);
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.transcript = transcriptWidth;
+    root.dataset.motion = motion;
+  }, [transcriptWidth, motion]);
   useEffect(() => {
     const overlay = (
       navigator as Navigator & {

@@ -1,5 +1,5 @@
 import { SkeletonRows } from '@ferry/ui';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -16,6 +16,7 @@ import {
   Network,
   Search,
   Settings,
+  Sparkles,
   SunMoon,
   Boxes,
   X,
@@ -29,6 +30,8 @@ import { useToasts } from '../state/toasts';
 import { useDisplayName } from './useDisplayName';
 import { useCloudStatus } from './CloudAccount';
 import { SidebarProjects } from './SidebarProjects';
+import { SidebarUpdateRow } from './UpdateBadge';
+import { shouldShowWhatsNew, WhatsNewDialog } from './WhatsNewDialog';
 
 const {
   Avatar,
@@ -53,6 +56,11 @@ const {
   TooltipTrigger,
 } = UiV2;
 
+function platformName(): string {
+  const platform = navigator.userAgent;
+  return /Mac/i.test(platform) ? 'macOS' : /Linux/i.test(platform) ? 'Linux' : 'Windows';
+}
+
 export function V2Sidebar({
   onNewChat,
 }: {
@@ -72,6 +80,11 @@ export function V2Sidebar({
   const { data: limits = [], isPending: limitsPending } = useLimits();
   const pushToast = useToasts((state) => state.push);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  useEffect(() => {
+    // After an update, show what changed once (never on a fresh install).
+    if (shouldShowWhatsNew(window.ferryHost?.versions.app)) setWhatsNewOpen(true);
+  }, []);
   const { data: systemInfo } = useQuery({
     queryKey: keys.system,
     queryFn: () => client.system.info(),
@@ -157,39 +170,39 @@ export function V2Sidebar({
         {collapsed && <div className="v2-rail-spacer" />}
         <div className="v2-sidebar-bottom">
           {!collapsed && !pathname.startsWith('/models') && (
-            <section className="v2-capacity-card" aria-label="Daily limits">
+            <button
+              aria-label={
+                tightest
+                  ? `${tightest.providerName}: ${describeWindow(tightest.window)}. Open usage`
+                  : 'Open usage'
+              }
+              className="v2-capacity-line"
+              onClick={() => {
+                void navigate({ to: '/models/usage' });
+              }}
+              type="button"
+            >
               {limitsPending ? (
                 <SkeletonRows rows={1} />
               ) : tightest ? (
                 <>
-                  <div className="v2-capacity-top">
+                  <span className="v2-capacity-line-top">
                     <span className="truncate">{tightest.providerName}</span>
-                    <span>{String(Math.round(tightest.share * 100))}%</span>
-                  </div>
-                  <Progress
-                    value={tightest.share * 100}
-                    aria-label={`${tightest.providerName}: ${describeWindow(tightest.window)}`}
-                  />
-                  <small className="v2-capacity-detail">
-                    {[describeWindow(tightest.window), describeReset(tightest.window)]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </small>
+                    <span className="v2-capacity-line-value">
+                      {describeReset(tightest.window) ??
+                        `${String(Math.round(tightest.share * 100))}% left`}
+                    </span>
+                  </span>
+                  <Progress value={tightest.share * 100} aria-hidden="true" />
                 </>
               ) : (
-                <div className="v2-capacity-top">
-                  <span>No daily limits used yet today</span>
-                </div>
+                <span className="v2-capacity-line-top">
+                  <span>Usage and limits</span>
+                </span>
               )}
-              <button
-                onClick={() => {
-                  void navigate({ to: '/models/usage' });
-                }}
-              >
-                See limits
-              </button>
-            </section>
+            </button>
           )}
+          {!collapsed && <SidebarUpdateRow />}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="v2-user-row" aria-label="User menu">
@@ -308,6 +321,14 @@ export function V2Sidebar({
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => {
+                  setWhatsNewOpen(true);
+                }}
+              >
+                <Sparkles />
+                What’s new
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
                   setAboutOpen(true);
                 }}
               >
@@ -322,57 +343,72 @@ export function V2Sidebar({
             <DialogClose aria-label="Close About dialog" autoFocus className="v2-about-close">
               <X aria-hidden="true" />
             </DialogClose>
-            <UiV2.DialogHeader>
-              <UiV2.DialogTitle>About Ferry</UiV2.DialogTitle>
+            <div className="v2-about-hero">
+              <FerryMark size={56} variant="brand" />
+              <UiV2.DialogTitle>Ferry for {platformName()}</UiV2.DialogTitle>
               <UiV2.DialogDescription>
-                Ferry desktop for routing coding work.
+                Version {appVersion ?? 'unavailable'} · {window.ferryHost?.channel ?? 'beta'}
+                {systemInfo?.version && systemInfo.version !== appVersion
+                  ? ` · engine ${systemInfo.version}`
+                  : ''}
               </UiV2.DialogDescription>
-            </UiV2.DialogHeader>
-            <dl className="v2-about-details">
-              <div>
-                <dt>App version</dt>
-                <dd>{appVersion ?? 'Unavailable'}</dd>
-              </div>
-              <div>
-                <dt>Channel</dt>
-                <dd>{window.ferryHost?.channel ?? 'beta'}</dd>
-              </div>
-              <div>
-                <dt>Engine version</dt>
-                <dd>{systemInfo?.version ?? 'Unavailable'}</dd>
-              </div>
-              {dataFolder && (
-                <div className="v2-about-data-folder">
-                  <dt>Data folder</dt>
-                  <dd>{dataFolder}</dd>
-                  {window.ferryHost && (
-                    <UiV2.Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => {
-                        void window.ferryHost
-                          ?.revealDataFolder(dataFolder)
-                          .catch((error: unknown) => {
-                            pushToast({
-                              kind: 'error',
-                              title: 'Data folder could not be revealed',
-                              body: error instanceof Error ? error.message : String(error),
-                            });
+            </div>
+            <div className="v2-about-actions">
+              <UiV2.Button
+                variant="outline"
+                onClick={() => {
+                  void window.ferryHost?.openHelp().catch((error: unknown) => {
+                    pushToast({
+                      kind: 'error',
+                      title: 'Help could not be opened',
+                      body: error instanceof Error ? error.message : String(error),
+                    });
+                  });
+                }}
+              >
+                Help
+              </UiV2.Button>
+              <UiV2.Button
+                variant="outline"
+                onClick={() => {
+                  setAboutOpen(false);
+                  setWhatsNewOpen(true);
+                }}
+              >
+                What’s new
+              </UiV2.Button>
+            </div>
+            {dataFolder && (
+              <p className="v2-about-folder">
+                <span title={dataFolder}>{dataFolder}</span>
+                {window.ferryHost && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void window.ferryHost
+                        ?.revealDataFolder(dataFolder)
+                        .catch((error: unknown) => {
+                          pushToast({
+                            kind: 'error',
+                            title: 'Data folder could not be revealed',
+                            body: error instanceof Error ? error.message : String(error),
                           });
-                      }}
-                    >
-                      Reveal
-                    </UiV2.Button>
-                  )}
-                </div>
-              )}
-              <div>
-                <dt>License</dt>
-                <dd>MIT</dd>
-              </div>
-            </dl>
+                        });
+                    }}
+                  >
+                    Reveal
+                  </button>
+                )}
+              </p>
+            )}
+            <p className="v2-about-license">MIT License</p>
           </UiV2.DialogContent>
         </UiV2.Dialog>
+        <WhatsNewDialog
+          open={whatsNewOpen}
+          onOpenChange={setWhatsNewOpen}
+          appVersion={window.ferryHost?.versions.app}
+        />
       </aside>
     </TooltipProvider>
   );

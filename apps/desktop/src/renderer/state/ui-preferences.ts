@@ -6,6 +6,8 @@ export function createPreferencesSlice(
   UIState,
   | 'setRightTab'
   | 'setDensity'
+  | 'setTranscriptWidth'
+  | 'setMotion'
   | 'setSettingsSection'
   | 'openSettings'
   | 'closeSettings'
@@ -27,6 +29,12 @@ export function createPreferencesSlice(
     },
     setDensity: (density) => {
       update(() => ({ density }));
+    },
+    setTranscriptWidth: (transcriptWidth) => {
+      update(() => ({ transcriptWidth }));
+    },
+    setMotion: (motion) => {
+      update(() => ({ motion }));
     },
     setSettingsSection: (settingsSection) => {
       update(() => ({ settingsSection }));
