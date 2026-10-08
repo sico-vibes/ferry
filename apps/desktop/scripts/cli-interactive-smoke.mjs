@@ -127,12 +127,20 @@ try {
       child.onData((data) => (output += data));
       // Subscribe before navigation: a fast exit must not be lost while waiting for cmd's prompt.
       const exited = new Promise((resolveExit) => child.onExit(resolveExit));
+      // Match what is on screen, not the raw bytes: ConPTY on older Windows (Server 2022) draws
+      // gaps with cursor moves instead of spaces, so "› No profile" arrives as "›\x1b[1CNo profile".
+      const visible = (text) =>
+        text
+          .replace(/\x1b\][^\x07]*\x07/g, '')
+          .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+          .replace(/\s+/g, '');
+      const shows = (value) => visible(output).includes(visible(value));
       const waitFor = async (value, timeout = 30_000) => {
         const deadline = Date.now() + timeout;
-        while (!output.includes(value) && Date.now() < deadline)
+        while (!shows(value) && Date.now() < deadline)
           await new Promise((resolvePromise) => setTimeout(resolvePromise, 40));
         assert.ok(
-          output.includes(value),
+          shows(value),
           `${variant}: timed out waiting for ${value}. Terminal output:\n${output}`,
         );
       };
@@ -152,7 +160,7 @@ try {
       child.write('hello\r');
       await waitFor('scripted reply', 60_000);
       await waitFor('bundledHighlight', 15_000);
-      assert.ok(!output.includes('ERROR'), `${variant}: markdown rendering failed:\n${output}`);
+      assert.ok(!shows('ERROR'), `${variant}: markdown rendering failed:\n${output}`);
       // The CLI labels each reply with the Ferry model that served it.
       await waitFor(`via openrouter/${model}`, 15_000);
       const previousOutput = output;
@@ -175,9 +183,9 @@ try {
       // cmd.exe asks this after Ctrl+C in any .cmd launcher (npm shims do the same); answer it so
       // the batch finishes with Ferry's own exit code.
       const batchPrompt = Date.now() + 5_000;
-      while (!output.includes('Terminate batch job') && Date.now() < batchPrompt)
+      while (!shows('Terminate batch job') && Date.now() < batchPrompt)
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 40));
-      if (output.includes('Terminate batch job')) child.write('N\r');
+      if (shows('Terminate batch job')) child.write('N\r');
       const exitCode = await new Promise((resolvePromise, reject) => {
         const timer = setTimeout(
           () =>
