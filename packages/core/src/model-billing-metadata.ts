@@ -47,6 +47,11 @@ export function preserveCatalogBillingMetadata(
     const free = isModelFreeForPlan(plan, { ...model, priceInPerM, priceOutPerM });
     return {
       ...model,
+      contextWindow: catalogModel?.contextWindow ?? model.contextWindow,
+      maxOutput: catalogModel?.maxOutput ?? model.maxOutput,
+      ...((model.reasoningEfforts ?? catalogModel?.reasoningEfforts)
+        ? { reasoningEfforts: model.reasoningEfforts ?? catalogModel?.reasoningEfforts }
+        : {}),
       free,
       priceInPerM,
       priceOutPerM,

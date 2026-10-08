@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { resolveFerryRuntimePaths } from '../src/electron-paths.js';
@@ -29,7 +29,11 @@ function resolveFixture(entryFilePath: string, execPath: string, env: Record<str
     entryFilePath,
     execPath,
     env,
-    exists: existsSync,
+    exists: (path) =>
+      roots.some((root) => {
+        const suffix = relative(root, path);
+        return !suffix.startsWith('..') && !isAbsolute(suffix);
+      }) && existsSync(path),
   });
 }
 

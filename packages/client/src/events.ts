@@ -10,6 +10,7 @@ import {
   MessageSchema,
   PartIdSchema,
   ProviderSchema,
+  ProviderHealthSnapshotSchema,
   OAuthLoginProgressSchema,
   SettingsSchema,
   SessionIdSchema,
@@ -111,6 +112,7 @@ export const FerryEventSchemas = {
   'quota.updated': CapacitySummarySchema,
   'quota.limits.updated': z.array(ProviderLimitsSchema),
   'provider.updated': ProviderSchema,
+  'providers.health.updated': ProviderHealthSnapshotSchema,
   'delegation.updated': DelegationRunSchema,
   'workspace.updated': WorkspaceSchema,
   'workspace.removed': z.object({ id: WorkspaceIdSchema }),
@@ -212,6 +214,7 @@ export interface FerryEvents {
   'quota.updated': CapacitySummary;
   'quota.limits.updated': ProviderLimits[];
   'provider.updated': Provider;
+  'providers.health.updated': import('@ferry/shared').ProviderHealthSnapshot;
   'delegation.updated': DelegationRun;
   'workspace.updated': import('@ferry/shared').Workspace;
   'workspace.removed': { id: import('@ferry/shared').WorkspaceId };

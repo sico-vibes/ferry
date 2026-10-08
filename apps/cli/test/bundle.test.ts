@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -69,19 +69,49 @@ describe('built CLI bundle', () => {
         sourceDirectory: join(cliDirectory, 'dist'),
         targetDirectory: resourcesCli,
       });
-      const stagedEntry = join(resourcesCli, 'ferry.js');
-      const version = spawnSync(process.execPath, [stagedEntry, '--version'], {
-        encoding: 'utf8',
-        timeout: 30_000,
-        env,
+      // Model the packaged native anchor explicitly: fixtures may live beneath the checkout.
+      const appAsar = join(temporaryRoot, 'resources', 'app.asar');
+      await mkdir(join(appAsar, 'out', 'main'), { recursive: true });
+      await writeFile(join(appAsar, 'out', 'main', 'index.js'), '', 'utf8');
+      await cp(join(cliDirectory, 'dist', 'data'), join(appAsar, 'out', 'data'), {
+        recursive: true,
       });
+      await symlink(
+        join(cliDirectory, '..', '..', 'node_modules'),
+        join(appAsar, 'node_modules'),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      const bootstrap = join(temporaryRoot, 'electron-resources.mjs');
+      await writeFile(
+        bootstrap,
+        `Object.defineProperty(process, 'resourcesPath', { value: ${JSON.stringify(join(temporaryRoot, 'resources'))} });\n`,
+        'utf8',
+      );
+      const stagedEntry = join(resourcesCli, 'ferry.js');
+      const version = spawnSync(
+        process.execPath,
+        ['--import', pathToFileURL(bootstrap).href, stagedEntry, '--version'],
+        {
+          encoding: 'utf8',
+          timeout: 30_000,
+          env,
+        },
+      );
       expect(version.error).toBeUndefined();
       expect(version.status, `${version.stderr}\n${version.stdout}`).toBe(0);
       expect(version.stdout).toMatch(/\d+\.\d+\.\d+/);
 
       const status = spawnSync(
         process.execPath,
-        [stagedEntry, 'status', '--json', '--engine', 'mock'],
+        [
+          '--import',
+          pathToFileURL(bootstrap).href,
+          stagedEntry,
+          'status',
+          '--json',
+          '--engine',
+          'mock',
+        ],
         { encoding: 'utf8', timeout: 30_000, env },
       );
       expect(status.error).toBeUndefined();

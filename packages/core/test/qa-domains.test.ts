@@ -11,6 +11,7 @@ import { openDatabase, STORAGE_SCHEMA_VERSION } from '@ferry/storage';
 import { FakeOpenAIServer } from '@ferry/testkit';
 import { CoreHost, createCoreHost, createMemoryTransportPair } from '../src/index.js';
 import { modelHintsFromRegistry } from '../src/session-deps.js';
+import { getModelDiscovery } from '../src/domains/model-discovery.js';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'ferry-qa-domains-'));
 vi.setConfig({ testTimeout: 30_000 });
@@ -366,6 +367,9 @@ describe('QA discovered models', () => {
     try {
       const providerId = ProviderIdSchema.parse('openrouter');
       await core.rpc.providers.setKey(providerId, 'fixture-key');
+      const services = core.host.options.services;
+      if (!services) throw new Error('Missing core services');
+      await getModelDiscovery(core.host, services).refresh(providerId);
       const models = await core.rpc.models.page({ filters: { providerId }, limit: 100 });
       const discovered = models.items.find(
         (model) => model.ref === 'openrouter/custom/discovered-coder',

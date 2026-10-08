@@ -407,7 +407,7 @@ export function createHybridClient(
                         ? 'mcp'
                         : event.startsWith('quota.')
                           ? 'quota'
-                          : event === 'provider.updated'
+                          : event === 'provider.updated' || event === 'providers.health.updated'
                             ? 'providers'
                             : event === 'delegation.updated'
                               ? 'delegation'

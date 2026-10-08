@@ -116,6 +116,8 @@ export type ProbeResult = z.infer<typeof ProbeResultSchema>;
 export const EffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 export type Effort = z.infer<typeof EffortSchema>;
 export const ModelInfoSchema = z.object({
+  verified: z.boolean().optional(),
+  verifiedAt: z.iso.datetime().nullable().optional(),
   ref: ModelRefSchema,
   providerId: ProviderIdSchema,
   name: z.string(),
@@ -161,6 +163,28 @@ export const ModelInfoSchema = z.object({
   gateway: z.object({ keyId: z.string(), keyName: z.string(), modelName: z.string() }).optional(),
 });
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;
+export const ProviderHealthSnapshotSchema = z.object({
+  providerId: ProviderIdSchema,
+  state: z.enum(['healthy', 'degraded', 'down']),
+  breaker: z.enum(['closed', 'open', 'half_open']),
+  openedAt: z.iso.datetime().nullable(),
+  nextProbeAt: z.iso.datetime().nullable(),
+  lastError: z.string().nullable(),
+  keys: z.array(
+    z.object({
+      keyId: z.string(),
+      cooldownUntil: z.iso.datetime().nullable(),
+      reason: z.string().nullable(),
+    }),
+  ),
+  lockedModels: z.array(
+    z.object({ ref: ModelRefSchema, until: z.iso.datetime(), reason: z.string() }),
+  ),
+  latencyP50Ms: z.number().nonnegative().nullable(),
+  latencyP95Ms: z.number().nonnegative().nullable(),
+  successRate1h: z.number().min(0).max(1).nullable(),
+});
+export type ProviderHealthSnapshot = z.infer<typeof ProviderHealthSnapshotSchema>;
 export const ModelCandidateSchema = z.object({
   ref: ModelRefSchema,
   score: z.number(),

@@ -54,6 +54,7 @@ export interface FerryClient {
     migrateLocalKeys(): Promise<{ migrated: number; missing: number; failed: number }>;
   };
   gateway: {
+    keySecret(id: string): Promise<string>;
     settings(): Promise<{
       enabled: boolean;
       port: number;
@@ -177,6 +178,7 @@ export interface FerryClient {
     restore(id: CheckpointId, paths?: string[]): Promise<void>;
   };
   providers: {
+    health(): Promise<import('@ferry/shared').ProviderHealthSnapshot[]>;
     list(): Promise<Provider[]>;
     listKeys(id: ProviderId): Promise<import('@ferry/shared').ProviderKey[]>;
     effectiveOverrides(id: ProviderId): Promise<ProviderRequestOverrides>;

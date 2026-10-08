@@ -2,8 +2,10 @@ import { discoverProviderModels } from '@ferry/providers';
 import { ProviderIdSchema, redactKnownSecretText } from '@ferry/shared';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
+import { createBackgroundQueue } from '../background-queue.js';
+import { getProviderHealth } from '../provider-health.js';
 
-const modelsMaxAgeMs = 24 * 60 * 60 * 1000;
+const modelsMaxAgeMs = 6 * 60 * 60 * 1000;
 const discoveryTimeoutMs = 4_000;
 const retryDelaysMs = [60_000, 120_000, 300_000, 900_000, 3_600_000] as const;
 
@@ -36,6 +38,7 @@ function discoveryErrorClass(
 }
 
 export interface ModelDiscovery {
+  keyChanged(id: string): Promise<void>;
   refresh(id: string): Promise<void>;
   refreshIfStale(id: string): Promise<void>;
   dispose(): Promise<void>;
@@ -49,22 +52,26 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
 
   const inFlight = new Map<string, Promise<void>>();
   const controllers = new Map<string, AbortController>();
+  const queue = createBackgroundQueue();
 
   const refresh = (id: string): Promise<void> => {
     const active = inFlight.get(id);
     if (active) return active;
 
     const controller = new AbortController();
+    const aborted = () => controller.signal.aborted;
     controllers.set(id, controller);
     const timeoutReason = new Error('Provider model discovery timed out');
-    const timeout = setTimeout(() => {
-      controller.abort(timeoutReason);
-    }, discoveryTimeoutMs);
-    timeout.unref();
-    const task = (async () => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const task = queue(async () => {
+      if (aborted()) return;
+      timeout = setTimeout(() => {
+        controller.abort(timeoutReason);
+      }, discoveryTimeoutMs);
+      timeout.unref();
       const limits = services.catalog.providers.find((item) => item.provider === id);
       const current = services.providers.get(id);
-      if (!limits || !current) return;
+      if (!limits || !current?.enabled) return;
 
       const baseUrl = baseUrlFor(services, id);
       if (services.env.NODE_ENV === 'test' && !isLoopbackUrl(baseUrl)) return;
@@ -83,22 +90,30 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
             !entry.cooldownUntil ||
             Date.parse(entry.cooldownUntil) <= services.clock.now().getTime()),
       );
+      // A persisted legacy key must not bypass disabled/invalid sibling entries.
+      if (keyEntries.length > 0 && !usableEntry) return;
       const key =
         (await services.secrets.get(
           usableEntry?.keyringRef ?? services.providerKeys.get(id)?.keyringRef ?? id,
         )) ?? '';
       const keylessEnabled = limits.key_required === false && current.enabled;
-      const endpointDeclared = limits.models_endpoint === '/models';
-      if (!key && !keylessEnabled && !endpointDeclared) return;
+      if (!key && !keylessEnabled) return;
 
       try {
         const providerId = ProviderIdSchema.parse(id);
-        const models = await discoverProviderModels(providerId, key, {
+        const discovered = await discoverProviderModels(providerId, key, {
           ...(baseUrl ? { baseUrl } : {}),
           signal: controller.signal,
         });
         const fetchedAt = services.clock.now().toISOString();
+        if (aborted()) return;
+        const models = discovered.map((model) => ({
+          ...model,
+          verified: true,
+          verifiedAt: fetchedAt,
+        }));
         services.models.replace(id, models, fetchedAt);
+        getProviderHealth(services).tracker.discovered(id);
         const saved = services.providers.get(id);
         if (!saved) return;
         const updated = {
@@ -113,6 +128,7 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
           discoveryFailures: 0,
           discoveryErrorClass: null,
           discoveryUnsupported: false,
+          excludedModelRefs: [],
         };
         services.providers.put(updated);
         if (
@@ -126,13 +142,15 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
         )
           host.emit('provider.updated', updated);
       } catch (error) {
-        if (controller.signal.aborted && controller.signal.reason !== timeoutReason) return;
+        if (aborted() && controller.signal.reason !== timeoutReason) return;
         const saved = services.providers.get(id);
         if (!saved) return;
         const errorClass = discoveryErrorClass(error);
         const failedAt = services.clock.now().toISOString();
         const failures = (saved.discoveryFailures ?? 0) + 1;
-        const unsupported = errorClass === 'not_found';
+        const unsupported =
+          errorClass === 'not_found' ||
+          (error instanceof Error && error.message === 'Provider has no model list endpoint');
         const authFailure = errorClass === 'auth';
         if (authFailure && usableEntry) {
           services.providerKeyEntries.put({
@@ -171,6 +189,14 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
             : {}),
         };
         services.providers.put(updated);
+        if (unsupported && !saved.modelsVerifiedAt) {
+          services.models.replace(
+            id,
+            services.catalog.models
+              .filter((model) => model.providerId === id)
+              .map((model) => ({ ...model, verified: false, verifiedAt: null })),
+          );
+        }
         const delayMs =
           retryDelaysMs[Math.min(failures - 1, retryDelaysMs.length - 1)] ?? 3_600_000;
         if (failures <= retryDelaysMs.length)
@@ -190,7 +216,7 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
         )
           host.emit('provider.updated', updated);
       }
-    })().finally(() => {
+    }).finally(() => {
       clearTimeout(timeout);
       inFlight.delete(id);
       controllers.delete(id);
@@ -219,7 +245,6 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
       saved.health === 'down' || saved.health === 'auth_invalid' || saved.keyStatus === 'invalid';
     const stale =
       needsHealthRecovery ||
-      services.models.list(id).length === 0 ||
       !Number.isFinite(fetchedAt) ||
       services.clock.now().getTime() - fetchedAt >= modelsMaxAgeMs;
     if (!stale) return;
@@ -227,6 +252,11 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
   };
 
   const discovery: ModelDiscovery = {
+    async keyChanged(id) {
+      controllers.get(id)?.abort();
+      await inFlight.get(id);
+      await refresh(id);
+    },
     refresh,
     refreshIfStale,
     async dispose() {

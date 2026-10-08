@@ -1,5 +1,9 @@
 import { MockNotFoundError } from '../errors.js';
-import { ProviderRequestOverridesSchema, type ProbeResult } from '@ferry/shared';
+import {
+  ProviderRequestOverridesSchema,
+  ProviderHealthSnapshotSchema,
+  type ProbeResult,
+} from '@ferry/shared';
 import type { ProviderKey } from '@ferry/shared';
 import type { FerryClient } from '../../ferry-client.js';
 import type { MockDeps } from './deps.js';
@@ -9,6 +13,29 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
   const { state, rng, before, persist, emit } = deps;
   const keys = state.providerKeys;
   return {
+    async health() {
+      await before();
+      return state.providers.map((provider) =>
+        ProviderHealthSnapshotSchema.parse({
+          providerId: provider.id,
+          state:
+            provider.health === 'down' ? 'down' : provider.health === 'ok' ? 'healthy' : 'degraded',
+          breaker: provider.health === 'down' ? 'open' : 'closed',
+          openedAt: null,
+          nextProbeAt: null,
+          lastError: null,
+          keys: (keys.get(provider.id) ?? []).map((key) => ({
+            keyId: key.id,
+            cooldownUntil: key.cooldownUntil,
+            reason: key.lastError,
+          })),
+          lockedModels: [],
+          latencyP50Ms: null,
+          latencyP95Ms: null,
+          successRate1h: null,
+        }),
+      );
+    },
     async list() {
       await before();
       return structuredClone(state.providers);

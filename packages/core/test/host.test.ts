@@ -247,6 +247,13 @@ describe('core host dispatcher and lifecycle', () => {
       expect(
         (await rpc.gateway.listKeys()).find((key) => key.id === noneKey.key.id)?.allowedModels,
       ).toEqual(['groq/x', 'gemini/y']);
+      // Tool launch can read a live key's secret; revoking removes it from the keyring.
+      expect(await rpc.gateway.keySecret(noneKey.key.id)).toBe(noneKey.secret);
+      await rpc.gateway.revokeKey(noneKey.key.id);
+      await expect(rpc.gateway.keySecret(noneKey.key.id)).rejects.toThrow(/revoked/);
+      expect(await host.options.services?.gatewaySecrets.has(`gateway:${noneKey.key.id}`)).toBe(
+        false,
+      );
       SettingsSchema.parse(await rpc.settings.update({ theme: 'light' }));
       const sessionId = SessionIdSchema.parse('contract_session');
       const projectFile = join(opened.path, 'project.txt');
@@ -461,6 +468,7 @@ describe('core host dispatcher and lifecycle', () => {
         modelsVerifiedAt: null,
       });
       services.models.replace(providerId, []);
+      await getModelDiscovery(host, services).refresh(providerId);
 
       const models = await rpc.models.page({ filters: { providerId }, limit: 100 });
       expect(models.items.map((model) => model.ref)).toContain('sambanova/gpt-oss-120b');
@@ -745,8 +753,12 @@ describe('provider, model and quota RPC integration', () => {
       const limited = await rpc.providers.probe(providerId);
       expect(limited).toMatchObject({ ok: false, errorKind: 'rate_limit' });
       const provider = (await rpc.providers.list()).find((item) => item.id === 'openai');
-      expect(provider).toMatchObject({ health: 'cooldown' });
-      expect(provider?.cooldownUntil).not.toBeNull();
+      const snapshot = (await rpc.providers.health()).find(
+        (item) => item.providerId === providerId,
+      );
+      expect(snapshot?.breaker).toBe('closed');
+      expect(typeof snapshot?.keys[0]?.cooldownUntil).toBe('string');
+      expect((await rpc.providers.listKeys(providerId))[0]?.cooldownUntil).not.toBeNull();
       expect(JSON.stringify({ limited, provider, emitted })).not.toContain(secret);
     } finally {
       rpc.close();

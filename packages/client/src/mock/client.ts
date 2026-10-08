@@ -75,6 +75,10 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
       migrateLocalKeys: () => Promise.resolve({ migrated: 0, missing: 0, failed: 0 }),
     },
     gateway: {
+      keySecret: (id) =>
+        gatewayKeys.some((key) => key.id === id && !key.revokedAt)
+          ? Promise.resolve('ferry-gw-mock-once')
+          : Promise.reject(new Error('Unknown or revoked Gateway key')),
       settings: () =>
         Promise.resolve({
           ...gatewaySettings,

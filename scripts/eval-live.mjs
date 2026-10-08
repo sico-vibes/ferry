@@ -8,6 +8,7 @@ import { createServices } from '../packages/core/src/services.ts';
 import { CoreHost } from '../packages/core/src/host.ts';
 import { createMemoryTransportPair } from '../packages/core/src/index.ts';
 import { domainRegistrars } from '../packages/core/src/domains/index.ts';
+import { getModelDiscovery } from '../packages/core/src/domains/model-discovery.ts';
 import { createRpcFerryClient } from '../packages/client/src/index.ts';
 import { KeyringSecretStore, MemorySecretStore } from '../packages/secrets/src/index.ts';
 import { AGENT_EVALS } from '../packages/agent/evals/fixtures.ts';
@@ -140,7 +141,13 @@ export async function runEvalLive(args = process.argv.slice(2), lifecycle = {}) 
     await host.start();
     rpc = createRpcFerryClient(clientTransport, { timeoutMs: 15_000 });
     await rpc.hello;
-    await invokeCore('models.list');
+    // The picker reads cached models immediately; an eval preflight must await discovery.
+    const discovery = getModelDiscovery(host, services);
+    await Promise.allSettled(
+      services.catalog.providers
+        .filter(({ provider }) => services.providers.get(provider)?.enabled)
+        .map(({ provider }) => discovery.refreshIfStale(provider)),
+    );
 
     const providerPolicies = await Promise.all(
       services.catalog.providers.map(async (limits) => {

@@ -44,6 +44,25 @@ function canonicalReasoningEffort(input: Record<string, unknown>): { effort?: Ef
   const parsed = EffortSchema.safeParse(input.reasoning_effort ?? nested);
   return parsed.success ? { effort: parsed.data } : {};
 }
+export function anthropicReasoningEffort(input: Record<string, unknown>): { effort?: Effort } {
+  const thinking =
+    input.thinking && typeof input.thinking === 'object'
+      ? (input.thinking as Record<string, unknown>)
+      : undefined;
+  if (!thinking || thinking.type === 'disabled') return {};
+  const output =
+    input.output_config && typeof input.output_config === 'object'
+      ? (input.output_config as Record<string, unknown>)
+      : undefined;
+  const effort = EffortSchema.safeParse(output?.effort);
+  if (effort.success) return { effort: effort.data };
+  if (thinking.type === 'adaptive') return { effort: 'high' };
+  if (thinking.type === 'enabled') {
+    const budget = Number(thinking.budget_tokens);
+    return { effort: budget <= 4096 ? 'low' : budget <= 16384 ? 'medium' : 'high' };
+  }
+  return {};
+}
 
 export interface CanonicalUsage {
   inputTokens: number;
@@ -333,6 +352,7 @@ export function anthropicToCanonical(input: Record<string, unknown>): CanonicalR
     ...(canonicalTools ? { tools: canonicalTools } : {}),
     stream: input.stream === true,
     ...(typeof input.max_tokens === 'number' ? { maxTokens: input.max_tokens } : {}),
+    ...anthropicReasoningEffort(input),
   };
 }
 

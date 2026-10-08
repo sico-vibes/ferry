@@ -2,14 +2,15 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FakeOpenAIServer } from '../../../packages/testkit/src/fake-servers.ts';
 
 const cliDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
 const cliEntry = join(cliDirectory, 'dist', 'ferry.js');
-const temporaryDirectory = await mkdtemp(join(tmpdir(), 'ferry-cli-e2e-'));
+const temporaryRoot = join(cliDirectory, '..', '..', '.dev', 'test-tmp');
+await mkdir(temporaryRoot, { recursive: true });
+const temporaryDirectory = await mkdtemp(join(temporaryRoot, 'ferry-cli-e2e-'));
 const dataDirectory = join(temporaryDirectory, 'engine');
 const workspace = join(temporaryDirectory, 'workspace');
 const firstModel = 'qwen/qwen3.8-27b:free';
@@ -51,6 +52,40 @@ function completion(text) {
   };
 }
 
+function toolCompletion() {
+  return {
+    chunks: [
+      {
+        id: 'chatcmpl_tool_e2e',
+        object: 'chat.completion.chunk',
+        created: 1,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              role: 'assistant',
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_lookup',
+                  type: 'function',
+                  function: { name: 'lookup', arguments: '{"path":"README.md"}' },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: 'chatcmpl_tool_e2e',
+        object: 'chat.completion.chunk',
+        created: 1,
+        choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+      },
+    ],
+  };
+}
 function jsonEvents(stdout) {
   return stdout
     .split(/\r?\n/)
@@ -120,16 +155,18 @@ async function runCliResult(prompt, extraArgs = []) {
 }
 
 async function runGatewayCli(args, { json = true } = {}) {
+  const separator = args.indexOf('--');
   const child = spawn(
     process.execPath,
     [
       cliEntry,
-      ...args,
+      ...(separator < 0 ? args : args.slice(0, separator)),
       '--engine',
       'local',
       '--data-dir',
       dataDirectory,
       ...(json ? ['--json'] : []),
+      ...(separator < 0 ? [] : args.slice(separator)),
     ],
     {
       cwd: workspace,
@@ -302,11 +339,153 @@ try {
   );
 
   await fake.start();
-  await startGatewayServer();
+  const initialGatewayStatus = await startGatewayServer();
   const gatewayModelRef = `groq/${secondModel}`;
   const noProfileKey = await createGatewayKey('CLI no-profile E2E', 'none', [gatewayModelRef]);
   assert.deepEqual(noProfileKey.allowedModels, [gatewayModelRef]);
   const profileKey = await createGatewayKey('CLI profile E2E', 'auto-free', [gatewayModelRef]);
+  for (const tool of ['claude', 'codex']) {
+    const automatic = await runGatewayCli(['run', tool, '--dry-run']);
+    assert.equal(automatic.code, 0, `${automatic.stderr}\n${automatic.stdout}`);
+    assert.ok(!automatic.stdout.includes('ferry-gw-'));
+    const result = await runGatewayCli([
+      'run',
+      tool,
+      '--dry-run',
+      '--model',
+      gatewayModelRef,
+      '--key',
+      profileKey.id,
+      '--',
+      '--version',
+    ]);
+    assert.equal(result.code, 0, `${result.stderr}\n${result.stdout}`);
+    const preview = resultJson(result);
+    assert.equal(preview.command, tool);
+    assert.ok(!result.stdout.includes('ferry-gw-'), result.stdout);
+    assert.ok(preview.args.includes('--version'));
+    if (tool === 'claude') {
+      assert.equal(preview.env.ANTHROPIC_BASE_URL, initialGatewayStatus.url);
+      assert.equal(preview.env.ANTHROPIC_AUTH_TOKEN, '[REDACTED]');
+      assert.equal(preview.env.ANTHROPIC_MODEL, gatewayModelRef);
+    } else {
+      assert.equal(preview.env.FERRY_GATEWAY_API_KEY, '[REDACTED]');
+      assert.ok(
+        preview.args.includes(`model_providers.ferry.base_url="${initialGatewayStatus.url}/v1"`),
+      );
+      assert.ok(preview.args.includes('model_providers.ferry.wire_api="responses"'));
+    }
+    console.log(`PASS ferry run ${tool} --dry-run env/args/masking`);
+  }
+  const configured = await runGatewayCli([
+    'configure',
+    'opencode',
+    '--print',
+    '--key',
+    profileKey.id,
+    '--model',
+    gatewayModelRef,
+  ]);
+  assert.equal(configured.code, 0, `${configured.stderr}\n${configured.stdout}`);
+  const printedConfig = JSON.parse(resultJson(configured).content);
+  assert.equal(printedConfig.provider.ferry.options.apiKey, '[REDACTED]');
+  assert.equal(printedConfig.provider.ferry.options.baseURL, `${initialGatewayStatus.url}/v1`);
+  console.log('PASS ferry configure opencode --print');
+  const formatKeyResult = await runGatewayCli([
+    'gateway',
+    'keys',
+    'create',
+    'Gateway formats E2E',
+    'none',
+    '--allowed-models',
+    gatewayModelRef,
+  ]);
+  assert.equal(formatKeyResult.code, 0, `${formatKeyResult.stderr}\n${formatKeyResult.stdout}`);
+  const formatKey = resultJson(formatKeyResult);
+  for (const format of ['messages', 'responses']) {
+    for (const stream of [false, true]) {
+      fake.setResponses([completion(`${format}-reply`)]);
+      const request =
+        format === 'messages'
+          ? {
+              model: gatewayModelRef,
+              messages: [{ role: 'user', content: 'Reply OK' }],
+              system: [{ type: 'text', text: 'Be concise.' }],
+              thinking: { type: 'enabled', budget_tokens: 1024 },
+              max_tokens: 2048,
+              stream,
+            }
+          : {
+              model: gatewayModelRef,
+              input: [{ role: 'user', content: [{ type: 'input_text', text: 'Reply OK' }] }],
+              reasoning: { effort: 'high' },
+              stream,
+            };
+      const response = await fetch(`${initialGatewayStatus.url}/v1/${format}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(format === 'messages'
+            ? { 'x-api-key': formatKey.secret }
+            : { authorization: `Bearer ${formatKey.secret}` }),
+        },
+        body: JSON.stringify(request),
+      });
+      assert.equal(response.status, 200, await response.clone().text());
+      const text = await response.text();
+      assert.ok(text.includes(`${format}-reply`), text);
+      if (stream)
+        assert.ok(
+          text.includes(
+            format === 'messages' ? 'event: message_stop' : 'event: response.completed',
+          ),
+          text,
+        );
+      const requests = await gatewayRequests();
+      assert.ok(
+        requests.some(
+          (record) =>
+            record.keyId === formatKey.key.id &&
+            record.requestedModel === gatewayModelRef &&
+            record.status === 'ok',
+        ),
+      );
+      console.log(`PASS gateway /v1/${format} ${stream ? 'SSE' : 'JSON'} and request log`);
+      fake.setResponses([toolCompletion()]);
+      const tool =
+        format === 'messages'
+          ? {
+              name: 'lookup',
+              input_schema: {
+                type: 'object',
+                properties: { path: { type: 'string' } },
+                required: ['path'],
+              },
+            }
+          : {
+              type: 'function',
+              name: 'lookup',
+              parameters: {
+                type: 'object',
+                properties: { path: { type: 'string' } },
+                required: ['path'],
+              },
+            };
+      const toolResponse = await fetch(`${initialGatewayStatus.url}/v1/${format}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${formatKey.secret}`,
+        },
+        body: JSON.stringify({ ...request, tools: [tool] }),
+      });
+      assert.equal(toolResponse.status, 200, await toolResponse.clone().text());
+      const toolText = await toolResponse.text();
+      assert.ok(toolText.includes('lookup') && toolText.includes('call_lookup'), toolText);
+      assert.ok(toolText.includes(format === 'messages' ? 'tool_use' : 'function_call'), toolText);
+      console.log(`PASS gateway /v1/${format} ${stream ? 'SSE' : 'JSON'} tool-call round trip`);
+    }
+  }
 
   fake.setResponses([completion('plain-reply')]);
   const plainRequestStart = chatRequests().length;

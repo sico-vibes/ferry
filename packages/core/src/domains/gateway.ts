@@ -46,8 +46,22 @@ export function register(host: CoreHost, services: FerryServices): void {
       return await gateway.setSettings(parsed);
     },
     listKeys: () => gateway.listKeys(),
-    createKey(value: unknown) {
-      return gateway.createKey(...(Object.values(createSchema.parse(value)) as [string, string]));
+    async createKey(value: unknown) {
+      const created = gateway.createKey(
+        ...(Object.values(createSchema.parse(value)) as [string, string]),
+      );
+      await services.gatewaySecrets.set(`gateway:${created.key.id}`, created.secret);
+      return created;
+    },
+    async keySecret(value: unknown) {
+      const id = idSchema.parse(value);
+      if (!gateway.key(id)) throw new Error(`Unknown or revoked Gateway key: ${id}`);
+      const secret = await services.gatewaySecrets.get(`gateway:${id}`);
+      if (!secret)
+        throw new Error(
+          'This legacy Gateway key cannot be retrieved. Create a new key for tool launch.',
+        );
+      return secret;
     },
     updateKey(value: unknown) {
       const parsed = updateSchema.parse(value);
@@ -75,8 +89,11 @@ export function register(host: CoreHost, services: FerryServices): void {
       };
       return gateway.updateKey(parsed.id, patch);
     },
-    revokeKey(value: unknown) {
-      gateway.revokeKey(idSchema.parse(value));
+    async revokeKey(value: unknown) {
+      const id = idSchema.parse(value);
+      gateway.revokeKey(id);
+      // A revoked key's secret is never needed again; don't leave it in the keyring.
+      await services.gatewaySecrets.delete(`gateway:${id}`);
       return gateway.listKeys();
     },
     requests: () => gateway.requests(),

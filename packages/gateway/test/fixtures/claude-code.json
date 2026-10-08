@@ -2,6 +2,7 @@
   "model": "ferry/auto-free",
   "stream": true,
   "max_tokens": 4096,
+  "thinking": { "type": "enabled", "budget_tokens": 2048 },
   "system": [
     {
       "type": "text",

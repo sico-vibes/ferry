@@ -531,8 +531,8 @@ describe('paid-call guardrails', () => {
     const h = await startHarness({
       turns: [
         {
-          status: 429,
-          body: { error: { message: 'scripted rate limit', type: 'rate_limit_error' } },
+          status: 404,
+          body: { error: { message: 'model_not_found', code: 'model_not_found' } },
         },
         textTurn('Paid fallback must not run'),
       ],
@@ -675,8 +675,8 @@ describe('paid-call guardrails', () => {
     const h = await startHarness({
       turns: [
         {
-          status: 429,
-          body: { error: { message: 'scripted rate limit', type: 'rate_limit_error' } },
+          status: 404,
+          body: { error: { message: 'model_not_found', code: 'model_not_found' } },
         },
         textTurn('Free fallback answer'),
       ],

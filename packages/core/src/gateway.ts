@@ -24,6 +24,7 @@ import {
 import { randomBytes } from 'node:crypto';
 import type { FerryServices } from './services.js';
 import { hasUsableProviderKey, recordProviderKeyFailure } from './services.js';
+import { getProviderHealth } from './provider-health.js';
 
 interface GatewaySettings {
   enabled: boolean;
@@ -184,6 +185,7 @@ export function createGatewayController(
     onRequest?.(record);
   };
   const providerKeyRotation = new ProviderKeyRotation();
+  const health = getProviderHealth(services);
   const stickyRoutes = new Map<
     string,
     {
@@ -194,10 +196,7 @@ export function createGatewayController(
     }
   >();
   const allModels = () =>
-    [
-      ...services.catalog.models,
-      ...services.catalog.providers.flatMap(({ provider }) => services.models.list(provider)),
-    ]
+    [...services.catalog.providers.flatMap(({ provider }) => services.models.list(provider))]
       .filter((model) => {
         const saved = services.providers.get(model.providerId);
         const configured = services.catalog.providers.find(
@@ -208,6 +207,7 @@ export function createGatewayController(
         return (
           (saved?.enabled ?? availableCredentials) &&
           availableCredentials &&
+          health.tracker.available(model.providerId, model.ref) &&
           !saved?.excludedModelRefs?.includes(model.ref)
         );
       })
@@ -218,13 +218,12 @@ export function createGatewayController(
     );
     if (key.profile === 'none' && allowedConcrete.length > 0) {
       const candidates = [
-        ...services.catalog.models,
         ...services.catalog.providers.flatMap(({ provider }) => services.models.list(provider)),
       ];
       const byRef = new Map(candidates.map((model) => [model.ref, model]));
       return allowedConcrete.flatMap((ref) => {
         const model = byRef.get(ref as (typeof candidates)[number]['ref']);
-        return model ? [model] : [];
+        return model && allModels().includes(model.ref) ? [model] : [];
       });
     }
     const allProfiles = [...BUILTIN_PROFILES];
@@ -409,7 +408,6 @@ export function createGatewayController(
       : input.key.profile;
     const visibleModels = new Set(allModels());
     const candidates = [
-      ...services.catalog.models,
       ...services.catalog.providers.flatMap(({ provider }) => services.models.list(provider)),
     ].filter((model) => visibleModels.has(model.ref));
     const runtimeDeps = await import('./session-deps.js');
@@ -508,7 +506,9 @@ export function createGatewayController(
     const lastAttemptHistory: GatewayAttempt[] = [];
     for (const model of withKeyFallback) {
       const providerId = model.providerId;
+      if (!health.tracker.available(providerId, model.ref)) continue;
       const entries = services.providerKeyEntries.list(providerId);
+      if (!entries.length && !health.tracker.available(providerId, model.ref, providerId)) continue;
       const stickyKeyId = stickyRoutes.get(input.sessionHint)?.providerKeyId;
       const preferredKeyId =
         stickyKeyId &&
@@ -518,7 +518,9 @@ export function createGatewayController(
           : stickyKeyId;
       const providerKey = providerKeyRotation.select(
         providerId,
-        entries.map((entry) => ({ ...entry, order: entry.position })),
+        entries
+          .filter((entry) => health.tracker.available(providerId, model.ref, entry.id))
+          .map((entry) => ({ ...entry, order: entry.position })),
         services.clock.now(),
         'round_robin',
         preferredKeyId,
@@ -536,7 +538,9 @@ export function createGatewayController(
       const attempts = lastAttemptHistory;
       attempts.push({ model: model.ref, status: 'started' });
       input.onAttempt?.({ servedModel: model.ref, attempts: [...attempts] });
+      if (providerKey) requestDeps.associateObservationKey(providerId, providerKey.id);
       try {
+        const startedAt = services.clock.now().getTime();
         const routedMessages = toGatewayModelMessages(
           compressedMessages(input.messages, input.key.compressToolResults),
         );
@@ -616,6 +620,13 @@ export function createGatewayController(
           },
         });
         const timestamp = services.clock.now().toISOString();
+        health.record({
+          providerId,
+          modelRef: model.ref,
+          keyId: providerKey?.id ?? providerId,
+          success: true,
+          latencyMs: services.clock.now().getTime() - startedAt,
+        });
         if (providerKey)
           services.providerKeyUsage.record(
             providerId,
@@ -689,8 +700,45 @@ export function createGatewayController(
               ? (providerError.response as { status?: unknown }).status
               : 0),
         );
+        const responseHeaders = providerError.responseHeaders;
+        const retryAfter =
+          providerError.response instanceof Response
+            ? (providerError.response.headers.get('retry-after') ?? undefined)
+            : responseHeaders &&
+                typeof responseHeaders === 'object' &&
+                'retry-after' in responseHeaders
+              ? String(responseHeaders['retry-after'])
+              : undefined;
+        if (!input.signal.aborted)
+          health.record({
+            providerId,
+            modelRef: model.ref,
+            keyId: providerKey?.id ?? providerId,
+            success: false,
+            status: providerStatus,
+            message: typed.message,
+            retryAfter,
+          });
         if (providerKey)
-          recordProviderKeyFailure(services, providerKey, providerStatus, typed.message);
+          recordProviderKeyFailure(
+            services,
+            providerKey,
+            providerStatus,
+            typed.message,
+            retryAfter,
+          );
+        if (
+          providerStatus === 404 ||
+          /model_not_found/i.test(typed.message) ||
+          (providerStatus === 400 && /model.{0,60}not supported/i.test(typed.message))
+        ) {
+          const saved = services.providers.get(providerId);
+          if (saved)
+            services.providers.put({
+              ...saved,
+              excludedModelRefs: [...new Set([...(saved.excludedModelRefs ?? []), model.ref])],
+            });
+        }
         stickyRoutes.delete(input.sessionHint);
         const rawMessage =
           typed.message || (error instanceof Error ? error.message : 'Provider request failed');

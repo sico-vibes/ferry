@@ -156,6 +156,50 @@ async function server() {
 }
 
 describe('Ferry gateway', () => {
+  it.each([false, true])(
+    'translates Claude thinking, system and tools (stream=%s) using x-api-key',
+    async (stream) => {
+      const url = await server();
+      runtime.complete = async (input) => ({
+        ...(await defaultComplete(input)),
+        reasoning: 'A short reasoning summary',
+      });
+      const response = await fetch(`${url}/v1/messages`, {
+        method: 'POST',
+        headers: { 'x-api-key': created.secret, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'ferry/auto-free',
+          max_tokens: 4096,
+          thinking: { type: 'enabled', budget_tokens: 2048 },
+          system: [{ type: 'text', text: 'Follow project instructions.' }],
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'Read README.' }] }],
+          tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
+          stream,
+        }),
+      });
+      expect(response.status).toBe(200);
+      expect(received.at(-1)).toMatchObject({
+        effort: 'low',
+        instructions: 'Follow project instructions.',
+        tools: [{ type: 'function', function: { name: 'lookup' } }],
+      });
+      if (stream) {
+        const events = await response.text();
+        expect(events).toContain('"type":"thinking_delta"');
+        expect(events).toContain('"type":"input_json_delta"');
+        expect(events).toContain('event: message_stop');
+      } else {
+        expect(await response.json()).toMatchObject({
+          content: [
+            { type: 'thinking', thinking: 'A short reasoning summary' },
+            { type: 'text', text: 'Hello' },
+            { type: 'tool_use', name: 'lookup', input: { q: 'x' } },
+          ],
+        });
+      }
+    },
+    30_000,
+  );
   it('prunes rate state older than one minute', () => {
     const state = new Map([
       ['expired', [-1, 0]],
@@ -712,6 +756,7 @@ describe('Ferry gateway', () => {
       ['cline-roo.json', '/v1/chat/completions'],
       ['aider.json', '/v1/chat/completions'],
       ['claude-code.json', '/v1/messages'],
+      ['codex.json', '/v1/responses'],
     ] as const;
     for (const [fixture, path] of fixtures) {
       const payload = JSON.parse(
@@ -724,10 +769,14 @@ describe('Ferry gateway', () => {
       });
       expect(response.status, fixture).toBe(200);
       expect(await response.text(), fixture).toContain(
-        path.endsWith('/messages') ? 'message_start' : 'chat.completion',
+        path.endsWith('/messages')
+          ? 'message_start'
+          : path.endsWith('/responses')
+            ? 'response.completed'
+            : 'chat.completion',
       );
     }
-    expect(received).toHaveLength(4);
+    expect(received).toHaveLength(fixtures.length);
     expect(received[0]?.instructions).toContain('expert programming assistant');
     expect(received[0]?.instructions).toContain('Use concise progress updates');
     expect(

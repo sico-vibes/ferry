@@ -379,11 +379,14 @@ export async function streamProviderChat(input: ProviderChatInput) {
     maxRetries: 0,
   });
   let text = '';
+  let reasoning = '';
   const toolCalls: { id: string; name: string; arguments: string }[] = [];
   for await (const part of result.stream) {
     if (part.type === 'text-delta') {
       text += part.text;
       input.onText?.(part.text);
+    } else if (part.type === 'reasoning-delta') {
+      reasoning += part.text;
     } else if (part.type === 'tool-call') {
       const call = {
         id: part.toolCallId,
@@ -412,6 +415,7 @@ export async function streamProviderChat(input: ProviderChatInput) {
       : undefined;
   return {
     text,
+    ...(reasoning ? { reasoning } : {}),
     toolCalls,
     inputTokens: usage.inputTokens ?? 0,
     ...(cachedTokens == null ? {} : { cachedTokens }),
@@ -1390,23 +1394,34 @@ export async function discoverProviderModels(
 ): Promise<ReturnType<typeof ModelInfoSchema.parse>[]> {
   let baseURL: string | undefined;
   if (providerId === 'openai') baseURL = options.baseUrl ?? 'https://api.openai.com/v1';
+  else if (providerId === 'anthropic') baseURL = options.baseUrl ?? 'https://api.anthropic.com/v1';
   else if (providerId === 'openrouter') baseURL = options.baseUrl ?? 'https://openrouter.ai/api/v1';
   else if (compatibleDefaults[providerId])
     baseURL = options.baseUrl ?? compatibleDefaults[providerId];
   else if (options.baseUrl) baseURL = options.baseUrl;
-  if (!baseURL) return [];
+  if (!baseURL) {
+    try {
+      baseURL = defaultBaseURL(providerId);
+    } catch {
+      throw new Error('Provider has no model list endpoint');
+    }
+  }
   const response = await (options.fetch ?? globalThis.fetch)(
     `${baseURL.replace(/\/$/, '')}/models`,
     {
-      headers: key ? { Authorization: `Bearer ${key}` } : {},
+      headers: key
+        ? providerId === 'anthropic'
+          ? { 'x-api-key': key, 'anthropic-version': '2023-06-01' }
+          : { Authorization: `Bearer ${key}` }
+        : {},
       ...(options.signal ? { signal: options.signal } : {}),
     },
   );
   if (!response.ok) throw new Error(`Model discovery failed with HTTP ${String(response.status)}`);
-  const payload: unknown = await response.json().catch(() => ({}));
-  if (!payload || typeof payload !== 'object') return [];
+  const payload: unknown = await response.json();
+  if (!payload || typeof payload !== 'object') throw new Error('Invalid provider models response');
   const data = (payload as Record<string, unknown>).data;
-  if (!Array.isArray(data)) return [];
+  if (!Array.isArray(data)) throw new Error('Invalid provider models response: missing data array');
   const catalog = await providerCatalog();
   return data.flatMap((item) => {
     if (!item || typeof item !== 'object') return [];
@@ -1588,3 +1603,4 @@ function quotaWindows(observations: QuotaObservation[]): ProbeResult['windows'] 
     };
   });
 }
+export { ProviderHealthTracker, type HealthOutcome } from './health.js';

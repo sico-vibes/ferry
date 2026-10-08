@@ -50,7 +50,7 @@ const ModelListQuerySchema = z.object({
 export function register(host: CoreHost, services: FerryServices): void {
   const modelDiscovery = getModelDiscovery(host, services);
   host.registerDomain('models', {
-    async list(rawProviderId?: unknown) {
+    list(rawProviderId?: unknown) {
       const providerId =
         rawProviderId === undefined ? undefined : ProviderIdSchema.parse(rawProviderId);
       const enabled = services.catalog.providers
@@ -58,12 +58,21 @@ export function register(host: CoreHost, services: FerryServices): void {
         .map((provider) => provider.provider)
         .filter((id) => services.providers.get(id)?.enabled ?? false);
 
-      await Promise.all(enabled.map((id) => modelDiscovery.refreshIfStale(id)));
-      const cachedModels = enabled.flatMap((id) => services.models.list(id));
+      for (const id of enabled) void modelDiscovery.refreshIfStale(id).catch(() => undefined);
+      const cachedModels = enabled.flatMap((id) =>
+        services.models
+          .list(id)
+          .filter((model) => !services.providers.get(id)?.excludedModelRefs?.includes(model.ref))
+          .map((model) => ({
+            ...model,
+            verified: model.verified ?? Boolean(services.providers.get(id)?.modelsVerifiedAt),
+            verifiedAt: model.verifiedAt ?? services.providers.get(id)?.modelsVerifiedAt ?? null,
+          })),
+      );
       const oauthModels = oauthModelCatalog
         .filter((model) => services.providers.get(model.providerId)?.enabled)
         .filter((model) => providerId === undefined || model.providerId === providerId)
-        .map((model) => ModelInfoSchema.parse(model));
+        .map((model) => ModelInfoSchema.parse({ ...model, verified: false, verifiedAt: null }));
       return preserveCatalogBillingMetadata(
         [...cachedModels, ...oauthModels].map((model) => ModelInfoSchema.parse(model)),
         services.catalog.models,
@@ -71,7 +80,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
       );
     },
-    async page(rawQuery?: unknown) {
+    page(rawQuery?: unknown) {
       const { offset, limit, query, filters, sort } = ModelListQuerySchema.parse(rawQuery ?? {});
       const providerId = filters.providerId;
       const enabled = services.catalog.providers
@@ -79,11 +88,20 @@ export function register(host: CoreHost, services: FerryServices): void {
         .map((provider) => provider.provider)
         .filter((id) => services.providers.get(id)?.enabled ?? false);
 
-      await Promise.all(enabled.map((id) => modelDiscovery.refreshIfStale(id)));
-      const cachedModels = enabled.flatMap((id) => services.models.list(id));
+      for (const id of enabled) void modelDiscovery.refreshIfStale(id).catch(() => undefined);
+      const cachedModels = enabled.flatMap((id) =>
+        services.models
+          .list(id)
+          .filter((model) => !services.providers.get(id)?.excludedModelRefs?.includes(model.ref))
+          .map((model) => ({
+            ...model,
+            verified: model.verified ?? Boolean(services.providers.get(id)?.modelsVerifiedAt),
+            verifiedAt: model.verifiedAt ?? services.providers.get(id)?.modelsVerifiedAt ?? null,
+          })),
+      );
       const oauthModels = oauthModelCatalog
         .filter((model) => services.providers.get(model.providerId)?.enabled)
-        .map((model) => ModelInfoSchema.parse(model));
+        .map((model) => ModelInfoSchema.parse({ ...model, verified: false, verifiedAt: null }));
 
       const needle = query.toLocaleLowerCase();
       const listedModels = preserveCatalogBillingMetadata(

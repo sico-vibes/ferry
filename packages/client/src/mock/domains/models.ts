@@ -10,7 +10,13 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
       await before();
       return state.models
         .filter((model) => providerId === undefined || model.providerId === providerId)
-        .map((model) => structuredClone(model));
+        .map((model) =>
+          structuredClone({
+            ...model,
+            verified: model.verified ?? false,
+            verifiedAt: model.verifiedAt ?? null,
+          }),
+        );
     },
     async page(query = {}) {
       await before();
@@ -41,7 +47,13 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
           return (sort.ascending === false ? -1 : 1) * (order || left.ref.localeCompare(right.ref));
         });
       return {
-        items: filtered.slice(offset, offset + limit).map((model) => structuredClone(model)),
+        items: filtered.slice(offset, offset + limit).map((model) =>
+          structuredClone({
+            ...model,
+            verified: model.verified ?? false,
+            verifiedAt: model.verifiedAt ?? null,
+          }),
+        ),
         total: filtered.length,
       };
     },

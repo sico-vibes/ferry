@@ -12,6 +12,8 @@ import {
   writeGatewayStatus,
 } from './gateway.js';
 import { collectDoctor } from './doctor.js';
+import { isSupportedTool } from './tool-config.js';
+import { configureTool, runTool } from './tools.js';
 import type { FerryClient } from '@ferry/client';
 import {
   LogicalModelMappingSchema,
@@ -269,7 +271,9 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
   let verbose = argv.includes('--verbose');
   let client: (FerryClient & { dispose?: () => Promise<void> }) | undefined;
   try {
-    const flags = readFlags(argv);
+    const separator = argv.indexOf('--');
+    const toolArgs = separator < 0 ? [] : argv.slice(separator + 1);
+    const flags = readFlags(separator < 0 ? argv : argv.slice(0, separator));
     json = flags.values.json === true;
     verbose = flags.values.verbose === true;
     validateFlags(flags.values);
@@ -284,7 +288,11 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
         : (flags.values.engine ?? (process.env.FERRY_ENGINE === 'mock' ? 'mock' : 'local'));
     if (engine !== 'mock' && engine !== 'local')
       throw new CliError(2, 'Invalid --engine. Use mock or local.');
-    if (command === 'run') validateRunArguments(flags);
+    const tool = flags.positionals[1];
+    const toolCommand = (command === 'run' || command === 'configure') && isSupportedTool(tool);
+    if (command === 'run' && !toolCommand) validateRunArguments(flags);
+    if (command === 'configure' && !toolCommand)
+      throw new CliError(2, 'Usage: ferry configure <claude|codex|opencode> [--print]');
     if (command === 'resume' && !flags.positionals[1])
       throw new CliError(2, 'Usage: ferry resume <sessionId>');
     if (command && !CLI_COMMANDS.has(command)) throw new CliError(2, `Unknown command: ${command}`);
@@ -316,10 +324,26 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     }
     if (command === 'doctor' && flags.values.providers !== true)
       return await doctor(dataDir, undefined, json);
+    if (toolCommand && engine === 'local') {
+      const selection = await inspectLocalCore(dataDir);
+      if (selection.kind === 'start') await startGatewayDaemon(dataDir);
+    }
     client = await createClientAsync({
       engine,
       ...(dataDir ? { dataDir } : {}),
     });
+    if (toolCommand && isSupportedTool(tool)) {
+      const options = {
+        keyId: stringFlag(flags.values.key),
+        model: stringFlag(flags.values.model),
+        preview: flags.values[command === 'run' ? 'dry-run' : 'print'] === true,
+        args: toolArgs,
+        json,
+      };
+      return await (command === 'run'
+        ? runTool(client, tool, options)
+        : configureTool(client, tool, options));
+    }
     if (command === 'cloud')
       return await cloudCommand(client, flags.positionals.slice(1), flags.values, json);
     if (command === 'gateway')
@@ -614,6 +638,8 @@ export async function main(): Promise<void> {
         '',
         'Commands:',
         '  run <prompt> [--model-ref ref] [--yes-paid]  Run a task with an optional explicit model',
+        '  run <claude|codex|opencode> [--key id] [--model ref] [--dry-run] [-- args]  Launch a tool',
+        '  configure <claude|codex|opencode> [--print]    Preview or write tool config with a backup',
         '  status                                        Show engine and provider status',
         '  cloud status|login|logout|mode|sync|migrate-keys  Manage Ferry Cloud storage and account',
         '  serve --gateway                              Run Ferry core and Gateway in the foreground',
@@ -645,6 +671,7 @@ export async function main(): Promise<void> {
 type Flags = { positionals: string[]; values: Record<string, string | boolean> };
 const CLI_COMMANDS = new Set([
   'run',
+  'configure',
   'resume',
   'serve',
   'gateway',
@@ -1115,6 +1142,7 @@ async function waitForShutdownSignal(): Promise<void> {
   });
 }
 const VALUE_FLAGS = new Set([
+  'key',
   'cwd',
   'profile',
   'data-dir',
@@ -1147,7 +1175,7 @@ function readFlags(argv: string[]): Flags {
     const [rawKey, inline] = token.slice(2).split('=', 2);
     const key = rawKey ?? '';
     if (inline !== undefined) values[key] = inline;
-    else if (key === 'yes-paid') values[key] = true;
+    else if (['yes-paid', 'dry-run', 'print'].includes(key)) values[key] = true;
     else if (argv[i + 1] && !argv[i + 1]?.startsWith('--')) values[key] = argv[++i] ?? '';
     else if (VALUE_FLAGS.has(key)) throw new CliError(2, `Missing value for --${key}`);
     else values[key] = true;

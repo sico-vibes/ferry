@@ -6,6 +6,7 @@ import { EffortSchema, type Effort } from '@ferry/shared';
 import {
   canonicalToGatewayMessages,
   anthropicToCanonical,
+  anthropicReasoningEffort,
   finalizeCanonicalStream,
   geminiToCanonical,
   openAiChatToCanonical,
@@ -805,6 +806,8 @@ async function handleAnthropic(
         ...(tools ? { tools } : {}),
         ...(toolChoice !== undefined ? { toolChoice } : {}),
         ...(payload.max_tokens ? { maxTokens: Number(payload.max_tokens) } : {}),
+        ...anthropicReasoningEffort(payload),
+        ...(typeof payload.temperature === 'number' ? { temperature: payload.temperature } : {}),
         sessionHint,
         signal: controller.signal,
         ...ferryAttemptOptions(ferryState),
@@ -833,22 +836,36 @@ async function handleAnthropic(
       observeCompletion(ferryState, result);
       beginStream(result);
       if (textStarted.value) send('content_block_stop', { type: 'content_block_stop', index: 0 });
+      if (result.reasoning) {
+        const index = textStarted.value ? 1 : 0;
+        send('content_block_start', {
+          type: 'content_block_start',
+          index,
+          content_block: { type: 'thinking', thinking: '' },
+        });
+        send('content_block_delta', {
+          type: 'content_block_delta',
+          index,
+          delta: { type: 'thinking_delta', thinking: result.reasoning },
+        });
+        send('content_block_stop', { type: 'content_block_stop', index });
+      }
       for (let i = 0; i < (result.toolCalls?.length ?? 0); i++) {
         const call = result.toolCalls?.[i];
         if (!call) continue;
         send('content_block_start', {
           type: 'content_block_start',
-          index: (textStarted.value ? 1 : 0) + i,
+          index: (textStarted.value ? 1 : 0) + (result.reasoning ? 1 : 0) + i,
           content_block: { type: 'tool_use', id: call.id, name: call.name, input: {} },
         });
         send('content_block_delta', {
           type: 'content_block_delta',
-          index: (textStarted.value ? 1 : 0) + i,
+          index: (textStarted.value ? 1 : 0) + (result.reasoning ? 1 : 0) + i,
           delta: { type: 'input_json_delta', partial_json: call.arguments },
         });
         send('content_block_stop', {
           type: 'content_block_stop',
-          index: (textStarted.value ? 1 : 0) + i,
+          index: (textStarted.value ? 1 : 0) + (result.reasoning ? 1 : 0) + i,
         });
       }
       send('message_delta', {
@@ -882,6 +899,8 @@ async function handleAnthropic(
         ...(tools ? { tools } : {}),
         ...(toolChoice !== undefined ? { toolChoice } : {}),
         ...(payload.max_tokens ? { maxTokens: Number(payload.max_tokens) } : {}),
+        ...anthropicReasoningEffort(payload),
+        ...(typeof payload.temperature === 'number' ? { temperature: payload.temperature } : {}),
         sessionHint,
         signal: controller.signal,
         ...ferryAttemptOptions(ferryState),
@@ -904,6 +923,7 @@ async function handleAnthropic(
           role: 'assistant',
           model: originalModel,
           content: [
+            ...(result.reasoning ? [{ type: 'thinking', thinking: result.reasoning }] : []),
             ...(result.text ? [{ type: 'text', text: result.text }] : []),
             ...(result.toolCalls ?? []).map((call) => ({
               type: 'tool_use',

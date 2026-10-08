@@ -89,6 +89,8 @@ export interface FerryServices {
   readonly catalog: Catalog;
   readonly quota: QuotaEngine;
   readonly secrets: SecretStore;
+  /** Gateway bearer credentials remain local even when provider keys use Cloud Vault. */
+  readonly gatewaySecrets: SecretStore;
   readonly providers: ProviderRepository;
   readonly models: ModelCacheRepository;
   readonly providerKeys: ProviderKeyRepository;
@@ -156,7 +158,12 @@ export function recordProviderKeyFailure(
     status = 'invalid';
   else if (statusCode === 429 || statusCode === 402) {
     status = 'rate_limited';
-    const retryAfterTime = retryAfter ? Date.parse(retryAfter) : Number.NaN;
+    const retryAfterTime =
+      retryAfter && Number.isFinite(Number(retryAfter))
+        ? now + Math.max(0, Number(retryAfter)) * 1000
+        : retryAfter
+          ? Date.parse(retryAfter)
+          : Number.NaN;
     cooldownUntil = new Date(
       Number.isFinite(retryAfterTime) && retryAfterTime > now ? retryAfterTime : now + 60_000,
     ).toISOString();
@@ -507,6 +514,7 @@ export async function createServices({
     catalog,
     quota,
     secrets: secretStore,
+    gatewaySecrets: localSecretStore,
     providers,
     models,
     providerKeys,
