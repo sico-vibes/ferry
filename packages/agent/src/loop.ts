@@ -76,8 +76,13 @@ import {
   type Effort,
   type RunReport,
   type RunCompleted,
+  extractRequirements,
+  taskGoal,
+  pendingRequirements,
+  modelAcceptsImages,
 } from '@ferry/shared';
 import { snapshotRunFiles, changedRunFiles } from './run-files.js';
+import { serializeMessagesForEstimate } from './message-estimate.js';
 import { retryDelayFromHeaders, quotaPeriodMs } from './routing-limits.js';
 import type { Catalog } from '@ferry/catalog';
 import type { RawCallObservation } from '@ferry/providers';
@@ -447,6 +452,22 @@ export class AgentLoop {
     this.softQuotaBypasses.set(sessionId, new Set());
     this.proactiveHandoverSteps.delete(sessionId);
     let { session, messages, taskRecord } = loaded;
+    const firstRequest = messages
+      .find((message) => message.role === 'user')
+      ?.parts.find((part) => part.type === 'text')?.text;
+    if (firstRequest) {
+      const requirements = extractRequirements(firstRequest);
+      taskRecord = {
+        ...taskRecord,
+        goal: taskGoal(firstRequest),
+        plan: taskRecord.plan.some((item) => item.id.startsWith('requirement_'))
+          ? taskRecord.plan
+          : [...requirements, ...taskRecord.plan],
+      };
+      this.persistTask(taskRecord);
+    }
+    let verificationRounds = 0;
+    let verificationNote: string | undefined;
     this.runReports.set(sessionId, {
       startedAt: this.now(),
       mutation: false,
@@ -654,6 +675,10 @@ export class AgentLoop {
           terseLevel: this.options.terseLevel ?? this.options.profile.optimizers.terse,
           ...(this.options.promptSections ? { sections: this.options.promptSections } : {}),
         });
+        if (verificationNote) {
+          system += `\n\n${verificationNote}`;
+          verificationNote = undefined;
+        }
         system +=
           '\nIf a directory or file was already inspected and the current conversation contains its result, use that result and move to an action or verification instead of repeating the same inspection.';
         if (contextSummary)
@@ -677,7 +702,9 @@ export class AgentLoop {
           ]),
         );
         const messageTokens = this.estimates(
-          JSON.stringify(toModelMessages(pinnedMessages, this.options.catalog.models[0])),
+          serializeMessagesForEstimate(
+            toModelMessages(pinnedMessages, this.options.catalog.models[0]),
+          ),
         );
         const inputTokens = Math.ceil(
           (this.estimates(system) + messageTokens + toolSchemaTokens) * 1.15,
@@ -1029,7 +1056,7 @@ export class AgentLoop {
           });
         }
         const targetMessageTokens = this.estimates(
-          JSON.stringify(toModelMessages(fittedMessages, model)),
+          serializeMessagesForEstimate(toModelMessages(fittedMessages, model)),
         );
         const fittedInputTokens = Math.ceil(
           (this.estimates(system) + targetMessageTokens + toolSchemaTokens) * 1.15,
@@ -1187,7 +1214,9 @@ export class AgentLoop {
           system += `\n\n[Ferry handover packet]\n${briefing.text}`;
           let packetInputTokens = Math.ceil(
             (this.estimates(system) +
-              this.estimates(JSON.stringify(toModelMessages(contextMessages, model))) +
+              this.estimates(
+                serializeMessagesForEstimate(toModelMessages(contextMessages, model)),
+              ) +
               toolSchemaTokens) *
               1.15,
           );
@@ -1212,7 +1241,9 @@ export class AgentLoop {
             fitCursor++;
             packetInputTokens = Math.ceil(
               (this.estimates(system) +
-                this.estimates(JSON.stringify(toModelMessages(contextMessages, model))) +
+                this.estimates(
+                  serializeMessagesForEstimate(toModelMessages(contextMessages, model)),
+                ) +
                 toolSchemaTokens) *
                 1.15,
             );
@@ -1224,7 +1255,9 @@ export class AgentLoop {
             packetContextOmitted = true;
             packetInputTokens = Math.ceil(
               (this.estimates(system) +
-                this.estimates(JSON.stringify(toModelMessages(contextMessages, model))) +
+                this.estimates(
+                  serializeMessagesForEstimate(toModelMessages(contextMessages, model)),
+                ) +
                 toolSchemaTokens) *
                 1.15,
             );
@@ -1264,7 +1297,9 @@ export class AgentLoop {
           }
           routeEstimate = Math.ceil(
             (this.estimates(system) +
-              this.estimates(JSON.stringify(toModelMessages(contextMessages, model))) +
+              this.estimates(
+                serializeMessagesForEstimate(toModelMessages(contextMessages, model)),
+              ) +
               toolSchemaTokens) *
               1.15,
           );
@@ -1336,7 +1371,8 @@ export class AgentLoop {
           contextMessages,
           this.options.profile.optimizers.cavemanInput,
           this.cavemanCache,
-          (context) => estimateOptimizerTokens(JSON.stringify(toModelMessages(context, model))),
+          (context) =>
+            estimateOptimizerTokens(serializeMessagesForEstimate(toModelMessages(context, model))),
         );
         contextMessages = cavemanContext.messages;
         if (cavemanContext.event)
@@ -2503,7 +2539,9 @@ export class AgentLoop {
                 ? await snapshotRunFiles(this.options.workspace, this.options.dataDir)
                 : undefined;
             const result = await raceAbort(
-              Promise.resolve(definition.execute(parsed.value, { signal, task: taskRecord })),
+              Promise.resolve(
+                definition.execute(parsed.value, { signal, task: taskRecord, model }),
+              ),
               signal,
             );
             const structured = result as {
@@ -2674,8 +2712,19 @@ export class AgentLoop {
         }
         if (repeatedCallDetected)
           return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
-        if (!calls.length || generated.finishReason === 'stop')
+        if (!calls.length) {
+          const pending = pendingRequirements(taskRecord.plan);
+          if (pending.length && verificationRounds < 2) {
+            if (stepCount >= maxSteps || totalTokens >= budget)
+              return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
+            verificationRounds++;
+            // Inject one system turn without inventing a user request.
+            verificationNote = `Verification round ${String(verificationRounds)}/2: before finishing, check these pending items with tools and call update_plan with status + evidence (or skipped with a reason):\n${pending.map((item) => `- ${item.id}: ${item.text}`).join('\n')}\nThen give a short summary.`;
+            rolesEnabled = false;
+            continue;
+          }
           return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'completed');
+        }
       }
       return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'limit');
     } catch (error) {
@@ -3088,6 +3137,17 @@ export class AgentLoop {
     tokens: number,
     status: RunResult['status'],
   ): RunResult {
+    if (status !== 'paused') {
+      taskRecord = {
+        ...taskRecord,
+        plan: taskRecord.plan.map((item) =>
+          pendingRequirements([item]).length
+            ? { ...item, status: 'skipped', evidence: 'not verified' }
+            : item,
+        ),
+      };
+      this.persistTask(taskRecord);
+    }
     if (status === 'limit')
       this.options.emit({
         type: 'toast',
@@ -3137,14 +3197,25 @@ export class AgentLoop {
   ): RunReport | undefined {
     const state = this.runReports.get(sessionId);
     if (!state) return undefined;
+    const checklist = this.options.store.load(sessionId)?.taskRecord.plan ?? [];
+    const warnings = [
+      ...new Set([
+        ...state.report.warnings,
+        ...checklist
+          .filter((item) => item.status === 'failed')
+          .map(
+            (item) =>
+              `Requirement failed: ${item.text}${item.evidence ? ` — ${item.evidence}` : ''}`,
+          ),
+      ]),
+    ];
     const report: RunReport = {
       ...state.report,
       durationMs: Math.max(0, this.now() - state.startedAt),
       steps,
-      outcome:
-        outcome === 'completed' && state.report.warnings.length
-          ? 'completed_with_warnings'
-          : outcome,
+      checklist,
+      warnings,
+      outcome: outcome === 'completed' && warnings.length ? 'completed_with_warnings' : outcome,
     };
     const lastMessage = this.options.store
       .load(sessionId)
@@ -3701,6 +3772,25 @@ export function toModelMessages(
                   : ''),
           },
         });
+        const resultPart = toolResults.at(-1);
+        if (
+          resultPart?.type === 'tool-result' &&
+          resultPart.output.type === 'text' &&
+          modelAcceptsImages(targetModel) &&
+          part.output?.images?.length
+        ) {
+          resultPart.output = {
+            type: 'content',
+            value: [
+              { type: 'text', text: resultPart.output.value },
+              ...part.output.images.map((image) => ({
+                type: 'file' as const,
+                data: { type: 'data' as const, data: image.data },
+                mediaType: image.mimeType,
+              })),
+            ],
+          };
+        }
       } else {
         const text = summarizeMessagePart(part);
         if (text) content.push({ type: 'text', text });

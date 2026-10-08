@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ModelRefSchema, SessionIdSchema } from './ids.js';
 import { ProviderFailureFamilySchema } from './quota.js';
+import { PlanItemSchema } from './plan.js';
 
 export const RunReportSchema = z.object({
   durationMs: z.number().nonnegative(),
@@ -42,6 +43,7 @@ export const RunReportSchema = z.object({
     'limit',
   ]),
   warnings: z.array(z.string()),
+  checklist: z.array(PlanItemSchema).optional(),
 });
 export type RunReport = z.infer<typeof RunReportSchema>;
 export const RunCompletedSchema = z.object({
@@ -63,6 +65,10 @@ export function formatRunReport(report: RunReport): string[] {
     `Failed attempts: ${report.failedAttempts.map((entry) => `${entry.kind} ${String(entry.count)}`).join(', ') || 'none'}`,
     `Tokens: ${String(report.tokens.input)} in, ${String(report.tokens.output)} out, ${String(report.tokens.reasoning)} reasoning`,
     `Files: ${report.filesChanged.map((entry) => `${entry.path} (${String(entry.sizeBytes)} bytes, ${entry.status})`).join(', ') || 'none'}`,
+    ...(report.checklist ?? []).map(
+      (item) =>
+        `${item.status === 'done' ? '✓' : item.status === 'failed' || item.status === 'blocked' ? '✗' : '–'} ${item.text}${item.evidence ? ` — ${item.evidence}` : ''}`,
+    ),
     ...report.warnings.map((warning) => `Warning: ${warning}`),
   ];
 }

@@ -7,3 +7,5 @@ export * from './git.js';
 export * from './repo-map.js';
 export * from './roots.js';
 export * from './file-search.js';
+export * from './page-check.js';
+export * from './page-check-results.js';

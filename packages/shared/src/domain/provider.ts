@@ -167,6 +167,12 @@ export const ModelInfoSchema = z.object({
   gateway: z.object({ keyId: z.string(), keyName: z.string(), modelName: z.string() }).optional(),
 });
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;
+export function modelAcceptsImages(model: ModelInfo | undefined): boolean {
+  return (
+    model?.capability?.vision === true ||
+    model?.inputModalities?.some((modality) => /^(?:image|images|vision)$/i.test(modality)) === true
+  );
+}
 export const ProviderHealthSnapshotSchema = z.object({
   providerId: ProviderIdSchema,
   state: z.enum(['healthy', 'degraded', 'down']),

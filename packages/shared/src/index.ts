@@ -3,6 +3,7 @@ export * from './domain/common.js';
 export * from './domain/workspace.js';
 export * from './domain/session.js';
 export * from './domain/run-report.js';
+export * from './domain/plan.js';
 export * from './domain/provider.js';
 export * from './domain/failures.js';
 export * from './domain/free-model.js';

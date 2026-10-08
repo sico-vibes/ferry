@@ -4,6 +4,7 @@ import {
   SessionSchema,
   TaskRecordSchema,
   newId,
+  taskGoal,
   type Message,
   type Session,
   type TaskRecord,
@@ -51,7 +52,7 @@ export class SessionStore {
     });
     const task = TaskRecordSchema.parse({
       sessionId: session.id,
-      goal: input.prompt,
+      goal: taskGoal(input.prompt),
       plan: [],
       decisions: [],
       touchedFiles: [],
@@ -98,9 +99,10 @@ export class SessionStore {
     now = new Date(),
     agentRole?: Message['agentRole'],
   ): Message {
-    const previousTime = this.repositories.messages
+    const previousMessages = this.repositories.messages
       .list()
-      .filter((entry) => entry.sessionId === sessionId)
+      .filter((entry) => entry.sessionId === sessionId);
+    const previousTime = previousMessages
       .map((entry) => Date.parse(entry.createdAt))
       .reduce((latest, value) => Math.max(latest, value), 0);
     const at = Math.max(now.getTime(), previousTime + (previousTime ? 1 : 0));
@@ -114,6 +116,11 @@ export class SessionStore {
       parts,
     });
     this.repositories.messages.put(message);
+    if (role === 'user' && !previousMessages.some((entry) => entry.role === 'user')) {
+      const task = this.repositories.tasks.get(sessionId);
+      const request = parts.find((part) => part.type === 'text')?.text;
+      if (task && request !== undefined) this.saveTask({ ...task, goal: taskGoal(request) });
+    }
     const session = this.repositories.sessions.get(sessionId);
     if (session) {
       this.repositories.sessions.put({

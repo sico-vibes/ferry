@@ -138,6 +138,11 @@ export function evaluatePermission(
     };
   if (
     action.tool === 'read_file' ||
+    action.tool === 'check_page' ||
+    action.tool === 'update_plan' ||
+    action.tool === 'record_decision' ||
+    action.tool === 'read_output' ||
+    action.tool === 'repo_map' ||
     action.tool === 'list_dir' ||
     action.tool === 'glob' ||
     action.tool === 'grep' ||

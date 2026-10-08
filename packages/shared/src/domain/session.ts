@@ -13,6 +13,8 @@ import { ProviderFailureFamilySchema } from './quota.js';
 import { AgentEventSchema } from './agent-event.js';
 import { EffortSchema } from './provider.js';
 import { RunReportSchema } from './run-report.js';
+import { PlanItemSchema } from './plan.js';
+export { PlanItemSchema, type PlanItem } from './plan.js';
 export const SessionStatusSchema = z.enum([
   'idle',
   'running',
@@ -64,6 +66,9 @@ export const ToolOutputSchema = z.object({
   originalTokens: z.number().int().nonnegative().nullable(),
   filteredTokens: z.number().int().nonnegative().nullable(),
   recoveryHandle: z.string().nullable(),
+  images: z
+    .array(z.object({ path: z.string(), data: z.string(), mimeType: z.literal('image/png') }))
+    .optional(),
 });
 export type ToolOutput = z.infer<typeof ToolOutputSchema>;
 const partBase = { id: PartIdSchema };
@@ -180,12 +185,6 @@ export const MessageSchema = z.object({
   parts: z.array(MessagePartSchema),
 });
 export type Message = z.infer<typeof MessageSchema>;
-export const PlanItemSchema = z.object({
-  id: z.string(),
-  text: z.string(),
-  status: z.enum(['todo', 'doing', 'done', 'blocked']),
-});
-export type PlanItem = z.infer<typeof PlanItemSchema>;
 export const TaskRecordSchema = z.object({
   sessionId: SessionIdSchema,
   goal: z.string(),

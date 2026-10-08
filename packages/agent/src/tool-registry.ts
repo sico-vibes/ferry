@@ -7,9 +7,18 @@ import {
   runCommand,
   buildRepoMap,
   ShadowCheckpoints,
+  checkPage,
+  CheckPageSchema,
 } from '@ferry/workspace';
-import type { MessagePart, PermissionMode, TaskRecord, ToolOutput } from '@ferry/shared';
-import { CheckpointIdSchema, newId, PartIdSchema } from '@ferry/shared';
+import type { MessagePart, ModelInfo, PermissionMode, TaskRecord, ToolOutput } from '@ferry/shared';
+import {
+  CheckpointIdSchema,
+  newId,
+  PartIdSchema,
+  PlanItemSchema,
+  refinePlan,
+  modelAcceptsImages,
+} from '@ferry/shared';
 import type { PermissionRule } from '@ferry/workspace';
 import { detectOutputKind, estimateTokens } from '@ferry/optimizer';
 
@@ -23,6 +32,7 @@ export class ToolPermissionDeniedError extends Error {
 export interface ToolContext {
   signal: AbortSignal;
   task: TaskRecord;
+  model?: ModelInfo;
 }
 
 export interface AgentTool {
@@ -109,10 +119,9 @@ const CommandSchema = z.object({
 });
 const PlanSchema = z.object({
   items: z.array(
-    z.object({
+    PlanItemSchema.extend({
       id: z.string().default(''),
-      text: z.string(),
-      status: z.enum(['todo', 'doing', 'done', 'blocked']).default('todo'),
+      status: PlanItemSchema.shape.status.default('pending'),
     }),
   ),
 });
@@ -149,6 +158,23 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
     if (signal.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
   };
   const defs: AgentTool[] = [
+    {
+      name: 'check_page',
+      title: 'Check web page in a headless browser',
+      schema: CheckPageSchema,
+      permission: {
+        path: (a) => {
+          const target = CheckPageSchema.parse(a).target;
+          return /^https?:/i.test(target) ? undefined : target;
+        },
+      },
+      execute: (a, c) =>
+        checkPage(workspace.jail, a, {
+          dataDir: options.dataDir,
+          sessionId: options.sessionId,
+          signal: c.signal,
+        }),
+    },
     {
       name: 'read_file',
       title: 'Read file',
@@ -214,11 +240,15 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
       schema: PlanSchema,
       execute: (a, c) => {
         const input = PlanSchema.parse(a);
+        const plan = refinePlan(
+          c.task.plan,
+          input.items.map((item, i) => ({ ...item, id: item.id || `plan_${String(i + 1)}` })),
+        );
         options.updateTask({
           ...c.task,
-          plan: input.items.map((item, i) => ({ ...item, id: item.id || `plan_${String(i + 1)}` })),
+          plan,
         });
-        return input.items;
+        return plan;
       },
     },
     {
@@ -392,6 +422,23 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
           filteredTokens: estimateTokens(filtered.text),
           recoveryHandle: filtered.recoveryHandle ?? null,
         };
+        if (
+          definition.name === 'check_page' &&
+          modelAcceptsImages(context.model) &&
+          typeof value === 'object' &&
+          value !== null &&
+          'screenshots' in value
+        ) {
+          const { readFile } = await import('node:fs/promises');
+          const paths = (value as { screenshots: string[] }).screenshots;
+          output.images = await Promise.all(
+            paths.map(async (filePath) => ({
+              path: filePath,
+              data: (await readFile(filePath)).toString('base64'),
+              mimeType: 'image/png' as const,
+            })),
+          );
+        }
         options.onOptimizerEvent?.({
           kind:
             definition.name === 'read_file'

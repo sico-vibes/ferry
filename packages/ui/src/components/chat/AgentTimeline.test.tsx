@@ -60,6 +60,16 @@ describe('AgentTimeline', () => {
       filesChanged: [{ path: 'blog.html', sizeBytes: 13, status: 'added' }],
       outcome: 'completed_with_warnings',
       warnings: ['Final check skipped: models were busy'],
+      checklist: [
+        {
+          id: 'requirement_1',
+          text: 'Safe headings',
+          status: 'done',
+          evidence: 'Escaping verified',
+        },
+        { id: 'requirement_2', text: 'No overflow', status: 'failed', evidence: '375px overflow' },
+        { id: 'requirement_3', text: 'Screenshot', status: 'skipped', evidence: 'not verified' },
+      ],
     });
     render(<AgentTimeline events={[]} report={report} />);
     fireEvent.click(screen.getByRole('button', { name: 'Worked for 18s' }));
@@ -68,6 +78,9 @@ describe('AgentTimeline', () => {
     expect(block.textContent).toContain('Waits: groq 12s');
     expect(block.textContent).toContain('blog.html (13 bytes, added)');
     expect(block.textContent).toContain('Final check skipped');
+    expect(block.textContent).toContain('✓ Safe headings — Escaping verified');
+    expect(block.textContent).toContain('✗ No overflow — 375px overflow');
+    expect(block.textContent).toContain('– Screenshot — not verified');
   });
   it('pairs tool results by callId, groups three same-tool calls, and keeps shell calls separate', () => {
     const events = [
