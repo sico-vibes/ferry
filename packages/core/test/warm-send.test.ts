@@ -131,7 +131,10 @@ describe('warm workspace sends and sessions.start', () => {
       await rpc('sessions.send', [first.id, { text: 'second' }]);
       const returnedAt = performance.now();
       await waitFor(() => dispatches.length === 2);
-      expect((dispatches[1] ?? Infinity) - returnedAt).toBeLessThan(300);
+      // The fixture MCP server takes 2 s to start; a warm send must not wait for it. The target is
+      // ~300 ms on an idle machine; allow 1 s so a busy CI runner doesn't fail on scheduling noise.
+      // The one-process assertion below proves the server was reused rather than restarted.
+      expect((dispatches[1] ?? Infinity) - returnedAt).toBeLessThan(1_000);
       console.info(
         `PASS warm send dispatched in ${((dispatches[1] ?? Infinity) - returnedAt).toFixed(1)} ms with one retained MCP process`,
       );
