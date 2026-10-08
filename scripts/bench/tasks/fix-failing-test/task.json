@@ -1,0 +1,9 @@
+{
+  "id": "fix-failing-test",
+  "prompt": "Fix the bug in sum.mjs so npm test passes. Do not change test.mjs or package.json. No dependencies.",
+  "profile": null,
+  "maxSteps": 30,
+  "timeoutMs": 600000,
+  "fixture": "fixture",
+  "checker": "check.mjs"
+}

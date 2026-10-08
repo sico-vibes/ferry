@@ -48,6 +48,7 @@ export interface ShellNotification {
   sessionId: string;
   title: string;
   body: string;
+  route?: '/models/health';
 }
 
 export function parseShellNotification(raw: unknown): ShellNotification {
@@ -64,6 +65,7 @@ export function parseShellNotification(raw: unknown): ShellNotification {
     sessionId,
     title: text(value.title, 200),
     body: text(value.body, 500),
+    ...(value.route === '/models/health' ? { route: value.route } : {}),
   };
 }
 
@@ -77,7 +79,8 @@ export function shouldNotify(
   return kind === 'approval' ? preferences.notifyApproval : preferences.notifyChatFinished;
 }
 
-export type ShellCommand = { type: 'open-session'; sessionId: string } | { type: 'new-chat' };
+export type ShellCommand =
+  { type: 'open-session'; sessionId: string } | { type: 'new-chat' } | { type: 'open-models' };
 
 export class DesktopShell {
   private preferences: ShellPreferences;
@@ -174,7 +177,11 @@ export class DesktopShell {
     });
     notification.on('click', () => {
       this.show();
-      this.options.send({ type: 'open-session', sessionId: input.sessionId });
+      this.options.send(
+        input.route
+          ? { type: 'open-models' }
+          : { type: 'open-session', sessionId: input.sessionId },
+      );
     });
     notification.show();
     return true;

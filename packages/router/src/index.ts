@@ -115,6 +115,7 @@ export function classifyStep(ctx: ClassifierContext): StepKind {
 
 const optimizerDefaults = {
   terse: 'off',
+  cavemanInput: 'off',
   toolOutputFilters: false,
   recoveryHandles: false,
   contextHygiene: false,
@@ -160,7 +161,12 @@ function builtinProfile(
     paidConfirmation: { preauthorize: false, confirmSubscriptions: false, confirmTrials: false },
     caps: { sessionUsd: null, dailyUsd, monthlyUsd },
     delegationMode: 'suggest',
-    optimizers: { ...optimizerDefaults },
+    optimizers: {
+      ...optimizerDefaults,
+      ...(!paidAllowed && allowedProviders === 'all_free'
+        ? { cavemanInput: 'lite' as const, terse: 'lite' as const }
+        : {}),
+    },
     ...(name === 'Auto-Free' || name === 'Best Available'
       ? {
           fallbackChain: DEFAULT_AUTO_FREE_CHAIN.map((entry) => ({

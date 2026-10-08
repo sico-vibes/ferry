@@ -25,7 +25,8 @@ import {
   compactContext,
   optimizeContextMessages,
   estimateTokens as estimateOptimizerTokens,
-  TERSE_LEVEL_TEXT,
+  compressCavemanMessages,
+  type CavemanInputCache,
 } from '@ferry/optimizer';
 import {
   classifyStep,
@@ -119,6 +120,7 @@ export type AgentEvent =
   | {
       type: 'optimizer.event';
       kind: string;
+      runId?: string;
       beforeTokens: number;
       afterTokens: number;
       recoveryHandle: string | null;
@@ -146,6 +148,7 @@ export interface GeneratedStep {
   responseModel?: string;
 }
 export interface StepGeneratorInput {
+  requestId?: string;
   model: ModelInfo;
   effort?: Effort | null | undefined;
   system: string;
@@ -228,8 +231,21 @@ export interface AgentOptions {
   waitForRetry?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   pinnedTurns?: number;
   estimateTokens?: (text: string) => number;
+  isProviderEnabled?: (providerId: string) => boolean;
   onObservation?: (observation: RawCallObservation) => void;
   onUsage?: (usage: UsageRecord) => void;
+  onProviderAttempt?: (attempt: {
+    error?: unknown;
+    requestId: string;
+    sessionId: string;
+    modelRef: string;
+    providerId: string;
+    keyId: string | null;
+    success: boolean;
+    family: string | null;
+    statusCode: number | null;
+    message: string;
+  }) => void;
   authorizePaidCall?: (
     model: ModelInfo,
     estimate: { inputTokens: number; outputTokens: number },
@@ -327,6 +343,7 @@ export class AgentLoop {
   >();
   private readonly estimates: (text: string) => number;
   private readonly recoveryStore = new InMemoryBlobStore();
+  private readonly cavemanCache: CavemanInputCache = new Map();
   private readonly resilience: ResilienceLedger;
   private readonly sessionModelLocks = new Map<string, Set<string>>();
   private readonly requestTooLargeAt = new Map<ModelRef, number>();
@@ -396,6 +413,7 @@ export class AgentLoop {
   }
 
   async run({ sessionId, signal: outerSignal, resume = false }: RunInput): Promise<RunResult> {
+    const cavemanRunId = newId('run');
     const traceContext = this.options.traceContext ?? { traceId: newTraceId() };
     const traceId = traceContext.traceId;
     let requestGroupId: string;
@@ -633,7 +651,7 @@ export class AgentLoop {
           workspace: this.options.workspace,
           sessionId,
           task: taskRecord,
-          ...(this.options.terseLevel ? { terseLevel: this.options.terseLevel } : {}),
+          terseLevel: this.options.terseLevel ?? this.options.profile.optimizers.terse,
           ...(this.options.promptSections ? { sections: this.options.promptSections } : {}),
         });
         system +=
@@ -1314,12 +1332,26 @@ export class AgentLoop {
             data: {},
           });
         };
+        const cavemanContext = compressCavemanMessages(
+          contextMessages,
+          this.options.profile.optimizers.cavemanInput,
+          this.cavemanCache,
+          (context) => estimateOptimizerTokens(JSON.stringify(toModelMessages(context, model))),
+        );
+        contextMessages = cavemanContext.messages;
+        if (cavemanContext.event)
+          this.options.emit({
+            type: 'optimizer.event',
+            ...cavemanContext.event,
+            runId: cavemanRunId,
+          });
         const stepRequest = (
           selected: ModelInfo,
           stepSignal: AbortSignal,
           onProgress: () => void,
         ): StepGeneratorInput => ({
           model: selected,
+          requestId: `${routingRequestId}:${String(stepCount)}`,
           effort: this.options.store.load(sessionId)?.session.effort,
           system: withModelIdentity(
             executionRole === 'planner' && stepKind === 'plan'
@@ -1578,6 +1610,17 @@ export class AgentLoop {
               latencyMs: Math.max(0, performance.now() - attemptStartedAt),
               errorKind: null,
             });
+            this.options.onProviderAttempt?.({
+              requestId: `${routingRequestId}:${String(stepCount)}`,
+              sessionId,
+              modelRef: model.ref,
+              providerId: model.providerId,
+              keyId: attemptProviderKeyId ?? null,
+              success: true,
+              family: null,
+              statusCode: 200,
+              message: '',
+            });
             const successRouting = this.options.routingSettings?.();
             if (successRouting?.smartReliability) {
               this.reliability.push({ modelRef: model.ref, outcome: 'success', at: this.now() });
@@ -1725,6 +1768,26 @@ export class AgentLoop {
             );
             if (failedKind) failedKind.count++;
             else runState.report.failedAttempts.push({ kind: classified.family, count: 1 });
+            this.options.onProviderAttempt?.({
+              requestId: `${routingRequestId}:${String(stepCount)}`,
+              sessionId,
+              modelRef: model.ref,
+              providerId: model.providerId,
+              keyId: attemptProviderKeyId ?? null,
+              success: false,
+              error,
+              family: isSignalAborted(signal)
+                ? 'cancelled'
+                : localQuotaReservation
+                  ? 'local_reservation'
+                  : error instanceof StepWatchdogError
+                    ? 'timeout'
+                    : classified.family,
+              statusCode: classified.status,
+              message: unsafeSignatureError
+                ? 'Provider rejected native reasoning metadata.'
+                : redactedProviderMessage(error),
+            });
             if (classified.family === 'request_too_large')
               this.requestTooLargeAt.set(model.ref, routeEstimate);
             if (isSignalAborted(signal)) throw error;
@@ -1893,7 +1956,8 @@ export class AgentLoop {
               transient &&
               !timedOut &&
               !excludedProviders.has(model.providerId) &&
-              sameModelRetries < 1
+              sameModelRetries < 1 &&
+              this.options.isProviderEnabled?.(model.providerId) !== false
             ) {
               sameModelRetries++;
               const retryDelayMsValue = retryDelayMs(sameModelRetries - 1, 300, 3_000);
@@ -2166,33 +2230,6 @@ export class AgentLoop {
           }
         }
         this.activeMessageParts.delete(sessionId);
-        if (this.options.terseLevel && this.options.terseLevel !== 'off') {
-          const tersePromptTokens = estimateOptimizerTokens(
-            TERSE_LEVEL_TEXT[
-              this.options.terseLevel === 'lite'
-                ? 'Lite'
-                : this.options.terseLevel === 'full'
-                  ? 'Full'
-                  : 'Ultra'
-            ],
-          );
-          this.options.emit({
-            type: 'optimizer.event',
-            kind: 'terse-prompt',
-            beforeTokens: estimateOptimizerTokens(TERSE_LEVEL_TEXT.Off),
-            afterTokens: tersePromptTokens,
-            recoveryHandle: null,
-          });
-          const responseTokens =
-            generated.outputTokens ?? estimateOptimizerTokens(generated.text ?? '');
-          this.options.emit({
-            type: 'optimizer.event',
-            kind: 'terse-response',
-            beforeTokens: responseTokens,
-            afterTokens: responseTokens,
-            recoveryHandle: null,
-          });
-        }
         this.options.onUsage?.({
           id: pendingPaidUsageId ?? newId('usage'),
           providerId: model.providerId,

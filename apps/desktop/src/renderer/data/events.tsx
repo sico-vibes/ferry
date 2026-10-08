@@ -37,6 +37,7 @@ export function useFerryEvents(): void {
   const pushToast = useToasts((state) => state.push);
   const flushPendingDeltas = useRef<() => void>(() => undefined);
   useEffect(() => {
+    const notifiedPauses = new Set<string>();
     const lastStatus = new Map<string, Session['status']>();
     const pendingParts = new Map<string, Map<PartId, MessagePart>>();
     const pendingKey = (sessionId: SessionId, messageId: MessageId) => `${sessionId}:${messageId}`;
@@ -266,7 +267,23 @@ export function useFerryEvents(): void {
         if (current) cache.setQueryData(key, { ...current, taskRecord: task });
         else void cache.invalidateQueries({ queryKey: key });
       }),
-      client.on('provider.updated', () => {
+      client.on('provider.updated', (provider) => {
+        void cache.invalidateQueries({ queryKey: ['provider-failures'] });
+        if (
+          provider.pausedReason &&
+          !notifiedPauses.has(`${provider.id}:${provider.pausedReason.at}`)
+        ) {
+          notifiedPauses.add(`${provider.id}:${provider.pausedReason.at}`);
+          void window.ferryHost
+            ?.notify({
+              kind: 'error',
+              sessionId: 'providers',
+              route: '/models/health',
+              title: `${provider.name} paused after ${String(provider.pausedReason.failedRequests)} failed requests`,
+              body: provider.pausedReason.lastError,
+            })
+            .catch(() => undefined);
+        }
         void cache.invalidateQueries({ queryKey: ['providers'] });
         void cache.invalidateQueries({ queryKey: ['models'] });
         void cache.invalidateQueries({ queryKey: ['model-candidates'] });

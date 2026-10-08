@@ -23,6 +23,7 @@ import { useUI } from '../../state/ui';
 import { ProviderKeyDialog } from '../ProviderKeyDialog';
 import { OAuthProviderRows } from '../OAuthProviderRows';
 import { UsageTab } from './Usage';
+import { PausedProviders } from './Failures';
 import { HealthTab } from './Health';
 
 type ModelSort =
@@ -295,6 +296,15 @@ export function ModelsCanvas() {
     >
       <div className="mx-auto grid w-full max-w-[1040px] gap-6">
         <PageHeader title="Models" subtitle="Providers, model capabilities and usage" />
+        {selectedTab !== 'health' && (
+          <PausedProviders
+            providers={providers}
+            onViewFailures={() => {
+              setSelectedTab('health');
+              void navigate({ to: '/models/health', hash: 'failures' });
+            }}
+          />
+        )}
         <UiV2.Tabs
           onValueChange={(value) => {
             setSelectedTab(value);
@@ -532,6 +542,11 @@ export function ModelsCanvas() {
                             size={16}
                           />
                           <span>{model.name}</span>
+                          {model.failing && (
+                            <UiV2.Badge variant="destructive" className="ml-2">
+                              Failing
+                            </UiV2.Badge>
+                          )}
                           {providers.find((provider) => provider.id === model.providerId)?.tag ===
                             'promo' && (
                             <span

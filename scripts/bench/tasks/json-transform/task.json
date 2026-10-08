@@ -1,0 +1,9 @@
+{
+  "id": "json-transform",
+  "prompt": "Implement transform.mjs. Read input.json, ignore inactive rows, group active rows by name, sum amounts, sort names ascending, print the array as JSON to stdout. Do not modify input.json, expected.json or package.json. Print JSON with two-space indentation and a final newline, exactly matching expected.json.",
+  "profile": null,
+  "maxSteps": 30,
+  "timeoutMs": 600000,
+  "fixture": "fixture",
+  "checker": "check.mjs"
+}

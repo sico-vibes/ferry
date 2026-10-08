@@ -35,6 +35,18 @@ describe('@ferry/cli', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  it('prints Caveman input and reply style in profile show and JSON output', async () => {
+    const api = client();
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    expect(await profiles(api, ['show', 'Auto-Free'])).toBe(0);
+    expect(output.mock.calls.at(-1)?.[0]).toContain('Caveman input: lite');
+    expect(output.mock.calls.at(-1)?.[0]).toContain('Reply style: lite');
+    await profiles(api, ['show', 'Auto-Free'], true);
+    expect(JSON.parse(output.mock.calls.at(-1)?.[0]?.toString() ?? '{}')).toMatchObject({
+      optimizers: { cavemanInput: 'lite', terse: 'lite' },
+    });
+  });
+
   it('formats attempt audits with provider, status, and latency for verbose output', () => {
     const details = {
       attempts: [

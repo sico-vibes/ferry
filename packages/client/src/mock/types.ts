@@ -19,6 +19,8 @@ export interface MockState {
   workspaces: Workspace[];
   sessions: Session[];
   providers: MockProvider[];
+  requestFailures: import('@ferry/shared').FailureEntry[];
+  failureResets: Record<string, string[]>;
   providerKeys: Map<string, ProviderKey[]>;
   models: ModelInfo[];
   profiles: Profile[];

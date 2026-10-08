@@ -1,0 +1,10 @@
+{
+  "id": "long-task",
+  "prompt": "Build the small todo app described in SPEC.md across all 15 files, including a self-contained browser UI and CLI. Read the full spec and test.mjs first. Implement validation, immutable state, actions, filters, search, sorting, versioned persistence, stats, undo history, safe rendering and app integration. Do not edit test.mjs, SPEC.md or package.json. No dependencies. Run npm test. This task expects approximately 30+ agent steps.",
+  "profile": null,
+  "maxSteps": 70,
+  "timeoutMs": 1500000,
+  "fixture": "fixture",
+  "checker": "check.mjs",
+  "expectedSteps": "30+"
+}

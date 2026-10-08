@@ -10,6 +10,7 @@ export type OptimizerKind =
   | 'package-install'
   | 'filesystem'
   | 'context-hygiene'
+  | 'caveman-input'
   | 'terse-prompt'
   | 'terse-response'
   | 'recovery-read'

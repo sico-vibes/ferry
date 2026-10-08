@@ -170,6 +170,10 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!window.ferryHost) return;
     return window.ferryHost.onShellCommand((command) => {
+      if (command.type === 'open-models') {
+        void navigate({ to: '/models/health', hash: 'failures' });
+        return;
+      }
       if (command.type === 'new-chat') {
         void createChatRef.current();
         return;

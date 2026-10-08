@@ -23,7 +23,11 @@ import { SessionStore } from '../src/session.js';
 
 const tempDirs: string[] = [];
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    tempDirs
+      .splice(0)
+      .map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })),
+  );
 });
 
 const nowMs = Date.parse('2026-09-27T12:00:00.000Z');
@@ -726,6 +730,50 @@ describe('QA adv: exhaustion and handoff budget', () => {
       await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
         /Routing stopped after 0 handoffs/,
       );
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+});
+
+describe('provider failure telemetry hook', () => {
+  it('shares a request ID across fallback attempts and immediately excludes a paused provider', async () => {
+    const state = await setup();
+    try {
+      const alpha = state.catalog.models[0]!;
+      const beta = state.catalog.models[1]!;
+      const fallback = model('groq/fallback');
+      const groq = ProviderSchema.parse({ ...state.provider, id: 'groq', name: 'Groq' });
+      const choices = [alpha, beta, fallback];
+      const calls: string[] = [];
+      const attempts: Parameters<NonNullable<AgentOptions['onProviderAttempt']>>[0][] = [];
+      const loop = makeLoop(state, routedSettings({ stickySessions: false }), {
+        maxSteps: 1,
+        catalog: { ...state.catalog, models: choices },
+        capacity: () => ({ providers: [state.provider, groq] }),
+        resolveCandidates: () =>
+          choices.filter((choice) => choice.providerId === 'groq' || state.provider.enabled),
+        isProviderEnabled: (providerId) => providerId === 'groq' || state.provider.enabled,
+        onProviderAttempt: (attempt) => {
+          attempts.push(attempt);
+          if (!attempt.success) state.provider.enabled = false;
+        },
+        generator: async ({ model: selected, requestId }) => {
+          calls.push(selected.ref);
+          expect(requestId).toBeTruthy();
+          if (selected.ref === alpha.ref) throw httpError(502, 'Upstream service error');
+          return { text: 'Done', toolCalls: [], inputTokens: 1, outputTokens: 1 };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+      expect(calls).toEqual([alpha.ref, fallback.ref]);
+      expect(attempts.map((attempt) => attempt.success)).toEqual([false, true]);
+      expect(new Set(attempts.map((attempt) => attempt.requestId)).size).toBe(1);
+      expect(attempts[0]).toMatchObject({
+        providerId: 'openai',
+        family: 'server',
+        statusCode: 502,
+      });
     } finally {
       state.database.close();
     }

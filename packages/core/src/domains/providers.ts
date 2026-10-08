@@ -10,6 +10,8 @@ import {
 } from '@ferry/shared';
 import { discoverProviderModels, probe, resolveProviderRequestOverrides } from '@ferry/providers';
 import { z } from 'zod';
+import { FailureOptionsSchema, ProviderFailuresSchema, newId } from '@ferry/shared';
+import { bindRequestFailures, recordRequestFailure } from '../request-failures.js';
 import { observationsFromProbe } from '@ferry/quota';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
@@ -39,8 +41,11 @@ function cooldownReasonsEnabled(services: FerryServices): boolean {
 
 function providerRecord(services: FerryServices, id: string): Provider {
   const limits = services.catalog.providers.find((item) => item.provider === id);
-  if (!limits) throw rpcDomainError(-32044, 'not_found', `Provider not found: ${id}`);
   const saved = services.providers.get(id);
+  if (!limits) {
+    if (saved) return ProviderSchema.parse(saved);
+    throw rpcDomainError(-32044, 'not_found', `Provider not found: ${id}`);
+  }
   const keyRef = services.providerKeys.get(id);
   const keys = services.providerKeyEntries.list(id);
   const keyStatus: Provider['keyStatus'] =
@@ -82,6 +87,8 @@ function providerRecord(services: FerryServices, id: string): Provider {
           },
         }),
     billingEnabled: saved?.billingEnabled ?? false,
+    pausedReason: saved?.pausedReason ?? null,
+    autoPauseAfterFailedRequests: saved?.autoPauseAfterFailedRequests,
     kind: limits.tag === 'subscription_cli' ? 'cli' : 'api',
     brand: null,
     keyStatus,
@@ -120,6 +127,14 @@ function providerRecord(services: FerryServices, id: string): Provider {
     windows: services.quota.getWindows(id),
     stepsLeftToday: services.quota.stepsLeft(id),
   });
+}
+
+function allProviders(services: FerryServices): Provider[] {
+  const ids = new Set([
+    ...services.catalog.providers.map((provider) => provider.provider),
+    ...services.providers.list().map((provider) => provider.id),
+  ]);
+  return [...ids].map((id) => providerRecord(services, id));
 }
 
 function ensureLegacyKeyEntry(services: FerryServices, id: string) {
@@ -161,6 +176,12 @@ export function register(host: CoreHost, services: FerryServices): void {
   probeBackoff.set(services, providerProbeBackoff);
   const modelDiscovery = getModelDiscovery(host, services);
   const health = getProviderHealth(services);
+  bindRequestFailures(services, {
+    provider: (id) => providerRecord(services, id),
+    emit: (event, value) => {
+      host.emit(event, value);
+    },
+  });
   const unsubscribeHealth = health.onChange((value) => {
     host.emit('providers.health.updated', value);
   });
@@ -342,12 +363,39 @@ export function register(host: CoreHost, services: FerryServices): void {
     await modelDiscovery.dispose();
     unsubscribeWindowActivity();
   });
+  const resume = (rawId: unknown) => {
+    const id = ProviderIdInput.parse(rawId);
+    services.requestFailures.reset(id);
+    const provider = saveProvider(services, {
+      ...providerRecord(services, id),
+      enabled: true,
+      pausedReason: null,
+    });
+    host.emit('provider.updated', provider);
+    return provider;
+  };
   host.registerDomain('providers', {
+    failures(rawId?: unknown, rawOptions?: unknown) {
+      const id = rawId === undefined ? undefined : ProviderIdInput.parse(rawId);
+      if (id) providerRecord(services, id);
+      const options = FailureOptionsSchema.parse(rawOptions ?? {});
+      return ProviderFailuresSchema.parse(
+        services.requestFailures.summary(allProviders(services), services.clock.now(), id, options),
+      );
+    },
+    resume,
+    clearFailures(rawId: unknown) {
+      const id = ProviderIdInput.parse(rawId);
+      providerRecord(services, id);
+      services.requestFailures.clear(id);
+      host.emit('provider.updated', providerRecord(services, id));
+      return null;
+    },
     health() {
       return services.catalog.providers.map(({ provider: id }) => health.snapshot(id));
     },
     list() {
-      return services.catalog.providers.map((entry) => providerRecord(services, entry.provider));
+      return allProviders(services);
     },
     async listKeys(rawId: unknown) {
       const id = ProviderIdInput.parse(rawId);
@@ -408,7 +456,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const provider = saveProvider(services, {
         ...providerRecord(services, id),
         keyStatus: 'unchecked',
-        enabled: true,
+        enabled: !providerRecord(services, id).pausedReason,
       });
       host.emit('provider.updated', provider);
       void modelDiscovery.keyChanged(id).catch(() => undefined);
@@ -465,7 +513,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const provider = saveProvider(services, {
         ...current,
         keyStatus: 'unchecked',
-        enabled: true,
+        enabled: !providerRecord(services, id).pausedReason,
         health: 'unknown',
         cooldownUntil: null,
         availableModels: current.availableModels ?? [],
@@ -775,8 +823,11 @@ export function register(host: CoreHost, services: FerryServices): void {
                 .filter((until): until is string => until !== null)
                 .sort()[0] ?? null)
             : null;
+        const latest = providerRecord(services, id);
         const provider = saveProvider(services, {
           ...current,
+          enabled: latest.enabled,
+          pausedReason: latest.pausedReason,
           keyStatus: result.keyValid || hasUsableProviderKey(services, id) ? 'valid' : 'invalid',
           health: result.ok
             ? 'ok'
@@ -833,11 +884,24 @@ export function register(host: CoreHost, services: FerryServices): void {
           retryAfter: result.windows.find((window) => window.resetAt)?.resetAt ?? undefined,
         });
         host.emit('provider.updated', provider);
+        if (!result.ok && result.errorKind === 'auth')
+          recordRequestFailure(services, {
+            providerId: id,
+            modelRef: `${id}/${result.usedModel ?? 'probe'}`,
+            keyId: keyEntry?.id ?? null,
+            requestId: newId('probe'),
+            sessionId: null,
+            source: 'probe',
+            kind: 'auth',
+            statusCode: null,
+            message: result.message,
+          });
         return result;
       }),
     setEnabled(rawId: unknown, rawEnabled: unknown) {
       const id = ProviderIdInput.parse(rawId);
       const enabled = EnabledInput.parse(rawEnabled);
+      if (enabled) return resume(id);
       const current = providerRecord(services, id);
       const provider = saveProvider(services, { ...current, enabled });
       host.emit('provider.updated', provider);

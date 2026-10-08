@@ -806,6 +806,26 @@ export function SettingsCanvas() {
           </Group>
           <Group title="Routing behavior">
             <SettingRow
+              title="Pause a provider after N failed requests"
+              helper="Different requests since the last success, within 24 hours. Rate limits and quota never count. 0 = never."
+            >
+              <UiV2.Input
+                type="number"
+                min={0}
+                step={1}
+                className="w-20"
+                aria-label="Pause a provider after N failed requests"
+                value={settings?.routing.autoPauseAfterFailedRequests ?? 5}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  if (settings && Number.isSafeInteger(value) && value >= 0)
+                    void update({
+                      routing: { ...settings.routing, autoPauseAfterFailedRequests: value },
+                    });
+                }}
+              />
+            </SettingRow>
+            <SettingRow
               title="When a picked model runs out"
               helper="If the model you picked hits a usage limit or fails, Ferry can hand the task to the next eligible model with a handover note, ask you first, or stop."
             >
@@ -1136,6 +1156,15 @@ export function SettingsCanvas() {
               </>
             )}
           </div>
+          {optimizerStats?.cavemanLastRun ? (
+            <p className="muted">
+              Caveman · last measured run:{' '}
+              {optimizerStats.cavemanLastRun.savedTokens.toLocaleString()} estimated input tokens
+              saved ({optimizerStats.cavemanLastRun.percent.toFixed(1)}%) across{' '}
+              {optimizerStats.cavemanLastRun.samples} steps. Reply savings are not measurable per
+              response.
+            </p>
+          ) : null}
         </Group>
       );
     }

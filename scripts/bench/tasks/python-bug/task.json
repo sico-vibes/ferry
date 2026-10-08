@@ -1,0 +1,10 @@
+{
+  "id": "python-bug",
+  "prompt": "Fix median in stats.py. Empty lists raise ValueError. Sort a copy, return the middle value for odd lists and average the two middle values for even lists. Do not change test_stats.py. Run python -m unittest test_stats.py; no pytest needed.",
+  "profile": null,
+  "maxSteps": 30,
+  "timeoutMs": 600000,
+  "fixture": "fixture",
+  "checker": "check.mjs",
+  "requires": "python"
+}

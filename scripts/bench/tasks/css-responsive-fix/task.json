@@ -1,0 +1,10 @@
+{
+  "id": "css-responsive-fix",
+  "prompt": "Fix style.css so the three .tile cards in index.html fit 375px and 1280px viewports without horizontal scrolling. Use a responsive grid and consistent 16px gaps/padding. Do not remove or edit index.html; all three cards must remain visible. No dependencies.",
+  "profile": null,
+  "maxSteps": 30,
+  "timeoutMs": 600000,
+  "fixture": "fixture",
+  "checker": "check.mjs",
+  "requires": "chromium"
+}

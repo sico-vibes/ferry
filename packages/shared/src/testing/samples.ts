@@ -229,6 +229,7 @@ export const sampleUsageHistoryPoint: UsageHistoryPoint = {
 };
 export const sampleHandoffStat: HandoffStat = { reason: 'quota', count: 1 };
 export const sampleOptimizerToggles: OptimizerToggles = {
+  cavemanInput: 'off',
   terse: 'lite',
   toolOutputFilters: true,
   recoveryHandles: true,
@@ -329,6 +330,7 @@ export const sampleSettings: Settings = {
   onboardingComplete: true,
   optimizers: sampleOptimizerToggles,
   routing: {
+    autoPauseAfterFailedRequests: 5,
     stickySessions: true,
     paceShortLimits: true,
     paceMaxWaitSeconds: 30,

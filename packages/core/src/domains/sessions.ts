@@ -59,6 +59,12 @@ import {
 } from '../context-compaction.js';
 import { oauthModelCatalog } from '@ferry/oauth';
 import { z } from 'zod';
+import {
+  isRecordedAttempt,
+  ledgerKind,
+  recordRequestFailure,
+  recordRequestSuccess,
+} from '../request-failures.js';
 import { canonicalPathKey } from '@ferry/shared/node-paths';
 import { getGatewayController } from '../gateway.js';
 
@@ -877,6 +883,7 @@ export function register(host: CoreHost, services: FerryServices): void {
                   id,
                   sessionId: session.id,
                   kind: event.kind,
+                  ...(event.runId ? { runId: event.runId } : {}),
                   beforeTokens: event.beforeTokens,
                   afterTokens: event.afterTokens,
                   timestamp: services.clock.now().toISOString(),
@@ -976,6 +983,30 @@ export function register(host: CoreHost, services: FerryServices): void {
                   ? null
                   : (services.sessions.get(session.id)?.pinnedModelRef ?? null),
               stepTimeoutMs: stepTimeoutFromEnvironment(services.env.FERRY_STEP_TIMEOUT_MS),
+              isProviderEnabled: (providerId) =>
+                services.providers.get(providerId)?.enabled !== false,
+              onProviderAttempt: (attempt) => {
+                if (isRecordedAttempt(attempt.error, attempt.requestId)) return;
+                if (attempt.providerId === 'gateway') return;
+                if (attempt.success)
+                  recordRequestSuccess(services, attempt.providerId, attempt.modelRef);
+                else
+                  recordRequestFailure(services, {
+                    providerId: attempt.providerId,
+                    modelRef: attempt.modelRef,
+                    requestId: attempt.requestId,
+                    sessionId: attempt.sessionId,
+                    keyId: attempt.keyId,
+                    source: 'agent',
+                    kind: ledgerKind(
+                      attempt.family ?? 'network',
+                      attempt.statusCode,
+                      attempt.message,
+                    ),
+                    statusCode: attempt.statusCode,
+                    message: attempt.message,
+                  });
+              },
               capacity: runtime.capacity,
               apiKeys: runtime.apiKeys,
               repairToolCalls: savedToolCallRepair,

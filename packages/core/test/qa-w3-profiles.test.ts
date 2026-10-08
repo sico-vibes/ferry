@@ -26,6 +26,7 @@ function customProfile(overrides: Record<string, unknown> = {}): Profile {
     delegationMode: 'suggest',
     optimizers: {
       terse: 'off',
+      cavemanInput: 'off',
       toolOutputFilters: true,
       recoveryHandles: true,
       contextHygiene: true,

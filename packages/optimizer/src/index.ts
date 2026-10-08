@@ -5,3 +5,7 @@ export * from './hygiene.js';
 export * from './rtk.js';
 export * from './terse.js';
 export * from './compaction.js';
+export * from './caveman/compress.js';
+export * from './caveman/output.js';
+export * from './caveman/preserve.js';
+export * from './caveman/messages.js';

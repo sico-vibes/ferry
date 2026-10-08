@@ -1,0 +1,19 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font-family: system-ui;
+}
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr));
+  padding: 16px;
+  gap: 16px;
+  max-width: 1280px;
+  margin: auto;
+}
+.tile {
+  padding: 16px;
+  border: 1px solid;
+}

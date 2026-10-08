@@ -20,6 +20,7 @@ import * as schema from './schema.js';
 import { newId, redactForTelemetry, type TelemetrySink } from '@ferry/shared';
 
 export { schema };
+export { RequestFailureRepository } from './request-failures.js';
 const storageMigrationFiles = [
   '0001_initial.sql',
   '0002_interrupted_sessions.sql',
@@ -27,6 +28,7 @@ const storageMigrationFiles = [
   '0004_provider_key_entries.sql',
   '0005_cloud_outbox_and_telemetry.sql',
   '0006_outbox_claims.sql',
+  '0007_request_failures.sql',
 ];
 export const STORAGE_SCHEMA_VERSION = storageMigrationFiles.length;
 /** Observes successful local writes so cloud mode can persist them for later sync. */
@@ -117,6 +119,8 @@ const salvageTables = [
   'settings_kv',
   'requests',
   'usage_daily',
+  'request_failures',
+  'request_failure_state',
 ] as const;
 /** Makes a WAL-aware SQLite backup, then copies each readable table independently. */
 export async function salvageReadableTables(
@@ -732,6 +736,10 @@ export const NoopStorageTelemetrySink: TelemetrySink = {
 export class ProviderRepository extends JsonRepository<Provider> {
   constructor(client: Database.Database, mirror?: StorageMirror) {
     super(client, 'providers', mirror);
+  }
+  override put(provider: Provider): void {
+    // Key replacement, probes and sign-in must preserve an automatic pause.
+    super.put({ ...provider, enabled: provider.pausedReason ? false : provider.enabled });
   }
 }
 export class WorkspaceRepository extends JsonRepository<Workspace> {

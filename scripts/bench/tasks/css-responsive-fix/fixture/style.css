@@ -1,0 +1,15 @@
+body {
+  margin: 0;
+}
+.tiles {
+  display: flex;
+  width: 1200px;
+  padding: 16px;
+  gap: 16px;
+}
+.tile {
+  width: 400px;
+  flex-shrink: 0;
+  padding: 16px;
+  border: 1px solid;
+}

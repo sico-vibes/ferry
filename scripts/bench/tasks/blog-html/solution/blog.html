@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Field Notes</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        line-height: 1.6;
+        background: Canvas;
+        color: CanvasText;
+      }
+      header,
+      main,
+      footer {
+        max-width: 1100px;
+        margin: auto;
+        padding: 24px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+        gap: 24px;
+      }
+      .card {
+        padding: 24px;
+        border: 1px solid GrayText;
+        border-radius: 12px;
+        box-shadow: 0 4px 16px #8882;
+        text-align: left;
+        color: inherit;
+        background: Canvas;
+        overflow-wrap: anywhere;
+      }
+      .card h2 {
+        margin-top: 0;
+      }
+      .meta,
+      .tag {
+        font-size: 0.875rem;
+      }
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+      button,
+      a {
+        cursor: pointer;
+      }
+      button:focus-visible,
+      a:focus-visible {
+        outline: 3px solid Highlight;
+        outline-offset: 4px;
+      }
+      form {
+        display: grid;
+        gap: 12px;
+        max-width: 700px;
+      }
+      label {
+        display: grid;
+      }
+      input,
+      textarea {
+        min-width: 0;
+        width: 100%;
+        padding: 8px;
+      }
+      .post-item {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 0;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Field Notes</h1>
+      <p>Small observations about making things.</p>
+    </header>
+    <main>
+      <section class="grid" id="cards" aria-label="Posts"></section>
+      <section id="post" hidden></section>
+      <section id="admin" hidden>
+        <h2>Admin</h2>
+        <form id="editor">
+          <label>Title<input id="title" required /></label>
+          <label>Tag<input id="tag" required /></label>
+          <label>Body<textarea id="body" rows="8" required></textarea></label>
+          <button>Save post</button>
+        </form>
+        <div id="admin-list"></div>
+      </section>
+    </main>
+    <footer><a href="#admin" id="admin-link">Admin</a></footer>
+    <script>
+      const storageKey = 'field-notes';
+      const seed = ['First light', 'A quieter workspace', 'Learning in public'].map((title, i) => ({
+        id: String(i),
+        title,
+        tag: 'Notes',
+        date: '2026-01-01',
+        body: '# A small beginning\nEvery project starts with an observation.',
+      }));
+      let posts = JSON.parse(localStorage.getItem(storageKey) || 'null') || seed;
+      let editing = null;
+      const cards = document.querySelector('#cards');
+      const postView = document.querySelector('#post');
+      const adminView = document.querySelector('#admin');
+      const form = document.querySelector('#editor');
+      const titleField = document.querySelector('#title');
+      const tagField = document.querySelector('#tag');
+      const bodyField = document.querySelector('#body');
+      const escape = (value) =>
+        value
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;');
+      const markdown = (value) =>
+        value
+          .split('\n')
+          .map((line) => {
+            const heading = /^(#{1,2})\s+(.*)/.exec(line);
+            return heading
+              ? `<h${heading[1].length}>${escape(heading[2])}</h${heading[1].length}>`
+              : line.trim()
+                ? `<p>${escape(line)}</p>`
+                : '';
+          })
+          .join('');
+      const save = () => {
+        localStorage.setItem(storageKey, JSON.stringify(posts));
+        draw();
+      };
+      function draw() {
+        cards.replaceChildren();
+        for (const post of posts) {
+          const card = document.createElement('button');
+          card.className = 'card';
+          card.innerHTML = `<h2>${escape(post.title)}</h2><time class="meta">${post.date}</time><p class="excerpt">${escape(post.body.replace(/^#{1,6}\s*/gm, '').slice(0, 120))}</p><span class="tag">${escape(post.tag)}</span>`;
+          card.onclick = () => {
+            cards.hidden = true;
+            postView.hidden = false;
+            postView.innerHTML = `<button id="back">Back</button><h1>${escape(post.title)}</h1><time>${post.date}</time>${markdown(post.body)}`;
+            document.querySelector('#back').onclick = () => {
+              postView.hidden = true;
+              cards.hidden = false;
+            };
+          };
+          cards.append(card);
+        }
+        const list = document.querySelector('#admin-list');
+        list.replaceChildren();
+        for (const post of posts) {
+          const row = document.createElement('div');
+          row.className = 'post-item';
+          const name = document.createElement('span');
+          name.textContent = post.title;
+          const edit = document.createElement('button');
+          edit.textContent = 'Edit';
+          edit.onclick = () => {
+            editing = post.id;
+            titleField.value = post.title;
+            tagField.value = post.tag;
+            bodyField.value = post.body;
+          };
+          const remove = document.createElement('button');
+          remove.textContent = 'Delete';
+          remove.onclick = () => {
+            posts = posts.filter((item) => item.id !== post.id);
+            save();
+          };
+          row.append(name, edit, remove);
+          list.append(row);
+        }
+      }
+      document.querySelector('#admin-link').onclick = (event) => {
+        event.preventDefault();
+        adminView.hidden = !adminView.hidden;
+      };
+      form.onsubmit = (event) => {
+        event.preventDefault();
+        const post = {
+          id: editing || crypto.randomUUID(),
+          title: titleField.value,
+          tag: tagField.value,
+          body: bodyField.value,
+          date: new Date().toISOString().slice(0, 10),
+        };
+        if (editing) posts = posts.map((item) => (item.id === editing ? post : item));
+        else posts.push(post);
+        editing = null;
+        form.reset();
+        save();
+      };
+      save();
+    </script>
+  </body>
+</html>

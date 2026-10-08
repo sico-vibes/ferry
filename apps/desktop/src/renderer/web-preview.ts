@@ -1,11 +1,12 @@
 import type { MockFerryClient } from '@ferry/client';
+import { FailureEntrySchema, PausedReasonSchema } from '@ferry/shared';
 import type { Message, MessagePart, ProviderKey } from '@ferry/shared';
 
 const stamp = '2026-10-04T10:00:00.000Z';
 
 export async function seedWebPreview(client: MockFerryClient, scenario: string): Promise<void> {
   const store = client.__store();
-  const chosen = ['empty', 'errors', 'busy'].includes(scenario) ? scenario : 'busy';
+  const chosen = ['empty', 'errors', 'busy', 'failures'].includes(scenario) ? scenario : 'busy';
   const params = new URLSearchParams(location.search);
   const theme = params.get('theme');
   if (theme === 'light' || theme === 'dark' || theme === 'system') store.settings.theme = theme;
@@ -14,6 +15,7 @@ export async function seedWebPreview(client: MockFerryClient, scenario: string):
     store.sessions.splice(0);
     store.messages.clear();
     store.providers.splice(0);
+    store.requestFailures.splice(0);
     store.providerKeys.clear();
     store.settings.onboardingComplete = false;
     await client.gateway.setSettings({ enabled: false, port: 11435, allowLan: false });
@@ -30,6 +32,40 @@ export async function seedWebPreview(client: MockFerryClient, scenario: string):
     if (provider.id === 'groq') provider.enabled = false;
     if (provider.id === 'opencode-go') provider.keyStatus = 'valid';
     if (provider.id === 'huggingface') provider.tag = 'trial';
+  }
+  if (chosen === 'failures') {
+    const groq = store.providers.find((provider) => provider.id === 'groq');
+    const now = new Date();
+    store.requestFailures.splice(
+      0,
+      store.requestFailures.length,
+      ...Array.from({ length: 6 }, (_, index) =>
+        FailureEntrySchema.parse({
+          id: `preview-failure-${String(index)}`,
+          at: new Date(now.getTime() - (6 - index) * 60_000).toISOString(),
+          providerId: 'groq',
+          modelRef: index === 0 ? 'groq/qwen/qwen3.8-27b' : 'groq/openai/gpt-oss-120b',
+          keyId: 'groq:1',
+          requestId: `preview-request-${String(index)}`,
+          sessionId: null,
+          source: 'agent',
+          kind: index === 0 ? 'rate_limit' : 'server',
+          statusCode: index === 0 ? 429 : 502,
+          message:
+            index === 0 ? 'Rate limit reached; retry after reset.' : '502 Upstream service error.',
+          counted: index === 0 ? 0 : 1,
+        }),
+      ),
+    );
+    if (groq)
+      groq.pausedReason = PausedReasonSchema.parse({
+        kind: 'failed_requests',
+        at: now.toISOString(),
+        failedRequests: 5,
+        lastError: '502 Upstream service error.',
+        lastKind: 'server',
+        models: ['groq/openai/gpt-oss-120b'],
+      });
   }
   const keys: ProviderKey[] = [
     {
