@@ -299,12 +299,30 @@ async function uninstall(directory, profile, removeData = false) {
     if (Date.now() >= deadline) break;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
   } while (Date.now() < deadline);
+  // Which processes still run from this folder (a Ferry hidden in the tray would lock files).
+  const prefix = canonicalPath(directory);
+  const holders = (() => {
+    try {
+      const raw = powershell(
+        '@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | ForEach-Object { [PSCustomObject]@{ Id=$_.ProcessId; Name=$_.Name; Path=$_.ExecutablePath; Cmd=$_.CommandLine } }) | ConvertTo-Json -Compress',
+      );
+      const parsed = raw ? JSON.parse(raw) : [];
+      return (Array.isArray(parsed) ? parsed : [parsed])
+        .filter((item) => canonicalPath(item.Path).startsWith(prefix))
+        .map((item) => `${String(item.Id)} ${item.Name} ${String(item.Cmd ?? '').slice(0, 160)}`);
+    } catch (error) {
+      return [
+        `(process listing failed: ${error instanceof Error ? error.message : String(error)})`,
+      ];
+    }
+  })();
   throw new Error(
     `Timed out after 180 seconds waiting for uninstall completion at ${directory} ` +
       `(Uninstall Ferry.exe: ${state?.uninstallExecutableExists ? 'present' : 'gone'}; ` +
       `Ferry.exe: ${state?.ferryExecutableExists ? 'present' : 'gone'}; ` +
       `registry entries: ${state?.registryEntries ?? 'unknown'}; ` +
-      `NSIS temporary process: ${state?.runningNsisCopy ? 'running' : 'none'}).`,
+      `NSIS temporary process: ${state?.runningNsisCopy ? 'running' : 'none'}; ` +
+      `processes from this folder: ${holders.length ? holders.join(' | ') : 'none'}).`,
   );
 }
 
