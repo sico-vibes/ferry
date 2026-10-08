@@ -28,6 +28,9 @@ export const ProviderRequestOverridesSchema = z.object({
 export type LogicalModelMapping = z.infer<typeof LogicalModelMappingSchema>;
 export type ProviderRequestOverrides = z.infer<typeof ProviderRequestOverridesSchema>;
 const RoutingSettingsFieldsSchema = z.object({
+  paceShortLimits: z.boolean(),
+  paceMaxWaitSeconds: z.number().int().min(0).max(120),
+  firstTokenTimeoutSeconds: z.number().int().min(1).max(120),
   stickySessions: z.boolean(),
   smartReliability: z.boolean(),
   quotaReservations: z.boolean(),
@@ -46,6 +49,9 @@ const RoutingSettingsFieldsSchema = z.object({
   providerWeights: z.record(ProviderIdSchema, z.number().min(0.01).max(1000)),
 });
 export const RoutingSettingsSchema = RoutingSettingsFieldsSchema.extend({
+  paceShortLimits: z.boolean().default(true),
+  paceMaxWaitSeconds: z.number().int().min(0).max(120).default(30),
+  firstTokenTimeoutSeconds: z.number().int().min(1).max(120).default(25),
   stickySessions: z.boolean().default(true),
   smartReliability: z.boolean().default(true),
   qualityWeight: z.number().min(0).max(20).default(4),

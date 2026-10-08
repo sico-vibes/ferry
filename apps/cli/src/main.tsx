@@ -20,6 +20,8 @@ import {
   ModelRefSchema,
   ProviderIdSchema,
   RoutingSettingsSchema,
+  formatRunReport,
+  type RunReport,
   type MessagePart,
   type Profile,
   type Provider,
@@ -72,12 +74,20 @@ export async function runPrompt(
   let stepLimitExceeded = false;
   let terminalStatusEmitted = false;
   let observedSteps = 0;
+  let runReport: RunReport | undefined;
   const seenParts = new Set<string>();
   let finishRun!: () => void;
   const done = new Promise<void>((resolve) => {
     finishRun = resolve;
   });
   const disposers = [
+    client.on('agent.event', ({ sessionId, event }) => {
+      if (sessionId === session.id && event.type === 'status' && event.status === 'waiting')
+        publish({ type: 'agent.event', sessionId, event }, event.message);
+    }),
+    client.on('run.completed', (event) => {
+      if (event.sessionId === session.id) runReport = event.report;
+    }),
     client.on('session.delta', (event) => {
       if (event.sessionId !== session.id) return;
       publish({ type: 'session.delta', ...event }, event.textDelta);
@@ -186,8 +196,9 @@ export async function runPrompt(
     if (options.permission)
       await client.settings.update({ permissionMode: settings.permissionMode });
   }
+  const detail = await client.sessions.get(session.id);
+  runReport ??= detail.session.runReport;
   if (json && !options.quiet) {
-    const detail = await client.sessions.get(session.id);
     const lastAssistant = detail.messages.findLast((message) => message.role === 'assistant');
     process.stdout.write(
       `${JSON.stringify({
@@ -195,9 +206,17 @@ export async function runPrompt(
         sessionId: session.id,
         servedModel: lastAssistant?.modelRef ?? detail.session.modelRef,
         attempts: lastAssistant?.modelAttempts ?? [],
+        outcome: runReport?.outcome ?? (failed ? 'error' : 'completed'),
+        warnings: runReport?.warnings ?? [],
+        report: runReport,
       })}\n`,
     );
   }
+  if (runReport)
+    publish(
+      { type: 'run.report', sessionId: session.id, ...runReport },
+      formatRunReport(runReport).join('\n'),
+    );
   if (stepLimitExceeded) {
     if (!options.quiet)
       process.stderr.write(
@@ -207,7 +226,15 @@ export async function runPrompt(
   }
   if (approvalNeeded) return 3;
   if (paidCapReached) return 5;
-  return failed ? 1 : 0;
+  return runExitCode(failed, runReport);
+}
+
+export function runExitCode(failed: boolean, report?: Pick<RunReport, 'outcome'>): number {
+  return report?.outcome === 'completed_with_warnings'
+    ? 0
+    : failed || report?.outcome === 'error'
+      ? 1
+      : 0;
 }
 
 function emit(json: boolean, event: Record<string, unknown>, human?: string) {

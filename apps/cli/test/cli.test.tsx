@@ -13,9 +13,11 @@ import {
   routingSettings,
   runCli,
   runPrompt,
+  runExitCode,
 } from '../src/main.js';
 import { ApprovalPrompt, Chat } from '../src/tui.js';
 import { formatCapacity, statusLine } from '../src/format.js';
+import { RunReportSchema } from '@ferry/shared';
 
 function client() {
   return createMockFerryClient({
@@ -26,6 +28,11 @@ function client() {
 }
 
 describe('@ferry/cli', () => {
+  it('maps completed work with warnings to exit zero, and unfinished failures to exit one', () => {
+    expect(runExitCode(true, { outcome: 'completed_with_warnings' })).toBe(0);
+    expect(runExitCode(true, { outcome: 'error' })).toBe(1);
+    expect(runExitCode(false, { outcome: 'error' })).toBe(1);
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it('formats attempt audits with provider, status, and latency for verbose output', () => {
@@ -324,6 +331,52 @@ describe('@ferry/cli', () => {
     expect(events.some((event) => event.type === 'session.delta')).toBe(true);
     expect(events.some((event) => event.type === 'session.status')).toBe(true);
   });
+
+  it.each([true, false])(
+    'prints the persisted report and warning at the end of ferry run (JSON: %s)',
+    async (json) => {
+      const api = client();
+      const originalGet = api.sessions.get.bind(api.sessions);
+      const report = RunReportSchema.parse({
+        durationMs: 12000,
+        steps: 2,
+        ownerModel: 'groq/owner',
+        modelsUsed: [{ model: 'groq/owner', steps: 2 }],
+        switches: [],
+        waits: [],
+        failedAttempts: [],
+        tokens: { input: 100, output: 20, reasoning: 0 },
+        filesChanged: [],
+        outcome: 'completed_with_warnings',
+        warnings: ['Final check skipped: rate limits'],
+      });
+      vi.spyOn(api.sessions, 'get').mockImplementation(async (id) => {
+        const detail = await originalGet(id);
+        return { ...detail, session: { ...detail.session, runReport: report } };
+      });
+      const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      expect(await runPrompt(api, 'Explain the request routing', json)).toBe(0);
+      const lines = output.mock.calls.map((call) => String(call[0]).trim()).filter(Boolean);
+      if (json) {
+        expect(JSON.parse(lines.at(-1) ?? '{}')).toMatchObject({
+          type: 'run.report',
+          outcome: 'completed_with_warnings',
+        });
+        const completed = lines
+          .map((line) => JSON.parse(line) as Record<string, unknown>)
+          .find((event) => event.type === 'run.completed');
+        expect(completed).toMatchObject({
+          outcome: 'completed_with_warnings',
+          warnings: report.warnings,
+          report,
+        });
+      } else {
+        expect(lines.at(-1)).toContain('Owner: groq/owner');
+        expect(lines.at(-1)?.split('\n')).toHaveLength(9);
+        expect(lines.at(-1)).toContain('Warning: Final check skipped: rate limits');
+      }
+    },
+  );
 
   it('returns approval exit code 3 for an approval-required scenario', async () => {
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);

@@ -530,6 +530,14 @@ describe('QA W3 sessions: run lifecycle and races', () => {
         return status === 'error' || status === 'idle';
       });
       expect(await sessionStatus(h.rpc, session.id)).toBe('error');
+      const detail = await h.rpc.sessions.get(session.id);
+      expect(detail.session.runReport?.outcome).toBe('error');
+      expect(
+        detail.session.runReport?.failedAttempts.some((attempt) => attempt.kind === 'server'),
+      ).toBe(true);
+      expect(
+        detail.messages.findLast((message) => message.role === 'assistant')?.runReport,
+      ).toEqual(detail.session.runReport);
     } finally {
       await h.close();
     }

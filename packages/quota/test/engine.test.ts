@@ -222,7 +222,7 @@ describe('QuotaEngine', () => {
       now,
       catalog: { providers: [provider], models: [] },
     });
-    first.recordUsage(usage('r1', '2026-06-01T09:59:00Z', { sessionId: 's1', taskId: 't1' }));
+    first.recordUsage(usage('r1', '2026-06-01T09:59:00.001Z', { sessionId: 's1', taskId: 't1' }));
     expect(first.queryUsage({ providerId: 'gemini', sessionId: 's1', taskId: 't1' })).toHaveLength(
       1,
     );
@@ -244,7 +244,7 @@ describe('QuotaEngine', () => {
       now: () => new Date('2026-06-01T10:00:00Z'),
       catalog: { providers: [provider], models: [] },
     });
-    engine.recordUsage(usage('1', '2026-06-01T09:59:00Z'));
+    engine.recordUsage(usage('1', '2026-06-01T09:59:00.001Z'));
     engine.recordUsage(usage('2', '2026-06-01T09:59:30Z'));
     const id = getWindow(engine, 'gemini').id;
     engine.observe({
@@ -391,7 +391,8 @@ describe('QuotaEngine', () => {
     const before = engine.capacitySummary();
     expect(before.perProvider).toHaveLength(6);
     expect(before.perProvider.find((item) => item.providerId === 'zeta')?.stepsLeft).toBeNull();
-    expect(before.banner?.text).toContain('delta');
+    expect(before.banner).toBeNull();
+    expect(before.lowCapacity).toBe(false);
     expect(before.nextResets.find((reset) => reset.providerId === 'delta')?.at).toBe(
       '2026-03-08T11:00:00.000Z',
     );

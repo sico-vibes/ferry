@@ -29,6 +29,7 @@ export const AgentEventSchema = z.discriminatedUnion('type', [
     type: z.literal('status'),
     status: z.string(),
     message: z.string().optional(),
+    waitUntil: z.iso.datetime().optional(),
     reasoningAvailable: z.boolean().optional(),
   }),
   z.object({ ...base, type: z.literal('error'), message: z.string() }),

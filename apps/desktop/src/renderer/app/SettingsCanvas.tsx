@@ -875,6 +875,70 @@ export function SettingsCanvas() {
             <p className="muted">
               Choose how Ferry balances continuity, reliability, and provider capacity.
             </p>
+            <SettingRow
+              title={`Wait for short rate limits (up to ${String(settings?.routing.paceMaxWaitSeconds ?? 30)} s)`}
+              helper="Stay on the same model while a per-minute limit refills."
+            >
+              <Switch
+                label="Wait for short rate limits"
+                checked={settings?.routing.paceShortLimits ?? true}
+                onCheckedChange={(paceShortLimits) => {
+                  if (settings) void update({ routing: { ...settings.routing, paceShortLimits } });
+                }}
+              />
+            </SettingRow>
+            <SettingRow
+              title="Maximum wait for short rate limits"
+              helper="Longer waits switch to another available model."
+            >
+              <div className="range-control">
+                <Slider
+                  label="Maximum wait for short rate limits in seconds"
+                  min={0}
+                  max={120}
+                  step={1}
+                  value={settings?.routing.paceMaxWaitSeconds ?? 30}
+                  onValueChange={(paceMaxWaitSeconds) => {
+                    if (settings)
+                      void update({
+                        routing: {
+                          ...settings.routing,
+                          paceMaxWaitSeconds: Math.round(paceMaxWaitSeconds),
+                        },
+                      });
+                  }}
+                />
+                <span className="whitespace-nowrap">
+                  {settings?.routing.paceMaxWaitSeconds ?? 30} s
+                </span>
+              </div>
+            </SettingRow>
+            <SettingRow
+              title={`Give up on a provider that doesn't answer within ${String(settings?.routing.firstTokenTimeoutSeconds ?? 25)} s`}
+              helper="Try another provider if no response begins. Local models are exempt."
+            >
+              <div className="range-control">
+                <Slider
+                  label="First response timeout in seconds"
+                  min={1}
+                  max={120}
+                  step={1}
+                  value={settings?.routing.firstTokenTimeoutSeconds ?? 25}
+                  onValueChange={(firstTokenTimeoutSeconds) => {
+                    if (settings)
+                      void update({
+                        routing: {
+                          ...settings.routing,
+                          firstTokenTimeoutSeconds: Math.round(firstTokenTimeoutSeconds),
+                        },
+                      });
+                  }}
+                />
+                <span className="whitespace-nowrap">
+                  {settings?.routing.firstTokenTimeoutSeconds ?? 25} s
+                </span>
+              </div>
+            </SettingRow>
             {routingRows.map((row) => (
               <SettingRow key={row.key} title={row.title} helper={row.helper}>
                 <div className="inline-control">
@@ -967,6 +1031,9 @@ export function SettingsCanvas() {
                     routing: {
                       ...settings.routing,
                       stickyTtlMinutes: 30,
+                      paceShortLimits: true,
+                      paceMaxWaitSeconds: 30,
+                      firstTokenTimeoutSeconds: 25,
                       qualityWeight: 4,
                       rampStart: 0.2,
                       rampFloor: 0.1,

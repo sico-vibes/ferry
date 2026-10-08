@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from '@ferry/shared';
+import { RunReportSchema } from '@ferry/shared';
 import { AgentTimeline, buildTimelineLanes } from './AgentTimeline';
 
 const call = (id: string, tool: string): AgentEvent => ({
@@ -25,6 +26,49 @@ const result = (id: string, output: string, truncated = false): AgentEvent => ({
 });
 
 describe('AgentTimeline', () => {
+  it('shows a short-limit wait in the running disclosure label', () => {
+    render(
+      <AgentTimeline
+        isRunning
+        events={[
+          {
+            id: 'wait',
+            type: 'status',
+            status: 'waiting',
+            timestamp: '2026-10-08T12:00:00Z',
+            waitUntil: '2026-10-08T12:00:12Z',
+            message: "Waiting 12s for Groq's per-minute limit",
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /Waiting 12s for Groq/ })).toBeTruthy();
+  });
+  it('shows a persisted run report as one compact worked-for block', () => {
+    const report = RunReportSchema.parse({
+      durationMs: 18000,
+      steps: 3,
+      ownerModel: 'groq/owner',
+      modelsUsed: [
+        { model: 'groq/owner', steps: 2 },
+        { model: 'gemini/alternate', steps: 1 },
+      ],
+      switches: [{ from: 'groq/owner', to: 'gemini/alternate', reason: 'quota', atStep: 3 }],
+      waits: [{ provider: 'groq', seconds: 12, reason: 'per-minute limit' }],
+      failedAttempts: [],
+      tokens: { input: 230, output: 45, reasoning: 9 },
+      filesChanged: [{ path: 'blog.html', sizeBytes: 13, status: 'added' }],
+      outcome: 'completed_with_warnings',
+      warnings: ['Final check skipped: models were busy'],
+    });
+    render(<AgentTimeline events={[]} report={report} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Worked for 18s' }));
+    const block = screen.getByLabelText('Run report');
+    expect(block.textContent).toContain('Owner: groq/owner');
+    expect(block.textContent).toContain('Waits: groq 12s');
+    expect(block.textContent).toContain('blog.html (13 bytes, added)');
+    expect(block.textContent).toContain('Final check skipped');
+  });
   it('pairs tool results by callId, groups three same-tool calls, and keeps shell calls separate', () => {
     const events = [
       call('a', 'read_file'),

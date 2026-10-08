@@ -567,7 +567,39 @@ export function register(host: CoreHost, services: FerryServices): void {
         status: 'running',
         runPhase: 'preparing',
         inFlight: true,
+        runReport: undefined,
+        ownerModelRef: null,
       });
+      const runStartedAt = services.clock.now().getTime();
+      const terminalReport = (
+        latest: Session,
+        outcome: import('@ferry/shared').RunReport['outcome'],
+      ) => {
+        if (latest.runReport) return latest.runReport;
+        const report: import('@ferry/shared').RunReport = {
+          durationMs: Math.max(0, services.clock.now().getTime() - runStartedAt),
+          steps: 0,
+          ownerModel: null,
+          modelsUsed: [],
+          switches: [],
+          waits: [],
+          failedAttempts: [],
+          tokens: { input: 0, output: 0, reasoning: 0 },
+          filesChanged: [],
+          outcome,
+          warnings: [],
+        };
+        const last = store
+          .load(session.id)
+          ?.messages.findLast((message) => message.role === 'assistant');
+        if (last) {
+          const message = { ...last, runReport: report };
+          services.messages.put(message);
+          host.emit('session.message', { sessionId: session.id, message });
+        }
+        host.emit('run.completed', { sessionId: session.id, outcome, warnings: [], report });
+        return report;
+      };
       let preparingStep = 'routing';
       let timedOut = false;
       let backgroundFailed = false;
@@ -605,7 +637,13 @@ export function register(host: CoreHost, services: FerryServices): void {
             sessionId: session.id,
             message: MessageSchema.parse(errorMessage),
           });
-          updateSession({ ...latest, status: 'error', runPhase: undefined, inFlight: false });
+          updateSession({
+            ...latest,
+            status: 'error',
+            runPhase: undefined,
+            inFlight: false,
+            runReport: terminalReport(latest, 'error'),
+          });
         }
         if (controllers.get(session.id) === controller) controllers.delete(session.id);
         if (runPromises.get(session.id) === run) runPromises.delete(session.id);
@@ -819,6 +857,7 @@ export function register(host: CoreHost, services: FerryServices): void {
                   textDelta: event.text,
                 });
               else if (event.type === 'agent.event') host.emit('agent.event', event);
+              else if (event.type === 'run.completed') host.emit('run.completed', event);
               else if (event.type === 'session.part') {
                 if (event.part.type === 'error') transcriptFailureRecorded = true;
                 host.emit('session.part', event);
@@ -1642,7 +1681,20 @@ export function register(host: CoreHost, services: FerryServices): void {
                       : latest.status === 'running'
                         ? 'idle'
                         : latest.status;
-                updateSession({ ...latest, status, runPhase: undefined, inFlight: false });
+                updateSession({
+                  ...latest,
+                  status,
+                  runPhase: undefined,
+                  inFlight: false,
+                  runReport: terminalReport(
+                    latest,
+                    status === 'error'
+                      ? 'error'
+                      : controller.signal.aborted
+                        ? 'cancelled'
+                        : 'completed',
+                  ),
+                });
               }
             }
             resolveRun();

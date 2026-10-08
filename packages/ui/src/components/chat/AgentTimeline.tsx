@@ -1,6 +1,6 @@
 import { Children, useEffect, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, LoaderCircle, Wrench } from 'lucide-react';
-import type { AgentEvent } from '@ferry/shared';
+import { formatRunReport, type AgentEvent, type RunReport } from '@ferry/shared';
 import { cn } from '../../lib/cn';
 import { focusRingClass } from '../primitives';
 
@@ -303,8 +303,10 @@ export function AgentTimeline({
   runningToolTitle,
   currentStep: currentStepOverride,
   contextWindow,
+  report,
 }: {
   events: readonly AgentEvent[];
+  report?: RunReport | undefined;
   onShowFull?: (handle: string) => void;
   modelName?: string;
   /** Context window of the model that answered, for the "4% of 128k" meter. */
@@ -335,7 +337,7 @@ export function AgentTimeline({
       window.clearInterval(interval);
     };
   }, [running]);
-  if (!events.length && Children.count(activity) === 0 && !modelName) return null;
+  if (!events.length && Children.count(activity) === 0 && !modelName && !report) return null;
   const firstTime = events[0] ? Date.parse(events[0].timestamp) : 0;
   const lastEvent = events.at(-1);
   const lastTime = lastEvent ? Date.parse(lastEvent.timestamp) : firstTime;
@@ -355,7 +357,7 @@ export function AgentTimeline({
     : startedAt
       ? Date.parse(startedAt)
       : firstTime;
-  const elapsedMs = running ? Math.max(0, now - startedAtMs) : durationMs;
+  const elapsedMs = running ? Math.max(0, now - startedAtMs) : (report?.durationMs ?? durationMs);
   const elapsed =
     running && elapsedMs >= 3_600_000
       ? '>1h'
@@ -373,7 +375,12 @@ export function AgentTimeline({
       : activeTool?.type === 'tool_use'
         ? prettyTool(activeTool.tool)
         : null;
-  const currentStep = activeTool ? (runningToolTitle ?? activeToolStep) : currentStepOverride;
+  const currentStep =
+    lastStatus?.type === 'status' && lastStatus.status === 'waiting'
+      ? lastStatus.message
+      : activeTool
+        ? (runningToolTitle ?? activeToolStep)
+        : currentStepOverride;
   const unavailable = lanes.model.some(
     (event) => event.type === 'status' && event.reasoningAvailable === false,
   );
@@ -412,6 +419,13 @@ export function AgentTimeline({
       </button>
       {open && (
         <div className="space-y-2 pl-5 text-meta text-text-3">
+          {report && (
+            <div aria-label="Run report" className="space-y-1 break-words">
+              {formatRunReport(report).map((line, index) => (
+                <p key={index}>{line}</p>
+              ))}
+            </div>
+          )}
           <div className="min-w-0 space-y-2">
             {unavailable && <p>This model doesn’t share its reasoning.</p>}
             {lanes.model.map((event) =>

@@ -13,6 +13,13 @@ import { CheckpointIdSchema, newId, PartIdSchema } from '@ferry/shared';
 import type { PermissionRule } from '@ferry/workspace';
 import { detectOutputKind, estimateTokens } from '@ferry/optimizer';
 
+export class ToolPermissionDeniedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ToolPermissionDeniedError';
+  }
+}
+
 export interface ToolContext {
   signal: AbortSignal;
   task: TaskRecord;
@@ -268,7 +275,16 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
             workspace: options.workspace,
           },
         );
-        if (decision.decision === 'deny') throw new Error(decision.reason);
+        if (decision.decision === 'deny') {
+          // A model can repair unsupported command options. This is distinct from
+          // an access denial or a user's refusal, which must remain terminal intent.
+          if (
+            decision.reason ===
+            'Non-default command execution options are not allowed in full-auto mode'
+          )
+            throw new Error(decision.reason);
+          throw new ToolPermissionDeniedError(decision.reason);
+        }
         if (decision.decision === 'ask' && options.permissionMode !== 'full_auto') {
           const part = {
             type: 'approval_request' as const,
@@ -301,7 +317,8 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
             throw error;
           }
           options.onPart({ ...part, state: response });
-          if (response === 'denied') throw new Error('User denied this tool call');
+          if (response === 'denied')
+            throw new ToolPermissionDeniedError('User denied this tool call');
         }
         if (actionTool === 'list_dir' || actionTool === 'read_file') {
           const key = `${actionTool}:${JSON.stringify(args)}`;

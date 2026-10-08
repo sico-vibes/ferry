@@ -330,6 +330,9 @@ export const sampleSettings: Settings = {
   optimizers: sampleOptimizerToggles,
   routing: {
     stickySessions: true,
+    paceShortLimits: true,
+    paceMaxWaitSeconds: 30,
+    firstTokenTimeoutSeconds: 25,
     smartReliability: true,
     qualityWeight: 4,
     textToolFallbackEnabled: false,

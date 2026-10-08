@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   CapacitySummarySchema,
+  RunCompletedSchema,
   ProviderLimitsSchema,
   DelegationRunSchema,
   AgentEventSchema,
@@ -61,6 +62,7 @@ export const FerryEventSchemas = {
     textDelta: z.string(),
   }),
   'agent.event': z.object({ sessionId: SessionIdSchema, event: AgentEventSchema }),
+  'run.completed': RunCompletedSchema,
   'routing.explain': z.object({
     sessionId: SessionIdSchema,
     selected: z.string(),
@@ -173,6 +175,7 @@ export interface FerryEvents {
     textDelta: string;
   };
   'agent.event': { sessionId: import('@ferry/shared').SessionId; event: AgentEvent };
+  'run.completed': import('@ferry/shared').RunCompleted;
   'routing.explain': {
     sessionId: import('@ferry/shared').SessionId;
     selected: string;

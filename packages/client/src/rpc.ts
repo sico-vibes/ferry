@@ -395,7 +395,11 @@ export function createHybridClient(
             handler: (payload: FerryEvents[E]) => void,
           ) => {
             const domain =
-              event.startsWith('session.') || event === 'task.updated'
+              event.startsWith('session.') ||
+              event === 'task.updated' ||
+              event === 'agent.event' ||
+              event === 'run.completed' ||
+              event === 'routing.explain'
                 ? 'sessions'
                 : event === 'settings.updated'
                   ? 'settings'

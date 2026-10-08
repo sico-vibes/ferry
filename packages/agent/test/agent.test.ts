@@ -761,7 +761,7 @@ describe('@ferry/agent', () => {
       await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
         /Pinned model openai\/test-model is unavailable and pinnedExhaustion is set to fail/,
       );
-      expect(attempts).toEqual([state.model.ref, state.model.ref, state.model.ref]);
+      expect(attempts).toEqual([state.model.ref, state.model.ref]);
       expect(state.store.load(state.session.id)?.session.modelRef).toBeNull();
       const failure = state.store
         .load(state.session.id)
@@ -771,7 +771,7 @@ describe('@ferry/agent', () => {
       expect(failure.message).toContain('pinnedExhaustion is set to fail');
       expect(failure.message).not.toContain('scoreBreakdown');
       expect(failure.details?.attempts).toMatchObject(
-        Array.from({ length: 3 }, () => ({ model: state.model.ref, kind: 'server', status: 503 })),
+        Array.from({ length: 2 }, () => ({ model: state.model.ref, kind: 'server', status: 503 })),
       );
     } finally {
       state.database.close();
@@ -797,7 +797,7 @@ describe('@ferry/agent', () => {
         maxSteps: 1,
         generator: async () => {
           calls++;
-          if (calls < 3)
+          if (calls < 2)
             throw Object.assign(new Error('temporary upstream outage'), { statusCode: 503 });
           return { text: 'Recovered after retry.', finishReason: 'stop' };
         },
@@ -808,13 +808,11 @@ describe('@ferry/agent', () => {
         },
       });
       await loop.run({ sessionId: state.session.id });
-      expect(calls).toBe(3);
-      expect(delays).toHaveLength(2);
+      expect(calls).toBe(2);
+      expect(delays).toHaveLength(1);
       expect(delays[0]).toBeGreaterThanOrEqual(150);
-      expect(delays[1]).toBeGreaterThanOrEqual(300);
       const finalMessage = state.store.load(state.session.id)?.messages.at(-1);
       expect(finalMessage?.modelAttempts).toMatchObject([
-        { status: 503, errorKind: 'server' },
         { status: 503, errorKind: 'server' },
         { status: 200, errorKind: null },
       ]);
@@ -826,12 +824,13 @@ describe('@ferry/agent', () => {
     }
   }, 30_000);
 
-  it('locks every failed model and caps a failure chain at four handoffs per step', async () => {
+  it('locks every failed model and honors an explicit four-handoff cap', async () => {
     const state = await setup();
     try {
       const candidates = Array.from({ length: 7 }, (_, index) => ({
         ...state.model,
-        ref: `openai/test-model-${String(index)}` as typeof state.model.ref,
+        ref: `provider${String(index)}/test-model` as typeof state.model.ref,
+        providerId: `provider${String(index)}` as typeof state.model.providerId,
         name: `Test model ${String(index)}`,
       }));
       const attempted: string[] = [];
@@ -841,7 +840,13 @@ describe('@ferry/agent', () => {
         dataDir: state.root,
         profile: BUILTIN_PROFILES[0]!,
         catalog: { ...state.catalog, models: candidates },
-        capacity: () => ({ providers: [state.provider] }),
+        capacity: () => ({
+          providers: candidates.map((candidate) => ({
+            ...state.provider,
+            id: candidate.providerId,
+          })),
+        }),
+        maxHandoffsPerStep: 4,
         apiKeys: {},
         permissionMode: 'full_auto',
         emit: () => {},
@@ -855,7 +860,7 @@ describe('@ferry/agent', () => {
       await expect(loop.run({ sessionId: state.session.id })).rejects.toThrow(
         /Routing stopped after 4 handoffs.*Ranked candidates:/,
       );
-      expect(attempted).toHaveLength(15);
+      expect(attempted).toHaveLength(10);
       expect(new Set(attempted).size).toBe(5);
     } finally {
       state.database.close();
@@ -1875,7 +1880,7 @@ describe('@ferry/agent', () => {
         waitForRetry: async () => {},
       });
       expect((await loop.run({ sessionId: state.session.id })).status).toBe('completed');
-      expect(calls).toBe(4);
+      expect(calls).toBe(2);
       expect(
         state.store
           .load(state.session.id)

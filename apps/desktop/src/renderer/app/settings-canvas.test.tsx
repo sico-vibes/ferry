@@ -82,10 +82,26 @@ describe('SettingsCanvas', () => {
     mount(client);
     const toggle = await screen.findByRole('switch', { name: 'Sticky sessions' });
     expect(toggle.getAttribute('data-state')).toBe('checked');
+    const pacing = screen.getByRole('switch', { name: 'Wait for short rate limits' });
+    expect(pacing.getAttribute('data-state')).toBe('checked');
+    await user.click(pacing);
+    const maximumWait = screen.getByRole('slider', {
+      name: 'Maximum wait for short rate limits in seconds',
+    });
+    expect(maximumWait.getAttribute('aria-valuenow')).toBe('30');
+    fireEvent.keyDown(maximumWait, { key: 'ArrowRight' });
+    const firstResponse = screen.getByRole('slider', { name: 'First response timeout in seconds' });
+    expect(firstResponse.getAttribute('aria-valuenow')).toBe('25');
+    fireEvent.keyDown(firstResponse, { key: 'ArrowRight' });
     await user.click(toggle);
     await user.click(await screen.findByRole('button', { name: 'Save changes' }));
     await waitFor(async () => {
       expect((await client.settings.get()).routing.stickySessions).toBe(false);
+      expect((await client.settings.get()).routing).toMatchObject({
+        paceShortLimits: false,
+        paceMaxWaitSeconds: 31,
+        firstTokenTimeoutSeconds: 26,
+      });
     });
     expect(screen.getByRole('status').textContent).toBe('Saved');
     expect(

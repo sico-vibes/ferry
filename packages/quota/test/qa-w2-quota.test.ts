@@ -173,7 +173,10 @@ describe('QA-w2 quota: quota.updated debounce', () => {
   it('emits exactly one debounced event for a burst and one per later burst', async () => {
     vi.useFakeTimers();
     const events: { type: string }[] = [];
-    const engine = makeEngine({ emit: (event) => events.push(event) });
+    const engine = makeEngine({
+      catalog: { providers: [provider], models: [model] },
+      emit: (event) => events.push(event),
+    });
     for (let i = 0; i < 50; i += 1)
       engine.recordUsage(record('2026-06-01T09:30:00Z', { id: `burst-${String(i)}` }));
     expect(events).toHaveLength(0);

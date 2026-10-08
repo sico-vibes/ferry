@@ -781,6 +781,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
         <AssistantMessage {...(message.agentRole ? { agentRole: message.agentRole } : {})}>
           <AgentTimeline
             events={timelineEvents}
+            report={message.runReport}
             modelName={modelName}
             contextWindow={contextWindow}
             startedAt={message.createdAt}

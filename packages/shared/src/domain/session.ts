@@ -12,6 +12,7 @@ import {
 import { ProviderFailureFamilySchema } from './quota.js';
 import { AgentEventSchema } from './agent-event.js';
 import { EffortSchema } from './provider.js';
+import { RunReportSchema } from './run-report.js';
 export const SessionStatusSchema = z.enum([
   'idle',
   'running',
@@ -40,6 +41,8 @@ export const SessionSchema = z.object({
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
   agentEvents: z.array(AgentEventSchema).default([]),
+  ownerModelRef: ModelRefSchema.nullable().optional(),
+  runReport: RunReportSchema.optional(),
 });
 export type Session = z.infer<typeof SessionSchema>;
 export const FileChangeSchema = z.object({
@@ -144,6 +147,7 @@ export const MessagePartSchema = z.discriminatedUnion('type', [
 ]);
 export type MessagePart = z.infer<typeof MessagePartSchema>;
 export const MessageSchema = z.object({
+  runReport: RunReportSchema.optional(),
   id: MessageIdSchema,
   sessionId: SessionIdSchema,
   role: z.enum(['user', 'assistant']),

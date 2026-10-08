@@ -46,6 +46,9 @@ describe('QA adv: routing settings persistence', () => {
         smartReliability: false,
         rampFloor: 0.42,
         stickyTtlMinutes: 5,
+        paceShortLimits: false,
+        paceMaxWaitSeconds: 12,
+        firstTokenTimeoutSeconds: 18,
       },
     });
     const stored = await first.rpc.settings.get();
@@ -53,6 +56,9 @@ describe('QA adv: routing settings persistence', () => {
       smartReliability: false,
       rampFloor: 0.42,
       stickyTtlMinutes: 5,
+      paceShortLimits: false,
+      paceMaxWaitSeconds: 12,
+      firstTokenTimeoutSeconds: 18,
     });
     await first.close();
 
@@ -64,6 +70,9 @@ describe('QA adv: routing settings persistence', () => {
         smartReliability: false,
         rampFloor: 0.42,
         stickyTtlMinutes: 5,
+        paceShortLimits: false,
+        paceMaxWaitSeconds: 12,
+        firstTokenTimeoutSeconds: 18,
       });
       expect(settings.routing.stickySessions).toBe(true);
       expect(settings.routing.gentleQuotaRamp).toBe(true);

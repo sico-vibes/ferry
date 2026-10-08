@@ -73,7 +73,11 @@ import {
   normalizeReasoningPart,
   reasoningTokensFromUsage,
   type Effort,
+  type RunReport,
+  type RunCompleted,
 } from '@ferry/shared';
+import { snapshotRunFiles, changedRunFiles } from './run-files.js';
+import { retryDelayFromHeaders, quotaPeriodMs } from './routing-limits.js';
 import type { Catalog } from '@ferry/catalog';
 import type { RawCallObservation } from '@ferry/providers';
 import {
@@ -83,7 +87,12 @@ import {
   type PromptSection,
 } from './prompt.js';
 import { SessionStore } from './session.js';
-import { createWorkspaceTools, type AgentTool, type ToolSource } from './tool-registry.js';
+import {
+  createWorkspaceTools,
+  ToolPermissionDeniedError,
+  type AgentTool,
+  type ToolSource,
+} from './tool-registry.js';
 import {
   containsOmissionPlaceholder,
   parseTextToolCallsDetailed,
@@ -99,6 +108,7 @@ import {
 } from './role-plan.js';
 
 export type AgentEvent =
+  | ({ type: 'run.completed' } & RunCompleted)
   | { type: 'agent.event'; sessionId: string; event: StructuredAgentEvent }
   | { type: 'session.message'; message: Message }
   | { type: 'session.part'; sessionId: string; messageId: string; part: MessagePart }
@@ -149,7 +159,6 @@ export interface StepGeneratorInput {
   modelHints: ModelHints;
 }
 export type StepGenerator = (input: StepGeneratorInput) => Promise<GeneratedStep>;
-const discardDelta = (_text: string): void => undefined;
 
 class QuotaReservationError extends Error {
   readonly statusCode = 429;
@@ -213,6 +222,9 @@ export interface AgentOptions {
   tokenBudget?: number;
   /** Maximum time without stream progress before this model attempt is abandoned. */
   stepTimeoutMs?: number;
+  firstTokenTimeoutSeconds?: number;
+  /** Wall time spent on failed requests and their retries, excluding quota pacing. */
+  routingDeadlineSeconds?: number;
   waitForRetry?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   pinnedTurns?: number;
   estimateTokens?: (text: string) => number;
@@ -297,9 +309,22 @@ export interface RunResult {
   steps: number;
   tokens: number;
   status: 'completed' | 'paused' | 'cancelled' | 'limit';
+  warnings?: string[];
+  report?: RunReport | undefined;
 }
 
 export class AgentLoop {
+  private readonly runReports = new Map<
+    string,
+    {
+      startedAt: number;
+      report: RunReport;
+      mutation: boolean;
+      permissionDenied: boolean;
+      lastStep: string;
+      waitMs: number;
+    }
+  >();
   private readonly estimates: (text: string) => number;
   private readonly recoveryStore = new InMemoryBlobStore();
   private readonly resilience: ResilienceLedger;
@@ -404,6 +429,30 @@ export class AgentLoop {
     this.softQuotaBypasses.set(sessionId, new Set());
     this.proactiveHandoverSteps.delete(sessionId);
     let { session, messages, taskRecord } = loaded;
+    this.runReports.set(sessionId, {
+      startedAt: this.now(),
+      mutation: false,
+      permissionDenied: false,
+      lastStep: 'Final check',
+      waitMs: 0,
+      report: {
+        durationMs: 0,
+        steps: 0,
+        ownerModel: null,
+        modelsUsed: [],
+        switches: [],
+        waits: [],
+        failedAttempts: [],
+        tokens: { input: 0, output: 0, reasoning: 0 },
+        filesChanged: [],
+        outcome: 'completed',
+        warnings: [],
+      },
+    });
+    this.options.store.updateSession(sessionId, {
+      ownerModelRef: null,
+      runReport: undefined,
+    });
     let resumedTranscript = false;
     const resumedToolResults = new Map<string, Extract<MessagePart, { type: 'tool_call' }>>();
     if (this.options.title && messages.filter((message) => message.role === 'user').length === 1) {
@@ -422,6 +471,7 @@ export class AgentLoop {
     let totalTokens = 0;
     let stepCount = 0;
     const attemptFailures: AttemptFailure[] = [];
+    let routingFailurePending = false;
     let contextSummary: string | undefined;
     const routingRequestId = newId('routing_request');
     const reflectionBudget = new ReflectionBudget(3);
@@ -538,6 +588,9 @@ export class AgentLoop {
     ];
     try {
       while (stepCount < maxSteps && totalTokens < budget) {
+        const runState = this.runReports.get(sessionId);
+        if (!runState) throw new Error('Run report state disappeared');
+        runState.waitMs = 0;
         requestGroupId = newId('group');
         parentTurnId = null;
         attemptNumber = 0;
@@ -621,6 +674,7 @@ export class AgentLoop {
           this.contextFitEstimate(inputTokens),
         );
         const estimatedInputTokens = inputTokens;
+        this.restoreOwnerEligibility(sessionId, inputTokens);
         const stepKind = plannerRepairHint
           ? 'plan'
           : pendingEditPlan
@@ -630,6 +684,10 @@ export class AgentLoop {
                 pendingEdits: taskRecord.touchedFiles.length > 0,
                 estimatedInputTokens,
               });
+        runState.lastStep =
+          taskRecord.nextStep ??
+          taskRecord.plan.find((item) => item.status === 'doing')?.text ??
+          `${stepKind} step`;
         let requestedRole =
           rolesEnabled && (stepKind === 'plan' || stepKind === 'edit')
             ? stepKind === 'plan'
@@ -679,8 +737,10 @@ export class AgentLoop {
           const quotaProvider = this.options
             .capacity()
             .providers.find((provider) => provider.id === selectedModel?.providerId);
-          const quotaSignal = evaluateProactiveQuota({
-            windows: quotaProvider?.windows ?? [],
+          let quotaSignal = evaluateProactiveQuota({
+            windows: (quotaProvider?.windows ?? []).filter(
+              (window) => window.scope === 'provider' || window.modelRef === selectedModel?.ref,
+            ),
             stepsLeft: quotaProvider?.stepsLeftToday ?? null,
             inputTokens: estimatedInputTokens,
             outputTokens: 2048,
@@ -692,6 +752,35 @@ export class AgentLoop {
             Date.parse(quotaProvider.cooldownUntil) > this.now(),
           );
           if (cooldownActive) quotaSignal.signal = 'hard';
+          if (quotaSignal.signal === 'hard') {
+            const hardWindow = quotaProvider?.windows.find(
+              (window) => window.id === quotaSignal.windowId,
+            );
+            const resetAt = quotaSignal.resetAt ?? quotaProvider?.cooldownUntil;
+            if (
+              (!cooldownActive || quotaProvider?.cooldownProvenance === 'authoritative') &&
+              (await this.paceLimit(
+                sessionId,
+                selectedModel,
+                resetAt ? Date.parse(resetAt) - this.now() : null,
+                quotaPeriodMs(hardWindow),
+                signal,
+              ))
+            ) {
+              const refreshed = this.options
+                .capacity()
+                .providers.find((provider) => provider.id === selectedModel?.providerId);
+              quotaSignal = evaluateProactiveQuota({
+                windows: (refreshed?.windows ?? []).filter(
+                  (window) => window.scope === 'provider' || window.modelRef === selectedModel?.ref,
+                ),
+                stepsLeft: refreshed?.stepsLeftToday ?? null,
+                inputTokens: estimatedInputTokens,
+                outputTokens: 2048,
+                now: this.now(),
+              });
+            }
+          }
           const pinned = Boolean(this.pinnedModelRefFor(sessionId));
           const lastHandover = this.proactiveHandoverSteps.get(sessionId) ?? -Infinity;
           const maySoftHandover = !pinned && stepCount - lastHandover >= 3;
@@ -705,7 +794,15 @@ export class AgentLoop {
               sessionId,
               minimumContext,
             );
-            if (rerouted && rerouted.ref !== previous.ref) {
+            const owner =
+              this.options.catalog.models.find(
+                (candidate) => candidate.ref === runState.report.ownerModel,
+              ) ?? previous;
+            if (
+              rerouted &&
+              rerouted.ref !== previous.ref &&
+              this.isAtLeastOwner(rerouted, owner, stepKind, estimatedInputTokens)
+            ) {
               selectedModel = rerouted;
               routeSwitchReason = 'quota';
               this.proactiveHandoverSteps.set(sessionId, stepCount);
@@ -724,6 +821,8 @@ export class AgentLoop {
                   steps_left: quotaProvider?.stepsLeftToday ?? null,
                 },
               });
+            } else {
+              this.softQuotaBypasses.get(sessionId)?.delete(previous.ref);
             }
           } else if (quotaSignal.signal === 'hard') {
             if (pinned) {
@@ -754,6 +853,7 @@ export class AgentLoop {
                   state: decision === 'denied' ? 'denied' : decision,
                 });
                 approved = decision === 'allowed_once' || decision === 'allowed_always';
+                if (decision === 'denied') runState.permissionDenied = true;
               }
               const fallback =
                 approved && pin
@@ -852,7 +952,7 @@ export class AgentLoop {
         if (!selectedModel) {
           const pin = this.pinnedModelRefFor(sessionId);
           if (pin)
-            throw new Error(
+            throw new AllCandidatesExhaustedError(
               `Pinned model ${pin} is unavailable; no eligible handover model is available (pinnedExhaustion: ${this.options.routingSettings?.().pinnedExhaustion ?? 'handover'}).`,
             );
           throw new AllCandidatesExhaustedError(this.exhaustedMessage(stepKind));
@@ -931,19 +1031,55 @@ export class AgentLoop {
             ) ?? model;
           const summarize =
             this.options.generator ?? this.createStreamingGenerator(summaryModel, sessionId);
-          const summaryResult = await summarize({
-            model: summaryModel,
-            system:
-              'Summarize the conversation for continued coding work. Preserve user requirements, completed actions, key discoveries, file names, constraints, and unresolved next steps. Return only the concise summary.',
-            messages: fittedMessages,
-            tools: [],
-            modelHints: this.options.modelHints?.(summaryModel) ?? {
-              toolProtocol: 'native',
-              editFormat: 'search_replace',
-            },
-            signal,
-            onDelta: discardDelta,
-          });
+          let summaryResult: GeneratedStep;
+          try {
+            summaryResult = await runWithStepWatchdog(
+              summarize,
+              (model, summarySignal, onProgress) => ({
+                model,
+                system:
+                  'Summarize the conversation for continued coding work. Preserve user requirements, completed actions, key discoveries, file names, constraints, and unresolved next steps. Return only the concise summary.',
+                messages: fittedMessages,
+                tools: [],
+                modelHints: this.options.modelHints?.(summaryModel) ?? {
+                  toolProtocol: 'native',
+                  editFormat: 'search_replace',
+                },
+                signal: summarySignal,
+                onProgress,
+                onDelta: () => {
+                  onProgress();
+                },
+              }),
+              summaryModel,
+              signal,
+              this.options.stepTimeoutMs ?? 120_000,
+              undefined,
+              ['ollama', 'lmstudio'].includes(summaryModel.providerId)
+                ? undefined
+                : (this.options.firstTokenTimeoutSeconds ??
+                    this.options.routingSettings?.().firstTokenTimeoutSeconds ??
+                    25) * 1000,
+            );
+          } catch (error) {
+            routingFailurePending = true;
+            const classified = classifyProviderError(errorInput(error, this.now()));
+            const failure = runState.report.failedAttempts.find(
+              (entry) => entry.kind === classified.family,
+            );
+            if (failure) failure.count++;
+            else runState.report.failedAttempts.push({ kind: classified.family, count: 1 });
+            attemptFailures.push({
+              model: summaryModel.ref,
+              provider: summaryModel.providerId,
+              kind: classified.family,
+              status: classified.status,
+              latencyMs: 0,
+              message: redactedProviderMessage(error),
+            });
+            throw error;
+          }
+          this.recordSuccessfulStep(sessionId, summaryModel, summaryResult, routeEstimate);
           contextSummary = summaryResult.text?.trim() ?? contextSummary ?? '';
           if (contextSummary) {
             system += `\n\nConversation summary from earlier context:\n${contextSummary}`;
@@ -972,6 +1108,16 @@ export class AgentLoop {
         const previousAssistant = [...messages]
           .reverse()
           .find((message) => message.role === 'assistant');
+        if (previousAssistant?.modelRef && previousAssistant.modelRef !== model.ref) {
+          runState.report.switches.push({
+            from: previousAssistant.modelRef,
+            to: model.ref,
+            reason:
+              routeSwitchReason ??
+              (model.ref === runState.report.ownerModel ? 'owner_return' : 'routing'),
+            atStep: stepCount + 1,
+          });
+        }
         if (
           previousAssistant?.modelRef &&
           previousAssistant.modelRef !== model.ref &&
@@ -1249,6 +1395,9 @@ export class AgentLoop {
         let handoffsThisStep = 0;
         let pendingPaidRelease: (() => void) | undefined;
         let pendingPaidUsageId: string | undefined;
+        let failedAttemptMs = 0;
+        const serverModels = new Map<string, Set<string>>();
+        const excludedProviders = new Set<string>();
         while (!generationComplete) {
           reasoningStartedAt = undefined;
           thinkingDurationMs = undefined;
@@ -1341,6 +1490,12 @@ export class AgentLoop {
               signal,
               this.options.stepTimeoutMs ?? 120_000,
               releaseOnce,
+              ['ollama', 'lmstudio'].includes(model.providerId)
+                ? undefined
+                : (this.options.firstTokenTimeoutSeconds ??
+                    this.options.routingSettings?.().firstTokenTimeoutSeconds ??
+                    25) * 1000,
+              Math.max(1, (this.options.routingDeadlineSeconds ?? 150) * 1000 - failedAttemptMs),
             );
             endThinking();
             stepDurationMs = Math.max(0, performance.now() - stepStartedAt);
@@ -1406,6 +1561,7 @@ export class AgentLoop {
                 timestamp: new Date().toISOString(),
               });
             generationComplete = true;
+            routingFailurePending = false;
             const attemptProviderKeyId = this.options.providerAffinityKey?.(
               model.providerId,
               sessionId,
@@ -1428,15 +1584,18 @@ export class AgentLoop {
               this.pruneReliability();
               this.options.onReliabilityState?.([...this.reliability]);
             }
+            this.recordSuccessfulStep(sessionId, model, generated, inputTokens);
             if (successRouting?.stickySessions) {
-              const providerKeyId = this.options.providerAffinityKey?.(model.providerId, sessionId);
+              const ownerModel = runState.report.ownerModel ?? model.ref;
+              const ownerProviderId = ownerModel.split('/')[0] ?? model.providerId;
+              const providerKeyId = this.options.providerAffinityKey?.(ownerProviderId, sessionId);
               this.sticky.set(
                 sessionId,
-                model.ref,
+                ownerModel,
                 this.now(),
                 successRouting.stickyTtlMinutes * 60_000,
                 {
-                  providerId: model.providerId,
+                  providerId: ownerProviderId,
                   ...(providerKeyId ? { providerKeyId } : {}),
                 },
               );
@@ -1448,13 +1607,14 @@ export class AgentLoop {
               ...this.toolRejections.filter((item) => item.modelRef !== model.ref),
             );
             this.options.onToolRejectionState?.([...this.toolRejections]);
-            this.resilience.recordSuccess('provider', model.providerId);
-            this.resilience.recordSuccess('key', model.providerId);
-            this.resilience.recordSuccess('model', model.ref);
+            this.resilience.recordSuccess('provider', model.providerId, this.now());
+            this.resilience.recordSuccess('key', model.providerId, this.now());
+            this.resilience.recordSuccess('model', model.ref, this.now());
             this.options.onResilienceState?.(this.resilience.snapshot());
             break;
           } catch (error) {
-            const classified = classifyProviderError(errorInput(error));
+            routingFailurePending = true;
+            const classified = classifyProviderError(errorInput(error, this.now()));
             const unsafeSignatureError = isInvalidSignatureOrThinkingError(error);
             this.options.telemetry?.turnUpdated(turnId, {
               status: isSignalAborted(signal)
@@ -1493,14 +1653,14 @@ export class AgentLoop {
             if (executionRole === 'editor') editorFailures += 1;
             const routing = this.options.routingSettings?.();
             const localQuotaReservation = error instanceof QuotaReservationError;
+            if (routing?.stickySessions && !runState.report.ownerModel) {
+              this.sticky.clear(sessionId);
+              this.options.onStickyState?.(this.sticky.snapshot());
+            }
             if (routing?.smartReliability && !localQuotaReservation) {
               this.reliability.push({ modelRef: model.ref, outcome: 'failure', at: this.now() });
               this.pruneReliability();
               this.options.onReliabilityState?.([...this.reliability]);
-            }
-            if (routing?.stickySessions) {
-              this.sticky.clear(sessionId);
-              this.options.onStickyState?.(this.sticky.snapshot());
             }
             if (classified.family === 'tools_unsupported' && routing?.toolRejectionMemory) {
               this.toolRejections.push({
@@ -1559,6 +1719,12 @@ export class AgentLoop {
               latencyMs: Math.max(0, performance.now() - attemptStartedAt),
               errorKind: classified.family,
             });
+            failedAttemptMs += Math.max(0, performance.now() - attemptStartedAt);
+            const failedKind = runState.report.failedAttempts.find(
+              (entry) => entry.kind === classified.family,
+            );
+            if (failedKind) failedKind.count++;
+            else runState.report.failedAttempts.push({ kind: classified.family, count: 1 });
             if (classified.family === 'request_too_large')
               this.requestTooLargeAt.set(model.ref, routeEstimate);
             if (isSignalAborted(signal)) throw error;
@@ -1585,6 +1751,44 @@ export class AgentLoop {
             const providerPolicy = this.options
               .capacity()
               .providers.find((item) => item.id === model.providerId);
+            const hardQuota = providerPolicy?.windows.find(
+              (window) =>
+                (window.scope === 'provider' || window.modelRef === model.ref) &&
+                window.remaining !== null &&
+                window.remaining < (window.metric === 'requests' ? 1 : routeEstimate + 2048),
+            );
+            if (
+              (classified.family === 'rate_limit' || localQuotaReservation) &&
+              (await this.paceLimit(
+                sessionId,
+                model,
+                classified.retryAfterMs ??
+                  (hardQuota?.resetAt ? Date.parse(hardQuota.resetAt) - this.now() : null),
+                /daily|monthly|per.day|per.month/i.test(classified.message)
+                  ? 86400_000
+                  : quotaPeriodMs(hardQuota),
+                signal,
+              ))
+            )
+              continue;
+            if (classified.family === 'server') {
+              const failures = serverModels.get(model.providerId) ?? new Set<string>();
+              failures.add(model.ref);
+              serverModels.set(model.providerId, failures);
+              if (failures.size >= 2) excludedProviders.add(model.providerId);
+            }
+            if (
+              (hardQuota?.scope === 'provider' && rateLimited) ||
+              /circuit.?breaker|breaker.{0,20}open/i.test(classified.message) ||
+              (classified.family === 'quota_exhausted' && classified.scope !== 'model')
+            )
+              excludedProviders.add(model.providerId);
+            for (const candidate of this.options.catalog.models)
+              if (excludedProviders.has(candidate.providerId)) attemptedModels.add(candidate.ref);
+            if (failedAttemptMs >= (this.options.routingDeadlineSeconds ?? 150) * 1000)
+              throw new AllCandidatesExhaustedError(
+                'Routing deadline reached after failed provider attempts.',
+              );
             const stopFallback = shouldStopFallback({
               pinnedModelRef: this.pinnedModelRefFor(sessionId),
               pinnedExhaustion: routing?.pinnedExhaustion ?? 'handover',
@@ -1604,8 +1808,21 @@ export class AgentLoop {
               ) ?? [])
                 this.sessionBadKeys.get(sessionId)?.add(`${model.providerId}:${unavailable}`);
             }
+            if (
+              classified.family === 'auth' &&
+              this.providerKeysExhausted(sessionId, model.providerId)
+            ) {
+              excludedProviders.add(model.providerId);
+              for (const candidate of this.options.catalog.models)
+                if (candidate.providerId === model.providerId) attemptedModels.add(candidate.ref);
+            }
             if (!localQuotaReservation && !badCredentialStatus && routingFailure.scope !== 'none') {
-              this.resilience.recordFailure(routingFailure, model.ref, model.providerId);
+              this.resilience.recordFailure(
+                routingFailure,
+                model.ref,
+                model.providerId,
+                this.now(),
+              );
             }
             let approvedPinnedHandover = false;
             if (
@@ -1647,6 +1864,7 @@ export class AgentLoop {
             if (
               !localQuotaReservation &&
               !badCredentialStatus &&
+              !rateLimited &&
               routingFailure.scope !== 'model' &&
               classified.family !== 'request_too_large'
             )
@@ -1654,6 +1872,7 @@ export class AgentLoop {
                 { ...routingFailure, scope: 'model' },
                 model.ref,
                 model.providerId,
+                this.now(),
               );
             this.options.onResilienceState?.(this.resilience.snapshot());
             const retryAction = classifyRetryAction({
@@ -1672,7 +1891,9 @@ export class AgentLoop {
               !badCredentialStatus &&
               retryAction === 'retry' &&
               transient &&
-              sameModelRetries < 2
+              !timedOut &&
+              !excludedProviders.has(model.providerId) &&
+              sameModelRetries < 1
             ) {
               sameModelRetries++;
               const retryDelayMsValue = retryDelayMs(sameModelRetries - 1, 300, 3_000);
@@ -1694,6 +1915,7 @@ export class AgentLoop {
                 },
               });
               await (this.options.waitForRetry ?? delayForRetry)(retryDelayMsValue, signal);
+              failedAttemptMs += retryDelayMsValue;
               continue;
             }
             const pendingBoundaryWork = (this.options.store.load(sessionId)?.messages ?? []).some(
@@ -1739,7 +1961,23 @@ export class AgentLoop {
                 model.ref,
                 sessionId,
               );
-              if (planner && planner.ref !== model.ref) {
+              if (
+                planner &&
+                planner.ref !== model.ref &&
+                !excludedProviders.has(planner.providerId) &&
+                !attemptedModels.has(planner.ref)
+              ) {
+                if (handoffsThisStep >= (this.options.maxHandoffsPerStep ?? 8))
+                  throw new AllCandidatesExhaustedError(
+                    'Routing handoff cap reached during replanning.',
+                  );
+                runState.report.switches.push({
+                  from: model.ref,
+                  to: planner.ref,
+                  reason: 'replan',
+                  atStep: stepCount + 1,
+                });
+                if (!localQuotaReservation) handoffsThisStep++;
                 attemptedModels.add(planner.ref);
                 executionRole = 'planner';
                 model = planner;
@@ -1749,11 +1987,10 @@ export class AgentLoop {
                 continue;
               }
             }
-            const maxHandoffs = this.options.maxHandoffsPerStep ?? 4;
+            const maxHandoffs = this.options.maxHandoffsPerStep ?? 8;
             if (handoffsThisStep >= maxHandoffs)
-              throw new Error(
+              throw new AllCandidatesExhaustedError(
                 `Routing stopped after ${String(handoffsThisStep)} handoffs in one ${stepKind} step. ${this.routingSummary(stepKind, routeEstimate, attemptedModels)}`,
-                { cause: error },
               );
             if (toolsUnsupported)
               toolCapabilityFailures.push(formatToolCapabilityFailure(model, error));
@@ -1764,6 +2001,7 @@ export class AgentLoop {
               sessionId,
               approvedPinnedHandover,
               minimumContext,
+              excludedProviders,
             );
             if (!fallback) {
               const currentPin = this.pinnedModelRefFor(sessionId);
@@ -1816,6 +2054,12 @@ export class AgentLoop {
               });
             }
             attemptedModels.add(fallback.ref);
+            runState.report.switches.push({
+              from: model.ref,
+              to: fallback.ref,
+              reason: localQuotaReservation ? 'quota' : classified.family,
+              atStep: stepCount + 1,
+            });
             // A local reservation refusal never reached the provider; it must not use up the
             // switch budget that protects against slow or failing upstream requests.
             if (!localQuotaReservation) handoffsThisStep++;
@@ -2217,6 +2461,10 @@ export class AgentLoop {
             timestamp: new Date().toISOString(),
           });
           try {
+            const beforeCommand =
+              call.name === 'run_command'
+                ? await snapshotRunFiles(this.options.workspace, this.options.dataDir)
+                : undefined;
             const result = await raceAbort(
               Promise.resolve(definition.execute(parsed.value, { signal, task: taskRecord })),
               signal,
@@ -2249,8 +2497,49 @@ export class AgentLoop {
                 ? [value]
                 : [];
             const purpose = `${call.name} via Ferry tool`;
+            const commandSucceeded =
+              value && typeof value === 'object' && 'exitCode' in value && value.exitCode === 0;
+            const commandChanges =
+              beforeCommand && commandSucceeded
+                ? changedRunFiles(
+                    beforeCommand,
+                    await snapshotRunFiles(this.options.workspace, this.options.dataDir),
+                  )
+                : [];
+            const fileChanges: RunReport['filesChanged'] = [
+              ...commandChanges,
+              ...changes.map((change) => ({
+                path: change.path,
+                sizeBytes:
+                  change.after === null ? 0 : new TextEncoder().encode(change.after).length,
+                status:
+                  change.before === null
+                    ? ('added' as const)
+                    : change.after === null
+                      ? ('deleted' as const)
+                      : ('modified' as const),
+              })),
+            ];
+            if (fileChanges.length || (definition.mutates && call.name !== 'run_command'))
+              runState.mutation = true;
+            for (const change of fileChanges) {
+              const existing = runState.report.filesChanged.findIndex(
+                (file) => file.path === change.path,
+              );
+              if (existing < 0) runState.report.filesChanged.push(change);
+              else
+                runState.report.filesChanged[existing] = {
+                  ...change,
+                  status:
+                    runState.report.filesChanged[existing]?.status === 'added' &&
+                    change.status === 'modified'
+                      ? 'added'
+                      : change.status,
+                };
+              taskRecord = touchFile(taskRecord, change.path, purpose);
+            }
             for (const change of changes) taskRecord = touchFile(taskRecord, change.path, purpose);
-            if (changes.length) this.persistTask(taskRecord);
+            if (fileChanges.length) this.persistTask(taskRecord);
             toolPart.status = 'succeeded';
             toolPart.output = output;
             toolPart.changes = changes.map((change) => ({
@@ -2288,6 +2577,7 @@ export class AgentLoop {
               });
           } catch (error) {
             if (isSignalAborted(signal)) throw error;
+            if (error instanceof ToolPermissionDeniedError) runState.permissionDenied = true;
             toolPart.status = 'failed';
             toolPart.durationMs = Date.now() - start;
             toolPart.output = {
@@ -2367,6 +2657,33 @@ export class AgentLoop {
         : pinnedPolicyFailure
           ? error.message
           : formatAttemptSummary(attemptFailures, providerDetail);
+      const runState = this.runReports.get(sessionId);
+      const permissionDenied =
+        runState?.permissionDenied === true ||
+        error instanceof ToolPermissionDeniedError ||
+        (pinnedPolicyFailure &&
+          error instanceof Error &&
+          /handover was declined/i.test(error.message));
+      const providerFailure =
+        poolExhausted || (routingFailurePending && attemptFailures.length > 0);
+      if (runState?.mutation && providerFailure && !permissionDenied) {
+        const reason =
+          attemptFailures.length &&
+          attemptFailures.every((attempt) =>
+            ['rate_limit', 'quota_exhausted'].includes(attempt.kind),
+          )
+            ? 'all available models were busy (rate limits)'
+            : message;
+        const warning = `Final check skipped (${taskRecord.nextStep ?? runState.lastStep}): ${reason}`;
+        runState.report.warnings.push(warning);
+        this.addPart(sessionId, {
+          type: 'text',
+          id: PartIdSchema.parse(newId('part')),
+          text: `Files changed:\n${runState.report.filesChanged.map((file) => `${file.path}: ${String(file.sizeBytes)} bytes (${file.status})`).join('\n') || taskRecord.touchedFiles.map((file) => file.path).join('\n')}\n\n${warning}`,
+        });
+        this.options.emit({ type: 'toast', tone: 'warning', message: warning });
+        return this.finish(sessionId, taskRecord, stepCount, totalTokens, 'completed');
+      }
       this.emitStructuredEvent(sessionId, {
         id: newId('event'),
         type: 'error',
@@ -2405,10 +2722,14 @@ export class AgentLoop {
       this.options.emit({ type: 'toast', tone: 'error', message });
       const failedSession = this.options.store.updateSession(sessionId, {
         status: 'error',
+        runPhase: undefined,
+        inFlight: false,
+        runReport: this.persistRunReport(sessionId, stepCount, 'error'),
       });
       this.options.emit({ type: 'session.updated', session: failedSession });
       throw error;
     } finally {
+      this.runReports.delete(sessionId);
       this.sessionBadKeys.delete(sessionId);
       this.pinnedHandoverModels.delete(sessionId);
       outerSignal?.removeEventListener('abort', relayAbort);
@@ -2458,6 +2779,12 @@ export class AgentLoop {
         ? this.options.profile.roles.plannerModelRef
         : this.options.profile.roles.editorModelRef;
     const baseline = this.selectModel(step, inputTokens, previous, sessionId, minimumContext);
+    if (
+      !configured &&
+      baseline?.ref === this.runReports.get(sessionId)?.report.ownerModel &&
+      this.options.routingSettings?.().stickySessions !== false
+    )
+      return baseline;
     const candidates = scoreModels({
       models: this.options.catalog.models,
       capacity: this.options.capacity(),
@@ -2522,19 +2849,29 @@ export class AgentLoop {
       !locked?.has(model.ref) &&
       !(routing?.carefulModelRetirement && this.retiredModels.has(model.ref)) &&
       !withinFailedSize(model);
+    const ownerRef = this.runReports.get(sessionId)?.report.ownerModel;
+    const ownerFirst = (models: ModelInfo[]) =>
+      routing?.stickySessions === false
+        ? models
+        : [
+            ...models.filter((model) => model.ref === ownerRef),
+            ...models.filter((model) => model.ref !== ownerRef),
+          ];
     const resolved = this.options.resolveCandidates?.(this.options.profile, step, inputTokens);
     if (resolved)
       return this.selectResilient(
-        preferStickyAffinity(
-          resolved.filter((model) => eligible(model) && model.contextWindow >= minimumContext),
-          stickyRoute,
-          this.options.profile.affinityMode,
-          (providerId) => this.options.providerAffinityKey?.(providerId, sessionId) ?? undefined,
+        ownerFirst(
+          preferStickyAffinity(
+            resolved.filter((model) => eligible(model) && model.contextWindow >= minimumContext),
+            stickyRoute,
+            this.options.profile.affinityMode,
+            (providerId) => this.options.providerAffinityKey?.(providerId, sessionId) ?? undefined,
+          ),
         ),
       );
     const candidates = scoreModels({
       models: this.options.catalog.models,
-      capacity: this.options.capacity(),
+      capacity: this.pacingCapacity(),
       profile: this.options.profile,
       step,
       estimate: {
@@ -2551,19 +2888,21 @@ export class AgentLoop {
       previousModelRef: stickyRef ?? previous,
     });
     const selected = this.selectResilient(
-      candidates.flatMap((item) => {
-        const model = this.options.catalog.models.find((candidate) => candidate.ref === item.ref);
-        if (
-          (model && this.providerKeysExhausted(sessionId, model.providerId, item.ref)) ||
-          softBypassed?.has(item.ref) ||
-          dispatchExcluded.has(item.ref) ||
-          locked?.has(item.ref) ||
-          (routing?.carefulModelRetirement && this.retiredModels.has(item.ref)) ||
-          (this.requestTooLargeAt.get(item.ref) ?? Infinity) <= inputTokens
-        )
-          return [];
-        return model ? [model] : [];
-      }),
+      ownerFirst(
+        candidates.flatMap((item) => {
+          const model = this.options.catalog.models.find((candidate) => candidate.ref === item.ref);
+          if (
+            (model && this.providerKeysExhausted(sessionId, model.providerId, item.ref)) ||
+            softBypassed?.has(item.ref) ||
+            dispatchExcluded.has(item.ref) ||
+            locked?.has(item.ref) ||
+            (routing?.carefulModelRetirement && this.retiredModels.has(item.ref)) ||
+            (this.requestTooLargeAt.get(item.ref) ?? Infinity) <= inputTokens
+          )
+            return [];
+          return model ? [model] : [];
+        }),
+      ),
     );
     return selected;
   }
@@ -2575,6 +2914,7 @@ export class AgentLoop {
     sessionId: string,
     allowPinnedHandover = false,
     minimumContext = 0,
+    excludedProviders: ReadonlySet<string> = new Set(),
   ): ModelInfo | undefined {
     // Session dependencies rotate through provider keys before this model fallback path is reached.
     const pinnedExhaustion = this.options.routingSettings?.().pinnedExhaustion ?? 'handover';
@@ -2591,6 +2931,7 @@ export class AgentLoop {
       return this.selectResilient(
         candidates.filter(
           (candidate) =>
+            !excludedProviders.has(candidate.providerId) &&
             !this.providerKeysExhausted(sessionId, candidate.providerId, candidate.ref) &&
             !attemptedRefs.has(candidate.ref) &&
             candidate.contextWindow >= minimumContext &&
@@ -2617,6 +2958,7 @@ export class AgentLoop {
     });
     const remaining = ranked.flatMap((candidate) => {
       if (
+        excludedProviders.has(candidate.ref.split('/')[0] ?? '') ||
         this.providerKeysExhausted(sessionId, candidate.ref.split('/')[0] ?? '', candidate.ref) ||
         attemptedRefs.has(candidate.ref) ||
         locked?.has(candidate.ref) ||
@@ -2645,9 +2987,9 @@ export class AgentLoop {
     const ranked = eligibleModels.map((model, index) => {
       const providerId = model.providerId as string;
       const active = [
-        this.resilience.active('model', model.ref),
-        this.resilience.active('key', providerId),
-        this.resilience.active('provider', providerId),
+        this.resilience.active('model', model.ref, now),
+        this.resilience.active('key', providerId, now),
+        this.resilience.active('provider', providerId, now),
       ].filter((entry): entry is ResilienceEntry => entry !== undefined);
       return {
         model,
@@ -2657,7 +2999,10 @@ export class AgentLoop {
       };
     });
     const availableRefs = new Set(
-      this.resilience.availableModelRefs(ranked.map(({ model }) => model.ref)),
+      this.resilience.availableModelRefs(
+        ranked.map(({ model }) => model.ref),
+        now,
+      ),
     );
     const unlocked = ranked.filter((entry) => availableRefs.has(entry.model.ref));
     const ready = unlocked.find((entry) => entry.reset === 0 && !entry.deferred);
@@ -2712,10 +3057,12 @@ export class AgentLoop {
         tone: 'warning',
         message: `FERRY_RUN_LIMIT:${steps >= (this.options.maxSteps ?? 40) ? 'max_steps' : 'token_budget'}:${String(steps)}`,
       });
+    const report = this.persistRunReport(sessionId, steps, status);
     const session = this.options.store.updateSession(sessionId, {
       status: 'idle',
       runPhase: undefined,
       inFlight: false,
+      runReport: report,
     });
     this.emitStructuredEvent(sessionId, {
       id: newId('event'),
@@ -2725,7 +3072,193 @@ export class AgentLoop {
       timestamp: new Date().toISOString(),
     });
     this.options.emit({ type: 'session.updated', session });
-    return { session, taskRecord, steps, tokens, status };
+    return { session, taskRecord, steps, tokens, status, report, warnings: report?.warnings ?? [] };
+  }
+
+  private recordSuccessfulStep(
+    sessionId: string,
+    model: ModelInfo,
+    generated: GeneratedStep,
+    inputTokens: number,
+  ): void {
+    const report = this.runReports.get(sessionId)?.report;
+    if (!report) return;
+    report.ownerModel ??= model.ref;
+    this.options.store.updateSession(sessionId, { ownerModelRef: report.ownerModel });
+    const used = report.modelsUsed.find((entry) => entry.model === model.ref);
+    if (used) used.steps++;
+    else report.modelsUsed.push({ model: model.ref, steps: 1 });
+    report.tokens.input += generated.inputTokens ?? inputTokens;
+    report.tokens.output += generated.outputTokens ?? this.estimates(generated.text ?? '');
+    report.tokens.reasoning += generated.reasoningTokens ?? 0;
+  }
+
+  private persistRunReport(
+    sessionId: string,
+    steps: number,
+    outcome: RunReport['outcome'],
+  ): RunReport | undefined {
+    const state = this.runReports.get(sessionId);
+    if (!state) return undefined;
+    const report: RunReport = {
+      ...state.report,
+      durationMs: Math.max(0, this.now() - state.startedAt),
+      steps,
+      outcome:
+        outcome === 'completed' && state.report.warnings.length
+          ? 'completed_with_warnings'
+          : outcome,
+    };
+    const lastMessage = this.options.store
+      .load(sessionId)
+      ?.messages.findLast((message) => message.role === 'assistant');
+    if (lastMessage) {
+      const message = { ...lastMessage, runReport: report };
+      this.options.store.replaceMessage(message);
+      this.options.emit({ type: 'session.message', message });
+    }
+    this.options.emit({
+      type: 'run.completed',
+      sessionId: sessionId as Session['id'],
+      outcome: report.outcome,
+      warnings: report.warnings,
+      report,
+    });
+    return report;
+  }
+
+  private async paceLimit(
+    sessionId: string,
+    model: ModelInfo,
+    delayMs: number | null,
+    durationMs: number | null,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const settings = this.options.routingSettings?.();
+    const state = this.runReports.get(sessionId);
+    const cap = (settings?.paceMaxWaitSeconds ?? 30) * 1000;
+    // A declared long window never becomes a short limit just because it resets soon.
+    if (
+      !state ||
+      settings?.paceShortLimits === false ||
+      delayMs === null ||
+      !Number.isFinite(delayMs) ||
+      delayMs <= 0 ||
+      delayMs > 120_000 ||
+      (durationMs !== null && durationMs > 120_000) ||
+      state.waitMs + delayMs > cap
+    )
+      return false;
+    state.waitMs += delayMs;
+    const reason = durationMs === null ? 'short rate limit' : 'per-minute limit';
+    const provider =
+      this.options.capacity().providers.find((entry) => entry.id === model.providerId)?.name ??
+      model.providerId;
+    this.emitStructuredEvent(sessionId, {
+      type: 'status',
+      id: newId('event'),
+      status: 'waiting',
+      waitUntil: new Date(this.now() + delayMs).toISOString(),
+      message: `Waiting ${String(Math.ceil(delayMs / 1000))}s for ${provider}'s ${reason}`,
+      timestamp: new Date(this.now()).toISOString(),
+    });
+    const start = this.now();
+    try {
+      await (this.options.waitForRetry ?? delayForRetry)(delayMs, signal);
+    } finally {
+      state.report.waits.push({
+        provider: model.providerId,
+        seconds: Math.max(0, this.now() - start) / 1000,
+        reason,
+      });
+    }
+    return true;
+  }
+
+  /** Temporarily keep paceable models in the eligible set so the dispatch branch can wait. */
+  private pacingCapacity(): CapacityView {
+    const capacity = this.options.capacity();
+    const settings = this.options.routingSettings?.();
+    if (settings?.paceShortLimits === false) return capacity;
+    const cap = (settings?.paceMaxWaitSeconds ?? 30) * 1000;
+    const paceable = new Set<string>();
+    const providers = capacity.providers.map((provider) => {
+      const windows = provider.windows.filter((window) => {
+        const delay = Date.parse(window.resetAt ?? '') - this.now();
+        if (window.durationMs && window.durationMs <= 120_000 && delay > 0 && delay <= cap) {
+          paceable.add(window.modelRef ?? provider.id);
+          return false;
+        }
+        return true;
+      });
+      return { ...provider, windows };
+    });
+    const tokensPerMinuteRemaining = Object.fromEntries(
+      Object.entries(capacity.tokensPerMinuteRemaining ?? {}).filter(
+        ([key]) => !paceable.has(key) && !paceable.has(key.split('/')[0] ?? ''),
+      ),
+    );
+    return { ...capacity, providers, tokensPerMinuteRemaining };
+  }
+
+  private isAtLeastOwner(
+    candidate: ModelInfo,
+    owner: ModelInfo,
+    step: import('@ferry/shared').StepKind,
+    inputTokens: number,
+  ): boolean {
+    if (Number(candidate.tier.slice(1)) < Number(owner.tier.slice(1))) return false;
+    const scores = scoreModels({
+      models: [owner, candidate],
+      profile: this.options.profile,
+      step,
+      capacity: this.pacingCapacity(),
+      estimate: { inputTokens, requiresTools: true },
+      ...(this.options.routingSettings ? { routing: this.options.routingSettings() } : {}),
+    });
+    const ownerScore = scores.find((entry) => entry.ref === owner.ref)?.score;
+    const candidateScore = scores.find((entry) => entry.ref === candidate.ref)?.score;
+    return ownerScore !== undefined && candidateScore !== undefined
+      ? candidateScore >= ownerScore
+      : (candidate.quality ?? 0.35) >= (owner.quality ?? 0.35);
+  }
+
+  private restoreOwnerEligibility(sessionId: string, inputTokens: number): void {
+    const capacity = this.options.capacity();
+    const signalFor = (model: ModelInfo) => {
+      const provider = capacity.providers.find((entry) => entry.id === model.providerId);
+      return evaluateProactiveQuota({
+        windows: (provider?.windows ?? []).filter(
+          (window) => window.scope === 'provider' || window.modelRef === model.ref,
+        ),
+        stepsLeft: provider?.stepsLeftToday ?? null,
+        inputTokens,
+        outputTokens: 2048,
+        now: this.now(),
+      });
+    };
+    const sourcePin = this.options.getPinnedModelRef?.() ?? this.options.pinnedModelRef;
+    if (sourcePin && this.pinnedHandoverModels.has(sessionId)) {
+      const original = this.options.catalog.models.find((model) => model.ref === sourcePin);
+      const provider = capacity.providers.find((entry) => entry.id === original?.providerId);
+      if (
+        original &&
+        provider &&
+        !this.providerKeysExhausted(sessionId, original.providerId) &&
+        !['down', 'auth_invalid', 'account_disabled'].includes(provider.health) &&
+        (!provider.cooldownUntil || Date.parse(provider.cooldownUntil) <= this.now()) &&
+        signalFor(original).signal !== 'hard' &&
+        !this.resilience.active('model', original.ref, this.now()) &&
+        !this.resilience.active('provider', original.providerId, this.now()) &&
+        !this.resilience.active('key', original.providerId, this.now())
+      )
+        this.pinnedHandoverModels.delete(sessionId);
+    }
+    for (const ref of this.softQuotaBypasses.get(sessionId) ?? []) {
+      const candidate = this.options.catalog.models.find((model) => model.ref === ref);
+      if (candidate && signalFor(candidate).signal === 'none')
+        this.softQuotaBypasses.get(sessionId)?.delete(ref);
+    }
   }
 
   private contextFitEstimate(inputTokens: number): number {
@@ -2918,7 +3451,8 @@ export function createStepGenerator(
           thinkingDurationMs = Math.max(0, performance.now() - reasoningStartedAt);
       };
       for await (const part of result.stream) {
-        onProgress?.();
+        // The SDK emits start markers locally before the provider answers.
+        if (part.type !== 'start' && part.type !== 'start-step') onProgress?.();
         if (part.type === 'error') throw part.error;
         const streamPart = part as unknown as {
           type: string;
@@ -3508,6 +4042,8 @@ async function runWithStepWatchdog(
   parentSignal: AbortSignal,
   timeoutMs: number,
   onAbort: () => void = () => undefined,
+  firstTokenTimeoutMs?: number,
+  maxAttemptMs?: number,
 ): Promise<GeneratedStep> {
   if (parentSignal.aborted)
     throw parentSignal.reason instanceof Error
@@ -3515,6 +4051,8 @@ async function runWithStepWatchdog(
       : new DOMException('Aborted', 'AbortError');
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let firstTokenTimer: ReturnType<typeof setTimeout> | undefined;
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let rejectTimeout!: (error: Error) => void;
   const timeout = new Promise<never>((_resolve, reject) => {
     rejectTimeout = reject;
@@ -3530,6 +4068,12 @@ async function runWithStepWatchdog(
   };
   parentSignal.addEventListener('abort', abort, { once: true });
   const resetWatchdog = () => {
+    if (firstTokenTimer) clearTimeout(firstTokenTimer);
+    firstTokenTimer = undefined;
+    // Productive streaming is not failed-attempt wall time. Once data arrives,
+    // retain the progress watchdog and apply the routing budget if this attempt fails.
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+    deadlineTimer = undefined;
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       const error = new StepWatchdogError(timeoutMs);
@@ -3539,6 +4083,20 @@ async function runWithStepWatchdog(
     }, timeoutMs);
   };
   resetWatchdog();
+  if (firstTokenTimeoutMs !== undefined)
+    firstTokenTimer = setTimeout(() => {
+      const error = new Error(`First token timeout after ${String(firstTokenTimeoutMs)}ms`);
+      controller.abort(error);
+      onAbort();
+      rejectTimeout(error);
+    }, firstTokenTimeoutMs);
+  if (maxAttemptMs !== undefined)
+    deadlineTimer = setTimeout(() => {
+      const error = new Error('Routing attempt timeout: failed-attempt deadline reached');
+      controller.abort(error);
+      onAbort();
+      rejectTimeout(error);
+    }, maxAttemptMs);
   try {
     return await Promise.race([
       generator(makeRequest(model, controller.signal, resetWatchdog)),
@@ -3546,11 +4104,13 @@ async function runWithStepWatchdog(
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+    if (firstTokenTimer) clearTimeout(firstTokenTimer);
+    if (deadlineTimer) clearTimeout(deadlineTimer);
     parentSignal.removeEventListener('abort', abort);
   }
 }
 
-function errorInput(error: unknown): Parameters<typeof classifyProviderError>[0] {
+function errorInput(error: unknown, now = Date.now()): Parameters<typeof classifyProviderError>[0] {
   if (!error || typeof error !== 'object') return { message: String(error) };
   const outer = error as Record<string, unknown>;
   const candidate = (
@@ -3561,7 +4121,11 @@ function errorInput(error: unknown): Parameters<typeof classifyProviderError>[0]
     response?: { status?: unknown; headers?: Headers };
     data?: { error?: { code?: unknown; type?: unknown; message?: unknown } };
   };
-  const headers = candidate.response?.headers;
+  const headers = candidate.response?.headers ?? candidate.responseHeaders ?? candidate.headers;
+  const resetDelay =
+    headers instanceof Headers || (headers && typeof headers === 'object')
+      ? retryDelayFromHeaders(headers as Headers | Record<string, string | undefined>, now)
+      : null;
   return {
     status: candidate.status,
     statusCode: candidate.statusCode ?? candidate.response?.status,
@@ -3569,24 +4133,29 @@ function errorInput(error: unknown): Parameters<typeof classifyProviderError>[0]
     type: candidate.type ?? candidate.data?.error?.type,
     message: candidate.data?.error?.message ?? candidate.message,
     responseBody: candidate.data ? JSON.stringify(candidate.data) : candidate.responseBody,
-    ...(headers ? { headers } : {}),
-    retryAfter: candidate.retryAfter,
+    ...(headers instanceof Headers || (headers && typeof headers === 'object')
+      ? { headers: headers as Headers | Record<string, string | undefined> }
+      : {}),
+    retryAfter: candidate.retryAfter ?? (resetDelay === null ? undefined : resetDelay / 1000),
   };
 }
 
 async function delayForRetry(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, Math.max(0, ms));
-    signal.addEventListener(
-      'abort',
+    const timer = setTimeout(
       () => {
-        clearTimeout(timer);
-        const reason: unknown = signal.reason;
-        reject(reason instanceof Error ? reason : new Error('Aborted', { cause: reason }));
+        signal.removeEventListener('abort', abort);
+        resolve();
       },
-      { once: true },
+      Math.max(0, ms),
     );
+    const abort = () => {
+      clearTimeout(timer);
+      const reason: unknown = signal.reason;
+      reject(reason instanceof Error ? reason : new Error('Aborted', { cause: reason }));
+    };
+    signal.addEventListener('abort', abort, { once: true });
   });
 }
 

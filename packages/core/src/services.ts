@@ -1,6 +1,7 @@
 import { mkdir, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { createLogger, getDataPaths, type DataPaths } from '@ferry/config';
+import { createLogger, getDataPaths, DEFAULT_SETTINGS, type DataPaths } from '@ferry/config';
+import { BUILTIN_PROFILES } from '@ferry/router';
 import { KeyringSecretStore, MemorySecretStore, type SecretStore } from '@ferry/secrets';
 import { loadCatalog, type Catalog } from '@ferry/catalog';
 import { QuotaEngine } from '@ferry/quota';
@@ -10,6 +11,10 @@ import {
   newId,
   redactKnownSecretText,
   resolveCaptureContent,
+  SettingsSchema,
+  ProfileSchema,
+  isModelFreeForPlan,
+  ProviderIdSchema,
 } from '@ferry/shared';
 import { canonicalizePath } from '@ferry/shared/node-paths';
 import {
@@ -409,10 +414,98 @@ export async function createServices({
     });
   }
   const { cooldowns, quotaObservations, handoffs } = adapter;
+  const quotaProfile = () => {
+    const current = SettingsSchema.safeParse(adapter.settings.get('global'));
+    const activeId = current.success
+      ? current.data.activeProfileId
+      : DEFAULT_SETTINGS.activeProfileId;
+    const saved = adapter.settings.get('profiles');
+    const custom = Array.isArray(saved)
+      ? saved.flatMap((value) => {
+          const parsed = ProfileSchema.safeParse(value);
+          return parsed.success ? [parsed.data] : [];
+        })
+      : [];
+    return {
+      profile: [...custom, ...BUILTIN_PROFILES].find((item) => item.id === activeId),
+      routing: current.success ? current.data.routing : DEFAULT_SETTINGS.routing,
+    };
+  };
   const quota = new QuotaEngine({
     catalog,
-    eligibleProviders: () =>
-      catalog.providers.flatMap(({ provider, key_required }) => {
+    eligibleModelRefs: () => {
+      const { profile, routing } = quotaProfile();
+      return catalog.models
+        .filter((model) => {
+          if (!profile) return true;
+          if (!Object.values(profile.tierByStep).some((tiers) => tiers.includes(model.tier)))
+            return false;
+          if (
+            Array.isArray(profile.allowedProviders) &&
+            !profile.allowedProviders.includes(model.providerId)
+          )
+            return false;
+          if (profile.paidAllowed && profile.allowedProviders !== 'all_free') return true;
+          const provider = catalog.providers.find((entry) => entry.provider === model.providerId);
+          const saved = providers.get(model.providerId);
+          return provider
+            ? isModelFreeForPlan(
+                {
+                  id: model.providerId,
+                  tag: provider.tag,
+                  billingEnabled: saved?.billingEnabled,
+                  freeTierUnsupported: saved?.freeTierUnsupported,
+                  freePlan: provider.free_plan
+                    ? {
+                        sourceUrl: provider.free_plan.source_url,
+                        models: provider.free_plan.models,
+                        excludedModels: provider.free_plan.excluded_models,
+                      }
+                    : undefined,
+                },
+                model,
+                routing.trialOptInProviders,
+              )
+            : false;
+        })
+        .map((model) => model.ref);
+    },
+    eligibleProviders: () => {
+      const { profile, routing } = quotaProfile();
+      return catalog.providers.flatMap(({ provider, key_required, tag, free_plan }) => {
+        if (
+          profile &&
+          Array.isArray(profile.allowedProviders) &&
+          !profile.allowedProviders.includes(provider as import('@ferry/shared').ProviderId)
+        )
+          return [];
+        const savedPlan = providers.get(provider);
+        if (
+          profile &&
+          (!profile.paidAllowed || profile.allowedProviders === 'all_free') &&
+          !catalog.models.some(
+            (model) =>
+              model.providerId === provider &&
+              isModelFreeForPlan(
+                {
+                  id: ProviderIdSchema.parse(provider),
+                  tag,
+                  freePlan: free_plan
+                    ? {
+                        sourceUrl: free_plan.source_url,
+                        models: free_plan.models,
+                        excludedModels: free_plan.excluded_models,
+                      }
+                    : undefined,
+                  billingEnabled: savedPlan?.billingEnabled,
+                  freeTierUnsupported: savedPlan?.freeTierUnsupported,
+                },
+                model,
+                routing.trialOptInProviders,
+              ),
+          )
+        )
+          return [];
         const entries = providerKeyEntries.list(provider);
         const hasKey = entries.length
           ? entries.some(
@@ -436,7 +529,8 @@ export async function createServices({
         return enabled && !saved?.freeTierUnsupported && (hasKey || key_required === false)
           ? [provider]
           : [];
-      }),
+      });
+    },
     requestRepository: adapter.requests,
     observationRepository: quotaObservations,
     now: () => (clock ?? { now: () => new Date() }).now(),

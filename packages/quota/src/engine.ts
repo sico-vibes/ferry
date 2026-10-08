@@ -94,6 +94,7 @@ export interface QuotaEngineOptions {
   catalog?: Pick<Catalog, 'providers' | 'models'>;
   /** Provider ids that are enabled and have credentials, or are enabled keyless providers. */
   eligibleProviders?: () => readonly string[];
+  eligibleModelRefs?: () => readonly string[];
   requestRepository?: RequestRepository;
   observationRepository?: QuotaObservationRepository;
   now?: () => Date;
@@ -175,6 +176,7 @@ export class QuotaEngine {
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   private readonly pollingTimers = new Set<ReturnType<typeof setTimeout>>();
   private emitTimer: ReturnType<typeof setTimeout> | undefined;
+  private lastMeaningfulSnapshot: string | undefined;
   private readonly providers: ProviderLimits[];
   private readonly models: Catalog['models'];
   private readonly lowThreshold: number;
@@ -467,8 +469,37 @@ export class QuotaEngine {
           ? record.modelRef === selectedModelRef
           : matchesQuotaModel(providerId, record.modelRef, window.model ?? '')),
     );
+    const modelRef =
+      window.scope === 'model'
+        ? (selectedModelRef ??
+          this.models.find((model) => matchesQuotaModel(providerId, model.ref, window.model ?? ''))
+            ?.ref ??
+          null)
+        : null;
+    const observation =
+      this.snapshots.get(this.key(providerId, window.id, modelRef ?? undefined)) ??
+      this.snapshots.get(this.key(providerId, window.id));
+    const resetAt = Date.parse(observation?.resetAt ?? '');
+    const shortReset =
+      window.kind === 'rolling' &&
+      (window.length ?? 60) <= 120 &&
+      observation !== undefined &&
+      ['header', 'endpoint'].includes(observation.source) &&
+      resetAt <= now.getTime() &&
+      now.getTime() - resetAt < (window.length ?? 60) * 1000;
     const start = windowStart(now, spec, matching);
-    const end = nextReset(now, spec, matching);
+    // A rolling request frees its slot exactly one period after it was sent.
+    if (spec.kind === 'rolling' || spec.kind === 'dynamic_5h') start.setTime(start.getTime() + 1);
+    // An authoritative provider reset wins over the catalog's approximate rolling
+    // ledger. Keeping pre-reset usage would refuse the lease immediately after pacing.
+    if (shortReset) start.setTime(Math.max(start.getTime(), resetAt));
+    const end = nextReset(
+      now,
+      spec,
+      shortReset
+        ? matching.filter((record) => Date.parse(record.occurredAt) >= start.getTime())
+        : matching,
+    );
     const amounts = usageIn({ start, end: new Date(now.getTime() + 1) }, matching);
     const inWindow = matching.filter((record) => {
       const timestamp = Date.parse(record.occurredAt);
@@ -488,16 +519,6 @@ export class QuotaEngine {
           : window.metric === 'usd'
             ? pricedUsd
             : pricedCredits;
-    const modelRef =
-      window.scope === 'model'
-        ? (selectedModelRef ??
-          this.models.find((model) => matchesQuotaModel(providerId, model.ref, window.model ?? ''))
-            ?.ref ??
-          null)
-        : null;
-    const observation =
-      this.snapshots.get(this.key(providerId, window.id, modelRef ?? undefined)) ??
-      this.snapshots.get(this.key(providerId, window.id));
     const validSnapshot =
       observation &&
       (!observation.resetAt || Date.parse(observation.resetAt) > now.getTime()) &&
@@ -522,7 +543,11 @@ export class QuotaEngine {
                 ((now.getTime() - learned.observedAt) / (30 * 86400000)),
           )
         : undefined;
-    const limit = validSnapshot?.limit ?? learnedLimit ?? window.limit;
+    const limit =
+      validSnapshot?.limit ??
+      (shortReset ? observation.limit : undefined) ??
+      learnedLimit ??
+      window.limit;
     const authoritative =
       validSnapshot?.remaining ??
       (validSnapshot?.limit != null && validSnapshot.value != null
@@ -746,10 +771,34 @@ export class QuotaEngine {
     if (record.headers?.offPeak === true) cost *= multipliers?.offPeak ?? 1;
     return cost;
   }
-  private stepsFor(providerId: string, modelRef?: string): number | null {
-    const windows = this.getWindows(providerId).filter(
+  private stepsFor(
+    providerId: string,
+    modelRef?: string,
+    eligibleRefs?: readonly string[],
+    windowSnapshot?: readonly QuotaWindow[],
+  ): number | null {
+    const windows = (windowSnapshot ?? this.getWindows(providerId)).filter(
       (window) => window.scope === 'provider' || !modelRef || window.modelRef === modelRef,
     );
+    if (!modelRef && windows.some((window) => window.scope === 'model')) {
+      const models = this.models.filter(
+        (model) =>
+          model.providerId === providerId && (!eligibleRefs || eligibleRefs.includes(model.ref)),
+      );
+      if (models.length) {
+        // A provider can still serve another independent model pool. Unknown or
+        // unbounded pools must not be advertised as exhausted because one model is.
+        // Profile eligibility is supplied once by capacitySummary; request routing
+        // can use a different session profile and must not rescan settings per model.
+        let best = 0;
+        for (const model of models) {
+          const steps = this.stepsFor(providerId, model.ref, undefined, windows);
+          if (steps === null) return null;
+          best = Math.max(best, steps);
+        }
+        return best;
+      }
+    }
     const model = modelRef ?? this.models.find((entry) => entry.providerId === providerId)?.ref;
     const bounded = windows.some((window) => {
       if (window.limit === null) return false;
@@ -783,6 +832,7 @@ export class QuotaEngine {
   }
   capacitySummary(): CapacitySummary {
     const eligibleProviderIds = this.options.eligibleProviders?.();
+    const eligibleModelRefs = this.options.eligibleModelRefs?.();
     const providers = [...new Set(this.providers.map((provider) => provider.provider))].filter(
       (providerId) => !eligibleProviderIds || eligibleProviderIds.includes(providerId),
     );
@@ -792,16 +842,41 @@ export class QuotaEngine {
         .map((window) => window.resetAt)
         .filter((value): value is string => Boolean(value))
         .sort();
-      const stepsLeft = this.stepsLeft(providerId);
+      const stepsLeft = this.stepsFor(providerId, undefined, eligibleModelRefs, windows);
       const restrictive = windows
         .filter((window) => window.limit !== null)
         .map((window) =>
           Math.max(0, Math.min(1, (window.remaining ?? 0) / Math.max(1, window.limit ?? 1))),
         );
+      const models = this.models.filter(
+        (model) =>
+          model.providerId === providerId &&
+          (!eligibleModelRefs || eligibleModelRefs.includes(model.ref)),
+      );
+      // Independent model pools are alternatives: use the best routable pool, still
+      // bounded by every shared provider window, rather than the worst model's pool.
+      const modelHeadroom = windows.some((window) => window.scope === 'model')
+        ? models.map((model) => {
+            const ratios = windows
+              .filter(
+                (window) =>
+                  (window.scope === 'provider' || window.modelRef === model.ref) &&
+                  window.limit !== null,
+              )
+              .map((window) =>
+                Math.max(0, Math.min(1, (window.remaining ?? 0) / Math.max(1, window.limit ?? 1))),
+              );
+            return ratios.length ? Math.min(...ratios) : 1;
+          })
+        : [];
       return {
         providerId: providerId as CapacitySummary['perProvider'][number]['providerId'],
         stepsLeft,
-        percent: restrictive.length ? Math.round(Math.min(...restrictive) * 100) : null,
+        percent: modelHeadroom.length
+          ? Math.round(Math.max(...modelHeadroom) * 100)
+          : restrictive.length
+            ? Math.round(Math.min(...restrictive) * 100)
+            : null,
         nextResetAt: resets[0] ?? null,
       };
     });
@@ -832,16 +907,21 @@ export class QuotaEngine {
     return {
       stepsLeftToday,
       percentRemaining,
-      lowCapacity: Boolean(low),
+      // Capacity is low only if every routable provider is at or below the threshold.
+      // Unknown/unbounded capacity is usable, not evidence of exhaustion.
+      lowCapacity:
+        perProvider.length > 0 &&
+        perProvider.every((provider) => (provider.percent ?? 100) <= this.lowThreshold),
       perProvider,
       nextResets,
-      banner: low
-        ? {
-            text: `Low capacity — ${low.providerId} resets soon`,
-            actionLabel: 'Add provider',
-            action: 'add_provider',
-          }
-        : null,
+      banner:
+        low && perProvider.every((provider) => (provider.percent ?? 100) <= this.lowThreshold)
+          ? {
+              text: `Low capacity — ${low.providerId} resets soon`,
+              actionLabel: 'Add provider',
+              action: 'add_provider',
+            }
+          : null,
       updatedAt: this.now().toISOString(),
     };
   }
@@ -860,6 +940,7 @@ export class QuotaEngine {
     const current = this.cooldowns.get(key) ?? { until: 0, failures: 0 };
     if (error === 'auth_invalid' || error === 'account_disabled') {
       this.cooldowns.set(key, { ...current, terminal: error });
+      this.scheduleEmit();
       return { health: error, cooldownUntil: null, retry: false };
     }
     if (error === '429') {
@@ -868,12 +949,17 @@ export class QuotaEngine {
         ? Math.max(this.now().getTime() + delay, Date.parse(resetAt))
         : this.now().getTime() + delay;
       this.cooldowns.set(key, { until, failures: current.failures + 1 });
+      this.scheduleEmit();
+      this.scheduleResets();
       return { health: 'cooldown', cooldownUntil: new Date(until).toISOString(), retry: true };
     }
     return { health: 'down', cooldownUntil: null, retry: true };
   }
   noteSuccess(providerId: string, modelRef: string, keyId: string): void {
-    this.cooldowns.delete(this.cooldownKey(providerId, modelRef, keyId));
+    if (this.cooldowns.delete(this.cooldownKey(providerId, modelRef, keyId))) {
+      this.scheduleEmit();
+      this.scheduleResets();
+    }
   }
   health(
     providerId: string,
@@ -921,6 +1007,31 @@ export class QuotaEngine {
     this.emitTimer = setTimeout(() => {
       try {
         const event = { type: 'quota.updated' as const, summary: this.capacitySummary() };
+        const snapshot = JSON.stringify({
+          stepsLeftToday: event.summary.stepsLeftToday,
+          percentRemaining: event.summary.percentRemaining,
+          lowCapacity: event.summary.lowCapacity,
+          providers: event.summary.perProvider.map(({ providerId, stepsLeft, percent }) => ({
+            providerId,
+            stepsLeft,
+            percent,
+          })),
+          windows: event.summary.perProvider.flatMap(({ providerId }) =>
+            this.getWindows(providerId).map(({ id, modelRef, used, remaining, limit }) => ({
+              providerId,
+              id,
+              modelRef,
+              used,
+              remaining,
+              limit,
+            })),
+          ),
+          cooldowns: [...this.cooldowns.entries()].filter(
+            ([, value]) => value.terminal !== undefined || value.until > this.now().getTime(),
+          ),
+        });
+        if (snapshot === this.lastMeaningfulSnapshot) return;
+        this.lastMeaningfulSnapshot = snapshot;
         this.options.emit?.(event);
         for (const listener of this.listeners) {
           try {
@@ -942,10 +1053,12 @@ export class QuotaEngine {
   private scheduleResets(): void {
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
-    const soonest = this.providers
-      .flatMap((provider) =>
+    const soonest = [
+      ...this.providers.flatMap((provider) =>
         this.getWindows(provider.provider).map((window) => Date.parse(window.resetAt ?? '')),
-      )
+      ),
+      ...[...this.cooldowns.values()].map((cooldown) => cooldown.until),
+    ]
       .filter((at) => at > this.now().getTime())
       .sort((a, b) => a - b)[0];
     if (soonest) {
@@ -954,7 +1067,8 @@ export class QuotaEngine {
           this.scheduleEmit();
           this.scheduleResets();
         },
-        Math.min(soonest - this.now().getTime(), 2_147_000_000),
+        // Rolling usage at the boundary expires one millisecond after its inclusive start.
+        Math.min(soonest - this.now().getTime() + 1, 2_147_000_000),
       );
       timer.unref();
       this.timers.add(timer);

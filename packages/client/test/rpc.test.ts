@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MessageChannel } from 'node:worker_threads';
 import { createMockFerryClient } from '../src/index.js';
 import {
@@ -49,6 +49,27 @@ runFerryClientContract('HybridClient all-mock', () => {
 });
 
 describe('RPC client', () => {
+  it('subscribes to routing status and run reports from the real sessions domain', () => {
+    const mock = createMockFerryClient({ behavior: 'test' });
+    const rpc = createMockFerryClient({ behavior: 'test' });
+    const remote = vi.spyOn(rpc, 'on');
+    const local = vi.spyOn(mock, 'on');
+    const hybrid = createHybridClient(mock, rpc, ['sessions']);
+    const disposers = [
+      hybrid.on('agent.event', vi.fn()),
+      hybrid.on('run.completed', vi.fn()),
+      hybrid.on('routing.explain', vi.fn()),
+    ];
+    expect(remote.mock.calls.map(([event]) => event)).toEqual([
+      'agent.event',
+      'run.completed',
+      'routing.explain',
+    ]);
+    expect(local).not.toHaveBeenCalled();
+    disposers.forEach((dispose) => {
+      dispose();
+    });
+  });
   it('can be returned from an async bootstrap without thenable assimilation', async () => {
     const mock = createMockFerryClient({ behavior: 'test' });
     const hybrid = createHybridClient(mock, mock, []);
