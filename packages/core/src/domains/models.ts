@@ -49,6 +49,22 @@ const ModelListQuerySchema = z.object({
 
 export function register(host: CoreHost, services: FerryServices): void {
   const modelDiscovery = getModelDiscovery(host, services);
+  const failingModels = () =>
+    new Set(
+      services.requestFailures
+        .summary(
+          [
+            ...new Set([
+              ...services.catalog.providers.map((provider) => provider.provider),
+              ...services.providers.list().map((provider) => provider.id),
+            ]),
+          ].map((id) => ({ id: ProviderIdSchema.parse(id) })),
+          services.clock.now(),
+        )
+        .providers.flatMap((provider) =>
+          provider.models.filter((model) => model.failing).map((model) => model.modelRef),
+        ),
+    );
   host.registerDomain('models', {
     list(rawProviderId?: unknown) {
       const providerId =
@@ -59,6 +75,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         .filter((id) => services.providers.get(id)?.enabled ?? false);
 
       for (const id of enabled) void modelDiscovery.refreshIfStale(id).catch(() => undefined);
+      const failing = failingModels();
       const cachedModels = enabled.flatMap((id) =>
         services.models
           .list(id)
@@ -74,7 +91,9 @@ export function register(host: CoreHost, services: FerryServices): void {
         .filter((model) => providerId === undefined || model.providerId === providerId)
         .map((model) => ModelInfoSchema.parse({ ...model, verified: false, verifiedAt: null }));
       return preserveCatalogBillingMetadata(
-        [...cachedModels, ...oauthModels].map((model) => ModelInfoSchema.parse(model)),
+        [...cachedModels, ...oauthModels].map((model) =>
+          ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }),
+        ),
         services.catalog.models,
         (id) => services.providers.get(id),
         (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
@@ -89,6 +108,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         .filter((id) => services.providers.get(id)?.enabled ?? false);
 
       for (const id of enabled) void modelDiscovery.refreshIfStale(id).catch(() => undefined);
+      const failing = failingModels();
       const cachedModels = enabled.flatMap((id) =>
         services.models
           .list(id)
@@ -105,7 +125,9 @@ export function register(host: CoreHost, services: FerryServices): void {
 
       const needle = query.toLocaleLowerCase();
       const listedModels = preserveCatalogBillingMetadata(
-        [...cachedModels, ...oauthModels].map((model) => ModelInfoSchema.parse(model)),
+        [...cachedModels, ...oauthModels].map((model) =>
+          ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }),
+        ),
         services.catalog.models,
         (id) => services.providers.get(id),
         (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
@@ -119,7 +141,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             !needle ||
             `${model.name} ${model.ref} ${model.providerId}`.toLocaleLowerCase().includes(needle),
         )
-        .map((model) => ModelInfoSchema.parse(model));
+        .map((model) => ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }));
       const direction = sort.ascending ? 1 : -1;
       filtered.sort((left, right) => {
         const a = left[sort.key];
@@ -133,6 +155,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       return { items: filtered.slice(offset, offset + limit), total: filtered.length };
     },
     candidates(rawSessionId: unknown) {
+      const failing = failingModels();
       const sessionId = SessionIdSchema.parse(rawSessionId);
       const session = services.sessions.get(sessionId);
       if (!session) return [];
@@ -153,7 +176,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const enabled = models.filter((model) => modelSupportsTools(model));
       const oauthModels = oauthModelCatalog
         .filter((model) => services.providers.get(model.providerId)?.enabled)
-        .map((model) => ModelInfoSchema.parse(model))
+        .map((model) => ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }))
         .filter((model) => modelSupportsTools(model));
       const choices = [...enabled, ...oauthModels];
       const gatewayChoices = (getGatewayController(services)?.listKeys() ?? [])

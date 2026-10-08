@@ -1,3 +1,6 @@
+import { useQuery } from '@tanstack/react-query';
+import { useFerryClient } from '../data/client';
+import { ProviderStatusBadge } from './ProviderStatusBadge';
 import { useMemo, useState } from 'react';
 import type { Provider, QuotaWindow } from '@ferry/shared';
 import {
@@ -33,6 +36,7 @@ export function providerStatus(
   provider: Provider,
   now = Date.now(),
 ): { label: string; tone: Tone } {
+  if (provider.pausedReason) return { label: 'Paused', tone: 'destructive' };
   if (!provider.enabled) return { label: 'Off', tone: 'muted' };
   if (provider.health === 'auth_invalid' || provider.keyStatus === 'invalid')
     return { label: 'Invalid key', tone: 'destructive' };
@@ -146,6 +150,11 @@ export function ProvidersTable({
   onToggle: (provider: Provider, enabled: boolean) => void;
   emptyLabel?: string;
 }) {
+  const client = useFerryClient();
+  const { data: failures } = useQuery({
+    queryKey: ['provider-failures'],
+    queryFn: () => client.providers.failures(undefined, { limit: 20 }),
+  });
   const [sort, setSort] = useState<{ key: SortKey; ascending: boolean } | null>(null);
   const rows = useMemo(() => {
     if (!sort) return providers;
@@ -232,6 +241,16 @@ export function ProvidersTable({
                         {provider.name}
                       </span>
                       <TagBadge kind={tagKind(provider)} />
+                      {(failures?.providers.find((row) => row.providerId === provider.id)
+                        ?.failed24h ?? 0) > 0 && (
+                        <span className="text-ui-meta tabular-nums text-muted-foreground">
+                          {
+                            failures?.providers.find((row) => row.providerId === provider.id)
+                              ?.failed24h
+                          }{' '}
+                          failed today
+                        </span>
+                      )}
                       {note && (
                         <UiV2.Tooltip>
                           <UiV2.TooltipTrigger asChild>
@@ -251,18 +270,22 @@ export function ProvidersTable({
                     </span>
                   </td>
                   <td className="v2-col-status">
-                    <UiV2.Tooltip>
-                      <UiV2.TooltipTrigger asChild>
-                        <span className="v2-status-icon" data-tone={status.tone} tabIndex={0}>
-                          <StatusIcon aria-hidden="true" size={16} strokeWidth={1.9} />
-                          <span className="sr-only">{status.label}</span>
-                        </span>
-                      </UiV2.TooltipTrigger>
-                      <UiV2.TooltipContent side="top">
-                        {status.label}
-                        {feedback?.[provider.id] ? ` · ${feedback[provider.id] ?? ''}` : ''}
-                      </UiV2.TooltipContent>
-                    </UiV2.Tooltip>
+                    {provider.pausedReason ? (
+                      <ProviderStatusBadge status="disabled" paused />
+                    ) : (
+                      <UiV2.Tooltip>
+                        <UiV2.TooltipTrigger asChild>
+                          <span className="v2-status-icon" data-tone={status.tone} tabIndex={0}>
+                            <StatusIcon aria-hidden="true" size={16} strokeWidth={1.9} />
+                            <span className="sr-only">{status.label}</span>
+                          </span>
+                        </UiV2.TooltipTrigger>
+                        <UiV2.TooltipContent side="top">
+                          {status.label}
+                          {feedback?.[provider.id] ? ` · ${feedback[provider.id] ?? ''}` : ''}
+                        </UiV2.TooltipContent>
+                      </UiV2.Tooltip>
+                    )}
                     {feedback?.[provider.id] && (
                       <span aria-live="polite" className="sr-only" role="status">
                         {feedback[provider.id]}

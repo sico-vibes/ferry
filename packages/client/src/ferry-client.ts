@@ -185,6 +185,12 @@ export interface FerryClient {
     restore(id: CheckpointId, paths?: string[]): Promise<void>;
   };
   providers: {
+    failures(
+      providerId?: ProviderId,
+      options?: import('@ferry/shared').FailureOptions,
+    ): Promise<import('@ferry/shared').ProviderFailures>;
+    resume(id: ProviderId): Promise<Provider>;
+    clearFailures(id: ProviderId): Promise<void>;
     health(): Promise<import('@ferry/shared').ProviderHealthSnapshot[]>;
     list(): Promise<Provider[]>;
     listKeys(id: ProviderId): Promise<import('@ferry/shared').ProviderKey[]>;

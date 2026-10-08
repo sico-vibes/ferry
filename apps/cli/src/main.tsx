@@ -72,6 +72,7 @@ export async function runPrompt(
   let stepLimitExceeded = false;
   let terminalStatusEmitted = false;
   let observedSteps = 0;
+  const pauseWarnings = new Set<string>();
   const seenParts = new Set<string>();
   let finishRun!: () => void;
   const done = new Promise<void>((resolve) => {
@@ -146,7 +147,17 @@ export async function runPrompt(
     }),
     client.on('task.updated', (event) => publish({ type: 'task.updated', payload: event })),
     client.on('quota.updated', (event) => publish({ type: 'quota.updated', payload: event })),
-    client.on('provider.updated', (event) => publish({ type: 'provider.updated', payload: event })),
+    client.on('provider.updated', (event) => {
+      const pause = event.pausedReason;
+      const marker = `${event.id}:${pause?.at ?? ''}`;
+      if (pause && !pauseWarnings.has(marker)) {
+        pauseWarnings.add(marker);
+        publish(
+          { type: 'provider.updated', payload: event },
+          `Warning: ${event.name} paused after ${pause.failedRequests} failed requests. Use ferry providers resume ${event.id}.\n`,
+        );
+      } else publish({ type: 'provider.updated', payload: event });
+    }),
     client.on('delegation.updated', (event) =>
       publish({ type: 'delegation.updated', payload: event }),
     ),
@@ -1108,7 +1119,7 @@ function commandHelp(positionals: string[]): string {
     'gateway keys':
       'Usage: ferry gateway keys create <name> [profile] [--allowed-models <ref,ref>] [limits] | show <id> | update <id> [--allowed-models <ref,ref>] [limits] | list | revoke <id>\nCreate and manage Gateway keys and budgets.\n',
     providers:
-      'Usage: ferry providers list|enable|disable|test ... | keys ... | routing ... | overrides ...\nManage provider keys, routing preferences, and effective overrides.\n',
+      'Usage: ferry providers list|failures [id]|resume <id>|enable|disable|test ... | keys ... | routing ... | overrides ...\nManage provider keys, routing preferences, and effective overrides.\n',
     'providers keys':
       'Usage: ferry providers keys <provider> list|add|remove|enable|disable|move\nAdd reads a hidden prompt or --stdin; secrets are never accepted as argv values.\n',
     'providers routing':
@@ -1322,8 +1333,41 @@ async function quotaWatch(client: FerryClient, json: boolean): Promise<number> {
     stdin.on('data', onData);
   });
 }
-async function providers(client: FerryClient, args: string[], json = false) {
+export async function providers(client: FerryClient, args: string[], json = false) {
   const [action, id] = args;
+  if (action === 'resume' && id) {
+    const provider = await client.providers.resume(ProviderIdSchema.parse(id));
+    writeResult(json, provider, `${provider.name} resumed\n`);
+    return 0;
+  }
+  if (action === 'failures') {
+    const failures = await client.providers.failures(id ? ProviderIdSchema.parse(id) : undefined);
+    const text =
+      failures.providers
+        .filter((provider) => provider.failed7d > 0 || provider.paused)
+        .map(
+          (provider) =>
+            `${provider.providerId}: ${provider.failed24h} failed in 24 h, ${provider.failed7d} in 7 d, ${provider.counted24h} counted, ${provider.consecutive} consecutive${provider.paused ? ' (paused)' : ''}\n` +
+            provider.models
+              .map(
+                (model) =>
+                  `  ${model.modelRef}: ${model.failed24h} / ${model.failed7d}${model.failing ? ' failing' : ''}\n`,
+              )
+              .join('') +
+            `  Kinds (7 d): ${Object.entries(provider.byKind)
+              .map(([kind, count]) => `${kind}: ${count}`)
+              .join(', ')}\n`,
+        )
+        .join('') +
+      failures.recent
+        .map(
+          (failure) =>
+            `${failure.at} ${failure.modelRef} ${failure.kind} ${failure.statusCode ?? '—'} ${failure.message}\n`,
+        )
+        .join('');
+    writeResult(json, failures, text || 'No failed requests.\n');
+    return 0;
+  }
   const rows = await client.providers.list();
   if (action === 'test' && id) {
     const result = await client.providers.probe(id as import('@ferry/shared').ProviderId);
@@ -1338,11 +1382,20 @@ async function providers(client: FerryClient, args: string[], json = false) {
     writeResult(json, { providerId: id, enabled: action === 'enable' }, '');
     return 0;
   }
+  const failures = await client.providers.failures();
+  const listed = rows.map((provider) => ({
+    ...provider,
+    status: provider.pausedReason ? 'paused' : provider.enabled ? 'enabled' : 'disabled',
+    failures: failures.providers.find((entry) => entry.providerId === provider.id) ?? null,
+  }));
   writeResult(
     json,
-    rows,
-    rows
-      .map((p) => `${p.enabled ? good('●') : muted('○')} ${p.id} · ${p.name} · ${p.keyStatus}`)
+    listed,
+    listed
+      .map(
+        (p) =>
+          `${p.enabled ? good('●') : muted('○')} ${p.id} · ${p.name} · ${p.status} · ${p.keyStatus} · ${p.failures?.failed24h ?? 0} failed today (${p.failures?.failed7d ?? 0} in 7 d)`,
+      )
       .join('\n') + '\n',
   );
   return 0;

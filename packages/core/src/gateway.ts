@@ -23,6 +23,7 @@ import {
 } from '@ferry/gateway';
 import { randomBytes } from 'node:crypto';
 import type { FerryServices } from './services.js';
+import { recordRequestFailure, recordRequestSuccess, ledgerKind } from './request-failures.js';
 import { hasUsableProviderKey, recordProviderKeyFailure } from './services.js';
 import { getProviderHealth } from './provider-health.js';
 
@@ -364,7 +365,7 @@ export function createGatewayController(
       };
       const latencyMs = () => Math.max(0, services.clock.now().getTime() - started.getTime());
       try {
-        const result = await routeCompletion({ ...input, traceId, onAttempt });
+        const result = await routeCompletion({ ...input, traceId, onAttempt }, base.id);
         logRequest({
           ...base,
           traceId,
@@ -402,6 +403,7 @@ export function createGatewayController(
   };
   async function routeCompletion(
     input: Parameters<GatewayRuntime['complete']>[0],
+    ledgerRequestId: string,
   ): ReturnType<GatewayRuntime['complete']> {
     const selectedProfile = input.model.startsWith('@profile:')
       ? input.model.slice('@profile:'.length)
@@ -505,6 +507,7 @@ export function createGatewayController(
     });
     const lastAttemptHistory: GatewayAttempt[] = [];
     for (const model of withKeyFallback) {
+      if (services.providers.get(model.providerId)?.enabled === false) continue;
       const providerId = model.providerId;
       if (!health.tracker.available(providerId, model.ref)) continue;
       const entries = services.providerKeyEntries.list(providerId);
@@ -651,6 +654,7 @@ export function createGatewayController(
           ...(providerKey?.id ? { providerKeyId: providerKey.id } : {}),
           expiresAt: services.clock.now().getTime() + 30 * 60 * 1000,
         });
+        recordRequestSuccess(services, providerId, model.ref);
         attempts[attempts.length - 1] = { model: model.ref, status: 'served' };
         input.onAttempt?.({ servedModel: model.ref, attempts: [...attempts] });
         return {
@@ -686,6 +690,19 @@ export function createGatewayController(
           ...(providerError.response instanceof Response
             ? { headers: providerError.response.headers }
             : {}),
+        });
+        recordRequestFailure(services, {
+          providerId,
+          modelRef: model.ref,
+          keyId: providerKey?.id ?? null,
+          requestId: ledgerRequestId,
+          sessionId: input.sessionHint || null,
+          source: 'gateway',
+          kind: input.signal.aborted
+            ? 'cancelled'
+            : ledgerKind(typed.family, typed.status, typed.message),
+          statusCode: typed.status,
+          message: typed.message,
         });
         attempts[attempts.length - 1] = {
           model: model.ref,

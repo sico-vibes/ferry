@@ -329,6 +329,7 @@ export const sampleSettings: Settings = {
   onboardingComplete: true,
   optimizers: sampleOptimizerToggles,
   routing: {
+    autoPauseAfterFailedRequests: 5,
     stickySessions: true,
     smartReliability: true,
     qualityWeight: 4,

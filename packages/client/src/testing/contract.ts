@@ -10,6 +10,7 @@ import {
   OptimizerStatsSchema,
   ProfileSchema,
   ProviderSchema,
+  ProviderFailuresSchema,
   SessionDetailSchema,
   SessionSchema,
   SettingsSchema,
@@ -79,6 +80,7 @@ export function runFerryClientContract(
       if (includes('providers'))
         for (const x of await client.providers.list())
           expect(() => ProviderSchema.parse(x)).not.toThrow();
+      if (includes('providers')) ProviderFailuresSchema.parse(await client.providers.failures());
       if (includes('models'))
         for (const x of await client.models.list())
           expect(() => ModelInfoSchema.parse(x)).not.toThrow();

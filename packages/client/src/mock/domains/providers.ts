@@ -1,6 +1,8 @@
+import { mockFailures } from '../failures.js';
 import { MockNotFoundError } from '../errors.js';
 import {
   ProviderRequestOverridesSchema,
+  FailureOptionsSchema,
   ProviderHealthSnapshotSchema,
   type ProbeResult,
 } from '@ferry/shared';
@@ -12,7 +14,41 @@ import type { MockStore } from '../types.js';
 export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryClient['providers'] {
   const { state, rng, before, persist, emit } = deps;
   const keys = state.providerKeys;
+  const resume = async (id: import('@ferry/shared').ProviderId) => {
+    await before();
+    const provider = state.providers.find((item) => item.id === id);
+    if (!provider) throw new MockNotFoundError('Provider', id);
+    provider.enabled = true;
+    provider.pausedReason = null;
+    state.failureResets[id] = state.requestFailures
+      .filter((row) => row.providerId === id)
+      .map((row) => row.id);
+    emit('provider.updated', provider);
+    persist();
+    return structuredClone(provider);
+  };
   return {
+    resume,
+    async clearFailures(id) {
+      await before();
+      const provider = state.providers.find((item) => item.id === id);
+      if (!provider) throw new MockNotFoundError('Provider', id);
+      state.requestFailures.splice(
+        0,
+        state.requestFailures.length,
+        ...state.requestFailures.filter((row) => row.providerId !== id),
+      );
+      emit('provider.updated', provider);
+      persist();
+    },
+    async failures(id, options) {
+      await before();
+      if (id && !state.providers.some((item) => item.id === id))
+        throw new MockNotFoundError('Provider', id);
+      return structuredClone(
+        mockFailures(state, deps.clock.now(), id, FailureOptionsSchema.parse(options ?? {})),
+      );
+    },
     async health() {
       await before();
       return state.providers.map((provider) =>
@@ -80,7 +116,7 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
           (entry) => entry.enabled && entry.status !== 'invalid' && entry.status !== 'disabled',
         );
       p.keyStatus = usableKey ? 'unchecked' : 'invalid';
-      p.enabled = true;
+      p.enabled = !p.pausedReason;
       emit('provider.updated', p);
       persist();
       return structuredClone(p);
@@ -109,7 +145,7 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
         (entry) => entry.enabled && entry.status !== 'invalid' && entry.status !== 'disabled',
       );
       p.keyStatus = usableKey ? 'unchecked' : 'invalid';
-      p.enabled = true;
+      p.enabled = !p.pausedReason;
       emit('provider.updated', p);
       persist();
       return structuredClone(item);
@@ -239,6 +275,7 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
       };
     },
     async setEnabled(id, v) {
+      if (v) return resume(id);
       await before();
       const p = state.providers.find((p) => p.id === id);
       if (!p) throw new MockNotFoundError('Provider', id);

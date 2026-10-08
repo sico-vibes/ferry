@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ReadOutputInputSchema } from './domain/session.js';
 import { ProviderIdSchema, SessionIdSchema, WorkspaceIdSchema } from './domain/ids.js';
+import { FailureOptionsSchema } from './domain/failures.js';
 import { EffortSchema } from './domain/provider.js';
 
 export const FERRY_PROTOCOL = 'ferry/1' as const;
@@ -47,6 +48,9 @@ export const FERRY_METHODS = [
   'checkpoints.restore',
   'providers.list',
   'providers.health',
+  'providers.failures',
+  'providers.resume',
+  'providers.clearFailures',
   'providers.listKeys',
   'providers.effectiveOverrides',
   'providers.setKey',
@@ -130,6 +134,9 @@ export const FERRY_METHOD_PARAMS_SCHEMAS: Readonly<
   'quota.limits': z.tuple([]),
   'providers.listKeys': z.tuple([ProviderIdSchema]),
   'providers.health': z.tuple([]),
+  'providers.failures': z.tuple([ProviderIdSchema.optional(), FailureOptionsSchema.optional()]),
+  'providers.resume': z.tuple([ProviderIdSchema]),
+  'providers.clearFailures': z.tuple([ProviderIdSchema]),
   'gateway.keySecret': z.tuple([z.string().min(1).max(64)]),
   'providers.effectiveOverrides': z.tuple([ProviderIdSchema]),
   'providers.setKey': z.tuple([ProviderIdSchema, z.string()]),

@@ -91,6 +91,11 @@ export function V2Sidebar({
   const go = (path: '/' | '/models' | '/gateway') => {
     void navigate({ to: path });
   };
+  const { data: providers = [] } = useQuery({
+    queryKey: ['providers'],
+    queryFn: () => client.providers.list(),
+  });
+  const pausedCount = providers.filter((provider) => provider.pausedReason).length;
   const tightest = tightestDailyWindow(limits);
   return (
     <TooltipProvider>
@@ -129,6 +134,7 @@ export function V2Sidebar({
           />
           <NavButton
             label="Models"
+            indicator={pausedCount > 0 ? `${String(pausedCount)} paused providers` : undefined}
             icon={<Boxes />}
             active={pathname.startsWith('/models') || pathname.startsWith('/explore')}
             collapsed={collapsed}
@@ -371,12 +377,14 @@ export function V2Sidebar({
 
 function NavButton({
   label,
+  indicator,
   icon,
   active,
   collapsed,
   onClick,
 }: {
   label: string;
+  indicator?: string | undefined;
   icon: ReactNode;
   active?: boolean;
   collapsed: boolean;
@@ -391,12 +399,19 @@ function NavButton({
     >
       {icon}
       {!collapsed && <span>{label}</span>}
+      {indicator && (
+        <span
+          aria-label={indicator}
+          className="v2-paused-dot size-2 shrink-0 rounded-full bg-destructive"
+          role="status"
+        />
+      )}
     </button>
   );
-  return collapsed ? (
+  return collapsed || indicator ? (
     <Tooltip delayDuration={0}>
       <TooltipTrigger asChild>{button}</TooltipTrigger>
-      <TooltipContent side="right">{label}</TooltipContent>
+      <TooltipContent side="right">{indicator ? `${label}: ${indicator}` : label}</TooltipContent>
     </Tooltip>
   ) : (
     button

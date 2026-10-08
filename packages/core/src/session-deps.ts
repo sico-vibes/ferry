@@ -33,6 +33,11 @@ import {
 import { oauthModelCatalog, streamOAuthStep } from '@ferry/oauth';
 import { hasUsableProviderKey, recordProviderKeyFailure, type FerryServices } from './services.js';
 import { z } from 'zod';
+import {
+  classifyLedgerError,
+  recordRequestFailure,
+  markRecordedAttempt,
+} from './request-failures.js';
 import { getGatewayController } from './gateway.js';
 import { observationsFromRateLimitHeaders } from '@ferry/quota';
 import { getProviderHealth } from './provider-health.js';
@@ -608,6 +613,11 @@ export function createSessionDependencies(
     },
     async streamStep(req, signal) {
       const providerId = req.model.providerId;
+      if (services.providers.get(providerId)?.enabled === false)
+        throw Object.assign(
+          new Error(`${providerId} is disabled or paused. Choose another provider or resume it.`),
+          { statusCode: 429 },
+        );
       if (providerId === 'gateway' && req.model.gateway) {
         const controller = getGatewayController(services);
         const status = controller?.status;
@@ -795,8 +805,22 @@ export function createSessionDependencies(
           !outputState.started &&
           ([401, 402, 403, 429].includes(statusCode) || capacityError) &&
           hasUsableProviderKey(services, providerId)
-        )
+        ) {
+          recordRequestFailure(services, {
+            ...classifyLedgerError(error),
+            providerId,
+            modelRef: req.model.ref,
+            requestId: req.requestId ?? newId('request'),
+            sessionId,
+            keyId: selectedKey.id,
+            source: 'agent',
+          });
+          if (services.providers.get(providerId)?.pausedReason) {
+            markRecordedAttempt(error, req.requestId ?? '');
+            throw error;
+          }
           return await gateway.streamStep(req, signal);
+        }
         const savedProvider = services.providers.get(providerId);
         const unsupportedFreeTier =
           providerId === 'opencode' &&

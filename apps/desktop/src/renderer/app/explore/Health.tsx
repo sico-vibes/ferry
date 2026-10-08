@@ -1,3 +1,4 @@
+import { FailuresSection, PausedProviders } from './Failures';
 import { useQuery } from '@tanstack/react-query';
 import type { ProviderHealthSnapshot } from '@ferry/shared';
 import { ShowMoreList } from '@ferry/ui';
@@ -60,13 +61,15 @@ export function HealthTab() {
 
   return (
     <div aria-label="Provider health" className="grid gap-6" role="region">
+      <PausedProviders providers={providers} />
+      <FailuresSection providers={providers} />
       <section className="grid gap-4 rounded-card bg-card p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-ui-section font-semibold">Provider health</h2>
             <p className="mt-1 text-ui-secondary text-muted-foreground">
-              Ferry pauses a provider after timeouts or server errors and retries it in the
-              background; rate-limited keys and failing models sit out until they recover.
+              Temporary cooldowns recover in the background. Providers paused after failed requests
+              stay paused until you resume them.
             </p>
           </div>
           <div className="flex gap-4 text-ui-meta tabular-nums text-muted-foreground">

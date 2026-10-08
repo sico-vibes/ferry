@@ -52,6 +52,7 @@ import {
   createStorageAdapter,
   salvageReadableTables,
   runTelemetryRetention,
+  RequestFailureRepository,
   type DatabaseConnection,
   type ProviderKeyEntry,
 } from '@ferry/storage';
@@ -91,6 +92,7 @@ export interface FerryServices {
   readonly secrets: SecretStore;
   /** Gateway bearer credentials remain local even when provider keys use Cloud Vault. */
   readonly gatewaySecrets: SecretStore;
+  readonly requestFailures: RequestFailureRepository;
   readonly providers: ProviderRepository;
   readonly models: ModelCacheRepository;
   readonly providerKeys: ProviderKeyRepository;
@@ -233,6 +235,8 @@ export async function createServices({
   }
   const catalog = await loadCatalog({ now: clock?.now() ?? new Date() });
   runTelemetryRetention(db.client);
+  const requestFailures = new RequestFailureRepository(db.client);
+  requestFailures.prune(clock?.now() ?? new Date());
   const settings = new SettingsRepository(db.client);
   const eventLogs = new EventLogRepository(db.client);
   const turnLogs = new TurnLogRepository(db.client);
@@ -516,6 +520,7 @@ export async function createServices({
     secrets: secretStore,
     gatewaySecrets: localSecretStore,
     providers,
+    requestFailures,
     models,
     providerKeys,
     providerKeyEntries,

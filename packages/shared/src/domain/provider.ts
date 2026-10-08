@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ModelRefSchema, ProviderIdSchema } from './ids.js';
+import { PausedReasonSchema } from './failures.js';
 import { TierSchema } from './common.js';
 import { ProviderErrorKindSchema } from './quota.js';
 export const ProviderTagSchema = z.enum([
@@ -71,6 +72,8 @@ export const ProviderSchema = z.object({
   autoDisableStatusCodes: z.array(z.number().int().min(100).max(599)).optional(),
   autoDisableKeywords: z.array(z.string().trim().min(1).max(120)).optional(),
   autoDisableMinutes: z.number().int().min(1).max(1440).optional(),
+  autoPauseAfterFailedRequests: z.number().int().nonnegative().optional(),
+  pausedReason: PausedReasonSchema.nullable().optional(),
   enabled: z.boolean(),
   health: z.enum(['ok', 'cooldown', 'down', 'unknown', 'auth_invalid', 'account_disabled']),
   cooldownUntil: z.iso.datetime().nullable(),
@@ -116,6 +119,7 @@ export type ProbeResult = z.infer<typeof ProbeResultSchema>;
 export const EffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 export type Effort = z.infer<typeof EffortSchema>;
 export const ModelInfoSchema = z.object({
+  failing: z.boolean().optional(),
   verified: z.boolean().optional(),
   verifiedAt: z.iso.datetime().nullable().optional(),
   ref: ModelRefSchema,

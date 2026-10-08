@@ -5,7 +5,7 @@ import { serveDirectory } from './static-server.mjs';
 
 if (process.env.FERRY_SKIP_WEB_BUILD !== '1') await import('./build-web.mjs');
 
-process.env.PLAYWRIGHT_BROWSERS_PATH = '0';
+process.env.PLAYWRIGHT_BROWSERS_PATH ??= '0';
 const { chromium } = await import('@playwright/test');
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const packageDirectory = join(scriptDirectory, '..');

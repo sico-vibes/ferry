@@ -267,7 +267,7 @@ export function createProviders(now: Date): MockProvider[] {
               : id === 'nvidia'
                 ? 'https://build.nvidia.com'
                 : null),
-        docsUrl: null,
+        docsUrl: id === 'groq' ? 'https://console.groq.com/docs' : null,
         verifiedAt: '2026-09-23',
         modelCount: 0,
         windows,

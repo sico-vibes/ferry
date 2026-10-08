@@ -136,6 +136,7 @@ export interface GeneratedStep {
   responseModel?: string;
 }
 export interface StepGeneratorInput {
+  requestId?: string;
   model: ModelInfo;
   effort?: Effort | null | undefined;
   system: string;
@@ -216,8 +217,21 @@ export interface AgentOptions {
   waitForRetry?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   pinnedTurns?: number;
   estimateTokens?: (text: string) => number;
+  isProviderEnabled?: (providerId: string) => boolean;
   onObservation?: (observation: RawCallObservation) => void;
   onUsage?: (usage: UsageRecord) => void;
+  onProviderAttempt?: (attempt: {
+    error?: unknown;
+    requestId: string;
+    sessionId: string;
+    modelRef: string;
+    providerId: string;
+    keyId: string | null;
+    success: boolean;
+    family: string | null;
+    statusCode: number | null;
+    message: string;
+  }) => void;
   authorizePaidCall?: (
     model: ModelInfo,
     estimate: { inputTokens: number; outputTokens: number },
@@ -1174,6 +1188,7 @@ export class AgentLoop {
           onProgress: () => void,
         ): StepGeneratorInput => ({
           model: selected,
+          requestId: `${routingRequestId}:${String(stepCount)}`,
           effort: this.options.store.load(sessionId)?.session.effort,
           system: withModelIdentity(
             executionRole === 'planner' && stepKind === 'plan'
@@ -1422,6 +1437,17 @@ export class AgentLoop {
               latencyMs: Math.max(0, performance.now() - attemptStartedAt),
               errorKind: null,
             });
+            this.options.onProviderAttempt?.({
+              requestId: `${routingRequestId}:${String(stepCount)}`,
+              sessionId,
+              modelRef: model.ref,
+              providerId: model.providerId,
+              keyId: attemptProviderKeyId ?? null,
+              success: true,
+              family: null,
+              statusCode: 200,
+              message: '',
+            });
             const successRouting = this.options.routingSettings?.();
             if (successRouting?.smartReliability) {
               this.reliability.push({ modelRef: model.ref, outcome: 'success', at: this.now() });
@@ -1559,6 +1585,26 @@ export class AgentLoop {
               latencyMs: Math.max(0, performance.now() - attemptStartedAt),
               errorKind: classified.family,
             });
+            this.options.onProviderAttempt?.({
+              requestId: `${routingRequestId}:${String(stepCount)}`,
+              sessionId,
+              modelRef: model.ref,
+              providerId: model.providerId,
+              keyId: attemptProviderKeyId ?? null,
+              success: false,
+              error,
+              family: isSignalAborted(signal)
+                ? 'cancelled'
+                : localQuotaReservation
+                  ? 'local_reservation'
+                  : error instanceof StepWatchdogError
+                    ? 'timeout'
+                    : classified.family,
+              statusCode: classified.status,
+              message: unsafeSignatureError
+                ? 'Provider rejected native reasoning metadata.'
+                : redactedProviderMessage(error),
+            });
             if (classified.family === 'request_too_large')
               this.requestTooLargeAt.set(model.ref, routeEstimate);
             if (isSignalAborted(signal)) throw error;
@@ -1672,7 +1718,8 @@ export class AgentLoop {
               !badCredentialStatus &&
               retryAction === 'retry' &&
               transient &&
-              sameModelRetries < 2
+              sameModelRetries < 2 &&
+              this.options.isProviderEnabled?.(model.providerId) !== false
             ) {
               sameModelRetries++;
               const retryDelayMsValue = retryDelayMs(sameModelRetries - 1, 300, 3_000);

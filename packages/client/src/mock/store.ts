@@ -14,6 +14,7 @@ import {
   WorkspaceSchema,
   ProviderSchema,
   ProviderKeySchema,
+  FailureEntrySchema,
   newId,
 } from '@ferry/shared';
 import type {
@@ -36,6 +37,7 @@ import { memoryStorage } from './storage.js';
 import type { StorageAdapter } from './storage.js';
 import { MockInjectedError } from './behavior.js';
 import type { MockBehavior } from './behavior.js';
+import { createFailures } from './fixtures/failures.js';
 import { createFixtures } from './fixtures/index.js';
 import { echoRunner } from './scenario.js';
 import type { ScenarioRunner } from './scenario.js';
@@ -82,6 +84,10 @@ const persistenceSchema = (state: unknown) => {
   const selections = new Map(value.selections as [string, string][]);
   return {
     ...value,
+    requestFailures: ((value.requestFailures as unknown[] | undefined) ?? []).map((row) =>
+      FailureEntrySchema.parse(row),
+    ),
+    failureResets: (value.failureResets as Record<string, string[]> | undefined) ?? {},
     workspaces,
     sessions,
     providers,
@@ -126,6 +132,8 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
     workspaces: structuredClone(fixtures.workspaces),
     sessions: structuredClone(fixtures.sessions),
     providers: structuredClone(fixtures.providers),
+    requestFailures: createFailures(clock.now()),
+    failureResets: {},
     providerKeys: new Map(),
     models: structuredClone(fixtures.models),
     profiles: structuredClone(fixtures.profiles),

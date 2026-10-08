@@ -1,3 +1,4 @@
+import { mockFailures } from '../failures.js';
 import { MockNotFoundError } from '../errors.js';
 import type { FerryClient } from '../../ferry-client.js';
 import type { MockDeps } from './deps.js';
@@ -8,11 +9,17 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
   return {
     async list(providerId) {
       await before();
+      const failing = new Set(
+        mockFailures(state, deps.clock.now()).providers.flatMap((provider) =>
+          provider.models.filter((model) => model.failing).map((model) => model.modelRef),
+        ),
+      );
       return state.models
         .filter((model) => providerId === undefined || model.providerId === providerId)
         .map((model) =>
           structuredClone({
             ...model,
+            failing: failing.has(model.ref),
             verified: model.verified ?? false,
             verifiedAt: model.verifiedAt ?? null,
           }),
@@ -27,6 +34,11 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
         filters = {},
         sort = { key: 'name' as const, ascending: true },
       } = query;
+      const failing = new Set(
+        mockFailures(state, deps.clock.now()).providers.flatMap((provider) =>
+          provider.models.filter((model) => model.failing).map((model) => model.modelRef),
+        ),
+      );
       const needle = search.trim().toLocaleLowerCase();
       const filtered = state.models
         .filter((model) => !filters.providerId || model.providerId === filters.providerId)
@@ -50,6 +62,7 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
         items: filtered.slice(offset, offset + limit).map((model) =>
           structuredClone({
             ...model,
+            failing: failing.has(model.ref),
             verified: model.verified ?? false,
             verifiedAt: model.verifiedAt ?? null,
           }),

@@ -40,11 +40,14 @@ export function ProviderStatusBadge({
   status,
   cooldownUntil = null,
   enabled = true,
+  paused = false,
 }: {
   status: ProviderStatusCode;
   cooldownUntil?: string | null;
   enabled?: boolean;
+  paused?: boolean;
 }) {
+  if (paused) return <UiV2.Badge variant="destructive">Paused</UiV2.Badge>;
   const { label, variant } = badgeContent(status, cooldownUntil, enabled);
   return <UiV2.Badge variant={variant}>{label}</UiV2.Badge>;
 }

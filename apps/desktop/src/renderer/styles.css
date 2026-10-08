@@ -1872,7 +1872,7 @@ body {
   flex: 0 0 18px;
   stroke-width: 1.75;
 }
-.v2-nav-button span {
+.v2-nav-button span:not(.v2-paused-dot) {
   flex: 1;
 }
 .v2-nav-button kbd {
