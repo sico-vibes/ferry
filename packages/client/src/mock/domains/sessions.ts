@@ -22,12 +22,15 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
     scenarioRunner,
     stringId,
   } = deps;
-  const list = async (q: { workspaceId?: string; query?: string } = {}) => {
+  const list = async (
+    q: { workspaceId?: string | null; query?: string; includeArchived?: boolean } = {},
+  ) => {
     await before();
     return state.sessions
       .filter(
         (s) =>
-          (!q.workspaceId || s.workspaceId === q.workspaceId) &&
+          ((q.includeArchived ?? false) || !s.archived) &&
+          (q.workspaceId === undefined || (s.workspaceId ?? null) === q.workspaceId) &&
           (!q.query ||
             `${s.title} ${s.preview}`.toLocaleLowerCase().includes(q.query.toLocaleLowerCase())),
       )
@@ -36,7 +39,52 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
   };
   return {
     list,
-    search: list,
+    async search(q = {}) {
+      const { query: _query, ...filters } = q;
+      const sessions = await list(filters);
+      const needle = q.query?.toLocaleLowerCase() ?? '';
+      return sessions.flatMap((s) => {
+        const texts = [
+          s.title,
+          s.preview,
+          ...(state.messages.get(s.id) ?? []).flatMap((message) =>
+            message.parts.flatMap((part) =>
+              part.type === 'text' || part.type === 'reasoning' ? [part.text] : [],
+            ),
+          ),
+        ];
+        const text = texts.find((text) => text.toLocaleLowerCase().includes(needle));
+        if (text === undefined) return [];
+        const index = text.toLocaleLowerCase().indexOf(needle);
+        return [{ ...s, match: text.slice(Math.max(0, index - 40), index + needle.length + 80) }];
+      });
+    },
+    async archive(id, archived) {
+      await before();
+      const s = session(id);
+      s.archived = archived;
+      updateSession(s);
+      return structuredClone(s);
+    },
+    async move(id, workspaceId) {
+      await before();
+      const s = session(id);
+      if (
+        controllers.has(id) ||
+        s.inFlight ||
+        s.status === 'running' ||
+        s.status === 'awaiting_approval'
+      )
+        throw Object.assign(new Error('Running chats cannot be moved'), {
+          code: -32010,
+          kind: 'conflict',
+          details: { sessionId: id, status: s.status },
+        });
+      if (workspaceId) workspace(workspaceId);
+      s.workspaceId = workspaceId;
+      updateSession(s);
+      return structuredClone(s);
+    },
     async get(id) {
       await before();
       return structuredClone(sessionDetail(id));
@@ -63,10 +111,10 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
     },
     async create(i) {
       await before();
-      workspace(i.workspaceId);
+      if (i.workspaceId) workspace(i.workspaceId);
       const s = SessionSchema.parse({
         id: stringId<SessionId>('session'),
-        workspaceId: i.workspaceId,
+        workspaceId: i.workspaceId ?? null,
         title: i.title ?? 'New Chat',
         preview: '',
         profileId: i.profileId ?? state.settings.activeProfileId,

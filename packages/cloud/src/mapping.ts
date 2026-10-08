@@ -35,6 +35,7 @@ export function mapCloudRow(
             workspaceId: value.workspaceId ?? null,
             createdAt: value.createdAt ?? null,
             starred: value.starred ?? false,
+            archived: value.archived ?? false,
             lastModelRef: value.modelRef ?? null,
           },
     };

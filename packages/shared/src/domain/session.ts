@@ -22,7 +22,7 @@ export const SessionStatusSchema = z.enum([
 export type SessionStatus = z.infer<typeof SessionStatusSchema>;
 export const SessionSchema = z.object({
   id: SessionIdSchema,
-  workspaceId: WorkspaceIdSchema,
+  workspaceId: WorkspaceIdSchema.nullable().optional(),
   title: z.string(),
   preview: z.string(),
   profileId: ProfileIdSchema,
@@ -31,6 +31,7 @@ export const SessionSchema = z.object({
   effort: EffortSchema.nullable().optional(),
   starred: z.boolean(),
   pinned: z.boolean(),
+  archived: z.boolean().default(false),
   status: SessionStatusSchema,
   runPhase: z.enum(['preparing', 'working']).optional(),
   // Independent of status so startup can recover a run even if an error handler

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ReadOutputInputSchema } from './domain/session.js';
-import { ProviderIdSchema, SessionIdSchema } from './domain/ids.js';
+import { ProviderIdSchema, SessionIdSchema, WorkspaceIdSchema } from './domain/ids.js';
 import { EffortSchema } from './domain/provider.js';
 
 export const FERRY_PROTOCOL = 'ferry/1' as const;
@@ -21,6 +21,8 @@ export const FERRY_METHODS = [
   'workspaces.open',
   'workspaces.remove',
   'workspaces.update',
+  'workspaces.archiveChats',
+  'workspaces.searchFiles',
   'workspaces.trust',
   'sessions.list',
   'sessions.search',
@@ -35,6 +37,8 @@ export const FERRY_METHODS = [
   'sessions.setStarred',
   'sessions.setPinned',
   'sessions.setEffort',
+  'sessions.archive',
+  'sessions.move',
   'sessions.remove',
   'approvals.respond',
   'checkpoints.list',
@@ -109,6 +113,16 @@ export const FERRY_METHOD_PARAMS_SCHEMAS: Readonly<
 > = {
   'sessions.readOutput': z.tuple([ReadOutputInputSchema]),
   'sessions.setEffort': z.tuple([SessionIdSchema, EffortSchema.nullable()]),
+  'sessions.archive': z.tuple([SessionIdSchema, z.boolean()]),
+  'sessions.move': z.tuple([SessionIdSchema, WorkspaceIdSchema.nullable()]),
+  'workspaces.archiveChats': z.tuple([WorkspaceIdSchema]),
+  'workspaces.searchFiles': z.tuple([
+    z.object({
+      workspaceId: WorkspaceIdSchema,
+      query: z.string().max(512),
+      limit: z.number().int().positive().max(200).optional(),
+    }),
+  ]),
   'quota.limits': z.tuple([]),
   'providers.listKeys': z.tuple([ProviderIdSchema]),
   'providers.effectiveOverrides': z.tuple([ProviderIdSchema]),

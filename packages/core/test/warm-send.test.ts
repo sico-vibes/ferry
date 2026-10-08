@@ -102,6 +102,7 @@ describe('warm workspace sends and sessions.start', () => {
       const first = SessionSchema.parse(
         await rpc('sessions.start', [
           {
+            workspaceId: workspace.id,
             text: 'first',
             effort: 'high',
             modelRef: model.ref,

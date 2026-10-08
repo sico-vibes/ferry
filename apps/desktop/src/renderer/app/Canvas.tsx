@@ -277,21 +277,23 @@ export function HomeCanvas() {
   );
   const activeModel = '';
   const draftModel = models.find((model) => model.ref === draftModelRef);
-  const selectedWorkspace =
-    workspaces.find((item) => item.id === selectedWorkspaceId) ?? workspaces[0];
+  // No selection means "No project": the chat gets its own private scratch folder.
+  const selectedWorkspace = selectedWorkspaceId
+    ? workspaces.find((item) => item.id === selectedWorkspaceId)
+    : undefined;
   useEffect(() => {
     document.querySelector<HTMLTextAreaElement>('[aria-label="Message Ferry"]')?.focus();
   }, []);
   const send = async () => {
     const text = prompt.trim();
     const workspace = selectedWorkspace;
-    if (!text || !workspace) return;
+    if (!text) return;
     try {
       // Ask about an untrusted folder before creating the chat, so declining leaves nothing behind.
-      if (!(await ensureWorkspaceTrusted(client, workspace))) return;
+      if (workspace && !(await ensureWorkspaceTrusted(client, workspace))) return;
       const profileId = activeProfile?.id;
       const session = await client.sessions.create({
-        workspaceId: workspace.id,
+        ...(workspace ? { workspaceId: workspace.id } : {}),
         ...(profileId ? { profileId } : {}),
       });
       if (draftModelRef) await client.models.select(session.id, draftModelRef);
@@ -351,7 +353,7 @@ export function HomeCanvas() {
             />
           }
           workspaceControl={
-            <WorkspaceMenu selectedId={selectedWorkspace?.id} workspaces={workspaces} />
+            <WorkspaceMenu selectedId={selectedWorkspace?.id ?? null} workspaces={workspaces} />
           }
         />
         <HomeStats />
@@ -1270,7 +1272,6 @@ export function SessionCanvas() {
       ),
     ),
   );
-  const workspace = workspaces.find((item) => item.id === data?.session.workspaceId);
   const activateProfile = async (profileId: (typeof profiles)[number]['id']) => {
     await client.profiles.activate(profileId, sessionId);
     await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
@@ -1451,7 +1452,12 @@ export function SessionCanvas() {
         />
       }
       workspaceControl={
-        <WorkspaceMenu lockedToSession selectedId={workspace?.id} workspaces={workspaces} />
+        <WorkspaceMenu
+          lockedToSession
+          sessionId={sessionId}
+          selectedId={data?.session.workspaceId ?? null}
+          workspaces={workspaces}
+        />
       }
       profileMenuItems={[
         ...profiles

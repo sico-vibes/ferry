@@ -6,3 +6,4 @@ export * from './command.js';
 export * from './git.js';
 export * from './repo-map.js';
 export * from './roots.js';
+export * from './file-search.js';

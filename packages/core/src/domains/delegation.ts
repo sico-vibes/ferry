@@ -1,3 +1,4 @@
+import { sessionWorkspace } from '../session-workspace.js';
 import {
   decide,
   detectAcpAgents,
@@ -86,8 +87,7 @@ export function register(host: CoreHost, services: FerryServices): void {
     const sessionId = SessionIdSchema.parse(raw);
     const session = services.sessions.get(sessionId);
     if (!session) throw rpcDomainError(-32044, 'not_found', `Session not found: ${sessionId}`);
-    const workspace = services.workspaces.get(session.workspaceId);
-    if (!workspace) throw rpcDomainError(-32044, 'not_found', 'Session workspace is unavailable');
+    const workspace = sessionWorkspace(services, session);
     return { sessionId, session, workspace };
   };
   const laneRead = async (workspacePath: string) => {

@@ -6,6 +6,7 @@ import {
 } from '@ferry/shared';
 import { WorkspaceJail, ShadowCheckpoints } from '@ferry/workspace';
 import { z } from 'zod';
+import { sessionWorkspace } from '../session-workspace.js';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 
@@ -21,7 +22,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         .map((checkpoint) => CheckpointSchema.parse(checkpoint));
       const output = [...checkpoints];
       const session = services.sessions.get(sessionId);
-      const workspace = session ? services.workspaces.get(session.workspaceId) : undefined;
+      const workspace = session ? sessionWorkspace(services, session) : undefined;
       const workspaces = services.workspaces.list();
       const candidates = session
         ? workspace
@@ -56,9 +57,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const checkpoint = services.checkpoints.get(id);
       const session = checkpoint && services.sessions.get(checkpoint.sessionId);
       const candidates = session
-        ? [services.workspaces.get(session.workspaceId)].filter(
-            (workspace): workspace is NonNullable<typeof workspace> => workspace !== undefined,
-          )
+        ? [sessionWorkspace(services, session)]
         : services.workspaces.list();
       for (const workspace of candidates) {
         const shadow = new ShadowCheckpoints(
@@ -76,7 +75,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const checkpoint = services.checkpoints.get(id);
       const session = checkpoint && services.sessions.get(checkpoint.sessionId);
       const workspaces = services.workspaces.list();
-      const workspace = session ? services.workspaces.get(session.workspaceId) : workspaces[0];
+      const workspace = session ? sessionWorkspace(services, session) : workspaces[0];
       if (checkpoint && !workspace)
         throw rpcDomainError(-32044, 'not_found', 'Checkpoint workspace is unavailable');
       for (const candidate of workspace ? [workspace] : workspaces) {

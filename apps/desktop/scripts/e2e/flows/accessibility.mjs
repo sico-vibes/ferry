@@ -48,7 +48,6 @@ export async function run(page, { url, expect }) {
     '/models',
     '/models/catalog',
     '/models/usage',
-    '/library',
     '/gateway',
     '/settings',
     '/onboarding',

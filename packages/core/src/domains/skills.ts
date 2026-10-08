@@ -9,7 +9,11 @@ export function removeSkillManager(services: FerryServices, projectPath: string)
   managers.get(services)?.delete(projectPath);
 }
 
-export function createSkillManager(services: FerryServices, projectPath: string): SkillManager {
+export function createSkillManager(
+  services: FerryServices,
+  projectPath: string,
+  userOnly = false,
+): SkillManager {
   let workspaceManagers = managers.get(services);
   if (!workspaceManagers) {
     workspaceManagers = new Map();
@@ -25,6 +29,7 @@ export function createSkillManager(services: FerryServices, projectPath: string)
   };
   const manager = new SkillManager({
     projectPath,
+    userOnly,
     userSkillsPath: services.paths.skills,
     getEnabled: (skill) =>
       typeof saved()[skill.name] === 'boolean' ? (saved()[skill.name] as boolean) : undefined,

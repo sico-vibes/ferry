@@ -237,18 +237,16 @@ try {
     await expect(page.getByRole('textbox', { name: 'Daily cap ($)' })).toHaveValue('3.5');
     await expect(page.getByRole('textbox', { name: 'Monthly cap ($)' })).toHaveValue('25');
 
-    await page.goto(`${url}/library`);
-    await page.getByRole('button', { name: 'Open project ferry-web', exact: true }).click();
-    await page.getByRole('tab', { name: 'Permissions', exact: true }).click();
-    const approvedStatus = page.getByRole('status', { name: 'Approved' });
-    const approveButton = page.getByRole('button', { name: 'Approve project lanes' });
-    await expect(approvedStatus.or(approveButton).first()).toBeVisible();
-    if (await approvedStatus.isVisible()) {
-      await expect(approvedStatus).toBeVisible();
-    } else {
-      await approveButton.click();
-      await expect(approvedStatus).toBeVisible();
-    }
+    // Project settings live in Edit project (sidebar project menu); lanes are approved there.
+    await page.goto(url);
+    await page.getByRole('button', { name: 'Project actions for ferry-web', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+    const editProject = page.getByRole('dialog', { name: 'Edit project' });
+    await expect(editProject).toBeVisible();
+    const approveButton = editProject.getByRole('button', { name: 'Approve project lanes' });
+    if (await approveButton.isVisible().catch(() => false)) await approveButton.click();
+    await expect(approveButton).toHaveCount(0);
+    await expect(editProject.getByText('Needs approval')).toHaveCount(0);
   } finally {
     await browser.close();
   }

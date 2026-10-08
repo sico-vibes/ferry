@@ -411,6 +411,7 @@ describe('@ferry/storage', () => {
       const repo = new SessionRepository(db.client);
       const messageRepo = new MessageRepository(db.client);
       const session = {
+        archived: false,
         id: 's1',
         workspaceId: WorkspaceIdSchema.parse('w1'),
         title: 'test',

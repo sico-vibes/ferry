@@ -8171,3 +8171,199 @@ button:not(:disabled):active,
   outline: none !important;
   box-shadow: none !important;
 }
+/* Sidebar Projects and Recents (Codex-style). Project rows sit on the nav icon column; their chats
+   indent to the text column; Recents chats start at the icon column. */
+.v2-sidebar-projects {
+  gap: 2px;
+}
+.v2-sidebar-projects > section {
+  display: grid;
+  gap: 2px;
+}
+.v2-sidebar-projects > section + section {
+  margin-top: 10px;
+}
+.v2-section-label-row {
+  justify-content: space-between;
+  padding-right: 4px;
+}
+.v2-section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.v2-section-toggle svg {
+  width: 14px;
+  height: 14px;
+}
+.v2-section-action,
+.v2-row-action {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.v2-section-action:hover,
+.v2-row-action:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.v2-section-action svg,
+.v2-row-action svg {
+  width: 15px;
+  height: 15px;
+}
+.v2-row-action {
+  opacity: 0;
+}
+.v2-project-row:hover .v2-row-action,
+.v2-project-row:focus-within .v2-row-action,
+.v2-row-action[data-state='open'] {
+  opacity: 1;
+}
+.v2-project-group {
+  display: grid;
+  gap: 2px;
+}
+.v2-project-row {
+  display: flex;
+  height: 36px;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  border-radius: 10px;
+  padding: 0 4px 0 10px;
+}
+.v2-project-row:hover {
+  background: var(--muted);
+}
+.v2-project-open {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--foreground);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+}
+.v2-project-open > svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--muted-foreground);
+  stroke-width: 1.75;
+}
+.v2-project-open > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.v2-chat-row:not(.is-nested) {
+  padding-left: 10px;
+}
+.v2-chat-show-more.is-nested {
+  padding-left: 38px;
+}
+.v2-project-no-chats {
+  margin: 0;
+  padding: 6px 0 8px 38px;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+}
+.v2-project-no-chats.is-flat {
+  padding-left: 10px;
+}
+.v2-project-empty {
+  display: flex;
+  height: 36px;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  padding: 0 10px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.v2-project-empty:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.v2-project-empty svg {
+  width: 18px;
+  height: 18px;
+}
+/* Hover card on a project name: name, chat count, path, Edit project. */
+.v2-project-card {
+  z-index: 60;
+  display: grid;
+  width: 280px;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--popover, var(--card));
+  padding: 12px;
+  color: var(--foreground);
+  box-shadow: var(--shadow-popover);
+  font-size: 13px;
+}
+.v2-project-card > strong,
+.v2-project-card > span,
+.v2-project-card > button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.v2-project-card > strong {
+  font-weight: 600;
+}
+.v2-project-card > span {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.v2-project-card > button {
+  margin-top: 2px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  padding: 8px 0 0;
+  color: var(--foreground);
+  cursor: pointer;
+  font: inherit;
+}
+.v2-project-card svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--muted-foreground);
+}
+.v2-edit-project-dialog {
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
+}

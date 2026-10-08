@@ -11,6 +11,9 @@ export type WorkspaceSettings = z.infer<typeof WorkspaceSettingsSchema>;
 export const WorkspaceSchema = z.object({
   id: WorkspaceIdSchema,
   name: z.string(),
+  pinned: z.boolean().default(false),
+  chatCount: z.number().int().nonnegative().default(0),
+  lastActivityAt: z.iso.datetime().nullable().default(null),
   path: z.string(),
   trusted: z.boolean().default(true),
   riskyRoot: z.boolean().default(false),

@@ -64,7 +64,7 @@ describe('QA fixture integrity', () => {
     const sessionIds = new Set<string>(state.sessions.map((x) => x.id));
 
     for (const session of state.sessions) {
-      expect(workspaceIds.has(session.workspaceId)).toBe(true);
+      expect(session.workspaceId && workspaceIds.has(session.workspaceId)).toBe(true);
       expect(profileIds.has(session.profileId)).toBe(true);
       if (session.modelRef) expect(providerIds.has(providerOf(session.modelRef))).toBe(true);
     }

@@ -1,8 +1,8 @@
 import { captureRoute } from './capture-route.mjs';
 export const name = 'empty-states';
 export const run = captureRoute({
-  path: '/library',
-  heading: 'Library',
+  path: '/models',
+  heading: 'Models',
   file: 'empty-states.png',
   action: async (page) =>
     page.evaluate(() => {

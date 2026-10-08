@@ -170,6 +170,7 @@ class AllCandidatesExhaustedError extends Error {
 export interface AgentOptions {
   store: SessionStore;
   workspace: string;
+  recent?: boolean;
   dataDir: string;
   profile: Profile;
   catalog: Catalog;
@@ -394,7 +395,9 @@ export class AgentLoop {
     outerSignal?.addEventListener('abort', relayAbort, { once: true });
     if (outerSignal?.aborted) relayAbort();
     const signal = controller.signal;
-    const environment = await loadPromptEnvironment(this.options.workspace);
+    const environment = this.options.recent
+      ? { branch: null, status: null, instructions: null }
+      : await loadPromptEnvironment(this.options.workspace);
     let loaded = this.options.store.load(sessionId);
     if (!loaded) throw new Error(`Unknown session ${sessionId}`);
     this.sessionBadKeys.set(sessionId, new Set());
@@ -572,6 +575,7 @@ export class AgentLoop {
           this.persistTask(taskRecord);
         }
         let system = await assembleSystemPrompt({
+          recent: this.options.recent ?? false,
           environment,
           workspace: this.options.workspace,
           sessionId,

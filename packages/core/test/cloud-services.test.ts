@@ -77,6 +77,7 @@ describe('createServices cloud mode selection', () => {
         message: 'Supabase cloud configuration is missing',
       });
       services.sessions.put({
+        archived: false,
         id: 'session_local' as Session['id'],
         workspaceId: 'workspace_1' as Session['workspaceId'],
         title: 'Local',
@@ -108,6 +109,7 @@ describe('createServices cloud mode selection', () => {
     const services = await createServices({ dataDir, env, cloudClientFactory: () => fakeClient });
     try {
       services.sessions.put({
+        archived: false,
         id: 'session_cloud' as Session['id'],
         workspaceId: 'workspace_1' as Session['workspaceId'],
         title: 'Cloud',

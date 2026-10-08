@@ -116,16 +116,39 @@ export interface FerryClient {
     list(): Promise<Workspace[]>;
     open(path: string): Promise<Workspace>;
     remove(id: WorkspaceId): Promise<void>;
-    update(id: WorkspaceId, patch: Partial<WorkspaceSettings>): Promise<Workspace>;
+    update(
+      id: WorkspaceId,
+      patch: Partial<WorkspaceSettings> & {
+        name?: string;
+        pinned?: boolean;
+        settings?: Partial<WorkspaceSettings>;
+      },
+    ): Promise<Workspace>;
+    archiveChats(id: WorkspaceId): Promise<void>;
+    searchFiles(input: {
+      workspaceId: WorkspaceId;
+      query: string;
+      limit?: number;
+    }): Promise<{ path: string; name: string }[]>;
     trust(id: WorkspaceId): Promise<Workspace>;
   };
   sessions: {
-    list(q?: { workspaceId?: WorkspaceId; query?: string }): Promise<Session[]>;
-    search(q?: { workspaceId?: WorkspaceId; query?: string }): Promise<Session[]>;
+    list(q?: {
+      workspaceId?: WorkspaceId | null;
+      query?: string;
+      includeArchived?: boolean;
+    }): Promise<Session[]>;
+    search(q?: {
+      workspaceId?: WorkspaceId | null;
+      query?: string;
+      includeArchived?: boolean;
+    }): Promise<(Session & { match: string })[]>;
+    archive(id: SessionId, archived: boolean): Promise<Session>;
+    move(id: SessionId, workspaceId: WorkspaceId | null): Promise<Session>;
     get(id: SessionId): Promise<SessionDetail>;
     readOutput(input: ReadOutputInput): Promise<ReadOutputPage>;
     create(i: {
-      workspaceId: WorkspaceId;
+      workspaceId?: WorkspaceId | null;
       profileId?: ProfileId;
       title?: string;
     }): Promise<Session>;

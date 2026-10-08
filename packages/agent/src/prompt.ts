@@ -16,6 +16,7 @@ export interface PromptContext {
 }
 
 export interface PromptAssemblyOptions extends PromptContext {
+  recent?: boolean;
   now?: Date;
   shell?: string;
   terseLevel?: 'off' | 'lite' | 'full' | 'ultra';
@@ -78,17 +79,28 @@ export async function loadPromptEnvironment(workspace: string): Promise<PromptEn
 }
 
 export async function assembleSystemPrompt(options: PromptAssemblyOptions): Promise<string> {
-  const { branch, status, instructions } =
-    options.environment ?? (await loadPromptEnvironment(options.workspace));
+  const { branch, status, instructions } = options.recent
+    ? { branch: null, status: null, instructions: null }
+    : (options.environment ?? (await loadPromptEnvironment(options.workspace)));
   const environment = [
     `OS: ${platform()} ${release()} (${hostname()})`,
     `Shell: ${options.shell ?? 'PowerShell'}`,
     `Date: ${(options.now ?? new Date()).toISOString()}`,
     `Workspace: ${path.resolve(options.workspace)}`,
-    `Git branch: ${branch ?? '(detached or unavailable)'}`,
-    `Git status: ${status === '' ? 'clean' : (status ?? 'unavailable')}`,
+    ...(options.recent
+      ? []
+      : [
+          `Git branch: ${branch ?? '(detached or unavailable)'}`,
+          `Git status: ${status === '' ? 'clean' : (status ?? 'unavailable')}`,
+        ]),
   ].join('\n');
-  const blocks = [BASE_RULES, `Environment\n${environment}`];
+  const rules = options.recent
+    ? BASE_RULES.replace(
+        "You are a coding agent working in the user's project.",
+        'This chat has a private scratch folder and no user project. Use the scratch folder for files and code execution. Do not look for a repository or treat any folder as a user project.',
+      )
+    : BASE_RULES;
+  const blocks = [rules, `Environment\n${environment}`];
   if (instructions)
     blocks.push(`Project instructions (${instructions.name})\n${instructions.text}`);
   blocks.push(`Task record\n${renderTask(options.task)}`);

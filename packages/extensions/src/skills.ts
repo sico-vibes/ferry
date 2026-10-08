@@ -22,6 +22,7 @@ export interface LoadedSkill extends Skill {
 }
 export interface SkillManagerOptions {
   projectPath: string;
+  userOnly?: boolean;
   bundledPath?: string;
   userSkillsPath?: string;
   claudeSkillsPath?: string;
@@ -117,7 +118,9 @@ export class SkillManager {
           ]
         : []),
     ];
-    for (const { source, root } of sources) {
+    for (const { source, root } of sources.filter(
+      (source) => !this.options.userOnly || source.source === 'user',
+    )) {
       if (!(await exists(root))) continue;
       for (const entry of (await readdir(root, { withFileTypes: true }))
         .filter((item) => item.isDirectory())

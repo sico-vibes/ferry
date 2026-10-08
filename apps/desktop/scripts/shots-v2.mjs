@@ -38,10 +38,7 @@ const states = [
   'session-streaming',
   'approval-pending',
   'drawer-open',
-  'library-list',
-  'library-detail',
-  'library-instructions',
-  'library-permissions',
+  'project-edit',
   'models-providers',
   'models-catalog',
   'models-usage',
@@ -135,19 +132,14 @@ async function captureState(browser, state, theme, viewport) {
       });
     await configureTheme(page, theme);
 
-    if (state.startsWith('library-')) {
-      await page.goto(new URL('/library', baseUrl).href);
-      await page.locator('.v2-library-header').waitFor();
-      if (state !== 'library-list') {
-        await page.locator('.v2-library-project-link').first().click();
-        const tab =
-          state === 'library-instructions'
-            ? 'Instructions'
-            : state === 'library-permissions'
-              ? 'Permissions'
-              : 'Sessions';
-        await page.getByRole('tab', { name: tab, exact: true }).click();
-      }
+    if (state === 'project-edit') {
+      // Project settings (formerly the Library page) open from the sidebar project menu.
+      await page
+        .getByRole('button', { name: /^Project actions for / })
+        .first()
+        .click();
+      await page.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+      await page.getByRole('dialog', { name: 'Edit project' }).waitFor();
     } else if (state === 'home-idle' || state === 'command-palette') {
       await page.getByRole('textbox', { name: 'Message Ferry' }).focus();
       if (state === 'command-palette') {

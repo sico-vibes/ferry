@@ -19,7 +19,7 @@ export interface SessionRepositories {
 }
 
 export interface CreateSessionInput {
-  workspaceId: WorkspaceId;
+  workspaceId?: WorkspaceId | null | undefined;
   profileId: Session['profileId'];
   modelRef?: Session['modelRef'];
   prompt: string;
@@ -38,7 +38,7 @@ export class SessionStore {
     const now = (input.now ?? new Date()).toISOString();
     const session = SessionSchema.parse({
       id: newId('session'),
-      workspaceId: input.workspaceId,
+      workspaceId: input.workspaceId ?? null,
       title: input.title ?? fallbackTitle(input.prompt),
       preview: input.prompt.slice(0, 160),
       profileId: input.profileId,
@@ -83,10 +83,10 @@ export class SessionStore {
     return { session, messages, taskRecord };
   }
 
-  list(workspaceId: WorkspaceId): Session[] {
+  list(workspaceId?: WorkspaceId | null): Session[] {
     return this.repositories.sessions
       .list()
-      .filter((session) => session.workspaceId === workspaceId)
+      .filter((session) => (session.workspaceId ?? null) === (workspaceId ?? null))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 

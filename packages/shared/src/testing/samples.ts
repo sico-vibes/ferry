@@ -45,6 +45,9 @@ const baseSettings: WorkspaceSettings = {
 };
 export const sampleWorkspaceSettings = baseSettings;
 export const sampleWorkspace: Workspace = {
+  pinned: false,
+  chatCount: 0,
+  lastActivityAt: null,
   id: workspaceId,
   name: 'Ferry',
   path: 'C:/dev/ferry',
@@ -55,7 +58,8 @@ export const sampleWorkspace: Workspace = {
   lastOpenedAt: '2026-09-23T10:00:00.000Z',
   settings: baseSettings,
 };
-export const sampleSession: Session = {
+export const sampleSession: Session & { workspaceId: Workspace['id'] } = {
+  archived: false,
   id: sessionId,
   workspaceId,
   title: 'Contract',

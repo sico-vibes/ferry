@@ -12,7 +12,16 @@ export function createWorkspacesDomain(
   return {
     async list() {
       await before();
-      return structuredClone(state.workspaces);
+      return state.workspaces.map((w) => ({
+        ...structuredClone(w),
+        chatCount: state.sessions.filter((s) => s.workspaceId === w.id && !s.archived).length,
+        lastActivityAt:
+          state.sessions
+            .filter((s) => s.workspaceId === w.id)
+            .map((s) => s.updatedAt)
+            .sort()
+            .at(-1) ?? null,
+      }));
     },
     async open(path) {
       await before();
@@ -43,17 +52,37 @@ export function createWorkspacesDomain(
     async remove(id) {
       await before();
       state.workspaces = state.workspaces.filter((w) => w.id !== id);
-      state.sessions = state.sessions.filter((s) => s.workspaceId !== id);
+      for (const s of state.sessions.filter((s) => s.workspaceId === id)) {
+        s.archived = true;
+        s.workspaceId = null;
+        deps.updateSession(s);
+      }
       persist();
       syncStore();
     },
     async update(id, patch) {
       await before();
       const w = workspace(id);
-      w.settings = { ...w.settings, ...patch };
+      const { name, pinned, settings, ...legacySettings } = patch;
+      if (name !== undefined) w.name = name;
+      if (pinned !== undefined) w.pinned = pinned;
+      w.settings = { ...w.settings, ...legacySettings, ...settings };
       WorkspaceSchema.parse(w);
       persist();
       return structuredClone(w);
+    },
+    async archiveChats(id) {
+      await before();
+      workspace(id);
+      for (const s of state.sessions.filter((s) => s.workspaceId === id)) {
+        s.archived = true;
+        deps.updateSession(s);
+      }
+    },
+    async searchFiles({ workspaceId }) {
+      await before();
+      workspace(workspaceId);
+      return [];
     },
     async trust(id) {
       await before();

@@ -4,6 +4,9 @@ import { applyHydratedRows } from '../src/index.js';
 import type { Message, Session, Workspace } from '@ferry/shared';
 
 const workspace: Workspace = {
+  pinned: false,
+  chatCount: 0,
+  lastActivityAt: null,
   id: 'workspace_1' as Workspace['id'],
   name: 'Local',
   path: '/work/local',
@@ -20,6 +23,7 @@ const workspace: Workspace = {
   },
 };
 const session: Session = {
+  archived: false,
   id: 'session_1' as Session['id'],
   workspaceId: workspace.id,
   title: 'Local',

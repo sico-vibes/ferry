@@ -352,13 +352,57 @@ async function startEmbeddedCore() {
     const helloDomains = await page.evaluate(() => window.ferryEngineHello?.realDomains ?? []);
     assert.ok(helloDomains.length > 0, 'File renderer hello must include real domains');
     console.log(`File renderer real client connected with ${String(helloDomains.length)} domains`);
-    if (phase === 'golden-path') await assertPackagedSignIns(page);
+    if (phase === 'golden-path') {
+      failureStep = 'golden-recent';
+      await page.evaluate(async () => {
+        await window.ferryRpcClient.providers.setKey('openrouter', 'fixture-key');
+        await window.ferryRpcClient.models.list('openrouter');
+      });
+      fakeProvider.setResponses([textTurn('golden-recent-reply')]);
+      const recent = await callRendererRpc(page, 'sessions.start', [
+        {
+          text: 'Reply with golden-recent-reply',
+          modelRef: 'openrouter/cohere/north-mini-code:free',
+        },
+      ]);
+      assert.equal(recent.workspaceId, null);
+      await expect
+        .poll(
+          () =>
+            page.evaluate(async (id) => {
+              const detail = await window.ferryRpcClient.sessions.get(id);
+              return (
+                detail.session.status === 'idle' &&
+                detail.messages.some(
+                  (message) =>
+                    message.role === 'assistant' &&
+                    message.parts.some(
+                      (part) => part.type === 'text' && part.text.includes('golden-recent-reply'),
+                    ),
+                )
+              );
+            }, recent.id),
+          { timeout: 10000 },
+        )
+        .toBe(true);
+      const recentContent = fakeProvider.requests.at(-1).body.messages[0].content;
+      const recentPrompt =
+        typeof recentContent === 'string'
+          ? recentContent
+          : recentContent.map((part) => part.text ?? '').join('\n');
+      assert.ok(recentPrompt.includes('private scratch folder'));
+      assert.ok(!/Git branch:|Git status:/.test(recentPrompt));
+      console.log(
+        'PASS packaged Recent: reply through engine RPC with a private scratch prompt and no git block',
+      );
+      failureStep = 'startup';
+      await assertPackagedSignIns(page);
+    }
     await expect(skipSetup.or(primaryNavigation).first()).toBeVisible({
       timeout: 20_000,
     });
     if (await skipSetup.isVisible().catch(() => false)) await skipSetup.click();
     await primaryNavigation.waitFor({ state: 'visible' });
-    await page.getByRole('button', { name: 'Library', exact: true }).click();
     await page.waitForFunction(() => Boolean(window.ferryRpcClient), undefined, {
       timeout: 30_000,
     });
@@ -518,8 +562,12 @@ async function selectWorkspaceViaComposer(page, workspaceName) {
     state: 'visible',
     timeout: 15_000,
   });
-  await page.getByRole('button', { name: `Project: ${workspaceName}`, exact: true }).click();
-  await page.getByRole('menuitem', { name: workspaceName }).click();
+  // The chip starts at "No project"; the menu lists projects with their path under the name.
+  await page.getByRole('button', { name: /^Project: / }).click();
+  await page.getByRole('menuitem', { name: new RegExp(`^${workspaceName}`) }).click();
+  await expect(
+    page.getByRole('button', { name: `Project: ${workspaceName}`, exact: true }),
+  ).toBeVisible();
 }
 
 async function createSessionViaUi(
@@ -535,11 +583,15 @@ async function createSessionViaUi(
   if (!workspace) throw new Error(`Workspace not found: ${workspaceName}`);
   const previousSessions = await callRendererRpc(page, 'sessions.list', []);
   const previousSessionIds = previousSessions.map((session) => session.id);
-  await selectWorkspaceViaComposer(page, workspaceName);
-  // "New chat" opens the composer and must not create a session until the first message is sent.
+  // "New chat" opens the composer (no project) and must not create a session until the first
+  // message is sent; the project is then picked in the composer.
   await page.getByRole('button', { name: 'New chat', exact: true }).click();
   await page.waitForURL((url) => url.hash === '#/' || url.hash === '', { timeout: 15_000 });
   await expect(page.getByRole('textbox', { name: 'Message Ferry' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Project: No project', exact: true }),
+  ).toBeVisible();
+  await selectWorkspaceViaComposer(page, workspaceName);
   const afterNewChat = await callRendererRpc(page, 'sessions.list', []);
   assert.deepEqual(
     afterNewChat.map((session) => session.id).filter((id) => !previousSessionIds.includes(id)),
@@ -625,7 +677,8 @@ try {
     );
     assert.equal(samePath(openedWorkspace.path), samePath(fixtureRepo));
 
-    await page.getByRole('button', { name: 'Open folder', exact: true }).first().click();
+    // Sidebar "New project" opens the folder dialog and adds the project to Projects.
+    await page.getByRole('button', { name: 'New project', exact: true }).click();
     await expect
       .poll(() =>
         page.evaluate(
@@ -637,13 +690,15 @@ try {
         ),
       )
       .toBe(true);
-    const fixtureWorkspace = page.getByRole('button', {
-      name: `Open project ${fixtureRepoName}`,
-      exact: true,
-    });
-    await fixtureWorkspace.click();
-    await expect(page.getByText('fixture/restore', { exact: true })).toBeVisible();
-    console.log('e2e real domains: folder dialog, selected Library workspace, and git branch OK');
+    const projectsList = page.getByRole('region', { name: 'Projects' });
+    await expect(
+      projectsList.getByRole('button', { name: new RegExp(`^${fixtureRepoName}`) }).first(),
+    ).toBeVisible();
+    const fixtureProject = (await callRendererRpc(page, 'workspaces.list', [])).find(
+      (workspace) => samePath(workspace.path) === samePath(fixtureRepo),
+    );
+    assert.equal(fixtureProject?.gitBranch, 'fixture/restore');
+    console.log('e2e real domains: folder dialog, project in the sidebar, and git branch OK');
 
     if (phase === 'golden-path') {
       failureStep = 'golden-chat';
@@ -729,7 +784,7 @@ try {
         'cloud',
       );
       console.log(
-        'PASS packaged golden path: two replies and Cloud storage persisted through engine RPC',
+        'PASS packaged golden path: two project replies, a Recent reply, and Cloud storage persisted through engine RPC',
       );
       throw goldenPathComplete;
     }
@@ -755,20 +810,19 @@ try {
       page = core.page;
       activePage = page;
       await openRenderer(page);
-      await page.getByRole('button', { name: 'Library', exact: true }).click();
-      const reopenedProject = page.getByRole('button', {
-        name: `Open project ${fixtureRepoName}`,
-        exact: true,
-      });
-      await reopenedProject.click();
-      await expect(page.getByRole('heading', { name: fixtureRepoName }).last()).toBeVisible();
+      await expect(
+        page
+          .getByRole('region', { name: 'Projects' })
+          .getByRole('button', { name: new RegExp(`^${fixtureRepoName}`) })
+          .first(),
+      ).toBeVisible();
       await page.waitForFunction(
         async () =>
           (await window.ferryRpcClient.settings.get()).theme === 'light' &&
           document.documentElement.dataset.theme === 'light',
       );
       console.log(
-        'e2e real domains: setting survives desktop restart and workspace remains in Library OK',
+        'e2e real domains: setting survives desktop restart and the project stays in the sidebar OK',
       );
     }
 

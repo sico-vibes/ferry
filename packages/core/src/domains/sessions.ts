@@ -1,6 +1,12 @@
 import { AgentLoop, SessionStore } from '@ferry/agent';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import {
+  sessionWorkspace,
+  prepareScratch,
+  resetScratch,
+  removeScratch,
+} from '../session-workspace.js';
 import { join } from 'node:path';
 import type { AgentEvent } from '@ferry/agent';
 import { WorkspaceJail, isRiskyWorkspaceRoot } from '@ferry/workspace';
@@ -39,8 +45,8 @@ import {
   isFreeForRouting,
   type SpendState,
 } from '@ferry/router';
-import { createSkillManager } from './skills.js';
-import { connectWorkspaceMcp, createMcpManager } from './mcp.js';
+import { createSkillManager, removeSkillManager } from './skills.js';
+import { connectWorkspaceMcp, createMcpManager, removeWorkspaceMcp } from './mcp.js';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { hasUsableProviderKey } from '../services.js';
@@ -52,7 +58,7 @@ import { canonicalPathKey } from '@ferry/shared/node-paths';
 import { getGatewayController } from '../gateway.js';
 
 const CreateSchema = z.object({
-  workspaceId: z.string().min(1),
+  workspaceId: z.string().min(1).nullable().optional(),
   profileId: z.string().min(1).optional(),
   title: z.string().optional(),
 });
@@ -243,14 +249,20 @@ export function register(host: CoreHost, services: FerryServices): void {
   });
   const listSessions = (rawQuery?: unknown) => {
     const query = z
-      .object({ workspaceId: z.string().optional(), query: z.string().optional() })
+      .object({
+        workspaceId: z.string().nullable().optional(),
+        query: z.string().optional(),
+        includeArchived: z.boolean().optional(),
+      })
       .parse(rawQuery ?? {});
     const needle = query.query?.toLocaleLowerCase();
     return services.sessions
       .list()
       .filter(
         (session) =>
-          (!query.workspaceId || session.workspaceId === query.workspaceId) &&
+          ((query.includeArchived ?? false) || !session.archived) &&
+          (query.workspaceId === undefined ||
+            (session.workspaceId ?? null) === query.workspaceId) &&
           (!needle || `${session.title} ${session.preview}`.toLocaleLowerCase().includes(needle)),
       )
       .map((session) => SessionSchema.parse(session))
@@ -266,26 +278,51 @@ export function register(host: CoreHost, services: FerryServices): void {
 
   host.registerDomain('sessions', {
     list: listSessions,
-    search: listSessions,
+    search(rawQuery?: unknown) {
+      const query = z
+        .object({
+          workspaceId: z.string().nullable().optional(),
+          query: z.string().optional(),
+          includeArchived: z.boolean().optional(),
+        })
+        .parse(rawQuery ?? {});
+      const sessions = listSessions({ ...query, query: undefined });
+      const needle = query.query?.trim().toLocaleLowerCase() ?? '';
+      const messages = needle
+        ? services.messages.searchText(needle, new Set(sessions.map((session) => session.id)))
+        : new Map<string, string>();
+      return sessions.flatMap((session) => {
+        const text = [session.title, session.preview].find((text) =>
+          text.toLocaleLowerCase().includes(needle),
+        );
+        const index = text?.toLocaleLowerCase().indexOf(needle) ?? 0;
+        const match =
+          text !== undefined
+            ? text.slice(Math.max(0, index - 40), index + needle.length + 80)
+            : messages.get(session.id);
+        return match === undefined ? [] : [{ ...session, match }];
+      });
+    },
     async start(rawInput: unknown) {
       const input = SendSchema.extend({
-        workspaceId: z.string().min(1).optional(),
+        workspaceId: z.string().min(1).nullable().optional(),
         profileId: z.string().min(1).optional(),
         modelRef: z.union([z.literal('auto'), ModelRefSchema]).optional(),
         effort: EffortSchema.nullable().optional(),
       }).parse(rawInput);
-      const workspaceId = input.workspaceId ?? services.workspaces.list()[0]?.id;
-      if (!workspaceId) throw rpcDomainError(-32044, 'not_found', 'No workspace is open');
-      const workspace = services.workspaces.get(workspaceId);
-      if (!workspace)
-        throw rpcDomainError(-32044, 'not_found', `Workspace not found: ${workspaceId}`);
-      if (!workspace.trusted)
-        throw rpcDomainError(
-          -32046,
-          'workspace_untrusted',
-          'Trust this workspace before sending a message',
-          { workspaceId, riskyRoot: isRiskyWorkspaceRoot(workspace.path) },
-        );
+      const workspaceId = input.workspaceId ?? null;
+      if (workspaceId) {
+        const workspace = services.workspaces.get(workspaceId);
+        if (!workspace)
+          throw rpcDomainError(-32044, 'not_found', `Workspace not found: ${workspaceId}`);
+        if (!workspace.trusted)
+          throw rpcDomainError(
+            -32046,
+            'workspace_untrusted',
+            'Trust this workspace before sending a message',
+            { workspaceId, riskyRoot: isRiskyWorkspaceRoot(workspace.path) },
+          );
+      }
       const created = SessionSchema.parse(
         await host.dispatch({
           jsonrpc: '2.0',
@@ -317,6 +354,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         });
       } catch (error) {
         deleteSession(created.id);
+        await removeScratch(services, created.id);
         throw error;
       }
     },
@@ -329,8 +367,7 @@ export function register(host: CoreHost, services: FerryServices): void {
     async readOutput(rawInput: unknown) {
       const input = ReadOutputInputSchema.parse(rawInput);
       const session = requireSession(input.sessionId);
-      const workspace = services.workspaces.get(session.workspaceId);
-      if (!workspace) throw rpcDomainError(-32044, 'not_found', 'Session workspace is unavailable');
+      const workspace = sessionWorkspace(services, session);
       const jail = new WorkspaceJail(workspace.path);
       try {
         await jail.initialize();
@@ -343,7 +380,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       if (!row) throw rpcDomainError(-32044, 'not_found', 'Output handle not found');
       let blob: {
         sessionId?: string;
-        workspaceId?: string;
+        workspaceId?: string | null;
         content?: unknown;
         sourcePath?: unknown;
         command?: unknown;
@@ -379,7 +416,7 @@ export function register(host: CoreHost, services: FerryServices): void {
     },
     create(rawInput: unknown) {
       const input = CreateSchema.parse(rawInput);
-      if (!services.workspaces.get(input.workspaceId))
+      if (input.workspaceId && !services.workspaces.get(input.workspaceId))
         throw rpcDomainError(-32044, 'not_found', `Workspace not found: ${input.workspaceId}`);
       const configured = services.settings.get('global');
       const activeProfile =
@@ -403,7 +440,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const now = services.clock.now().toISOString();
       const session = SessionSchema.parse({
         id: newId('session'),
-        workspaceId: input.workspaceId,
+        workspaceId: input.workspaceId ?? null,
         title: input.title?.trim() ?? 'New Chat',
         preview: '',
         profileId: profile.id,
@@ -453,8 +490,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           sessionId: session.id,
           status: session.status,
         });
-      const workspace = services.workspaces.get(session.workspaceId);
-      if (!workspace) throw rpcDomainError(-32044, 'not_found', 'Session workspace is unavailable');
+      const workspace = sessionWorkspace(services, session);
       if (!workspace.trusted)
         throw rpcDomainError(
           -32046,
@@ -794,13 +830,17 @@ export function register(host: CoreHost, services: FerryServices): void {
               ...services.catalog,
               models: availableModels,
             };
+            await prepareScratch(services, session);
+            if (isRunAborted()) throw controller.signal.reason;
             preparingStep = 'project configuration';
-            const rawProjectConfig = await readFile(join(workspace.path, '.ferry', 'config.json'))
-              .then((bytes) => {
-                const source: unknown = JSON.parse(bytes.toString('utf8'));
-                return { bytes, source, parsed: ProjectConfigSchema.safeParse(source) };
-              })
-              .catch(() => null);
+            const rawProjectConfig = session.workspaceId
+              ? await readFile(join(workspace.path, '.ferry', 'config.json'))
+                  .then((bytes) => {
+                    const source: unknown = JSON.parse(bytes.toString('utf8'));
+                    return { bytes, source, parsed: ProjectConfigSchema.safeParse(source) };
+                  })
+                  .catch(() => null)
+              : null;
             const projectConfigHash = rawProjectConfig
               ? createHash('sha256').update(rawProjectConfig.bytes).digest('hex')
               : null;
@@ -838,7 +878,7 @@ export function register(host: CoreHost, services: FerryServices): void {
               ? stricterPermissionMode(userPermissionMode, projectPermissionMode)
               : userPermissionMode;
             preparingStep = 'skills';
-            const skillManager = createSkillManager(services, workspace.path);
+            const skillManager = createSkillManager(services, workspace.path, !session.workspaceId);
             await skillManager.load();
             if (isRunAborted()) throw controller.signal.reason;
             preparingStep = 'MCP tools';
@@ -847,6 +887,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             const loop = new AgentLoop({
               store,
               workspace: workspace.path,
+              recent: !session.workspaceId,
               dataDir: services.paths.home,
               onCheckpointCreated: (checkpointId, label) => {
                 services.checkpoints.put({
@@ -971,9 +1012,13 @@ export function register(host: CoreHost, services: FerryServices): void {
                       pattern: rule.pattern,
                     }))
                   : []),
-                ...(Array.isArray(services.settings.get(`permission-rules:${session.workspaceId}`))
+                ...(Array.isArray(
+                  services.settings.get(`permission-rules:${session.workspaceId ?? session.id}`),
+                )
                   ? (
-                      services.settings.get(`permission-rules:${session.workspaceId}`) as {
+                      services.settings.get(
+                        `permission-rules:${session.workspaceId ?? session.id}`,
+                      ) as {
                         pattern: string;
                         mode: 'allow' | 'ask' | 'deny';
                       }[]
@@ -1447,7 +1492,7 @@ export function register(host: CoreHost, services: FerryServices): void {
                 try {
                   const blob = JSON.parse(row.data_json) as {
                     sessionId?: string;
-                    workspaceId?: string;
+                    workspaceId?: string | null;
                     sourcePath?: string;
                     command?: string;
                     content?: string;
@@ -1656,10 +1701,45 @@ export function register(host: CoreHost, services: FerryServices): void {
       const session = requireSession(rawId);
       return updateSession({ ...session, effort: EffortSchema.nullable().parse(rawEffort) });
     },
-    remove(rawId: unknown) {
+    archive(rawId: unknown, rawArchived: unknown) {
+      return updateSession({
+        ...requireSession(rawId),
+        archived: BooleanSchema.parse(rawArchived),
+      });
+    },
+    async move(rawId: unknown, rawWorkspaceId: unknown) {
+      const session = requireSession(rawId);
+      const workspaceId = z.string().min(1).nullable().parse(rawWorkspaceId);
+      if (
+        controllers.has(session.id) ||
+        session.inFlight ||
+        session.status === 'running' ||
+        session.status === 'awaiting_approval'
+      )
+        throw rpcDomainError(-32010, 'conflict', 'Running chats cannot be moved', {
+          sessionId: session.id,
+          status: session.status,
+        });
+      if (workspaceId && !services.workspaces.get(workspaceId))
+        throw rpcDomainError(-32044, 'not_found', `Workspace not found: ${workspaceId}`);
+      if ((session.workspaceId ?? null) === workspaceId) return session;
+      if (workspaceId === null) await resetScratch(services, session.id);
+      return updateSession(SessionSchema.parse({ ...session, workspaceId }));
+    },
+    async remove(rawId: unknown) {
       const session = requireSession(rawId);
       controllers.get(session.id)?.abort();
+      await runPromises.get(session.id);
       deleteSession(session.id);
+      await removeScratch(services, session.id);
+      removeSkillManager(
+        services,
+        sessionWorkspace(services, { ...session, workspaceId: null }).path,
+      );
+      await removeWorkspaceMcp(
+        services,
+        sessionWorkspace(services, { ...session, workspaceId: null }).path,
+      );
     },
   });
 
@@ -1698,8 +1778,10 @@ export function register(host: CoreHost, services: FerryServices): void {
         const existing = z
           .array(z.object({ pattern: z.string(), mode: z.enum(['allow', 'ask', 'deny']) }))
           .catch([])
-          .parse(services.settings.get(`permission-rules:${session.workspaceId}`) ?? []);
-        services.settings.put(`permission-rules:${session.workspaceId}`, [
+          .parse(
+            services.settings.get(`permission-rules:${session.workspaceId ?? session.id}`) ?? [],
+          );
+        services.settings.put(`permission-rules:${session.workspaceId ?? session.id}`, [
           ...existing.filter((rule) => rule.pattern !== target.detail),
           { pattern: target.detail, mode: 'allow' },
         ]);

@@ -745,8 +745,47 @@ export class SessionRepository extends JsonRepository<Session> {
   }
 }
 export class MessageRepository extends JsonRepository<Message> {
+  private textIndex: Map<string, { sessionId: string; text: string; lower: string }[]> | undefined;
   constructor(client: Database.Database, mirror?: StorageMirror) {
     super(client, 'messages', mirror);
+  }
+  override put(value: Message): void {
+    super.put(value);
+    this.textIndex?.set(value.id, this.indexMessage(value));
+  }
+  override delete(id: string): boolean {
+    const removed = super.delete(id);
+    this.textIndex?.delete(id);
+    return removed;
+  }
+  private indexMessage(message: Message) {
+    return message.parts.flatMap((part) =>
+      part.type === 'text' || part.type === 'reasoning'
+        ? [{ sessionId: message.sessionId, text: part.text, lower: part.text.toLocaleLowerCase() }]
+        : [],
+    );
+  }
+  /** Lazily index text once, then scan only normalized strings, never reparse transcripts. */
+  searchText(query: string, sessionIds: ReadonlySet<string>): Map<string, string> {
+    this.textIndex ??= new Map(
+      this.list().map((message) => [message.id, this.indexMessage(message)]),
+    );
+    const matches = new Map<string, string>();
+    const needle = query.toLocaleLowerCase();
+    for (const parts of this.textIndex.values()) {
+      for (const part of parts) {
+        if (!sessionIds.has(part.sessionId) || matches.has(part.sessionId)) continue;
+        const index = part.lower.indexOf(needle);
+        if (index >= 0)
+          matches.set(
+            part.sessionId,
+            part.text
+              .slice(Math.max(0, index - 40), index + needle.length + 80)
+              .replace(/\s+/g, ' '),
+          );
+      }
+    }
+    return matches;
   }
 }
 export class TaskRepository {

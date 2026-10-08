@@ -2,21 +2,32 @@ import { readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { removeWorkspaceMcp } from './mcp.js';
 import { removeSkillManager } from './skills.js';
-import { WorkspaceIdSchema, WorkspaceSchema, newId } from '@ferry/shared';
+import { WorkspaceIdSchema, WorkspaceSchema, SessionSchema, newId } from '@ferry/shared';
 import { canonicalPathKey } from '@ferry/shared/node-paths';
 import type { Workspace } from '@ferry/shared';
-import { gitBranch, isRiskyWorkspaceRoot, WorkspaceJail } from '@ferry/workspace';
+import {
+  gitBranch,
+  isRiskyWorkspaceRoot,
+  WorkspaceJail,
+  WorkspaceFileSearch,
+} from '@ferry/workspace';
 import { z } from 'zod';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 
 const PathSchema = z.string().min(1);
 const IdSchema = WorkspaceIdSchema;
-const UpdateSchema = z.object({
+const SettingsPatchSchema = z.object({
   gateCommands: z.array(z.string()).optional(),
   instructionsFile: z.string().nullable().optional(),
   defaultProfileId: z.string().nullable().optional(),
   permissionMode: z.enum(['ask', 'auto_edit', 'full_auto']).optional(),
+});
+
+const UpdateSchema = SettingsPatchSchema.extend({
+  name: z.string().trim().min(1).max(160).optional(),
+  pinned: z.boolean().optional(),
+  settings: SettingsPatchSchema.optional(),
 });
 
 function language(files: string[]): Workspace['language'] {
@@ -29,12 +40,64 @@ function language(files: string[]): Workspace['language'] {
 }
 
 export function register(host: CoreHost, services: FerryServices): void {
+  const fileSearch = new WorkspaceFileSearch();
+  const archiveChats = (id: string, detach = false) => {
+    if (!services.workspaces.get(id))
+      throw rpcDomainError(-32044, 'not_found', `Workspace not found: ${id}`);
+    const sessions = services.sessions.list().filter((session) => session.workspaceId === id);
+    if (
+      detach &&
+      sessions.some(
+        (session) =>
+          (session.inFlight ?? false) ||
+          session.status === 'running' ||
+          session.status === 'awaiting_approval',
+      )
+    )
+      throw rpcDomainError(-32010, 'conflict', 'A project with running chats cannot be removed');
+    for (const session of sessions) {
+      const updated = SessionSchema.parse({
+        ...session,
+        archived: true,
+        ...(detach ? { workspaceId: null } : {}),
+      });
+      services.sessions.put(updated);
+      host.emit('session.updated', updated);
+      host.emit('session.status', updated);
+    }
+  };
   host.registerDomain('workspaces', {
+    archiveChats(rawId: unknown) {
+      archiveChats(IdSchema.parse(rawId));
+    },
+    async searchFiles(rawInput: unknown) {
+      const input = z
+        .object({
+          workspaceId: IdSchema,
+          query: z.string().max(512),
+          limit: z.number().int().positive().max(200).default(50),
+        })
+        .parse(rawInput);
+      const workspace = services.workspaces.get(input.workspaceId);
+      if (!workspace)
+        throw rpcDomainError(-32044, 'not_found', `Workspace not found: ${input.workspaceId}`);
+      return fileSearch.search(workspace.path, input.query, input.limit);
+    },
     list() {
+      const sessions = services.sessions.list();
       return Promise.resolve(
         services.workspaces.list().map((workspace) =>
           WorkspaceSchema.parse({
             ...workspace,
+            chatCount: sessions.filter(
+              (session) => session.workspaceId === workspace.id && !session.archived,
+            ).length,
+            lastActivityAt:
+              sessions
+                .filter((session) => session.workspaceId === workspace.id)
+                .map((session) => session.updatedAt)
+                .sort()
+                .at(-1) ?? null,
             riskyRoot: isRiskyWorkspaceRoot(workspace.path),
           }),
         ),
@@ -105,9 +168,11 @@ export function register(host: CoreHost, services: FerryServices): void {
       return Promise.resolve().then(async () => {
         const id = IdSchema.parse(rawId);
         const workspace = services.workspaces.get(id);
+        archiveChats(id, true);
         if (!services.workspaces.delete(id))
           throw rpcDomainError(-32044, 'not_found', `Workspace not found: ${id}`);
         if (workspace) {
+          fileSearch.invalidate(workspace.path);
           removeSkillManager(services, workspace.path);
           await removeWorkspaceMcp(services, workspace.path);
         }
@@ -120,9 +185,12 @@ export function register(host: CoreHost, services: FerryServices): void {
         const patch = UpdateSchema.parse(rawPatch);
         const current = services.workspaces.get(id);
         if (!current) throw rpcDomainError(-32044, 'not_found', `Workspace not found: ${id}`);
+        const { name, pinned, settings, ...legacySettings } = patch;
         const workspace = WorkspaceSchema.parse({
           ...current,
-          settings: { ...current.settings, ...patch },
+          ...(name === undefined ? {} : { name }),
+          ...(pinned === undefined ? {} : { pinned }),
+          settings: { ...current.settings, ...legacySettings, ...settings },
         });
         services.workspaces.put(workspace);
         host.emit('workspace.updated', workspace);

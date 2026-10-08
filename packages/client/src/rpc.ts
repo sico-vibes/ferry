@@ -43,7 +43,7 @@ export class RpcError extends Error {
 export interface RpcFerryClient extends FerryClient {
   sessions: FerryClient['sessions'] & {
     start(input: {
-      workspaceId?: import('@ferry/shared').WorkspaceId;
+      workspaceId?: import('@ferry/shared').WorkspaceId | null;
       profileId?: import('@ferry/shared').ProfileId;
       modelRef?: import('@ferry/shared').ModelRef | 'auto';
       effort?: import('@ferry/shared').Effort | null;

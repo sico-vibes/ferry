@@ -15,6 +15,7 @@ import { RightPanel } from './right-panel/RightPanel';
 import { appMounts } from './mounts';
 import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
 import { WorkspaceTrustDialog } from './WorkspaceTrustDialog';
+import { EditProjectDialog } from './EditProjectDialog';
 import { V2Sidebar } from './V2Sidebar';
 import { SettingsDialog } from './SettingsDialog';
 import { V2ChatHeader } from './V2ChatHeader';
@@ -293,22 +294,12 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const reviewPage = pathname.includes('/review/');
   const fullCanvasPage = onboardingPage || reviewPage;
   const bottomOpen = useUI((state) => state.bottomOpen);
-  const createChat = async () => {
+  /** New chat without a project; pass a project id to start one inside that project. */
+  const createChat = async (workspaceId: string | null = null) => {
     try {
-      const workspaces = await client.workspaces.list();
-      const selectedWorkspaceId = useUI.getState().selectedWorkspaceId;
-      const workspace = workspaces.find((item) => item.id === selectedWorkspaceId) ?? workspaces[0];
-      if (!workspace) {
-        pushToast({
-          kind: 'warning',
-          title: 'Add a folder first',
-          body: 'Choose a workspace before starting a chat.',
-        });
-        return;
-      }
       // A chat exists only once its first message is sent (HomeCanvas creates it), so "New chat"
       // just opens the composer instead of leaving an empty session behind.
-      useUI.getState().setSelectedWorkspace(workspace.id);
+      useUI.getState().setSelectedWorkspace(workspaceId);
       useUI.getState().requestComposerFocus();
       await navigate({ to: '/' });
     } catch (error) {
@@ -491,7 +482,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       <div
         className={`v2-app-grid ${!rightCollapsed && !reviewPage && pathname.startsWith('/s/') ? 'drawer-open' : ''}`}
       >
-        <V2Sidebar onNewChat={() => void createChat()} />
+        <V2Sidebar onNewChat={(workspaceId) => void createChat(workspaceId ?? null)} />
         <main className="v2-main-column">
           {(!networkOnline || simulatedOffline) && (
             <div className="offline-warning" role="status">
@@ -625,6 +616,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <SettingsDialog />
       <WorkspaceTrustDialog />
+      <EditProjectDialog />
     </div>
   );
 }

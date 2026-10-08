@@ -160,7 +160,8 @@ describe('V2Sidebar new chat', () => {
 
     const primaryNav = screen.getByRole('navigation', { name: 'Primary' });
     expect(within(primaryNav).getByRole('button', { name: 'New chat' })).toBeTruthy();
-    expect(within(primaryNav).getByRole('button', { name: 'Library' })).toBeTruthy();
+    // Projects live in the sidebar list now; there is no Library page.
+    expect(within(primaryNav).queryByRole('button', { name: 'Library' })).toBeNull();
     expect(within(primaryNav).getByRole('button', { name: 'Models' })).toBeTruthy();
     expect(screen.getByRole('img', { name: 'Ferry' }).style.width).toBe('18px');
     await userEvent.click(await screen.findByRole('button', { name: /^User menu$/ }));
