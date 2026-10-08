@@ -1,0 +1,9 @@
+{
+  "id": "add-cli-flag",
+  "prompt": "Add --uppercase to greet.mjs. It uppercases the greeting and works before or after --name <name>. Preserve default greeting and exit 2 on unknown flags or missing name. Do not edit test.mjs/package.json. No dependencies.",
+  "profile": null,
+  "maxSteps": 30,
+  "timeoutMs": 600000,
+  "fixture": "fixture",
+  "checker": "check.mjs"
+}

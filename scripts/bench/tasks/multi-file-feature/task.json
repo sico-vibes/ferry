@@ -1,0 +1,10 @@
+{
+  "id": "multi-file-feature",
+  "prompt": "Build the inventory feature across the eight modules named in SPEC.md. Read the spec and tests, implement all modules and re-export the feature from index.mjs. Validate inputs, isolate caller mutations, provide CSV quoting, storage and safe HTML. Do not modify test.mjs, SPEC.md or package.json. No dependencies. Run npm test. Expected work: roughly 15-25 agent steps.",
+  "profile": null,
+  "maxSteps": 45,
+  "timeoutMs": 900000,
+  "fixture": "fixture",
+  "checker": "check.mjs",
+  "expectedSteps": "15-25"
+}

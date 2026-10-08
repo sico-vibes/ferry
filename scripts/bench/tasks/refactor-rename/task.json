@@ -1,0 +1,9 @@
+{
+  "id": "refactor-rename",
+  "prompt": "Rename oldFormat to normalizeLabel everywhere in the four modules format.mjs, user.mjs, label.mjs and main.mjs. Keep behavior. No old name may remain. Do not edit test.mjs/package.json.",
+  "profile": null,
+  "maxSteps": 30,
+  "timeoutMs": 600000,
+  "fixture": "fixture",
+  "checker": "check.mjs"
+}

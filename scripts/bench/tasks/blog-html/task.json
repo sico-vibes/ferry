@@ -1,0 +1,10 @@
+{
+  "id": "blog-html",
+  "prompt": "Create a single self-contained file named blog.html in this folder: a beautiful, modern blog website.\n\nRequirements:\n- One HTML file with inline CSS and JavaScript; no build step and no external JS libraries (a Google Font is fine).\n- Public side: a header with the blog name, a grid of post cards (title, date, excerpt, tag), and a full post view with a back link. Posts render Markdown-style paragraphs and headings safely (escape HTML).\n- A simple admin section reached from a footer link: a form to add a post (title, tag, body), and a list of existing posts with edit and delete. Data persists in localStorage, seeded with three example posts on first load.\n- Polished design: good typography, spacing, subtle shadows, light and dark mode via prefers-color-scheme, responsive down to phone width, keyboard accessible, no horizontal scrolling.\nWhen done, reply with a short summary of what you built.\r\n",
+  "profile": null,
+  "maxSteps": 40,
+  "timeoutMs": 600000,
+  "fixture": "fixture",
+  "checker": "check.mjs",
+  "requires": "chromium"
+}

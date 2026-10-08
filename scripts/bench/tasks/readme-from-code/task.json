@@ -1,0 +1,9 @@
+{
+  "id": "readme-from-code",
+  "prompt": "Write README.md for the API in index.mjs. Document slug(text), clamp(value,min,max), Node 22+, ESM usage with an import and runnable examples slug(\"Hello Ferry\") => \"hello-ferry\" and clamp(12,0,10) => 10. Describe clamp throwing RangeError when min > max. No dependencies; do not change index.mjs/package.json.",
+  "profile": null,
+  "maxSteps": 30,
+  "timeoutMs": 600000,
+  "fixture": "fixture",
+  "checker": "check.mjs"
+}

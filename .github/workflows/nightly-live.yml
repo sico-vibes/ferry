@@ -1,0 +1,106 @@
+name: Nightly live provider checks
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ferry-nightly-live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: windows-2022
+    timeout-minutes: 240
+    env:
+      FERRY_LIVE_GROQ_KEY: ${{ secrets.FERRY_LIVE_GROQ_KEY }}
+      FERRY_LIVE_CEREBRAS_KEY: ${{ secrets.FERRY_LIVE_CEREBRAS_KEY }}
+      FERRY_LIVE_GEMINI_KEY: ${{ secrets.FERRY_LIVE_GEMINI_KEY }}
+      FERRY_LIVE_OPENROUTER_KEY: ${{ secrets.FERRY_LIVE_OPENROUTER_KEY }}
+      FERRY_LIVE_MISTRAL_KEY: ${{ secrets.FERRY_LIVE_MISTRAL_KEY }}
+      FERRY_LIVE_SAMBANOVA_KEY: ${{ secrets.FERRY_LIVE_SAMBANOVA_KEY }}
+      FERRY_LIVE_NVIDIA_KEY: ${{ secrets.FERRY_LIVE_NVIDIA_KEY }}
+      FERRY_LIVE_HUGGINGFACE_KEY: ${{ secrets.FERRY_LIVE_HUGGINGFACE_KEY }}
+      FERRY_LIVE_TOGETHER_KEY: ${{ secrets.FERRY_LIVE_TOGETHER_KEY }}
+      FERRY_LIVE_DEEPINFRA_KEY: ${{ secrets.FERRY_LIVE_DEEPINFRA_KEY }}
+      FERRY_LIVE_FIREWORKS_KEY: ${{ secrets.FERRY_LIVE_FIREWORKS_KEY }}
+      FERRY_LIVE_NEBIUS_KEY: ${{ secrets.FERRY_LIVE_NEBIUS_KEY }}
+      FERRY_LIVE_NOVITA_KEY: ${{ secrets.FERRY_LIVE_NOVITA_KEY }}
+      FERRY_LIVE_SCALEWAY_KEY: ${{ secrets.FERRY_LIVE_SCALEWAY_KEY }}
+      FERRY_LIVE_OVHCLOUD_KEY: ${{ secrets.FERRY_LIVE_OVHCLOUD_KEY }}
+      FERRY_LIVE_STEPFUN_KEY: ${{ secrets.FERRY_LIVE_STEPFUN_KEY }}
+      FERRY_LIVE_TOKENROUTER_KEY: ${{ secrets.FERRY_LIVE_TOKENROUTER_KEY }}
+      FERRY_LIVE_ZAI_GLM_KEY: ${{ secrets.FERRY_LIVE_ZAI_GLM_KEY }}
+      FERRY_LIVE_VERCEL_AI_GATEWAY_KEY: ${{ secrets.FERRY_LIVE_VERCEL_AI_GATEWAY_KEY }}
+      FERRY_LIVE_CLOUDFLARE_WORKERS_AI_KEY: ${{ secrets.FERRY_LIVE_CLOUDFLARE_WORKERS_AI_KEY }}
+      FERRY_LIVE_KILO_KEY: ${{ secrets.FERRY_LIVE_KILO_KEY }}
+      FERRY_LIVE_LLM7_KEY: ${{ secrets.FERRY_LIVE_LLM7_KEY }}
+      FERRY_LIVE_ANYAPI_KEY: ${{ secrets.FERRY_LIVE_ANYAPI_KEY }}
+      FERRY_LIVE_HYPERBOLIC_KEY: ${{ secrets.FERRY_LIVE_HYPERBOLIC_KEY }}
+      FERRY_LIVE_OPENCODE_GO_KEY: ${{ secrets.FERRY_LIVE_OPENCODE_GO_KEY }}
+      FERRY_LIVE_OPENAI_KEY: ${{ secrets.FERRY_LIVE_OPENAI_KEY }}
+      FERRY_LIVE_ANTHROPIC_KEY: ${{ secrets.FERRY_LIVE_ANTHROPIC_KEY }}
+      FERRY_LIVE_DEEPSEEK_KEY: ${{ secrets.FERRY_LIVE_DEEPSEEK_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check for live keys
+        id: keys
+        shell: pwsh
+        run: |
+          $available = @(Get-ChildItem Env: | Where-Object { $_.Name -cmatch '^FERRY_LIVE_[A-Z0-9_]+_KEY$' -and $_.Value.Trim() })
+          if ($available.Count -eq 0) {
+            Write-Output '::notice::No FERRY_LIVE_* secrets are configured; live checks skipped.'
+            'available=false' >> $env:GITHUB_OUTPUT
+          } else {
+            'available=true' >> $env:GITHUB_OUTPUT
+          }
+      - uses: pnpm/action-setup@v6
+        if: steps.keys.outputs.available == 'true'
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v7
+        if: steps.keys.outputs.available == 'true'
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: ./.github/actions/setup-msvc-node-gyp
+        if: steps.keys.outputs.available == 'true'
+      - name: Install dependencies
+        if: steps.keys.outputs.available == 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Build CLI
+        if: steps.keys.outputs.available == 'true'
+        run: .\tools\pnpm.cmd --filter @ferry/cli build
+      - name: Provider conformance
+        id: conformance
+        if: steps.keys.outputs.available == 'true'
+        continue-on-error: true
+        run: node scripts/live/provider-conformance.mjs --keys-from-env --profile Auto-Free --out live-reports/conformance/report.json
+      - name: Ferry Bench
+        id: bench
+        if: steps.keys.outputs.available == 'true'
+        continue-on-error: true
+        run: node scripts/bench/run.mjs --keys-from-env --profile Auto-Free --repeat 1 --out live-reports/bench/report.json
+      - name: Write summaries
+        if: always() && steps.keys.outputs.available == 'true'
+        shell: pwsh
+        run: |
+          Get-ChildItem live-reports -Recurse -Filter report.md -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-Content -LiteralPath $_.FullName -Raw >> $env:GITHUB_STEP_SUMMARY
+          }
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.keys.outputs.available == 'true'
+        with:
+          name: ferry-nightly-live-${{ github.run_id }}
+          path: |
+            live-reports/**/report.json
+            live-reports/**/report.md
+          if-no-files-found: warn
+      - name: Fail on regressions
+        if: always() && (steps.conformance.outcome == 'failure' || steps.bench.outcome == 'failure')
+        shell: pwsh
+        run: exit 1

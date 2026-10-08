@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>Todos</title>
+  <body>
+    <main>
+      <h1>Todos</h1>
+      <form>
+        <label>New todo <input required name="title" /></label><button>Add</button>
+      </form>
+      <ul></ul>
+    </main>
+    <script>
+      let todos = JSON.parse(localStorage.getItem('todos-ui') || '[]');
+      const form = document.querySelector('form'),
+        list = document.querySelector('ul');
+      function draw() {
+        list.replaceChildren();
+        for (const todo of todos) {
+          const li = document.createElement('li'),
+            label = document.createElement('label'),
+            checkbox = document.createElement('input'),
+            button = document.createElement('button');
+          checkbox.type = 'checkbox';
+          checkbox.checked = todo.done;
+          checkbox.onchange = () => {
+            todo.done = checkbox.checked;
+            save();
+          };
+          label.append(checkbox, document.createTextNode(todo.title));
+          button.textContent = 'Delete';
+          button.onclick = () => {
+            todos = todos.filter((item) => item.id !== todo.id);
+            save();
+          };
+          li.append(label, button);
+          list.append(li);
+        }
+      }
+      function save() {
+        localStorage.setItem('todos-ui', JSON.stringify(todos));
+        draw();
+      }
+      form.onsubmit = (e) => {
+        e.preventDefault();
+        todos.push({ id: crypto.randomUUID(), title: form.elements.title.value, done: false });
+        form.reset();
+        save();
+      };
+      draw();
+    </script>
+  </body>
+</html>
