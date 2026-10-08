@@ -21,7 +21,12 @@ describe('Electron security boundary', () => {
       FERRY_E2E_PROVIDER_KEY: 'fixture-key',
     };
 
-    expect(buildCoreEnvironment(source, true)).toEqual({ PATH: 'system-path' });
+    // Packaged: no test overrides cross, and a test launch is forced onto a separate keyring so it
+    // can never write the user's real provider keys.
+    expect(buildCoreEnvironment(source, true)).toEqual({
+      PATH: 'system-path',
+      FERRY_KEYRING_SERVICE: 'Ferry-Test',
+    });
     expect(buildCoreEnvironment({ ...source, FERRY_E2E_USER_DATA_DIR: '' }, false)).toEqual({
       PATH: 'system-path',
     });

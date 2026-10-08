@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FakeOpenAIServer } from '../../../packages/testkit/src/fake-servers.ts';
+import { assertRealKeyringUnchanged, snapshotRealKeyring } from './real-keyring-guard.mjs';
+
+const realKeyringBefore = snapshotRealKeyring();
 
 if (process.platform !== 'win32')
   throw new Error('Interactive installed CLI smoke requires Windows.');
@@ -212,4 +215,5 @@ ${output.slice(-1500)}`,
   );
 } finally {
   await fake.stop();
+  assertRealKeyringUnchanged(realKeyringBefore);
 }

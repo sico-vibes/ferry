@@ -60,7 +60,27 @@ export function buildCoreEnvironment(
     }
   }
 
+  // A packaged build under any test harness must never write to the user's real "Ferry" keyring:
+  // the core ignores test keyring namespaces in packaged builds, so tests once overwrote the
+  // user's real provider keys. Force a separate Credential Manager service in those modes.
+  if (isPackaged && isTestLaunch(source)) {
+    const requested = source.FERRY_KEYRING_SERVICE?.trim();
+    result.FERRY_KEYRING_SERVICE =
+      requested && requested.toLowerCase() !== 'ferry' ? requested : TEST_KEYRING_SERVICE;
+  }
+
   return result;
+}
+
+export const TEST_KEYRING_SERVICE = 'Ferry-Test';
+
+function isTestLaunch(source: NodeJS.ProcessEnv): boolean {
+  return (
+    source.FERRY_E2E_PACKAGED === '1' ||
+    Boolean(source.FERRY_E2E_USER_DATA_DIR) ||
+    source.FERRY_INSTALL_SMOKE === 'true' ||
+    Boolean(source.FERRY_TEST_KEYRING_NAMESPACE)
+  );
 }
 
 function isLoopbackUrl(value: string): boolean {

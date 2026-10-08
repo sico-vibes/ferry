@@ -11,6 +11,13 @@ import { fileURLToPath } from 'node:url';
 import { chromium, expect } from '@playwright/test';
 import { FakeOpenAIServer } from '../../../packages/testkit/src/fake-servers.ts';
 import { FixtureRepo } from '../../../packages/testkit/src/fixture-repo.ts';
+import {
+  assertRealKeyringUnchanged,
+  cleanupTestKeyring,
+  snapshotRealKeyring,
+} from './real-keyring-guard.mjs';
+
+const testKeyringService = `Ferry-E2E-${String(process.pid)}`;
 
 const appDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
 const temporaryDirectory = realpathSync.native(
@@ -248,6 +255,8 @@ async function startEmbeddedCore() {
         ...process.env,
         NODE_ENV: 'test',
         FERRY_TEST_KEYRING_NAMESPACE: `ferry-real-e2e-${process.pid}`,
+        // Packaged builds keep keys in Credential Manager; never under the user's real service.
+        FERRY_KEYRING_SERVICE: testKeyringService,
         FERRY_E2E_USER_DATA_DIR: userDataDirectory,
         FERRY_E2E_OPEN_FOLDER: fixtureRepo,
         FERRY_HOME: dataDirectory,
@@ -632,6 +641,7 @@ async function createSessionViaUi(
   return { ...detail.session, id: sessionIdFromDetail };
 }
 
+const realKeyringBefore = snapshotRealKeyring();
 try {
   if (!phases.includes(phase)) {
     throw new Error(`Unsupported FERRY_E2E_ONLY phase: ${phase}. Supported: ${phases.join(', ')}`);
@@ -1768,4 +1778,7 @@ try {
   });
   await agentFixture.cleanup();
   await fakeProvider?.stop();
+  cleanupTestKeyring(testKeyringService);
+  // Fails the run if anything reached the user's real "Ferry" keyring.
+  assertRealKeyringUnchanged(realKeyringBefore);
 }
