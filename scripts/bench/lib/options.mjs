@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 export const root = fileURLToPath(new URL('../../../', import.meta.url));
 export const usage = `Usage: node scripts/bench/run.mjs [--profile Auto-Free] [--tasks a,b] [--repeat N]
   [--cli <ferry.js|ferry.cmd>] [--keys-from-env | --use-stored-keys] [--out report.json]
-  [--dry-run] [--help]
+  [--keep-output <dir>] [--dry-run] [--help]
 Live runs require an explicit key source. --dry-run runs the offline self-test.
 Conformance accepts the same flags except --tasks, --repeat and --dry-run.`;
 
@@ -16,7 +16,7 @@ export function options(argv, conformance = false) {
     out: resolve(conformance ? 'conformance/report.json' : 'report.json'),
   };
   const booleans = new Set(['help', 'dry-run', 'keys-from-env', 'use-stored-keys']);
-  const values = new Set(['profile', 'tasks', 'repeat', 'cli', 'out']);
+  const values = new Set(['profile', 'tasks', 'repeat', 'cli', 'out', 'keep-output']);
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]?.replace(/^--/, '');
     if (!argv[i]?.startsWith('--') || (!booleans.has(flag) && !values.has(flag)))
@@ -39,5 +39,6 @@ export function options(argv, conformance = false) {
     throw new Error('Live runs require --keys-from-env or --use-stored-keys');
   result.cli = resolve(result.cli);
   result.out = resolve(result.out);
+  if (result['keep-output']) result['keep-output'] = resolve(result['keep-output']);
   return result;
 }

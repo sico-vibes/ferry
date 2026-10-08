@@ -1,4 +1,4 @@
-import { cp } from 'node:fs/promises';
+import { cp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { options, usage } from './lib/options.mjs';
 import { loadTasks, check, selfTestTasks } from './lib/tasks.mjs';
@@ -61,6 +61,13 @@ try {
               const parsed = metrics(result.stdout);
               const checked = await check(task, workspace, { env: live.env });
               const checker = { ...checked, reason: live.scrub(checked.reason) };
+              if (opts['keep-output']) {
+                // Keep what the agent built and its event stream (secrets scrubbed) for review.
+                const kept = join(opts['keep-output'], `${task.id}-${String(repeat)}`);
+                await rm(kept, { recursive: true, force: true });
+                await cp(workspace, kept, { recursive: true });
+                await writeFile(join(kept, 'run.jsonl'), live.scrub(result.stdout), 'utf8');
+              }
               const status =
                 checker.status === 'skipped'
                   ? 'skipped'
