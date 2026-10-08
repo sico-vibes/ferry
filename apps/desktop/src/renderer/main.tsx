@@ -33,8 +33,11 @@ const previewParams = new URLSearchParams(location.search);
 const webPreview =
   import.meta.env.DEV && (previewParams.get('preview') === 'web' || location.port === '5199');
 const previewScenario = previewParams.get('scenario') ?? 'busy';
+// `?latency=1500` slows every mock call in the web preview so loading states can be reviewed.
+const previewLatency = webPreview ? Number(previewParams.get('latency') ?? Number.NaN) : Number.NaN;
 const mock = createDemoFerryClient({
   ...(webPreview ? { storage: { load: () => undefined, save: () => undefined } } : {}),
+  ...(Number.isFinite(previewLatency) && previewLatency > 0 ? { latencyMs: previewLatency } : {}),
   ...(configuredSpeed !== undefined && Number.isFinite(configuredSpeed) && configuredSpeed >= 0
     ? { speed: configuredSpeed }
     : {}),
