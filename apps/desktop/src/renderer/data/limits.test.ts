@@ -52,5 +52,9 @@ describe('limit formatting', () => {
     expect(tightest?.providerName).toBe('OpenRouter');
     expect(tightest?.share).toBe(0.1);
     expect(tightestDailyWindow([provider('Paid', [])])).toBeNull();
+    // An untouched plan isn't "closest to running out".
+    expect(
+      tightestDailyWindow([provider('AnyAPI', [window({ used: 0, remaining: 50 })])]),
+    ).toBeNull();
   });
 });

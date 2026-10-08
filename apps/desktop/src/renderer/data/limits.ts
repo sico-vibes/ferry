@@ -51,14 +51,17 @@ export function describeReset(window: LimitWindow, now = Date.now()): string | n
   return `resets in ${String(Math.round(hours / 24))}d`;
 }
 
-/** The daily window closest to running out across connected providers, for the sidebar. */
+/**
+ * The daily window closest to running out, for the sidebar. Only windows you've used today count:
+ * an untouched free plan at 100% says nothing about your day.
+ */
 export function tightestDailyWindow(
   limits: readonly ProviderLimits[],
 ): { providerName: string; window: LimitWindow; share: number } | null {
   let best: { providerName: string; window: LimitWindow; share: number } | null = null;
   for (const provider of limits)
     for (const window of provider.windows) {
-      if (window.period !== 'day') continue;
+      if (window.period !== 'day' || window.used <= 0) continue;
       const share = remainingShare(window);
       if (share === null) continue;
       if (!best || share < best.share)

@@ -169,7 +169,7 @@ export function V2Sidebar({
                 </>
               ) : (
                 <div className="v2-capacity-top">
-                  <span>No daily limits reported yet</span>
+                  <span>No daily limits used yet today</span>
                 </div>
               )}
               <button
