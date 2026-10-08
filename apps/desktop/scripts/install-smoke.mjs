@@ -337,7 +337,10 @@ try {
       'Refusing to run: an existing Ferry installation or HKCU Ferry settings key could be affected.',
     );
 
-  tempRoot = await mkdtemp(join(tmpdir(), 'ferry-install-upgrade-smoke-'));
+  // Long-form path: CI's TEMP is spelled with 8.3 names (RUNNER~1), but Windows reports running
+  // processes by long path, and electron-builder's installer/uninstaller find a running Ferry with
+  // Path.StartsWith($INSTDIR). A short $INSTDIR means they never stop it and its files stay locked.
+  tempRoot = realpathSync.native(await mkdtemp(join(tmpdir(), 'ferry-install-upgrade-smoke-')));
   const baseInstaller = requestedInstaller ?? (await newestInstaller());
   await access(baseInstaller);
   const baseVersion = releaseVersion(baseInstaller);
