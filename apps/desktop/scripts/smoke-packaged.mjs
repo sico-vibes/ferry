@@ -332,10 +332,21 @@ async function waitForRendererLoad() {
             const composer = page.getByRole('textbox', { name: 'Message Ferry' });
             const skipSetup = page.getByRole('button', { name: 'Skip setup' });
             const primaryNavigation = page.getByRole('navigation', { name: 'Primary' });
+            // After an upgrade, What's new opens once over the app; close it like a user would.
+            const whatsNew = page.getByRole('dialog', { name: /What.s new/ });
             await Promise.race([
               composer.waitFor({ state: 'visible' }),
               skipSetup.waitFor({ state: 'visible' }),
+              whatsNew.waitFor({ state: 'visible' }),
             ]);
+            if (await whatsNew.isVisible()) {
+              await page.keyboard.press('Escape');
+              await whatsNew.waitFor({ state: 'hidden' });
+              await Promise.race([
+                composer.waitFor({ state: 'visible' }),
+                skipSetup.waitFor({ state: 'visible' }),
+              ]);
+            }
             const interactiveMs = Number((performance.now() - launchStartedAt).toFixed(1));
             console.log(`Packaged time to interactive: ${String(interactiveMs)} ms`);
             await page.waitForFunction(
