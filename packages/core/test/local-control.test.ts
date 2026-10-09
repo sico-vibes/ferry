@@ -24,14 +24,18 @@ afterEach(async () => {
 });
 
 describe('core local control channel', () => {
-  it('derives a stable Windows pipe name from the canonical engine directory', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'ferry-core-pipe-name-'));
-    dataDirectories.push(root);
-    const first = localControlSocketAddress(join(root, 'Engine'), 'win32');
-    const second = localControlSocketAddress(join(root, 'engine'), 'win32');
-    expect(first.transport).toBe('pipe');
-    expect(second).toEqual(first);
-  });
+  // Pipe names and case-insensitive paths only exist on Windows.
+  it.runIf(process.platform === 'win32')(
+    'derives a stable Windows pipe name from the canonical engine directory',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'ferry-core-pipe-name-'));
+      dataDirectories.push(root);
+      const first = localControlSocketAddress(join(root, 'Engine'), 'win32');
+      const second = localControlSocketAddress(join(root, 'engine'), 'win32');
+      expect(first.transport).toBe('pipe');
+      expect(second).toEqual(first);
+    },
+  );
 
   it('rejects a missing or incorrect authentication token', () => {
     expect(verifyLocalControlToken('expected-token-value', undefined)).toBe(false);

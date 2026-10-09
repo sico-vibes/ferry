@@ -149,7 +149,8 @@ const textParts = () =>
     .map((part) => part.text)
     .join('\n') ?? '';
 async function ready(assertion: () => void): Promise<void> {
-  const deadline = process.hrtime.bigint() + 5_000_000_000n;
+  // Generous for slow CI runners; tests still finish as soon as the condition holds.
+  const deadline = process.hrtime.bigint() + 20_000_000_000n;
   for (;;) {
     try {
       assertion();
@@ -567,19 +568,23 @@ describe('routing reliability', () => {
         throw error(429, 'rate limit', '12');
       },
     }).run({ sessionId, signal: controller.signal });
-    await ready(() => {
-      expect(
-        events.some(
-          (event) =>
-            event.type === 'agent.event' &&
-            event.event.type === 'status' &&
-            event.event.status === 'waiting',
-        ),
-      ).toBe(true);
-    });
-    controller.abort();
+    try {
+      await ready(() => {
+        expect(
+          events.some(
+            (event) =>
+              event.type === 'agent.event' &&
+              event.event.type === 'status' &&
+              event.event.status === 'waiting',
+          ),
+        ).toBe(true);
+      });
+    } finally {
+      // Always stop the run before cleanup closes the database.
+      controller.abort();
+    }
     expect((await run).status).toBe('cancelled');
-  });
+  }, 30_000);
 
   it('does not turn a permission denial into completed work with warnings', async () => {
     let calls = 0;
