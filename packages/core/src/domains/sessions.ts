@@ -206,11 +206,15 @@ export function register(host: CoreHost, services: FerryServices): void {
     host.emit('session.status', updated);
     return updated;
   };
+  /** Messages each session received while a run was active, until a run has seen them. */
+  const queuedMessageIds = new Map<SessionId, Set<string>>();
   /** Messages sent while the agent was working that its last step never saw get their own run. */
   const answerQueuedMessage = (id: SessionId, seen: ReadonlySet<string> | null) => {
-    if (!seen) return;
+    const queued = queuedMessageIds.get(id);
+    queuedMessageIds.delete(id);
+    if (!seen || !queued?.size) return;
     const unseen = (store.load(id)?.messages ?? []).filter(
-      (message) => message.role === 'user' && !seen.has(message.id),
+      (message) => message.role === 'user' && queued.has(message.id) && !seen.has(message.id),
     );
     const text = unseen
       .flatMap((message) =>
@@ -557,6 +561,9 @@ export function register(host: CoreHost, services: FerryServices): void {
           sessionId: session.id,
           message: MessageSchema.parse(queued),
         });
+        const pending = queuedMessageIds.get(session.id) ?? new Set<string>();
+        pending.add(queued.id);
+        queuedMessageIds.set(session.id, pending);
         return Promise.resolve(requireSession(session.id));
       }
       const workspace = sessionWorkspace(services, session);
