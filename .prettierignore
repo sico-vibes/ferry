@@ -1,6 +1,7 @@
 dist
 out
 coverage
+apps/landing/next-env.d.ts
 pnpm-lock.yaml
 design/reference
 .dev
