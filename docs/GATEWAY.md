@@ -150,3 +150,17 @@ Set key policy with `ferry gateway keys update <id> --paid-backup true --budget-
 Gateway execution uses the routing first-token timeout, the agent step inactivity timeout, a 150-second overall deadline and at most five dispatches. Provider cooldowns and Retry-After remain authoritative. Request history is persisted locally as metadata, with Core retention settings applied at startup and hourly.
 
 OpenCode-only models use the real OpenCode app's own providers and credentials. Launch with `ferry run opencode --native --model opencode/big-pickle`; this path does not create a Gateway key, start the Gateway, or inject Ferry provider configuration.
+
+## Interactive CLI and provider readiness
+
+Use `/connect` to choose an API, supported account sign-in, or a keyless/authenticated local server. Credentials are entered without echo or history. Escape closes a connection/picker overlay first; it cancels the agent only when no overlay is open. Configure a custom or regional endpoint with `/connect <provider> endpoint <base-url>` and check saved access with `/connect <provider> check`.
+
+`/gateway` reports the shared Core server and key spending policies. `/gateway start`, `stop`, `requests`, and `routing` use the same Core operations as the dashboard. `/gateway configure codex|opencode|claude` prints a masked configuration; adding `--apply` writes through the existing configuration/backup helper. `/doctor` reads a sanitized Core/provider diagnostic summary without opening an agent chat. Scripted generation remains available through `ferry run`; the interactive UI requires a terminal.
+
+Models and onboarding expose free checks, a recommendation preview, Apply and Undo. Paid API checks require separate approval of a positive total ceiling, at most USD 1. The ceiling covers both workers together and shared global spend caps remain enforced. Cancellation or missing usage retains a conservative charge. Paid checks never enable paid inference; supported account models use the Gateway verification operation. A small synthetic generation tests responsiveness and access, not coding ability or installed-client certification.
+
+Preserve fidelity disables lossy agent transforms. Safe savings enables recoverable output filtering and context hygiene. Advanced exposes individual switches, including RTK when installed. Saving global optimizer controls applies them to built-in native agent profiles; custom profiles retain their explicit overrides. Gateway prompts and tool structures retain their independent fidelity defaults. Free native profiles retain Caveman Lite and Lite replies until explicitly changed. Savings appear from recorded transform measurements; cost estimates and missing usage are labelled separately.
+
+Custom OpenAI-compatible APIs and regional template endpoints persist in Core. Changing an endpoint clears old model and check evidence. Local discovery uses advertised context/tool metadata; unadvertised local/custom tool support remains unavailable. Beta integrations remain excluded from default Auto until enabled. Kilo's API template is separate from its Coming soon account connection; Qoder and Cline account controls also remain unavailable until supported authentication exists.
+
+Data & privacy and About can export allowlisted diagnostics containing version, Gateway state and provider health. The export excludes credentials, configuration headers, paths, prompts, responses and arbitrary log/error bodies.

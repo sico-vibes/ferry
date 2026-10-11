@@ -51,6 +51,17 @@ export function createProviders(now: Date): MockProvider[] {
     throw new Error('Unable to determine the next Pacific midnight');
   })();
   const specs = [
+    [
+      'openai-compatible',
+      'Custom OpenAI-compatible API',
+      'paid',
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+    ],
     ['ollama', 'Ollama', 'legit', 'ollama', null, null, null, null, null],
     ['lmstudio', 'LM Studio', 'legit', null, null, null, null, null, null],
     ['gemini', 'Gemini API', 'legit', 'googlegemini', 250, 212, 10, 3, 38],
@@ -201,6 +212,7 @@ export function createProviders(now: Date): MockProvider[] {
       return {
         id: id as Provider['id'],
         name,
+        keyRequired: !['ollama', 'lmstudio', 'ovhcloud', 'kilo'].includes(id),
         tag,
         kind: tag === 'subscription_cli' ? 'cli' : 'api',
         brand,

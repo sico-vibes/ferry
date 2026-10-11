@@ -16,6 +16,28 @@ import { HealthTab } from './Health';
 import { ProviderStatusBadge } from '../ProviderStatusBadge';
 import { V2Sidebar } from '../V2Sidebar';
 import { providerStatus } from '../ProvidersTable';
+import { sampleProvider } from '@ferry/shared/testing';
+
+it('keeps connection health visible independently of routing enablement', () => {
+  expect(
+    providerStatus({
+      ...sampleProvider,
+      enabled: false,
+      keyStatus: 'invalid',
+      health: 'auth_invalid',
+      pausedReason: null,
+    }),
+  ).toEqual({ label: 'Invalid key', tone: 'destructive' });
+  expect(
+    providerStatus({
+      ...sampleProvider,
+      enabled: false,
+      keyStatus: 'valid',
+      health: 'ok',
+      pausedReason: null,
+    }),
+  ).toEqual({ label: 'Healthy', tone: 'success' });
+});
 
 afterEach(() => {
   cleanup();

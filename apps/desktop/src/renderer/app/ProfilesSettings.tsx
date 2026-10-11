@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Copy, GripVertical, Plus, Trash2, X } from 'lucide-react';
 import { listAllModels } from '@ferry/client';
 import { SkeletonRows, ProviderLogo, SegmentedControl, Select, Switch, UiV2 } from '@ferry/ui';
 import {
   DIRECT_PROFILE_ID,
+  OPTIMIZATION_PRESETS,
+  optimizationPreset,
   type Profile,
   type Provider,
   type StepKind,
@@ -117,6 +119,9 @@ export function ProfilesSettings() {
   >(null);
   const [codingFeedback, setCodingFeedback] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [profileAdvanced, setProfileAdvanced] = useState(false);
+  const operation = useRef(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const saved = draft ? profiles.find((profile) => profile.id === draft.id) : undefined;
   const dirty = isProfileDirty(draft, saved);
@@ -148,7 +153,9 @@ export function ProfilesSettings() {
     setDraft(structuredClone(profile));
   };
   const save = async () => {
-    if (!draft || providersPending || modelsPending || !settings) return;
+    if (!draft || providersPending || modelsPending || !settings || operation.current) return;
+    operation.current = true;
+    setBusy(true);
     try {
       const result = await client.profiles.save(draft);
       await cache.invalidateQueries({ queryKey: keys.profiles });
@@ -159,6 +166,9 @@ export function ProfilesSettings() {
         kind: 'error',
         message: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      operation.current = false;
+      setBusy(false);
     }
   };
   const remove = async () => {
@@ -289,9 +299,34 @@ export function ProfilesSettings() {
         </p>
         <p className="v2-gateway-help">
           Gateway/API: preserve fidelity by default. Ferry agent input:{' '}
-          {draft.optimizers.cavemanInput}; reply style: {draft.optimizers.terse}. Planner/editor
-          splitting is an advanced agent option.
+          {draft.builtin && settings.globalOptimizerOverride
+            ? settings.optimizers.cavemanInput
+            : draft.optimizers.cavemanInput}
+          ; reply style:{' '}
+          {draft.builtin && settings.globalOptimizerOverride
+            ? settings.optimizers.terse
+            : draft.optimizers.terse}
+          .{' '}
+          {draft.builtin && settings.globalOptimizerOverride
+            ? 'Using saved global agent defaults.'
+            : ''}{' '}
+          Planner/editor splitting is an advanced agent option.
         </p>
+        <Select
+          label="Profile optimization preset"
+          value={optimizationPreset(draft.optimizers)}
+          options={[
+            { value: 'fidelity', label: 'Preserve fidelity' },
+            { value: 'savings', label: 'Safe savings' },
+            { value: 'advanced', label: 'Advanced (individual settings)' },
+          ]}
+          disabled={locked}
+          onValueChange={(value) => {
+            setProfileAdvanced(value === 'advanced');
+            if (value === 'fidelity' || value === 'savings')
+              patch('optimizers', { ...OPTIMIZATION_PRESETS[value] });
+          }}
+        />
         {draft.provenance && (
           <p className="v2-gateway-help">
             Generated {draft.provenance.generatedAt} from {draft.provenance.sampleCount} provider
@@ -300,8 +335,11 @@ export function ProfilesSettings() {
         )}
         <UiV2.Button
           variant="secondary"
-          disabled={isNew || dirty || settings.activeProfileId === draft.id}
-          onClick={() =>
+          disabled={busy || isNew || dirty || settings.activeProfileId === draft.id}
+          onClick={() => {
+            if (operation.current) return;
+            operation.current = true;
+            setBusy(true);
             void client.profiles
               .activate(draft.id)
               .then(() => cache.invalidateQueries({ queryKey: keys.settings }))
@@ -311,13 +349,22 @@ export function ProfilesSettings() {
                   message: cause instanceof Error ? cause.message : 'Could not apply profile.',
                 });
               })
-          }
+              .finally(() => {
+                operation.current = false;
+                setBusy(false);
+              });
+          }}
         >
           {settings.activeProfileId === draft.id ? 'Active preset' : 'Apply preset'}
         </UiV2.Button>
       </section>
 
-      <details>
+      <details
+        open={profileAdvanced}
+        onToggle={(event) => {
+          setProfileAdvanced(event.currentTarget.open);
+        }}
+      >
         <summary>Advanced</summary>
         <label className="v2-settings-field">
           <span>Import Ferry Bench coding results (JSON)</span>
@@ -794,7 +841,11 @@ export function ProfilesSettings() {
                   'Keep full output retrievable after trimming.',
                 ],
                 ['contextHygiene', 'Context hygiene', 'Drop stale context between steps.'],
-                ['rtk', 'RTK', 'Compress shell output with RTK when installed.'],
+                [
+                  'rtk',
+                  'RTK',
+                  'Use RTK for supported shell commands when it is installed on PATH.',
+                ],
               ] as const
             ).map(([key, title, helper]) => (
               <ToggleRow
@@ -836,7 +887,9 @@ export function ProfilesSettings() {
               >
                 Discard
               </UiV2.Button>
-              <UiV2.Button onClick={() => void save()}>Save profile</UiV2.Button>
+              <UiV2.Button disabled={busy} onClick={() => void save()}>
+                {busy ? 'Saving…' : 'Save profile'}
+              </UiV2.Button>
             </div>
           ) : null}
         </div>

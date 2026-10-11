@@ -34,6 +34,9 @@ const RoutingSettingsFieldsSchema = z.object({
   autoPauseAfterFailedRequests: z.number().int().nonnegative(),
   stickySessions: z.boolean(),
   smartReliability: z.boolean(),
+  qualityWeight: z.number().min(0).max(20),
+  textToolFallbackEnabled: z.boolean(),
+  avoidTrainingProviders: z.boolean(),
   quotaReservations: z.boolean(),
   pinnedExhaustion: z.enum(['handover', 'ask', 'fail']),
   cooldownReasons: z.boolean(),
@@ -89,6 +92,22 @@ export const UserPermissionRuleSchema = z.object({
 });
 export type UserPermissionRule = z.infer<typeof UserPermissionRuleSchema>;
 export const SettingsSchema = z.object({
+  globalOptimizerOverride: z.boolean().default(false),
+  providerEndpoints: z
+    .record(
+      ProviderIdSchema,
+      z.url().refine((value) => {
+        const url = new URL(value);
+        return (
+          ['http:', 'https:'].includes(url.protocol) &&
+          !url.username &&
+          !url.password &&
+          !url.search &&
+          !url.hash
+        );
+      }, 'Use an HTTP(S) base URL without credentials, query or fragment.'),
+    )
+    .default({}),
   permissionRules: z.array(UserPermissionRuleSchema).default([]),
   logRetentionDays: z.number().int().min(1).max(3650).nullable().default(30),
   browserPreferencesMigrated: z.boolean().default(false),

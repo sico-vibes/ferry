@@ -589,9 +589,18 @@ export function register(host: CoreHost, services: FerryServices): void {
             riskyRoot: isRiskyWorkspaceRoot(workspace.path),
           },
         );
-      const profile = profileList().find((item) => item.id === session.profileId);
-      if (!profile)
+      const savedProfile = profileList().find((item) => item.id === session.profileId);
+      if (!savedProfile)
         throw rpcDomainError(-32044, 'not_found', `Profile not found: ${session.profileId}`);
+      const optimizerSettings = services.settings.get('global') as
+        { globalOptimizerOverride?: boolean; optimizers?: Profile['optimizers'] } | undefined;
+      const profile =
+        savedProfile.builtin &&
+        savedProfile.id !== DIRECT_PROFILE_ID &&
+        optimizerSettings?.globalOptimizerOverride &&
+        optimizerSettings.optimizers
+          ? { ...savedProfile, optimizers: { ...optimizerSettings.optimizers } }
+          : savedProfile;
       const traceId = newTraceId();
       const traceContext = {
         traceId,
@@ -1681,11 +1690,21 @@ export function register(host: CoreHost, services: FerryServices): void {
                   );
                 }),
               filterOutput: async (name, output, command, sourcePath) => {
+                if (!profile.optimizers.toolOutputFilters) return { text: output, filtered: false };
                 const { optimizeOutput } = await import('@ferry/optimizer');
-                const result = optimizeOutput(command ?? name, output);
+                const result = optimizeOutput(command ?? name, output, {
+                  blobStore: {
+                    put: () => '',
+                    get: () => undefined,
+                    deleteSession: () => undefined,
+                  },
+                });
                 if (sourcePath && isProtectedWorkspacePath(sourcePath))
                   return { text: result.output, filtered: result.output !== output };
-                const handle = result.output === output ? undefined : newId('recovery');
+                const handle =
+                  result.output === output || !profile.optimizers.recoveryHandles
+                    ? undefined
+                    : newId('recovery');
                 if (handle)
                   services.db.client
                     .prepare('INSERT INTO optimizer_blobs (id,data_json,updated_at) VALUES (?,?,?)')

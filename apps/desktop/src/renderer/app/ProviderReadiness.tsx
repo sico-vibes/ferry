@@ -11,6 +11,8 @@ export function ProviderReadiness() {
   const [id, setId] = useState<string | undefined>();
   const [starting, setStarting] = useState(false),
     [error, setError] = useState('');
+  const [paidCap, setPaidCap] = useState('0.01');
+  const [paidApproved, setPaidApproved] = useState(false);
   const [preview, setPreview] = useState<Profile | null>(null),
     [built, setBuilt] = useState('');
   const mutation = useRef(false);
@@ -36,6 +38,10 @@ export function ProviderReadiness() {
   );
   useEffect(() => {
     const progress = checks.data;
+    if (progress && !progress.running && (progress.cancelled || !progress.results.length)) {
+      setPreview(null);
+      return;
+    }
     const base = profiles.data?.find((profile) => profile.builtin && profile.name === 'Auto-Free');
     if (
       !progress ||
@@ -48,7 +54,7 @@ export function ProviderReadiness() {
       return;
     setBuilt(progress.id);
     const good = progress.results
-      .filter((result) => result.ok)
+      .filter((result) => result.ok && !result.paid)
       .sort((a, b) => (a.firstResponseMs ?? Infinity) - (b.firstResponseMs ?? Infinity));
     if (!good.length) return;
     setPreview({
@@ -68,19 +74,22 @@ export function ProviderReadiness() {
       provenance: {
         kind: 'provider-check',
         generatedAt: progress.results.at(-1)?.at ?? new Date().toISOString(),
-        sampleCount: progress.results.length,
+        sampleCount: progress.results.reduce((count, result) => count + result.sampleCount, 0),
         note: 'One generation per connection measures responsiveness, not coding quality. Auto edits and verification continue to prefer measured coding success.',
       },
     });
   }, [checks.data, profiles.data, built]);
-  const start = async () => {
+  const start = async (paid = false) => {
     if (busy) return;
     setStarting(true);
     setError('');
     setPreview(null);
     setApplied(false);
     try {
-      const result = await client.providers.startChecks();
+      const result = await client.providers.startChecks(
+        paid ? { approvedCostUsd: Number(paidCap) } : undefined,
+      );
+      setPaidApproved(false);
       setId(result.id);
       await cache.invalidateQueries({ queryKey: ['provider-check'] });
     } catch (cause) {
@@ -116,6 +125,53 @@ export function ProviderReadiness() {
           </UiV2.Button>
         )}
       </div>
+      <details className="settings-developer-details">
+        <summary>Paid checks</summary>
+        <div className="grid gap-3">
+          <p className="v2-gateway-help">
+            Paid API checks need a separate approval. The total ceiling covers this operation, at
+            most two requests at once. They never enable paid inference or apply paid routes.
+            Account models use the Gateway verification flow.
+          </p>
+          <label className="grid gap-2">
+            Total test ceiling (USD)
+            <UiV2.Input
+              aria-label="Total test ceiling (USD)"
+              type="number"
+              min="0.000001"
+              max="1"
+              step="0.01"
+              value={paidCap}
+              onChange={(event) => {
+                setPaidCap(event.target.value);
+                setPaidApproved(false);
+              }}
+            />
+          </label>
+          <label className="flex items-center gap-3">
+            <UiV2.Checkbox
+              checked={paidApproved}
+              onCheckedChange={(value) => {
+                setPaidApproved(value === true);
+              }}
+            />
+            I approve paid checks up to this total ceiling
+          </label>
+          <UiV2.Button
+            variant="secondary"
+            disabled={
+              busy ||
+              !paidApproved ||
+              !Number.isFinite(Number(paidCap)) ||
+              Number(paidCap) <= 0 ||
+              Number(paidCap) > 1
+            }
+            onClick={() => void start(true)}
+          >
+            Check paid API providers
+          </UiV2.Button>
+        </div>
+      </details>
       {checks.isError && (
         <p role="alert">
           Could not load check results.{' '}
@@ -141,6 +197,14 @@ export function ProviderReadiness() {
                   : `${String(result.completionMs)}ms completion`}
                 . {result.sampleCount} sample. Checked {result.at}. {result.message}{' '}
                 {result.features}
+                {result.authentication && <> Authentication: {result.authentication}.</>}
+                {result.costUsd !== undefined && result.costUsd !== null && (
+                  <>
+                    {' '}
+                    {result.estimatedCost ? 'Estimated' : 'Recorded'} cost: $
+                    {result.costUsd.toFixed(6)}.
+                  </>
+                )}
               </p>
             </li>
           ))}
@@ -167,6 +231,26 @@ export function ProviderReadiness() {
                   setApplying(true);
                   setError('');
                   try {
+                    const current = await client.providers.checkProgress(checkId);
+                    if (
+                      current.running ||
+                      current.cancelled ||
+                      current.results.at(-1)?.at !== preview.provenance?.generatedAt ||
+                      JSON.stringify(
+                        current.results
+                          .filter((result) => result.ok && !result.paid)
+                          .map((result) => result.modelRef)
+                          .sort(),
+                      ) !==
+                        JSON.stringify(
+                          preview.fallbackChain
+                            ?.flatMap((entry) =>
+                              entry.patterns.map((model) => `${entry.provider}/${model}`),
+                            )
+                            .sort(),
+                        )
+                    )
+                      throw new Error('These recommendations are stale. Check providers again.');
                     const prior = (await client.settings.get()).activeProfileId;
                     setPrevious(prior);
                     await client.profiles.save(preview);

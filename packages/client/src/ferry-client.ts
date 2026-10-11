@@ -215,7 +215,7 @@ export interface FerryClient {
     restore(id: CheckpointId, paths?: string[]): Promise<void>;
   };
   providers: {
-    startChecks(): Promise<{ id: string }>;
+    startChecks(options?: import('@ferry/shared').ProviderCheckOptions): Promise<{ id: string }>;
     checkProgress(id?: string): Promise<import('@ferry/shared').ProviderCheckProgress>;
     cancelChecks(id: string): Promise<import('@ferry/shared').ProviderCheckProgress>;
     failures(
@@ -283,6 +283,7 @@ export interface FerryClient {
   settings: { get(): Promise<Settings>; update(patch: SettingsPatch): Promise<Settings> };
   optimizer: { stats(): Promise<OptimizerStats> };
   delegation: {
+    clients(checkAuth?: boolean): Promise<import('@ferry/shared').DelegationClientStatus[]>;
     lanes(): Promise<Lane[]>;
     detectAgents(): Promise<AcpAgentDetection[]>;
     approveProjectLanes(): Promise<Lane[]>;

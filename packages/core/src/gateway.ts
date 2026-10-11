@@ -1,3 +1,4 @@
+import { providerBaseUrl } from './provider-endpoints.js';
 import { isOpenCodeAppModel } from '@ferry/shared';
 import { oauthModelCatalog, streamOAuthChat } from '@ferry/oauth';
 import { reserveSpend, BudgetError } from './spending.js';
@@ -901,7 +902,7 @@ export function createGatewayController(
         );
         continue;
       }
-      const envName = `FERRY_PROVIDER_BASE_URL_${providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+      const baseUrl = providerBaseUrl(services, providerId);
       const attemptStarted = Date.now();
       const attempts = lastAttemptHistory;
       attempts.push({ model: model.ref, status: 'started' });
@@ -1062,7 +1063,7 @@ export function createGatewayController(
                     typeof input.toolChoice.function.name === 'string'
                   ? { toolChoice: { name: input.toolChoice.function.name } }
                   : {}),
-              ...(services.env[envName] ? { baseUrl: services.env[envName] } : {}),
+              ...(baseUrl ? { baseUrl } : {}),
               overrides: resolveProviderRequestOverrides(
                 providerId,
                 routingSettings(services).providerOverrides[providerId],

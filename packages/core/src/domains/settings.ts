@@ -1,5 +1,10 @@
 import { DEFAULT_SETTINGS } from '@ferry/config';
-import { ProfileSchema, SettingsPatchSchema, SettingsSchema } from '@ferry/shared';
+import {
+  ProfileSchema,
+  ProviderIdSchema,
+  SettingsPatchSchema,
+  SettingsSchema,
+} from '@ferry/shared';
 import { FERRY_DOMAINS } from '@ferry/shared';
 import { BUILTIN_PROFILES } from '@ferry/router';
 import type { CoreHost } from '../host.js';
@@ -82,10 +87,54 @@ export function register(host: CoreHost, services: FerryServices): void {
           ...patch,
           paidCaps: { ...current.paidCaps, ...patch.paidCaps },
           optimizers: { ...current.optimizers, ...patch.optimizers },
+          globalOptimizerOverride: patch.optimizers
+            ? true
+            : (patch.globalOptimizerOverride ?? current.globalOptimizerOverride),
           developer: { ...current.developer, ...patch.developer },
           routing: { ...current.routing, ...patch.routing },
         });
         services.settings.put('global', settings);
+        if (patch.providerEndpoints) {
+          for (const rawId of new Set([
+            ...Object.keys(current.providerEndpoints),
+            ...Object.keys(settings.providerEndpoints),
+          ])) {
+            const id = ProviderIdSchema.parse(rawId);
+            if (current.providerEndpoints[id] === settings.providerEndpoints[id]) continue;
+            services.models.replace(id, []);
+            const results = services.settings.get('provider-check-results');
+            if (Array.isArray(results))
+              services.settings.put(
+                'provider-check-results',
+                results.filter(
+                  (result: unknown) =>
+                    typeof result !== 'object' ||
+                    result === null ||
+                    !('providerId' in result) ||
+                    result.providerId !== id,
+                ),
+              );
+            const provider = services.providers.get(id);
+            if (provider) {
+              const updated = {
+                ...provider,
+                health: 'unknown' as const,
+                keyStatus:
+                  provider.keyRequired === false
+                    ? ('not_applicable' as const)
+                    : ('unchecked' as const),
+                availableModels: [],
+                modelCount: 0,
+                modelsVerifiedAt: null,
+                discoveryFailures: 0,
+                discoveryUnsupported: false,
+                discoveryErrorClass: null,
+              };
+              services.providers.put(updated);
+              host.emit('provider.updated', updated);
+            }
+          }
+        }
         services.emitAppEvent('settings.changed', {
           keys: Object.keys(patch),
         });

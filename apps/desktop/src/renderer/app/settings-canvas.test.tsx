@@ -81,6 +81,7 @@ describe('SettingsCanvas', () => {
     const user = userEvent.setup();
     useUI.setState({ settingsSection: 'Routing' });
     mount(client);
+    await user.click(await screen.findByText('Advanced', { selector: 'summary' }));
     const toggle = await screen.findByRole('switch', { name: 'Sticky sessions' });
     expect(toggle.getAttribute('data-state')).toBe('checked');
     const pacing = screen.getByRole('switch', { name: 'Wait for short rate limits' });
@@ -119,10 +120,14 @@ describe('SettingsCanvas', () => {
     useUI.setState({ settingsSection: 'Routing' });
     mount(client);
     const user = userEvent.setup();
+    await user.click(await screen.findByText('Advanced', { selector: 'summary' }));
     await user.click(await screen.findByRole('switch', { name: 'Sticky sessions' }));
     await user.click(screen.getByRole('button', { name: /^Save changes$/ }));
     expect((await screen.findByRole('alert')).textContent).toContain(
       'Could not save: Storage is unavailable',
+    );
+    expect(screen.getByRole('switch', { name: 'Sticky sessions' }).getAttribute('data-state')).toBe(
+      'checked',
     );
   });
 

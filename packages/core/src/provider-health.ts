@@ -1,5 +1,7 @@
 import { ProviderHealthTracker, probe, type HealthOutcome } from '@ferry/providers';
-import { canProbeCooldown } from '@ferry/router';
+import { canProbeCooldown, isFreeForRouting } from '@ferry/router';
+import { RoutingSettingsSchema } from '@ferry/shared';
+import { providerBaseUrl } from './provider-endpoints.js';
 import type { ProviderHealthSnapshot } from '@ferry/shared';
 import type { FerryServices } from './services.js';
 import { createBackgroundQueue } from './background-queue.js';
@@ -73,8 +75,16 @@ function createHealth(services: FerryServices) {
             if (isDisposed()) return;
             const saved = services.providers.get(id);
             if (saved?.enabled === false) return;
-            const envName = `FERRY_PROVIDER_BASE_URL_${id.replace(/[^a-z0-9]/gi, '_').toUpperCase()}`;
-            const baseUrl = services.env[envName];
+            // Automatic recovery cannot spend a user's credits or paid allowance.
+            if (!saved) return;
+            const settings = services.settings.get('global') as { routing?: unknown } | undefined;
+            const routing = RoutingSettingsSchema.parse(settings?.routing ?? {});
+            const freeModel = [
+              ...services.models.list(id),
+              ...services.catalog.models.filter((model) => model.providerId === id),
+            ].find((model) => isFreeForRouting(saved, model, routing.trialOptInProviders));
+            if (!freeModel) return;
+            const baseUrl = providerBaseUrl(services, id);
             if (
               services.env.NODE_ENV === 'test' &&
               (!baseUrl || !['127.0.0.1', 'localhost', '[::1]'].includes(new URL(baseUrl).hostname))
@@ -115,6 +125,7 @@ function createHealth(services: FerryServices) {
               let status: number | undefined;
               let retryAfter: string | undefined;
               const result = await probe(id, key, {
+                modelRef: freeModel.ref,
                 ...(baseUrl ? { baseUrl } : {}),
                 signal: controller.signal,
                 timeoutMs: 4_000,
@@ -153,13 +164,12 @@ function createHealth(services: FerryServices) {
               });
               if (result.ok && cooldown && services.cooldowns.get(id)?.until === cooldown.until) {
                 services.cooldowns.delete(id);
-                if (saved)
-                  services.providers.put({
-                    ...saved,
-                    health: 'ok',
-                    cooldownUntil: null,
-                    cooldownProvenance: null,
-                  });
+                services.providers.put({
+                  ...saved,
+                  health: 'ok',
+                  cooldownUntil: null,
+                  cooldownProvenance: null,
+                });
               }
             } catch (error) {
               if (!isDisposed())

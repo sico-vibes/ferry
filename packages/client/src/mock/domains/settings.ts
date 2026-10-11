@@ -17,6 +17,9 @@ export function createSettingsDomain(_store: MockStore, deps: MockDeps): FerryCl
         ...patch,
         paidCaps: { ...state.settings.paidCaps, ...patch.paidCaps },
         optimizers: { ...state.settings.optimizers, ...patch.optimizers },
+        globalOptimizerOverride: patch.optimizers
+          ? true
+          : (patch.globalOptimizerOverride ?? state.settings.globalOptimizerOverride),
         developer: { ...state.settings.developer, ...patch.developer },
         routing: { ...state.settings.routing, ...patch.routing },
       });

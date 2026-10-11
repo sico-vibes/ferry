@@ -27,3 +27,4 @@ export * from './client-config.js';
 export * from './provider-registry.js';
 export * from './domain/coding-quality.js';
 export * from './domain/provider-check.js';
+export * from './optimization-presets.js';

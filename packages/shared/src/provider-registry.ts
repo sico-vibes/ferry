@@ -13,6 +13,18 @@ export interface ProviderDefinition {
 }
 export const PROVIDER_REGISTRY: readonly ProviderDefinition[] = [
   {
+    id: 'openai-compatible',
+    name: 'Custom OpenAI-compatible API',
+    auth: 'api_key',
+    transport: 'openai_chat',
+    discovery: 'openai_models',
+    capabilities: { text: true, tools: false, images: false },
+    billingClass: 'metered',
+    docsSource: 'https://platform.openai.com/docs/api-reference',
+    verification: 'adapter_tested',
+    releaseState: 'Beta',
+  },
+  {
     id: 'anthropic',
     name: 'Anthropic API',
     auth: 'api_key',

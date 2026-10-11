@@ -79,11 +79,21 @@ export function initializeKeybindings(onError: (message: string) => void): () =>
   return off;
 }
 export function saveKeybindings(content: string): Promise<string[]> {
+  try {
+    const validation = parseKeybindings(JSON.parse(content) as unknown);
+    if (validation.errors.length) return Promise.resolve(validation.errors);
+  } catch (error) {
+    return Promise.resolve([error instanceof Error ? error.message : 'Invalid JSON']);
+  }
   return (
     window.ferryHost?.writeKeybindings(content).then((value) => {
       applyFile(value);
       return state.errors;
-    }) ?? Promise.resolve([])
+    }) ??
+    Promise.resolve().then(() => {
+      applyFile({ path: 'keybindings.json', content, error: null });
+      return state.errors;
+    })
   );
 }
 export function useKeybindings(): State {

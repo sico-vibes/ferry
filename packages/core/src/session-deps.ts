@@ -1,3 +1,4 @@
+import { providerBaseUrl } from './provider-endpoints.js';
 import { isOpenCodeAppModel } from '@ferry/shared';
 import {
   createStepGenerator,
@@ -120,8 +121,7 @@ export function createSessionDependencies(
   const keyRetryAfter = new Map<string, string>();
   const providerBaseUrls = Object.fromEntries(
     services.catalog.providers.flatMap(({ provider }) => {
-      const envName = `FERRY_PROVIDER_BASE_URL_${provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-      const baseUrl = services.env[envName];
+      const baseUrl = providerBaseUrl(services, provider);
       return baseUrl ? [[provider, baseUrl]] : [];
     }),
   );

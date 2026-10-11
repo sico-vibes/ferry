@@ -999,3 +999,7 @@
   line-height: var(--text-ui-page--line-height);
   font-weight: 600;
 }
+.model-free-pill {
+  color: var(--foreground);
+  background: var(--muted);
+}

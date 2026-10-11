@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, X } from 'lucide-react';
 import type { Workspace, WorkspaceSettings } from '@ferry/shared';
@@ -41,6 +41,8 @@ function EditProjectForm({ project, onDone }: { project: Workspace; onDone: () =
   const [settings, setSettings] = useState<WorkspaceSettings>(project.settings);
   const [gate, setGate] = useState('');
   const [saving, setSaving] = useState(false);
+  const lock = useRef(false);
+  const [error, setError] = useState('');
   useEffect(() => {
     setName(project.name);
     setSettings(project.settings);
@@ -51,7 +53,13 @@ function EditProjectForm({ project, onDone }: { project: Workspace; onDone: () =
   };
   const save = async () => {
     const trimmed = name.trim();
-    if (!trimmed) return;
+    if (lock.current) return;
+    if (!trimmed) {
+      setError('Enter a project name.');
+      return;
+    }
+    lock.current = true;
+    setError('');
     setSaving(true);
     try {
       await client.workspaces.update(project.id, { name: trimmed, settings });
@@ -59,12 +67,14 @@ function EditProjectForm({ project, onDone }: { project: Workspace; onDone: () =
       await cache.invalidateQueries({ queryKey: keys.sessions });
       onDone();
     } catch (error) {
+      setError(error instanceof Error ? error.message : 'Project could not be saved. Retry.');
       pushToast({
         kind: 'error',
         title: 'Project could not be saved',
         body: error instanceof Error ? error.message : String(error),
       });
     } finally {
+      lock.current = false;
       setSaving(false);
     }
   };
@@ -258,6 +268,7 @@ function EditProjectForm({ project, onDone }: { project: Workspace; onDone: () =
         </UiV2.Button>
       </section>
       <div className="v2-library-dialog-actions">
+        {error && <p role="alert">{error}</p>}
         <UiV2.Button type="button" variant="secondary" onClick={onDone}>
           Cancel
         </UiV2.Button>

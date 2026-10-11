@@ -15,13 +15,17 @@ const { default: AxeBuilder } = await import('@axe-core/playwright');
 const packageDirectory = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outputDirectory = join(packageDirectory, 'ui-invariants');
 await mkdir(outputDirectory, { recursive: true });
-const phaseShots = join(packageDirectory, '..', '..', '.dev', 'shots', 'g1-B');
+const phaseShots = join(packageDirectory, '..', '..', '.dev', 'shots', 'g1-C');
 await mkdir(phaseShots, { recursive: true });
 const served = await serveDirectory(join(packageDirectory, 'out', 'web'));
 
 const screens = [
   { name: 'home', path: '/' },
   { name: 'models', path: '/models' },
+  { name: 'model-catalog', path: '/models/catalog' },
+  { name: 'provider-endpoint', path: '/models', endpoint: true },
+  { name: 'model-picker', path: '/', modelPicker: true },
+  { name: 'command-palette', path: '/', palette: true },
   { name: 'usage', path: '/models/usage' },
   { name: 'health', path: '/models/health' },
   { name: 'gateway', path: '/gateway' },
@@ -42,6 +46,12 @@ const screens = [
   { name: 'onboarding-paid-backup', path: '/onboarding', step: 2, paidBackup: true },
   { name: 'onboarding-paid-verification', path: '/onboarding', step: 5, paidBackup: true },
   { name: 'chat', path: '/?speed=0', openFirstChat: true },
+  ...['Plan', 'Changes', 'Terminal'].map((drawer) => ({
+    name: `drawer-${drawer.toLowerCase()}`,
+    path: '/?speed=0',
+    openFirstChat: true,
+    drawer,
+  })),
   { name: 'settings-general', path: '/settings', section: 'General' },
   { name: 'settings-routing', path: '/settings', section: 'Routing' },
   { name: 'settings-providers', path: '/settings', section: 'Providers & keys' },
@@ -49,6 +59,36 @@ const screens = [
   { name: 'settings-data', path: '/settings', section: 'Data & privacy' },
   { name: 'settings-cloud', path: '/settings', section: 'Storage & Cloud' },
   { name: 'settings-profiles', path: '/settings', section: 'Profiles' },
+  ...[
+    'Notifications',
+    'Optimizers',
+    'Delegation',
+    'Gateway',
+    'Integrations',
+    'Shortcuts',
+    'About',
+  ].map((section) => ({ name: `settings-${section.toLowerCase()}`, path: '/settings', section })),
+  { name: 'settings-routing-advanced', path: '/settings', section: 'Routing', advanced: true },
+  {
+    name: 'settings-optimizers-advanced',
+    path: '/settings',
+    section: 'Optimizers',
+    advanced: true,
+  },
+  { name: 'providers-paid-checks', path: '/models', paidChecks: true },
+  {
+    name: 'settings-delegation-clients',
+    path: '/settings',
+    section: 'Delegation',
+    inspectClients: true,
+  },
+  ...['About', 'Data & privacy'].map((section) => ({
+    name: `settings-${section === 'About' ? 'about' : 'data'}-diagnostics`,
+    path: '/settings',
+    section,
+    diagnostics: true,
+  })),
+  { name: 'review-missing', path: '/s/demo-session/review/demo-run' },
 ];
 const viewports = [
   { width: 1024, height: 680 },
@@ -160,6 +200,23 @@ try {
           });
         } else await page.locator('.v2-sidebar').first().waitFor({ timeout: 30_000 });
         if (screen.tab) await page.getByRole('tab', { name: screen.tab, exact: true }).click();
+        if (screen.endpoint) {
+          await page
+            .locator('#provider-openai-compatible')
+            .getByRole('button', { name: 'Manage key', exact: true })
+            .click();
+          await page
+            .getByRole('textbox', { name: 'Provider base URL' })
+            .fill('http://localhost:8080/v1');
+        }
+        if (screen.modelPicker) await page.locator('.v2-composer-chip[aria-controls]').click();
+        if (screen.palette) await page.keyboard.press('Control+k');
+        if (screen.paidChecks) {
+          await page.getByText('Paid checks', { exact: true }).click();
+          await page
+            .getByRole('button', { name: 'Check paid API providers' })
+            .scrollIntoViewIfNeeded();
+        }
         if (screen.providerCheck) {
           await page.getByRole('button', { name: 'Check free providers', exact: true }).click();
           await page
@@ -204,13 +261,35 @@ try {
             .locator('.v2-settings-nav button', { hasText: screen.section })
             .first()
             .click();
+          if (screen.advanced)
+            await page
+              .locator('.v2-settings-content details > summary')
+              .filter({ hasText: /^Advanced$/ })
+              .first()
+              .click();
+          if (screen.inspectClients) {
+            await page.getByRole('button', { name: 'Check client sign-ins' }).click();
+            await page.getByText(/Installed and signed in/).waitFor();
+            await page
+              .getByRole('list', { name: 'Coding CLIs', exact: true })
+              .scrollIntoViewIfNeeded();
+          }
+          if (screen.diagnostics) {
+            const exportButton = page.getByRole('button', { name: 'Export sanitized diagnostics' });
+            await exportButton.scrollIntoViewIfNeeded();
+            await exportButton.click();
+            await page.getByText(/Exported Ferry/).waitFor();
+          }
+        }
+        if (screen.drawer) {
+          await page.keyboard.press('Control+.');
+          await page.getByRole('tab', { name: screen.drawer, exact: true }).click();
         }
         await page.evaluate(() => document.fonts.ready);
         await page.waitForTimeout(600);
         const label = `${screen.name}-${theme}-${String(viewport.width)}`;
         await page.screenshot({ path: join(outputDirectory, `${label}.png`) });
-        if (screen.name.startsWith('gateway') || screen.name.startsWith('onboarding'))
-          await copyFile(join(outputDirectory, `${label}.png`), join(phaseShots, `${label}.png`));
+        await copyFile(join(outputDirectory, `${label}.png`), join(phaseShots, `${label}.png`));
         const problems = await page.evaluate(findViolations);
         const axe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
         report.push({

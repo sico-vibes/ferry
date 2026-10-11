@@ -121,13 +121,13 @@ export function HealthTab() {
                   <span>
                     Latency{' '}
                     {row.latencyP50Ms === null
-                      ? '—'
+                      ? 'Not measured yet'
                       : `${String(Math.round(row.latencyP50Ms))} ms typical · ${String(Math.round(row.latencyP95Ms ?? row.latencyP50Ms))} ms slow`}
                   </span>
                   <span>
                     Success{' '}
                     {row.successRate1h === null
-                      ? '—'
+                      ? 'No recent requests'
                       : `${String(Math.round(row.successRate1h * 100))}% last hour`}
                   </span>
                   {row.breaker !== 'closed' && (

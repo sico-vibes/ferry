@@ -317,6 +317,16 @@ function ChangesPanel({ detail }: { detail: ReturnType<typeof useSessionDetail>[
   const client = useFerryClient();
   const navigate = useNavigate();
   const cache = useQueryClient();
+  const [restoreError, setRestoreError] = useState('');
+  const restore = useMutation({
+    mutationFn: (id: import('@ferry/shared').CheckpointId) => client.checkpoints.restore(id),
+    onSuccess: () => cache.invalidateQueries({ queryKey: ['checkpoints', detail?.session.id] }),
+    onError: (cause) => {
+      setRestoreError(
+        cause instanceof Error ? cause.message : 'Could not restore this checkpoint. Retry.',
+      );
+    },
+  });
   const { data: checkpoints = [], isLoading: checkpointsLoading } = useQuery({
     queryKey: ['checkpoints', detail?.session.id],
     queryFn: () => (detail ? client.checkpoints.list(detail.session.id) : Promise.resolve([])),
@@ -358,6 +368,7 @@ function ChangesPanel({ detail }: { detail: ReturnType<typeof useSessionDetail>[
       <h2>
         <FileCode2 size={14} /> Changes <span>{unique.length}</span>
       </h2>
+      {restoreError && <p role="alert">{restoreError}</p>}
       {unique.length > 0 && (
         <p
           className="change-diffstat"
@@ -411,13 +422,13 @@ function ChangesPanel({ detail }: { detail: ReturnType<typeof useSessionDetail>[
                   className="change-row"
                   key={checkpoint.id}
                   aria-label={`Restore checkpoint ${checkpoint.label}`}
-                  onClick={() =>
-                    void client.checkpoints.restore(checkpoint.id).then(async () => {
-                      await cache.invalidateQueries({
-                        queryKey: ['checkpoints', detail?.session.id],
-                      });
-                    })
-                  }
+                  disabled={restore.isPending}
+                  onClick={() => {
+                    if (!restore.isPending) {
+                      setRestoreError('');
+                      restore.mutate(checkpoint.id);
+                    }
+                  }}
                   type="button"
                 >
                   <span>{checkpoint.label}</span>

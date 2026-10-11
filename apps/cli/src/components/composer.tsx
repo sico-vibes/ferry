@@ -136,7 +136,7 @@ export function Composer({
     }
     if (key.ctrl || key.meta || key.tab || key.leftArrow || key.rightArrow) return;
     if (key.backspace || key.delete) {
-      change(value.slice(0, -1));
+      change(Array.from(value).slice(0, -1).join(''));
       return;
     }
     // A single trailing Enter in a fast terminal chunk is submission. Multiple lines are paste.

@@ -10,6 +10,7 @@ import {
 import type { ProviderRequestOverrides } from '@ferry/shared';
 import { jsonrepair } from 'jsonrepair';
 import { z } from 'zod';
+import { existsSync } from 'node:fs';
 import {
   createObservedFetch,
   createLanguageModel,
@@ -20,6 +21,8 @@ import {
 } from '@ferry/providers';
 import {
   optimizeOutput,
+  rewriteWithRtk,
+  rtkAvailable,
   InMemoryBlobStore,
   readOutput,
   compactContext,
@@ -537,6 +540,11 @@ export class AgentLoop {
       sessionId,
       stepNumber: () => stepCount + 1,
       dataDir: this.options.dataDir,
+      rewriteCommand: (command) =>
+        rewriteWithRtk(
+          command,
+          this.options.profile.optimizers.rtk && rtkAvailable(process.env.PATH, existsSync),
+        ),
       permissionMode: this.options.permissionMode,
       ...(this.options.permissionRules ? { permissionRules: this.options.permissionRules } : {}),
       onPart: (part) => {
@@ -578,16 +586,21 @@ export class AgentLoop {
         }
       },
       filterOutput: async (name, text, command, sourcePath) => {
+        if (!this.options.profile.optimizers.toolOutputFilters) return { text, filtered: false };
         if (this.options.filterOutput)
           return this.options.filterOutput(name, text, command, sourcePath);
         const result = optimizeOutput(command ?? name, text, {
           sessionId,
-          blobStore: this.recoveryStore,
+          blobStore: this.options.profile.optimizers.recoveryHandles
+            ? this.recoveryStore
+            : { put: () => '', get: () => undefined, deleteSession: () => undefined },
         });
         return {
           text: result.output,
           filtered: result.output !== text,
-          ...(result.handle ? { recoveryHandle: result.handle } : {}),
+          ...(result.handle && this.options.profile.optimizers.recoveryHandles
+            ? { recoveryHandle: result.handle }
+            : {}),
         };
       },
       readRecovery: async (handle) => {
@@ -1024,6 +1037,8 @@ export class AgentLoop {
           this.estimates,
           this.recoveryStore,
           sessionId,
+          this.options.profile.optimizers.contextHygiene &&
+            this.options.profile.optimizers.recoveryHandles,
         );
         for (const event of targetCompaction.events)
           this.options.emit({ type: 'optimizer.event', ...event });
@@ -3912,6 +3927,7 @@ function compactConversationMessages(
   estimate: (text: string) => number,
   blobStore: InMemoryBlobStore,
   sessionId: string,
+  hygieneEnabled: boolean,
 ): {
   messages: Message[];
   summary: string;
@@ -3929,59 +3945,61 @@ function compactConversationMessages(
     afterTokens: number;
     recoveryHandle: string | null;
   }[] = [];
-  const hygienic = messages.map((message, messageIndex) => ({
-    ...message,
-    parts: message.parts.map((part) => {
-      if (part.type !== 'tool_call' || !part.output) return part;
-      const isStale = messageIndex < messages.length - 10;
-      const isPayload = /^\s*(?:\{|\[|<!doctype html|<html)/i.test(part.output.text);
-      if (isStale && estimate(part.output.text) > 240 && !isPayload) {
-        const handle = part.output.recoveryHandle ?? blobStore.put(sessionId, part.output.text);
-        const text = summarizeStaleToolResult(part.output.text, handle);
-        events.push({
-          kind: 'context-hygiene',
-          beforeTokens: estimate(part.output.text),
-          afterTokens: estimate(text),
-          recoveryHandle: handle,
-        });
-        return {
-          ...part,
-          output: {
-            ...part.output,
-            text,
-            filtered: true,
-            originalTokens: estimate(part.output.text),
-            filteredTokens: estimate(text),
+  const hygienic = hygieneEnabled
+    ? messages.map((message, messageIndex) => ({
+        ...message,
+        parts: message.parts.map((part) => {
+          if (part.type !== 'tool_call' || !part.output) return part;
+          const isStale = messageIndex < messages.length - 10;
+          const isPayload = /^\s*(?:\{|\[|<!doctype html|<html)/i.test(part.output.text);
+          if (isStale && estimate(part.output.text) > 240 && !isPayload) {
+            const handle = part.output.recoveryHandle ?? blobStore.put(sessionId, part.output.text);
+            const text = summarizeStaleToolResult(part.output.text, handle);
+            events.push({
+              kind: 'context-hygiene',
+              beforeTokens: estimate(part.output.text),
+              afterTokens: estimate(text),
+              recoveryHandle: handle,
+            });
+            return {
+              ...part,
+              output: {
+                ...part.output,
+                text,
+                filtered: true,
+                originalTokens: estimate(part.output.text),
+                filteredTokens: estimate(text),
+                recoveryHandle: handle,
+              },
+            };
+          }
+          if (part.tool !== 'read_file') return part;
+          const path = typeof part.args.path === 'string' ? part.args.path : '';
+          const previous = seenReads.get(path);
+          seenReads.set(path, part.output.text);
+          if (!path || previous !== part.output.text) return part;
+          const handle = part.output.recoveryHandle ?? blobStore.put(sessionId, part.output.text);
+          const text = `[${path} unchanged since its earlier read. Full output: ${handle}]`;
+          events.push({
+            kind: 'context-hygiene',
+            beforeTokens: estimate(part.output.text),
+            afterTokens: estimate(text),
             recoveryHandle: handle,
-          },
-        };
-      }
-      if (part.tool !== 'read_file') return part;
-      const path = typeof part.args.path === 'string' ? part.args.path : '';
-      const previous = seenReads.get(path);
-      seenReads.set(path, part.output.text);
-      if (!path || previous !== part.output.text) return part;
-      const handle = part.output.recoveryHandle ?? blobStore.put(sessionId, part.output.text);
-      const text = `[${path} unchanged since its earlier read. Full output: ${handle}]`;
-      events.push({
-        kind: 'context-hygiene',
-        beforeTokens: estimate(part.output.text),
-        afterTokens: estimate(text),
-        recoveryHandle: handle,
-      });
-      return {
-        ...part,
-        output: {
-          ...part.output,
-          text,
-          filtered: true,
-          originalTokens: estimate(part.output.text),
-          filteredTokens: estimate(text),
-          recoveryHandle: handle,
-        },
-      };
-    }),
-  }));
+          });
+          return {
+            ...part,
+            output: {
+              ...part.output,
+              text,
+              filtered: true,
+              originalTokens: estimate(part.output.text),
+              filteredTokens: estimate(text),
+              recoveryHandle: handle,
+            },
+          };
+        }),
+      }))
+    : [...messages];
   const hygieneInput = hygienic.flatMap((message, messageIndex) =>
     message.parts.flatMap((part) => {
       if (part.type !== 'tool_call' || !part.output) return [];
@@ -4010,12 +4028,14 @@ function compactConversationMessages(
       ];
     }),
   );
-  const hygieneResult = optimizeContextMessages(hygieneInput, {
-    currentStep: messages.length,
-    staleAfterSteps: 10,
-    blobStore,
-    sessionId,
-  });
+  const hygieneResult = hygieneEnabled
+    ? optimizeContextMessages(hygieneInput, {
+        currentStep: messages.length,
+        staleAfterSteps: 10,
+        blobStore,
+        sessionId,
+      })
+    : { output: hygieneInput, event: { beforeTokens: 0, afterTokens: 0 } };
   if (hygieneResult.event.afterTokens < hygieneResult.event.beforeTokens)
     events.push({
       kind: 'context-hygiene',

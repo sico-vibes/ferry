@@ -1,3 +1,4 @@
+import { providerBaseUrl } from '../provider-endpoints.js';
 import { discoverProviderModels } from '@ferry/providers';
 import { ProviderIdSchema, redactKnownSecretText } from '@ferry/shared';
 import type { CoreHost } from '../host.js';
@@ -9,11 +10,6 @@ import { permitsKeylessProvider } from '../services.js';
 const modelsMaxAgeMs = 6 * 60 * 60 * 1000;
 const discoveryTimeoutMs = 4_000;
 const retryDelaysMs = [60_000, 120_000, 300_000, 900_000, 3_600_000] as const;
-
-function baseUrlFor(services: FerryServices, id: string): string | undefined {
-  const envName = `FERRY_PROVIDER_BASE_URL_${id.replace(/[^a-z0-9]/gi, '_').toUpperCase()}`;
-  return services.env[envName];
-}
 
 function isLoopbackUrl(value: string | undefined): boolean {
   if (!value) return false;
@@ -74,7 +70,7 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
       const current = services.providers.get(id);
       if (!limits || !current?.enabled) return;
 
-      const baseUrl = baseUrlFor(services, id);
+      const baseUrl = providerBaseUrl(services, id);
       if (services.env.NODE_ENV === 'test' && !isLoopbackUrl(baseUrl)) return;
 
       const keyEntries = services.providerKeyEntries.list(id);

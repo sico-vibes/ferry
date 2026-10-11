@@ -315,6 +315,8 @@ export const sampleOptimizerStats: OptimizerStats = {
   byOptimizer: [{ id: 'terse', name: 'Terse', enabled: true, savedTokens: 100, percent: 5 }],
 };
 export const sampleSettings: Settings = {
+  providerEndpoints: {},
+  globalOptimizerOverride: false,
   permissionRules: [],
   logRetentionDays: 30,
   browserPreferencesMigrated: false,

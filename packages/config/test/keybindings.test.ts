@@ -7,6 +7,19 @@ import {
 } from '../src/keybindings';
 
 describe('keybindings', () => {
+  it('detects equivalent chords with reordered modifiers and rejects invalid modifiers', () => {
+    expect(
+      parseKeybindings({
+        bindings: [
+          { command: 'one', key: 'Ctrl+Shift+J' },
+          { command: 'two', key: 'Shift + Ctrl + J' },
+        ],
+      }).errors,
+    ).toContain('Key conflict: Shift + Ctrl + J is assigned to one and two');
+    expect(parseKeybindings({ bindings: [{ command: 'one', key: 'Banana+J' }] }).errors).toContain(
+      'Invalid key chord: Banana+J',
+    );
+  });
   it('merges valid overrides over defaults and reports conflicting chords', () => {
     const result = parseKeybindings({
       bindings: [

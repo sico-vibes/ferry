@@ -72,6 +72,7 @@ describe('Settings audit', () => {
     const client = createMockFerryClient({ behavior: 'test' });
     useUI.setState({ settingsSection: 'Routing' });
     const view = await mount(<SettingsCanvas />, client);
+    fireEvent.click(await screen.findByText('Advanced', { selector: 'summary' }));
     await screen.findByRole('switch', { name: 'Sticky sessions' });
     const content = view.container.querySelector('.v2-settings-content');
     if (!(content instanceof HTMLElement)) throw new Error('Missing settings scroller');

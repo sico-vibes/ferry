@@ -5,6 +5,7 @@ import {
   FailureOptionsSchema,
   ProviderHealthSnapshotSchema,
   isModelFreeForPlan,
+  ProviderCheckOptionsSchema,
   type ProbeResult,
 } from '@ferry/shared';
 import type { ProviderKey } from '@ferry/shared';
@@ -36,7 +37,8 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
     return structuredClone(provider);
   };
   return {
-    startChecks: () => {
+    startChecks: (rawOptions) => {
+      const options = ProviderCheckOptionsSchema.parse(rawOptions ?? {});
       check = {
         id: crypto.randomUUID(),
         running: false,
@@ -50,8 +52,9 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
             const model = state.models.find(
               (model) =>
                 model.providerId === provider.id &&
-                isModelFreeForPlan(provider, model) &&
-                model.toolCalling,
+                (options.approvedCostUsd === undefined
+                  ? isModelFreeForPlan(provider, model)
+                  : !isModelFreeForPlan(provider, model)),
             );
             return model
               ? [
@@ -63,6 +66,8 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
                     firstResponseMs: 100,
                     completionMs: 180,
                     sampleCount: 1 as const,
+                    paid: options.approvedCostUsd !== undefined,
+                    costUsd: 0,
                     message:
                       'Web preview fixture: reachable. One sample does not measure coding quality.',
                     features:

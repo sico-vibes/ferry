@@ -18,6 +18,7 @@ import { executeSlashCommand, parseSlashCommand } from './slash.js';
 import { Picker, type PickerOption } from './components/picker.js';
 import { Composer } from './components/composer.js';
 import { SettingsPanel } from './components/settings-panel.js';
+import { ConnectPanel } from './components/connect-panel.js';
 import { StatusBar } from './components/status-bar.js';
 import { Transcript, type TranscriptEntry } from './components/transcript.js';
 import {
@@ -64,6 +65,7 @@ export function Chat({
   const [busy, setBusy] = useState(false);
   const [panel, setPanel] = useState<Panel | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
   const [freeOnly, setFreeOnly] = useState(false);
   const [offset, setOffset] = useState(0);
   const [limits, setLimits] = useState<ProviderLimits[]>([]);
@@ -258,9 +260,9 @@ export function Chat({
   }, [client, input, project, passwordEmail]);
   useInput((value, key) => {
     if (key.ctrl && value === 'c') pressCtrlC();
+    if (panel || settingsOpen || connectOpen) return;
     if (key.escape && running && sessionRef.current)
       void client.sessions.cancel(sessionRef.current).catch(showError);
-    if (panel || settingsOpen) return;
     if (key.pageUp) setOffset((old) => Math.min(entries.length, old + 10));
     if (key.pageDown) setOffset((old) => Math.max(0, old - 10));
     if (approval && ['y', 'n', 'a'].includes(value.toLowerCase()) && sessionRef.current) {
@@ -463,6 +465,10 @@ export function Chat({
       return;
     }
     const parsed = parseSlashCommand(text);
+    if (parsed.name === '/connect' && !parsed.args.length) {
+      setConnectOpen(true);
+      return;
+    }
     if (parsed.name === '/exit') {
       exit();
       return;
@@ -489,7 +495,17 @@ export function Chat({
       await newChat(project, false);
       return;
     }
-    const id = await createSession();
+    const id = [
+      '/connect',
+      '/gateway',
+      '/doctor',
+      '/help',
+      '/quota',
+      '/status',
+      '/optimize',
+    ].includes(parsed.name)
+      ? (sessionRef.current ?? ('command_only' as SessionId))
+      : await createSession();
     if (text.startsWith('/')) {
       if (parsed.name === '/compact') setReplyTokens(null);
       notice(
@@ -535,7 +551,7 @@ export function Chat({
       <Transcript
         entries={entries}
         offset={offset}
-        enabled={!panel && !settingsOpen && !approval}
+        enabled={!panel && !settingsOpen && !connectOpen && !approval}
       />
       {approval ? <ApprovalPrompt summary={approval.summary} detail={approval.detail} /> : null}
       {running || busy ? (
@@ -543,7 +559,9 @@ export function Chat({
           <Spinner type="dots" /> {muted('Working · Esc cancels')}
         </Text>
       ) : null}
-      {panel ? (
+      {connectOpen ? (
+        <ConnectPanel client={client} onClose={() => setConnectOpen(false)} />
+      ) : panel ? (
         <Picker
           key={panel.name}
           title={panel.title}
@@ -595,6 +613,8 @@ export function Chat({
         project={project?.name}
         profile={activeProfile?.name ?? 'No profile'}
         model={servedModel ?? model}
+        requestedModel={model}
+        paidAllowed={activeProfile?.paidAllowed ?? false}
         effort={effort}
         contextTokens={contextTokens}
         contextWindow={contextWindow}

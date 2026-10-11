@@ -57,7 +57,9 @@ describe('QA persistence', () => {
     expect(await createMockFerryClient({ storage: garbage }).workspaces.list()).toHaveLength(3);
 
     const nullData = { load: () => ({ version: 1, data: null }), save: () => undefined };
-    expect(await createMockFerryClient({ storage: nullData }).providers.list()).toHaveLength(40);
+    expect(await createMockFerryClient({ storage: nullData }).providers.list()).toHaveLength(
+      (await createMockFerryClient().providers.list()).length,
+    );
 
     const invalid = {
       load: () => ({ version: 1, data: { workspaces: [{ bad: true }] } }),

@@ -571,6 +571,16 @@ export function ModelsCanvas() {
                             size={16}
                           />
                           <span>{model.name}</span>
+                          <small className="block text-ui-meta text-muted-foreground">
+                            {model.apiAccessVerified
+                              ? 'Verified on this account'
+                              : model.verified
+                                ? 'Discovered on this connection'
+                                : 'Catalogued; access not checked'}
+                            {model.verifiedAt
+                              ? ` · ${new Date(model.verifiedAt).toLocaleDateString()}`
+                              : ''}
+                          </small>
                           {model.failing && (
                             <UiV2.Badge variant="destructive" className="ml-2">
                               Failing
@@ -628,7 +638,7 @@ export function ModelsCanvas() {
                         </td>
                         <td className="px-3">
                           <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
-                            {model.tier}
+                            {{ T1: 'Top', T2: 'Strong', T3: 'Light' }[model.tier]}
                           </span>
                         </td>
                         <td className="px-3 tabular-nums text-muted-foreground">

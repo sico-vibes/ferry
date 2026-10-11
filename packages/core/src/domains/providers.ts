@@ -1,5 +1,7 @@
+import { providerBaseUrl } from '../provider-endpoints.js';
 import {
   ProbeResultSchema,
+  ProviderCheckOptionsSchema,
   canonicalProviderId,
   providerDefinition,
   ProviderKeySchema,
@@ -23,17 +25,13 @@ import { getProviderHealth } from '../provider-health.js';
 import { isCoreWindowActive, onCoreWindowActiveChange } from '../runtime-activity.js';
 import { hasUsableProviderKey, permitsKeylessProvider } from '../services.js';
 import { createProviderChecks } from '../provider-checks.js';
+import { isFreeForRouting } from '@ferry/router';
 
 const ProviderIdInput = ProviderIdSchema.transform((id) =>
   ProviderIdSchema.parse(canonicalProviderId(id)),
 );
 const KeyInput = z.string().trim().min(1).max(4096);
 const EnabledInput = z.boolean();
-
-function baseUrlFor(services: FerryServices, id: string): string | undefined {
-  const envName = `FERRY_PROVIDER_BASE_URL_${id.replace(/[^a-z0-9]/gi, '_').toUpperCase()}`;
-  return services.env[envName];
-}
 
 function cooldownReasonsEnabled(services: FerryServices): boolean {
   const stored = services.settings.get('global');
@@ -387,7 +385,8 @@ export function register(host: CoreHost, services: FerryServices): void {
     return provider;
   };
   host.registerDomain('providers', {
-    startChecks: () => checks.start(),
+    startChecks: (options: unknown) =>
+      checks.start(ProviderCheckOptionsSchema.parse(options ?? {})),
     checkProgress: (id: unknown) => checks.progress(z.string().max(64).optional().parse(id)),
     cancelChecks: (id: unknown) => checks.cancel(z.string().max(64).parse(id)),
     failures(rawId?: unknown, rawOptions?: unknown) {
@@ -710,19 +709,37 @@ export function register(host: CoreHost, services: FerryServices): void {
           saveProvider(services, { ...current, keyStatus: 'missing' });
           return result;
         }
-        const baseUrl = baseUrlFor(services, id);
+        const baseUrl = providerBaseUrl(services, id);
         const stored = services.settings.get('global');
         const routing =
           typeof stored === 'object' && stored !== null && 'routing' in stored
             ? stored.routing
             : undefined;
         const overrides = RoutingSettingsSchema.parse(routing ?? {}).providerOverrides[id];
+        const freeProbe = [
+          ...services.models.list(id),
+          ...services.catalog.models.filter((model) => model.providerId === id),
+        ].find((model) =>
+          isFreeForRouting(
+            current,
+            model,
+            RoutingSettingsSchema.parse(routing ?? {}).trialOptInProviders,
+          ),
+        );
         const result = ProbeResultSchema.parse(
           await probe(id, key ?? '', {
+            discoveryOnly: !freeProbe && !['ollama', 'lmstudio'].includes(id),
+            ...(freeProbe ? { modelRef: freeProbe.ref } : {}),
             ...(baseUrl ? { baseUrl } : {}),
             overrides: resolveProviderRequestOverrides(id, overrides),
           }),
         );
+        if (
+          ['ollama', 'lmstudio'].includes(id) &&
+          !result.ok &&
+          ['network', 'offline', 'timeout'].includes(result.errorKind ?? '')
+        )
+          result.message = `Server not running or unreachable. Start ${id === 'ollama' ? 'Ollama' : 'LM Studio'}, load a model and check the configured endpoint.`;
         if (keyEntry) {
           const status = result.ok
             ? 'ok'

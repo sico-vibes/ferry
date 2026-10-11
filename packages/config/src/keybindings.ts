@@ -60,7 +60,15 @@ export function parseKeybindings(raw: unknown): KeybindingsValidation {
       merged.push(binding);
   const keys = new Map<string, string>();
   for (const binding of merged) {
-    const normalized = binding.key.toLowerCase().replaceAll(' ', '');
+    const parts = binding.key.toLowerCase().replaceAll(' ', '').split('+');
+    const chordKey = parts.pop();
+    if (
+      !chordKey ||
+      parts.some((part) => !['ctrl', 'cmd', 'shift', 'alt'].includes(part)) ||
+      new Set(parts).size !== parts.length
+    )
+      errors.push(`Invalid key chord: ${binding.key}`);
+    const normalized = [...parts.sort(), chordKey].join('+');
     const other = keys.get(normalized);
     if (other && other !== binding.command)
       errors.push(`Key conflict: ${binding.key} is assigned to ${other} and ${binding.command}`);
@@ -81,7 +89,7 @@ export function matchesKeybinding(
   context: Partial<Record<KeybindingContext, boolean>>,
 ): boolean {
   if (binding.when.some((key) => !context[key])) return false;
-  const parts = binding.key.toLowerCase().split('+');
+  const parts = binding.key.toLowerCase().replaceAll(' ', '').split('+');
   const key = parts.at(-1);
   if (!key || event.key.toLowerCase() !== key) return false;
   const modifier = (name: string, pressed: boolean | undefined) =>

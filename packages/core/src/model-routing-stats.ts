@@ -28,7 +28,17 @@ export function modelRoutingStats(services: FerryServices): ModelStats[] {
     )
       latency.set(check.modelRef, check.firstResponseMs);
   }
-  return services.catalog.models.map((model) => ({
+  const models = [
+    ...new Map(
+      [
+        ...services.catalog.models,
+        ...services.catalog.providers.flatMap((provider) =>
+          services.models.list(provider.provider),
+        ),
+      ].map((model) => [model.ref, model]),
+    ).values(),
+  ];
+  return models.map((model) => ({
     modelRef: model.ref,
     toolCalls: 0,
     toolCallValidationFailures: 0,

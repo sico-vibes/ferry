@@ -757,7 +757,9 @@ describe('@ferry/cli output hygiene', () => {
   it(
     'prints doctor rows as text',
     () => {
-      const result = runCli(['doctor']);
+      const result = runCli(['doctor'], {
+        env: { FERRY_HOME: tempDirectory('doctor'), PATH: '', Path: '' },
+      });
       expect(result.stdout).toMatch(/Node:/);
       expect(result.stdout).toMatch(/Data dir:/);
       expect([0, 1]).toContain(result.status);
@@ -832,7 +834,9 @@ describe('@ferry/cli known bugs (adversarial)', () => {
     'makes `doctor --json` emit JSON rather than human text',
     () => {
       // BUG: doctor ignores --json (main.tsx doctor() only writes text rows).
-      const result = runCli(['doctor', '--json']);
+      const result = runCli(['doctor', '--json'], {
+        env: { FERRY_HOME: tempDirectory('doctor-json'), PATH: '', Path: '' },
+      });
       expect(() => {
         JSON.parse(result.stdout);
       }).not.toThrow();

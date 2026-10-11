@@ -104,9 +104,17 @@ export function ProviderConnections() {
                   <div className="provider-connection-copy">
                     <strong>{provider.name}</strong>
                     <small>
-                      {provider.enabled && ['valid', 'not_applicable'].includes(provider.keyStatus)
-                        ? 'Connected'
-                        : (providerDefinition(provider.id)?.releaseState ?? 'Add a connection')}
+                      {kind === 'local' &&
+                      (provider.discoveryErrorClass === 'network' || provider.health === 'down')
+                        ? 'Server not running or unreachable'
+                        : kind === 'local' &&
+                            provider.enabled &&
+                            (provider.health !== 'ok' || provider.modelCount === 0)
+                          ? 'Enabled; check the server and load a model'
+                          : provider.enabled &&
+                              ['valid', 'not_applicable'].includes(provider.keyStatus)
+                            ? 'Connected'
+                            : (providerDefinition(provider.id)?.releaseState ?? 'Add a connection')}
                     </small>
                   </div>
                 </div>

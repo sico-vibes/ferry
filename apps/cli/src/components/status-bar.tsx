@@ -8,6 +8,8 @@ export function StatusBar({
   project,
   profile,
   model,
+  requestedModel,
+  paidAllowed = false,
   effort,
   contextTokens,
   contextWindow,
@@ -18,6 +20,8 @@ export function StatusBar({
   project?: string | undefined;
   profile: string;
   model: string;
+  requestedModel?: string;
+  paidAllowed?: boolean;
   effort: Effort | null;
   contextTokens: number | null;
   contextWindow?: number | undefined;
@@ -31,7 +35,10 @@ export function StatusBar({
   return (
     <Text>
       {muted(project ?? 'No project')} · {statusLine(profile, model, limits)} ·{' '}
-      {effort ?? 'default effort'}
+      {requestedModel
+        ? `requested ${requestedModel} · serving ${model === 'auto' ? 'waiting' : model} · `
+        : ''}
+      {paidAllowed ? 'paid within profile/global caps' : 'free only'} · {effort ?? 'default effort'}
       {contextTokens !== null && contextWindow
         ? ` · context ${String(Math.round((contextTokens / contextWindow) * 100))}%`
         : ''}

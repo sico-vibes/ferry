@@ -8,6 +8,7 @@ import { useSettings } from '../data/queries';
 import { ProviderStatusBadge } from './ProviderStatusBadge';
 import { ConfirmDialog } from './ConfirmDialog';
 import { usesRealDomain } from '../data/realDomains';
+import { ProviderEndpoint } from './ProviderEndpoint';
 
 const numberFormat = new Intl.NumberFormat();
 
@@ -48,6 +49,10 @@ export function ProviderKeyDialog({
   const [keywords, setKeywords] = useState('');
   const isZen = provider?.id === 'opencode' || provider?.id === 'opencode-zen';
   const definition = provider ? providerDefinition(provider.id) : undefined;
+  const keyless =
+    definition?.auth === 'local' ||
+    definition?.auth === 'anonymous' ||
+    provider?.keyRequired === false;
   useEffect(() => {
     setPriority(
       String((provider ? settings?.routing.providerPriorities[provider.id] : undefined) ?? 0),
@@ -159,12 +164,23 @@ export function ProviderKeyDialog({
       setMessage('Enter the Cloudflare account ID.');
       return;
     }
-    if (!provider || (!value.trim() && !(isZen && providerKeys.length > 0))) {
+    if (!provider || (!keyless && !value.trim() && !(isZen && providerKeys.length > 0))) {
       setMessage('Enter an API key to save.');
       return;
     }
     setBusy(true);
     try {
+      if (keyless && !value.trim()) {
+        await client.providers.setEnabled(provider.id, true);
+        await cache.invalidateQueries({ queryKey: ['providers'] });
+        await cache.invalidateQueries({ queryKey: ['models'] });
+        setMessage(
+          providerKeys.length
+            ? 'Connection enabled using saved credentials. Test model access.'
+            : 'Connection enabled without a key. Test the connection to discover and verify model access.',
+        );
+        return;
+      }
       const secret =
         provider.id === 'cloudflare-workers-ai'
           ? JSON.stringify({ accountId: accountId.trim(), apiKey: value.trim() })
@@ -213,7 +229,7 @@ export function ProviderKeyDialog({
       const result = await client.providers.probe(provider.id);
       setMessage(
         result.ok
-          ? `Connected in ${result.latencyMs === null ? 'CLI' : `${String(result.latencyMs)} ms`}. Next: select this provider in a profile.`
+          ? `Connected in ${result.latencyMs === null ? 'CLI' : `${String(result.latencyMs)} ms`}. ${result.message}. Next: select this provider in a profile.`
           : `Connection failed: ${result.message}. Check the key and try again.`,
       );
       await cache.invalidateQueries({ queryKey: ['providers'] });
@@ -338,6 +354,28 @@ export function ProviderKeyDialog({
         </DialogHeader>
         <div className="min-h-0 overflow-y-auto pr-2">
           <div className="grid gap-4">
+            {definition && (
+              <p className="text-ui-meta text-muted-foreground">
+                {definition.auth === 'local'
+                  ? 'Local server'
+                  : definition.auth === 'oauth'
+                    ? 'Account sign-in'
+                    : definition.auth === 'anonymous'
+                      ? 'Anonymous API'
+                      : 'API key'}
+                . {definition.releaseState}. Integration:{' '}
+                {definition.verification === 'adapter_tested' ? 'adapter tested' : 'catalogued'}.{' '}
+                {provider?.availableModels?.some((model) => model.apiAccessVerified)
+                  ? 'Generation verified on this account.'
+                  : 'Generation not verified on this account.'}{' '}
+                {provider?.modelsVerifiedAt
+                  ? `Last discovery/check: ${new Date(provider.modelsVerifiedAt).toLocaleString()}.`
+                  : 'No recent model discovery.'}
+              </p>
+            )}
+            {provider && definition?.transport === 'openai_chat' && (
+              <ProviderEndpoint key={provider.id} provider={provider} />
+            )}
             {isZen ? (
               <section className="grid gap-3" aria-label="OpenCode Zen access">
                 <h3 className="text-ui-label">OpenCode Zen API</h3>
@@ -487,6 +525,66 @@ export function ProviderKeyDialog({
                 </section>
               )
             )}
+            {(isZen || provider?.signupUrl) && (
+              <a
+                className="text-label text-primary"
+                href={isZen ? 'https://opencode.ai/auth' : (provider.signupUrl ?? undefined)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Get a key
+              </a>
+            )}
+            {provider?.id === 'cloudflare-workers-ai' && (
+              <label className="grid gap-2 text-ui-label">
+                Cloudflare account ID
+                <Input
+                  autoComplete="off"
+                  aria-label="Cloudflare account ID"
+                  onChange={(event) => {
+                    setAccountId(event.target.value);
+                    setMessage('');
+                  }}
+                  placeholder="Account ID"
+                  value={accountId}
+                />
+              </label>
+            )}
+            {!isZen && providerKeys.length > 0 && (
+              <label className="grid gap-2 text-ui-label">
+                Key label
+                <Input
+                  aria-label="Key label"
+                  onChange={(event) => {
+                    setKeyLabel(event.target.value);
+                  }}
+                  placeholder={`Key ${String(providerKeys.length + 1)}`}
+                  value={keyLabel}
+                />
+              </label>
+            )}
+            <label className="grid gap-2 text-ui-label">
+              {isZen && providerKeys.length
+                ? 'Replace account key (optional)'
+                : provider?.id === 'cloudflare-workers-ai'
+                  ? 'Cloudflare API token'
+                  : keyless
+                    ? 'API key (optional)'
+                    : 'API key'}
+              <Input
+                aria-label={
+                  provider?.id === 'cloudflare-workers-ai' ? 'Cloudflare API token' : 'API key'
+                }
+                autoComplete="new-password"
+                onChange={(event) => {
+                  setValue(event.target.value);
+                  setMessage('');
+                }}
+                placeholder="Paste provider key"
+                type="password"
+                value={value}
+              />
+            </label>
             {showRoutingControls && (
               <section className="grid gap-3" aria-label="Provider routing">
                 <h3 className="text-ui-label">Routing</h3>
@@ -613,64 +711,6 @@ export function ProviderKeyDialog({
                 </Button>
               </div>
             </details>
-            {(isZen || provider?.signupUrl) && (
-              <a
-                className="text-label text-primary"
-                href={isZen ? 'https://opencode.ai/auth' : (provider.signupUrl ?? undefined)}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Get a key
-              </a>
-            )}
-            {provider?.id === 'cloudflare-workers-ai' && (
-              <label className="grid gap-2 text-ui-label">
-                Cloudflare account ID
-                <Input
-                  autoComplete="off"
-                  aria-label="Cloudflare account ID"
-                  onChange={(event) => {
-                    setAccountId(event.target.value);
-                    setMessage('');
-                  }}
-                  placeholder="Account ID"
-                  value={accountId}
-                />
-              </label>
-            )}
-            {!isZen && providerKeys.length > 0 && (
-              <label className="grid gap-2 text-ui-label">
-                Key label
-                <Input
-                  aria-label="Key label"
-                  onChange={(event) => {
-                    setKeyLabel(event.target.value);
-                  }}
-                  placeholder={`Key ${String(providerKeys.length + 1)}`}
-                  value={keyLabel}
-                />
-              </label>
-            )}
-            <label className="grid gap-2 text-ui-label">
-              {isZen && providerKeys.length
-                ? 'Replace account key (optional)'
-                : provider?.id === 'cloudflare-workers-ai'
-                  ? 'Cloudflare API token'
-                  : 'API key'}
-              <Input
-                aria-label={
-                  provider?.id === 'cloudflare-workers-ai' ? 'Cloudflare API token' : 'API key'
-                }
-                autoComplete="new-password"
-                onChange={(event) => {
-                  setValue(event.target.value);
-                  setMessage('');
-                }}
-                placeholder="Paste provider key"
-                type="password"
-                value={value}
-              />
-            </label>
             {message && (
               <p
                 role={
@@ -726,11 +766,15 @@ export function ProviderKeyDialog({
           >
             {busy
               ? 'Saving…'
-              : isZen
-                ? 'Save connection'
-                : providerKeys.length
-                  ? 'Add key'
-                  : 'Save key'}
+              : keyless && !value.trim()
+                ? providerKeys.length
+                  ? 'Enable connection'
+                  : 'Connect without a key'
+                : isZen
+                  ? 'Save connection'
+                  : providerKeys.length
+                    ? 'Add key'
+                    : 'Save key'}
           </Button>
         </div>
       </DialogContent>

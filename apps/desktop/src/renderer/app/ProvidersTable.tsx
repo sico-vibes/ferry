@@ -38,7 +38,6 @@ export function providerStatus(
   now = Date.now(),
 ): { label: string; tone: Tone } {
   if (provider.pausedReason) return { label: 'Paused', tone: 'destructive' };
-  if (!provider.enabled) return { label: 'Off', tone: 'muted' };
   if (provider.health === 'auth_invalid' || provider.keyStatus === 'invalid')
     return { label: 'Invalid key', tone: 'destructive' };
   if (provider.health === 'account_disabled')
@@ -284,7 +283,7 @@ export function ProvidersTable({
                       <UiV2.Tooltip>
                         <UiV2.TooltipTrigger asChild>
                           <span className="v2-status-icon" data-tone={status.tone} tabIndex={0}>
-                            <StatusIcon aria-hidden="true" size={16} strokeWidth={1.9} />
+                            <StatusIcon aria-hidden="true" size={16} strokeWidth={1.75} />
                             <span className="sr-only">{status.label}</span>
                           </span>
                         </UiV2.TooltipTrigger>

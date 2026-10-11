@@ -25,17 +25,19 @@ export function mockShellOutput(command: string): string {
 function TerminalView() {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    if (window.ferryHost) return;
     if (!host.current) return;
     const styles = getComputedStyle(document.documentElement);
     const term = new XTerm({
       cursorBlink: true,
-      fontFamily: 'Cascadia Code, Consolas, monospace',
+      fontFamily: styles.getPropertyValue('--font-mono').trim() || 'monospace',
       fontSize: 12,
       theme: {
-        background: styles.getPropertyValue('--bg-input').trim(),
-        foreground: styles.getPropertyValue('--text-1').trim(),
-        cursor: styles.getPropertyValue('--blue-500').trim(),
-        selectionBackground: styles.getPropertyValue('--bg-raised').trim(),
+        background: styles.getPropertyValue('--background').trim(),
+        foreground: styles.getPropertyValue('--foreground').trim(),
+        blue: styles.getPropertyValue('--accent-foreground').trim(),
+        cursor: styles.getPropertyValue('--accent-foreground').trim(),
+        selectionBackground: styles.getPropertyValue('--muted').trim(),
       },
     });
     const fit = new FitAddon();
@@ -71,7 +73,21 @@ function TerminalView() {
       term.dispose();
     };
   }, []);
-  return <div aria-label="Terminal" className="terminal-host" ref={host} />;
+  return window.ferryHost ? (
+    <div className="grid gap-3 p-5" role="status">
+      <strong>Terminal unavailable</strong>
+      <p className="muted">
+        This session has no connected terminal. Open Agent log to see commands Ferry executed.
+      </p>
+    </div>
+  ) : (
+    <div className="grid gap-2">
+      <p className="muted" role="status">
+        Connected to demo terminal. Commands use local fixtures.
+      </p>
+      <div aria-label="Terminal" className="terminal-host" ref={host} />
+    </div>
+  );
 }
 
 export function BottomPanel({ sessionId: activeSessionId }: { sessionId?: SessionId } = {}) {
@@ -79,7 +95,7 @@ export function BottomPanel({ sessionId: activeSessionId }: { sessionId?: Sessio
   const path = useRouterState({ select: (state) => state.location.pathname });
   const sessionId =
     activeSessionId ?? (path.startsWith('/s/') ? (path.slice(3) as SessionId) : null);
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['session', sessionId],
     queryFn: () => (sessionId ? client.sessions.get(sessionId as never) : Promise.resolve(null)),
     enabled: Boolean(sessionId),
@@ -184,7 +200,11 @@ export function BottomPanel({ sessionId: activeSessionId }: { sessionId?: Sessio
         <TerminalView />
       ) : (
         <div aria-label="Agent log" className="agent-log" role="region">
-          {isLoading ? (
+          {isError ? (
+            <p role="alert">
+              Agent log unavailable. <button onClick={() => void refetch()}>Retry</button>
+            </p>
+          ) : isLoading ? (
             <Skeleton rows={5} />
           ) : agentLogRows.length ? (
             agentLogRows.map((row) => (
@@ -195,7 +215,11 @@ export function BottomPanel({ sessionId: activeSessionId }: { sessionId?: Sessio
               </div>
             ))
           ) : (
-            <p className="muted">Tool calls from this session will appear here.</p>
+            <p className="muted">
+              {sessionId
+                ? 'Connected. Tool calls from this session will appear here.'
+                : 'Open a session to see its agent log.'}
+            </p>
           )}
         </div>
       )}

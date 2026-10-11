@@ -21,6 +21,7 @@ import { loadCatalog, reasoningEffortsForModel, advertisesReasoning } from '@fer
 export type { ModelMessage } from 'ai';
 import {
   ProviderIdSchema,
+  ProbeResultSchema,
   providerDefinition,
   ModelInfoSchema,
   isModelFreeForPlan,
@@ -242,7 +243,12 @@ export function createLanguageModel(ref: ModelRef, opts: ModelFactoryOptions): L
         headers,
       );
     case 'anthropic':
-      return createAnthropic({ apiKey: opts.apiKey, headers, ...fetchOptions })(modelId);
+      return createAnthropic({
+        apiKey: opts.apiKey,
+        headers,
+        ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
+        ...fetchOptions,
+      })(modelId);
     case 'openai':
       return createOpenAI({
         apiKey: opts.apiKey,
@@ -1192,6 +1198,7 @@ function friendlyError(kind: ProviderErrorKind, retryAfterMs: number | null): st
 }
 
 export interface ProbeOptions {
+  discoveryOnly?: boolean;
   modelRef?: ModelRef;
   baseUrl?: string;
   fetch?: typeof globalThis.fetch;
@@ -1243,10 +1250,28 @@ async function probeWithSignal(
     const catalog = await providerCatalog();
     const catalogModels = catalog.models.filter((model) => model.providerId === providerId);
     const liveModels = await discoverProviderModels(providerId, apiKey, probeOptions).catch(
-      () => [],
+      (error: unknown) => {
+        if (probeOptions.discoveryOnly) throw error;
+        return [];
+      },
     );
     const discovered = liveModels.length > 0;
     const models = discovered ? liveModels : catalogModels;
+    if (probeOptions.discoveryOnly) {
+      if (!discovered)
+        throw new Error('Model endpoint could not be checked. Check the endpoint and credentials.');
+      return ProbeResultSchema.parse({
+        ok: true,
+        keyValid: true,
+        latencyMs: performance.now() - started,
+        message:
+          'Model endpoint reachable; generation is untested. Use paid checks with an approved ceiling.',
+        windows: [],
+        models: liveModels.map((model) => model.ref.slice(String(providerId).length + 1)),
+        errorKind: null,
+        usedModel: null,
+      });
+    }
     const preferredModels =
       probeOptions.probeModels ??
       catalog.providers.find((entry) => entry.provider === providerId)?.probe_models ??
@@ -1516,7 +1541,11 @@ export async function discoverProviderModels(
       ...(options.signal ? { signal: options.signal } : {}),
     },
   );
-  if (!response.ok) throw new Error(`Model discovery failed with HTTP ${String(response.status)}`);
+  if (!response.ok)
+    throw Object.assign(new Error(`Model discovery failed with HTTP ${String(response.status)}`), {
+      statusCode: response.status,
+      responseHeaders: Object.fromEntries(response.headers),
+    });
   const payload: unknown = await response.json();
   if (!payload || typeof payload !== 'object') throw new Error('Invalid provider models response');
   const data = (payload as Record<string, unknown>).data;
@@ -1586,7 +1615,13 @@ export async function discoverProviderModels(
         priceOutPerM,
       },
     );
-    const contextWindow = known?.contextWindow ?? 8192;
+    const metadata = item as Record<string, unknown>;
+    const context = metadata.context_length ?? metadata.max_context_length;
+    const contextWindow =
+      typeof context === 'number' && Number.isSafeInteger(context) && context > 0
+        ? context
+        : (known?.contextWindow ?? 8192);
+    const local = providerId === 'ollama' || providerId === 'lmstudio';
     const model = ModelInfoSchema.safeParse({
       ref: `${providerId}/${normalizedId}`,
       providerId,
@@ -1598,7 +1633,7 @@ export async function discoverProviderModels(
       tier: known?.tier ?? 'T2',
       contextWindow,
       maxOutput: known?.maxOutput ?? 4096,
-      toolCalling: toolCall ?? true,
+      toolCalling: toolCall ?? (!local && providerId !== 'openai-compatible'),
       ...(known?.family ? { family: known.family } : {}),
       ...(known?.capability ? { capability: known.capability } : {}),
       ...(known?.quality !== undefined ? { quality: known.quality } : {}),
@@ -1624,9 +1659,9 @@ export async function discoverProviderModels(
           ? (item as Record<string, unknown>)
           : { ...(item as Record<string, unknown>), reasoningEfforts: known?.reasoningEfforts },
       }),
-      free,
-      priceInPerM,
-      priceOutPerM,
+      free: local || free,
+      priceInPerM: local ? 0 : priceInPerM,
+      priceOutPerM: local ? 0 : priceOutPerM,
     });
     return model.success ? [model.data] : [];
   });
