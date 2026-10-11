@@ -1,5 +1,7 @@
+import { vi } from 'vitest';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer } from 'node:net';
+import { request as httpRequest } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import {
   authenticateGatewayKey,
@@ -102,7 +104,7 @@ const runtime: GatewayRuntime = {
     key.profile === 'none' && key.allowedModels.length > 0
       ? key.allowedModels
       : ['openai/gpt-test', 'gpt-test-logical'],
-  complete: (input) => {
+  complete: async (input) => {
     received.push(input);
     const startedAttempt = { model: 'openai/gpt-test', status: 'started' as const };
     input.onAttempt?.({ servedModel: startedAttempt.model, attempts: [startedAttempt] });
@@ -110,9 +112,9 @@ const runtime: GatewayRuntime = {
       return Promise.reject(
         Object.assign(new Error('provider quota exhausted'), { statusCode: 429 }),
       );
-    input.onText?.('Hello');
+    await input.onText?.('Hello');
     if (input.tools?.length)
-      input.onToolCall?.({ id: 'call_1', name: 'lookup', arguments: '{"q":"x"}' });
+      await input.onToolCall?.({ id: 'call_1', name: 'lookup', arguments: '{"q":"x"}' });
     const servedAttempt = { model: 'openai/gpt-test', status: 'served' as const };
     input.onAttempt?.({ servedModel: servedAttempt.model, attempts: [servedAttempt] });
     return Promise.resolve({
@@ -137,6 +139,7 @@ afterEach(async () => {
   await stop?.();
   stop = undefined;
   runtime.complete = defaultComplete;
+  delete runtime.inputTokenBound;
   entries.splice(0, entries.length, created.key);
   created.key.profile = 'auto-free';
   created.key.revokedAt = null;
@@ -156,6 +159,292 @@ async function server() {
 }
 
 describe('Ferry gateway', () => {
+  it('keeps Responses item indexes stable when a tool precedes text', async () => {
+    runtime.complete = async (input) => {
+      const call = { id: 'first_tool', name: 'read_file', arguments: '{"path":"README.md"}' };
+      await input.onToolCall?.(call);
+      await input.onText?.('Text after tool');
+      return {
+        id: 'response',
+        model: 'groq/fixture',
+        text: 'Text after tool',
+        toolCalls: [call],
+        inputTokens: 1,
+        outputTokens: 2,
+        finishReason: 'tool_calls',
+      };
+    };
+    const base = await server();
+    const response = await fetch(`${base}/v1/responses`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'ferry/auto', input: 'Hi', stream: true }),
+    });
+    const events = (await response.text())
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map(
+        (line) =>
+          JSON.parse(line.slice(6)) as {
+            type: string;
+            output_index?: number;
+            item?: { id: string; type: string };
+            response?: { output: { type: string }[] };
+          },
+      );
+    expect(
+      events
+        .filter((event) => event.type === 'response.output_item.added')
+        .map((event) => [event.output_index, event.item?.type]),
+    ).toEqual([
+      [0, 'function_call'],
+      [1, 'message'],
+    ]);
+    expect(
+      events
+        .find((event) => event.type === 'response.completed')
+        ?.response?.output.map((item) => item.type),
+    ).toEqual(['function_call', 'message']);
+  }, 30000);
+  it('forwards structured output, parallel tools and supported images across the certified protocols', async () => {
+    const base = await server();
+    for (const [path, payload] of [
+      [
+        '/v1/chat/completions',
+        {
+          model: 'ferry/auto',
+          messages: [
+            {
+              role: 'user',
+              content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,YQ==' } }],
+            },
+          ],
+          parallel_tool_calls: false,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'answer', schema: { type: 'object' }, strict: true },
+          },
+        },
+      ],
+      [
+        '/v1/responses',
+        {
+          model: 'ferry/auto',
+          input: 'Hi',
+          parallel_tool_calls: false,
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'answer',
+              schema: { type: 'object' },
+              strict: true,
+            },
+          },
+        },
+      ],
+      [
+        '/v1/messages',
+        {
+          model: 'ferry/auto',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'image',
+                  source: { type: 'base64', media_type: 'image/png', data: 'YQ==' },
+                },
+              ],
+            },
+          ],
+          max_tokens: 8,
+          tool_choice: { type: 'auto', disable_parallel_tool_use: true },
+          output_config: { format: { type: 'json_schema', schema: { type: 'object' } } },
+        },
+      ],
+    ] as const) {
+      const response = await fetch(`${base}${path}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      expect(response.status).toBe(200);
+      expect(received.at(-1)).toMatchObject({
+        parallelToolCalls: false,
+        structuredOutput: { schema: { type: 'object' } },
+      });
+      if (path !== '/v1/responses')
+        expect(received.at(-1)?.messages[0]?.content).toEqual([
+          { type: 'image', image: 'data:image/png;base64,YQ==' },
+        ]);
+    }
+  }, 30000);
+  it('reserves the conservative vision context bound before dispatching an image request', async () => {
+    runtime.inputTokenBound = () => Promise.resolve(128_000);
+    created.key.tokenLimitPerMinute = 10_000;
+    const base = await server();
+    const response = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'ferry/auto',
+        max_tokens: 32,
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,YQ==' } }],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(429);
+    expect(received).toHaveLength(0);
+  }, 30_000);
+  it('translates a Responses named tool choice without losing the requested function', async () => {
+    const base = await server();
+    const response = await fetch(`${base}/v1/responses`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'ferry/auto',
+        input: 'Look it up',
+        tools: [{ type: 'function', name: 'lookup', parameters: { type: 'object' } }],
+        tool_choice: { type: 'function', name: 'lookup' },
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(received.at(-1)?.toolChoice).toEqual({ type: 'function', function: { name: 'lookup' } });
+  }, 30_000);
+  it('bounds an active request deadline and aborts the upstream adapter', async () => {
+    let aborted = false;
+    runtime.complete = (input) =>
+      new Promise(() => {
+        input.signal.addEventListener(
+          'abort',
+          () => {
+            aborted = true;
+          },
+          { once: true },
+        );
+      });
+    const handle = await startGateway({ runtime, port: 0, requestDeadlineMs: 50 });
+    stop = () => handle.close();
+    const response = await fetch(`http://127.0.0.1:${String(handle.port)}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'ferry/auto', messages: [{ role: 'user', content: 'Hi' }] }),
+    });
+    expect(response.status).toBe(504);
+    expect(await response.json()).toMatchObject({ error: { code: 'request_timeout' } });
+    expect(aborted).toBe(true);
+    expect(handle.activity()).toEqual({ active: 0, queued: 0 });
+  }, 30000);
+  it('client disconnect releases an active slot and cancels upstream work', async () => {
+    let begin!: () => void, aborted!: () => void;
+    const entered = new Promise<void>((resolve) => (begin = resolve)),
+      cancelled = new Promise<void>((resolve) => (aborted = resolve));
+    runtime.complete = async (input) => {
+      begin();
+      return new Promise((_resolve, reject) => {
+        input.signal.addEventListener(
+          'abort',
+          () => {
+            aborted();
+            reject(
+              input.signal.reason instanceof Error ? input.signal.reason : new Error('Cancelled.'),
+            );
+          },
+          { once: true },
+        );
+      });
+    };
+    const handle = await startGateway({ runtime, port: 0 });
+    stop = () => handle.close();
+    const controller = new AbortController();
+    const pending = fetch(`http://127.0.0.1:${String(handle.port)}/v1/responses`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'ferry/auto', input: 'Hi' }),
+      signal: controller.signal,
+    });
+    const rejected = expect(pending).rejects.toThrow();
+    await entered;
+    controller.abort();
+    await rejected;
+    await cancelled;
+    await vi.waitFor(() => {
+      expect(handle.activity()).toEqual({ active: 0, queued: 0 });
+    });
+  }, 30000);
+  it('stops a partial stream safely without a successful completion marker', async () => {
+    runtime.complete = async (input) => {
+      await input.onText?.('partial text');
+      throw new Error('fixture upstream failure');
+    };
+    const base = await server();
+    const response = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'ferry/auto',
+        stream: true,
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+    });
+    const text = await response.text();
+    expect(text).toContain('partial text');
+    expect(text).toContain('error');
+    expect(text).not.toContain('"finish_reason":"stop"');
+  }, 30000);
+  it('waits for a slow client and cancels blocked writes on shutdown', async () => {
+    let begin!: () => void,
+      aborted!: () => void,
+      produced = 0;
+    const entered = new Promise<void>((resolve) => (begin = resolve)),
+      cancelled = new Promise<void>((resolve) => (aborted = resolve));
+    runtime.complete = async (input) => {
+      input.signal.addEventListener('abort', aborted, { once: true });
+      begin();
+      for (let index = 0; index < 1000; index++) {
+        await input.onText?.('x'.repeat(256 * 1024));
+        produced++;
+        input.signal.throwIfAborted();
+      }
+      return {
+        id: 'slow',
+        model: 'groq/fixture',
+        text: 'done',
+        inputTokens: 1,
+        outputTokens: 1,
+        finishReason: 'stop',
+      };
+    };
+    const handle = await startGateway({ runtime, port: 0 });
+    stop = () => handle.close();
+    const client = httpRequest(
+      `http://127.0.0.1:${String(handle.port)}/v1/chat/completions`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
+      },
+      (response) => response.pause(),
+    );
+    client.on('error', () => undefined);
+    client.end(
+      JSON.stringify({
+        model: 'ferry/auto',
+        stream: true,
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+    );
+    await entered;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(produced).toBeLessThan(1000);
+    await handle.close();
+    stop = undefined;
+    await cancelled;
+    client.destroy();
+  }, 30000);
   it.each([false, true])(
     'translates Claude thinking, system and tools (stream=%s) using x-api-key',
     async (stream) => {
@@ -255,13 +544,13 @@ describe('Ferry gateway', () => {
 
   it('reports the fallback model in headers and final metadata while echoing the requested model', async () => {
     const url = await server();
-    runtime.complete = (input) => {
+    runtime.complete = async (input) => {
       const failed = { model: 'openai/gpt-test', status: 'failed' as const, reason: 'rate_limit' };
       const started = { model: 'groq/served-model', status: 'started' as const };
       const served = { model: 'groq/served-model', status: 'served' as const };
       input.onAttempt?.({ servedModel: failed.model, attempts: [failed] });
       input.onAttempt?.({ servedModel: started.model, attempts: [failed, started] });
-      input.onText?.('Fallback answer');
+      await input.onText?.('Fallback answer');
       input.onAttempt?.({ servedModel: served.model, attempts: [failed, served] });
       return Promise.resolve({
         id: 'response-fallback',
@@ -621,8 +910,8 @@ describe('Ferry gateway', () => {
 
     const failingRuntime: GatewayRuntime = {
       ...runtime,
-      complete: (input) => {
-        input.onText?.('partial');
+      complete: async (input) => {
+        await input.onText?.('partial');
         return Promise.reject(
           Object.assign(new Error('upstream unavailable'), { statusCode: 503 }),
         );
@@ -870,7 +1159,7 @@ describe('Ferry gateway', () => {
     });
     expect(
       ((await concreteOnly.json()) as { data: { id: string }[] }).data.map((item) => item.id),
-    ).toEqual(['openai/gpt-test']);
+    ).toEqual(['ferry/auto', 'openai/gpt-test']);
     created.key.allowedModels = ['ferry/fast'];
     const aliasOnly = await fetch(`${url}/v1/models`, {
       headers: { authorization: `Bearer ${created.secret}` },
@@ -907,8 +1196,8 @@ describe('Ferry gateway', () => {
   it('returns an OpenAI-compatible classified error chunk when a provider fails mid-stream', async () => {
     const failingRuntime: GatewayRuntime = {
       ...runtime,
-      complete: (input) => {
-        input.onText?.('partial');
+      complete: async (input) => {
+        await input.onText?.('partial');
         return Promise.reject(
           Object.assign(
             new Error('stream wrapper failed', {
@@ -989,7 +1278,7 @@ describe('Ferry gateway', () => {
       error: { type: 'rate_limit_error' },
     });
   }, 30_000);
-  it('limits concurrent requests and counts total separately from successful calls', async () => {
+  it('queues concurrent requests and counts total separately from successful calls', async () => {
     let begin: (() => void) | undefined;
     let finish: (() => void) | undefined;
     const entered = new Promise<void>((resolve) => (begin = resolve));
@@ -1013,18 +1302,17 @@ describe('Ferry gateway', () => {
       });
     const first = request('/v1/responses', { model: 'ferry/auto-free', input: 'Hi' });
     await entered;
-    const second = await request('/v1beta/models/ferry%2Fauto-free:generateContent', {
+    const second = request('/v1beta/models/ferry%2Fauto-free:generateContent', {
       contents: [{ role: 'user', parts: [{ text: 'Hi' }] }],
     });
-    expect(second.status).toBe(429);
-    expect(second.headers.get('retry-after')).toBe('1');
-    expect(await second.json()).toMatchObject({
-      error: { code: 429, status: 'RESOURCE_EXHAUSTED' },
+    await vi.waitFor(() => {
+      expect(handle.activity()).toEqual({ active: 1, queued: 1 });
     });
     finish?.();
     expect((await first).status).toBe(502);
+    expect((await second).status).toBe(502);
     expect(runtime.store.usage(created.key.id)).toMatchObject({
-      requests: 1,
+      requests: 2,
       successfulRequests: 0,
     });
   }, 30_000);

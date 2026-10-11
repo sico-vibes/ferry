@@ -28,6 +28,14 @@ export const ProfileSchema = z.object({
   icon: z.string(),
   description: z.string(),
   routingObjective: z.enum(['balanced', 'latency', 'quality', 'context']).optional(),
+  provenance: z
+    .object({
+      kind: z.literal('provider-check'),
+      generatedAt: z.iso.datetime(),
+      sampleCount: z.number().int().nonnegative(),
+      note: z.string(),
+    })
+    .optional(),
   affinityMode: z.enum(['soft', 'strict']).default('soft'),
   builtin: z.boolean(),
   pinned: z.boolean(),

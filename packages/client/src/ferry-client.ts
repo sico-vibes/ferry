@@ -7,6 +7,12 @@ import type {
   DelegationRun,
   AcpAgentDetection,
   GatewayRequestRecord,
+  GatewayHistoryQuery,
+  GatewayHistoryPage,
+  GatewayUsageSummary,
+  GatewayRoutingExplanation,
+  GatewayActivity,
+  GatewayConnectionTest,
   HandoffStat,
   Lane,
   McpServer,
@@ -72,6 +78,7 @@ export interface FerryClient {
       {
         id: string;
         name: string;
+        client?: string;
         profile: string;
         allowedModels: string[];
         rateLimit: number | null;
@@ -80,6 +87,7 @@ export interface FerryClient {
         concurrencyLimit: number | null;
         paidBackup?: boolean;
         budgetUsd?: number | null;
+        budgetUsedUsd?: number;
         compressToolResults: boolean;
         terseSystemPrompt: boolean;
         createdAt: string;
@@ -100,6 +108,7 @@ export interface FerryClient {
     updateKey(input: {
       id: string;
       patch: {
+        client?: string;
         profile?: string;
         allowedModels?: string[];
         rateLimit?: number | null;
@@ -115,6 +124,22 @@ export interface FerryClient {
     revokeKey(id: string): Promise<unknown>;
     /** Recent requests routed by the Gateway, newest first (metadata only, persisted locally). */
     requests(): Promise<GatewayRequestRecord[]>;
+    history(input?: GatewayHistoryQuery): Promise<GatewayHistoryPage>;
+    request(id: string): Promise<GatewayRequestRecord | null>;
+    usage(input?: {
+      range?: '24h' | '7d' | '30d';
+      groupBy?: 'key' | 'provider' | 'model';
+    }): Promise<GatewayUsageSummary>;
+    activity(): Promise<GatewayActivity>;
+    routing(keyId?: string): Promise<GatewayRoutingExplanation>;
+    rotateKey(
+      id: string,
+    ): Promise<{ key: { id: string; name: string; profile: string }; secret: string }>;
+    testConnection(input: {
+      id: string;
+      protocol?: 'chat' | 'responses' | 'anthropic';
+      approvedCostUsd?: number;
+    }): Promise<GatewayConnectionTest>;
     start(): Promise<unknown>;
     stop(): Promise<unknown>;
   };
@@ -190,6 +215,9 @@ export interface FerryClient {
     restore(id: CheckpointId, paths?: string[]): Promise<void>;
   };
   providers: {
+    startChecks(): Promise<{ id: string }>;
+    checkProgress(id?: string): Promise<import('@ferry/shared').ProviderCheckProgress>;
+    cancelChecks(id: string): Promise<import('@ferry/shared').ProviderCheckProgress>;
     failures(
       providerId?: ProviderId,
       options?: import('@ferry/shared').FailureOptions,
@@ -246,6 +274,7 @@ export interface FerryClient {
     select(sessionId: SessionId, ref: ModelRef | 'auto'): Promise<void>;
   };
   profiles: {
+    importCodingResults(report: unknown): Promise<{ imported: number; total: number }>;
     list(): Promise<Profile[]>;
     save(p: Profile): Promise<Profile>;
     remove(id: ProfileId): Promise<void>;

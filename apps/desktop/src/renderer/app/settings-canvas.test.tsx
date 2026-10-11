@@ -133,15 +133,16 @@ describe('SettingsCanvas', () => {
     mount(client);
     await user.click(await screen.findByRole('combobox', { name: 'Profile to edit' }));
     await user.click(await screen.findByRole('option', { name: /Auto-Free/ }));
+    await user.click(screen.getByText('Advanced', { selector: 'summary' }));
     const toggle = await screen.findByRole('switch', { name: 'Split planning and editing' });
-    expect(toggle.getAttribute('data-state')).toBe('checked');
+    expect(toggle.getAttribute('data-state')).toBe('unchecked');
     await user.click(toggle);
     await user.click(screen.getByRole('button', { name: 'Save profile' }));
     await waitFor(async () => {
       expect(
         (await client.profiles.list()).find((profile) => profile.name === 'Auto-Free')?.roles
           .enabled,
-      ).toBe(false);
+      ).toBe(true);
     });
   });
 

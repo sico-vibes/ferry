@@ -11,7 +11,7 @@ export interface GatewaySnippet {
 const keyPlaceholder = 'YOUR_FERRY_KEY';
 
 /** Copy-paste setup for common OpenAI/Anthropic-compatible tools. */
-export function gatewaySnippets(baseUrl: string, model = 'ferry/auto-free'): GatewaySnippet[] {
+export function gatewaySnippets(baseUrl: string, model = 'ferry/auto'): GatewaySnippet[] {
   const openAiBase = `${baseUrl}/v1`;
   const connection = { url: baseUrl.replace(/\/$/, ''), model, secret: keyPlaceholder };
   return [

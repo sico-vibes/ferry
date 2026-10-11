@@ -108,6 +108,26 @@ export const SettingsSchema = z.object({
   activeProfileId: ProfileIdSchema,
   paidCaps: PaidCapsSchema.default({ sessionUsd: null, dailyUsd: null, monthlyUsd: null }),
   onboardingComplete: z.boolean(),
+  onboarding: z
+    .object({
+      step: z.number().int().min(0).max(5).default(0),
+      use: z.enum(['external', 'agent', 'both']).default('external'),
+      keyId: z.string().nullable().default(null),
+      keyName: z.string().trim().min(1).max(80).default('Personal API'),
+      paidBackup: z.boolean().default(false),
+      budgetUsd: z.number().positive().nullable().default(null),
+      verifiedRequestId: z.string().nullable().default(null),
+      clientId: z.enum(['opencode', 'codex', 'claude-code', 'openai']).optional(),
+    })
+    .default({
+      step: 0,
+      use: 'external',
+      keyId: null,
+      keyName: 'Personal API',
+      paidBackup: false,
+      budgetUsd: null,
+      verifiedRequestId: null,
+    }),
   optimizers: OptimizerTogglesSchema,
   routing: RoutingSettingsSchema.default(DEFAULT_ROUTING_SETTINGS),
   developer: z.object({

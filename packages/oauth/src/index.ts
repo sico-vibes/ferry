@@ -469,6 +469,18 @@ export const oauthModelCatalog = [
     contextWindow: model.contextWindow,
     maxOutput: model.maxOutput,
     toolCalling: true,
+    capability: {
+      toolCall: true,
+      parallelToolCalls: null,
+      reasoning: model.reasoning,
+      vision: piModels.get(`${model.providerId}/${model.id}`)?.input.includes('image') ?? false,
+      context: model.contextWindow,
+      maxOutput: model.maxOutput,
+      editFormat: 'Unknown',
+      toolProtocol: 'native',
+      cachePrompt: null,
+      temperature: null,
+    },
     reasoning: model.reasoning,
     reasoningEfforts: (() => {
       const native = piModels.get(`${model.providerId}/${model.id}`);
@@ -637,7 +649,7 @@ export interface OAuthStepRequest {
   messages: readonly Message[];
   tools: readonly { name: string; title: string; schema: z.ZodType }[];
   signal: AbortSignal;
-  onDelta(text: string): void;
+  onDelta(text: string): void | Promise<void>;
   onReasoning?(text: string): void;
   onToolDelta?(): void;
   onProgress?(): void;
@@ -747,7 +759,7 @@ export async function streamOAuthStep(secrets: SecretStore, request: OAuthStepRe
     if (event.type === 'text_delta') {
       endThinking();
       text += event.delta;
-      request.onDelta(event.delta);
+      await request.onDelta(event.delta);
     } else if (event.type === 'thinking_delta') {
       if (event.delta) reasoningStartedAt ??= performance.now();
       reasoning += event.delta;
@@ -792,9 +804,9 @@ export interface OAuthChatRequest {
   maxTokens?: number;
   temperature?: number;
   signal: AbortSignal;
-  onText?: (text: string) => void;
+  onText?: (text: string) => void | Promise<void>;
   onProgress?: () => void;
-  onToolCall?: (call: { id: string; name: string; arguments: string }) => void;
+  onToolCall?: (call: { id: string; name: string; arguments: string }) => void | Promise<void>;
 }
 
 /** Gateway and native-agent OAuth use the same credential store, refresh and stream adapter. */
@@ -901,7 +913,7 @@ export async function streamOAuthChat(secrets: SecretStore, request: OAuthChatRe
     name: call.name,
     arguments: JSON.stringify(call.input),
   }));
-  for (const call of toolCalls) request.onToolCall?.(call);
+  for (const call of toolCalls) await request.onToolCall?.(call);
   return {
     ...result,
     toolCalls,

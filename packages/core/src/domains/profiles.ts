@@ -9,6 +9,7 @@ import { DEFAULT_SETTINGS } from '@ferry/config';
 import { BUILTIN_PROFILES } from '@ferry/router';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
+import { importBenchCoding } from '../coding-quality.js';
 
 const savedProfiles = (services: FerryServices) => {
   const value = services.settings.get('profiles');
@@ -26,12 +27,20 @@ export function register(host: CoreHost, services: FerryServices): void {
       ...BUILTIN_PROFILES.map((base) => {
         if (base.id === DIRECT_PROFILE_ID) return base;
         const override = overrides.find((item) => item.id === base.id);
-        return override ? ProfileSchema.parse({ ...base, ...override, builtin: true }) : base;
+        return override
+          ? ProfileSchema.parse({
+              ...base,
+              fallbackChain: override.fallbackChain ?? base.fallbackChain,
+              roles: override.roles,
+              builtin: true,
+            })
+          : base;
       }),
       ...savedProfiles(services),
     ];
   };
   host.registerDomain('profiles', {
+    importCodingResults: (value: unknown) => importBenchCoding(services, value),
     list() {
       return list().map((profile) => ProfileSchema.parse(profile));
     },

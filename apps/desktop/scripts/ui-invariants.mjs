@@ -2,7 +2,7 @@
 // no horizontal overflow, no clipped button/badge/tab text, and click targets at least 24 px.
 // Screenshots and an axe accessibility report go to apps/desktop/ui-invariants/ for review.
 // Usage: node scripts/ui-invariants.mjs   (FERRY_SKIP_WEB_BUILD=1 to reuse out/web)
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, copyFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serveDirectory } from './static-server.mjs';
@@ -15,6 +15,8 @@ const { default: AxeBuilder } = await import('@axe-core/playwright');
 const packageDirectory = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outputDirectory = join(packageDirectory, 'ui-invariants');
 await mkdir(outputDirectory, { recursive: true });
+const phaseShots = join(packageDirectory, '..', '..', '.dev', 'shots', 'g1-B');
+await mkdir(phaseShots, { recursive: true });
 const served = await serveDirectory(join(packageDirectory, 'out', 'web'));
 
 const screens = [
@@ -23,6 +25,22 @@ const screens = [
   { name: 'usage', path: '/models/usage' },
   { name: 'health', path: '/models/health' },
   { name: 'gateway', path: '/gateway' },
+  ...['Requests', 'Routing', 'Keys', 'Usage & costs', 'Connect'].map((tab) => ({
+    name: `gateway-${tab.toLowerCase().replaceAll(' & ', '-').replaceAll(' ', '-')}`,
+    path: '/gateway',
+    tab,
+  })),
+  ...Array.from({ length: 6 }, (_, step) => ({
+    name: `onboarding-${String(step + 1)}`,
+    path: '/onboarding',
+    step,
+  })),
+  { name: 'onboarding-account', path: '/onboarding', step: 1, method: 'Account sign-in' },
+  { name: 'onboarding-local', path: '/onboarding', step: 1, method: 'Local server' },
+  { name: 'gateway-request-details', path: '/gateway', requestDetails: true },
+  { name: 'gateway-optimized-preview', path: '/gateway', tab: 'Routing', providerCheck: true },
+  { name: 'onboarding-paid-backup', path: '/onboarding', step: 2, paidBackup: true },
+  { name: 'onboarding-paid-verification', path: '/onboarding', step: 5, paidBackup: true },
   { name: 'chat', path: '/?speed=0', openFirstChat: true },
   { name: 'settings-general', path: '/settings', section: 'General' },
   { name: 'settings-routing', path: '/settings', section: 'Routing' },
@@ -30,6 +48,7 @@ const screens = [
   { name: 'settings-permissions', path: '/settings', section: 'Permissions' },
   { name: 'settings-data', path: '/settings', section: 'Data & privacy' },
   { name: 'settings-cloud', path: '/settings', section: 'Storage & Cloud' },
+  { name: 'settings-profiles', path: '/settings', section: 'Profiles' },
 ];
 const viewports = [
   { width: 1024, height: 680 },
@@ -98,7 +117,79 @@ try {
             served.url,
           ).href,
         );
-        await page.locator('.v2-sidebar').first().waitFor({ timeout: 30_000 });
+        if (screen.step !== undefined) {
+          await page
+            .getByRole('heading', { name: 'What will you use Ferry for?', exact: true })
+            .waitFor({ timeout: 30000 });
+          const titles = [
+            'What will you use Ferry for?',
+            'Connect a provider',
+            'Use Auto',
+            'Check readiness',
+            'Create a named key',
+            'Connect and verify',
+          ];
+          for (let step = 0; step < screen.step; step++) {
+            await page
+              .getByRole('button', {
+                name: step === 4 ? 'Create key and continue' : 'Continue',
+                exact: true,
+              })
+              .click();
+            await page
+              .getByRole('heading', { name: titles[step + 1], exact: true })
+              .waitFor({ timeout: 30000 });
+            if (screen.paidBackup && screen.step > 2 && step + 1 === 2) {
+              await page.getByRole('switch', { name: 'Enable paid backup' }).click();
+              await page.getByRole('textbox', { name: 'Monthly spending limit (USD)' }).fill('5');
+            }
+          }
+          if (screen.paidBackup && screen.step === 2) {
+            await page.getByRole('switch', { name: 'Enable paid backup' }).click();
+            await page.getByRole('textbox', { name: 'Monthly spending limit (USD)' }).fill('5');
+          }
+          if (screen.method) {
+            await page.getByRole('combobox', { name: 'Connection method' }).click();
+            await page.getByRole('option', { name: screen.method, exact: true }).click();
+          }
+          await page.evaluate(() => {
+            for (const element of document.querySelectorAll(
+              '.page-scroll-canvas,.onboarding-page,.onboarding-content',
+            ))
+              element.scrollTop = 0;
+          });
+        } else await page.locator('.v2-sidebar').first().waitFor({ timeout: 30_000 });
+        if (screen.tab) await page.getByRole('tab', { name: screen.tab, exact: true }).click();
+        if (screen.providerCheck) {
+          await page.getByRole('button', { name: 'Check free providers', exact: true }).click();
+          await page
+            .getByRole('heading', { name: 'Preview: Optimized for this device', exact: true })
+            .waitFor();
+          await page
+            .getByRole('button', { name: 'Apply recommendations', exact: true })
+            .scrollIntoViewIfNeeded();
+        }
+        if (screen.paidBackup && screen.step === 5) {
+          await page
+            .getByRole('button', { name: 'Send verification request' })
+            .scrollIntoViewIfNeeded();
+        }
+        if (screen.requestDetails) {
+          await page.getByRole('tab', { name: 'Keys', exact: true }).click();
+          await page.getByRole('button', { name: 'Create key', exact: true }).click();
+          await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Screenshot fixture');
+          await page
+            .getByRole('dialog')
+            .getByRole('button', { name: 'Create key', exact: true })
+            .click();
+          await page.getByRole('button', { name: 'Done', exact: true }).click();
+          await page.getByRole('tab', { name: 'Connect', exact: true }).click();
+          await page.getByRole('button', { name: 'Send verification request' }).click();
+          await page.getByText(/Fixture request completed/).waitFor();
+          await page.getByRole('tab', { name: 'Requests', exact: true }).click();
+          await page.getByRole('button', { name: 'Screenshot fixture', exact: true }).click();
+          await page.getByRole('heading', { name: 'Request details' }).waitFor();
+        }
         if (screen.openFirstChat) {
           // The web build has no saved chats: start one and let the scripted reply play.
           const composer = page.getByRole('textbox').first();
@@ -118,6 +209,8 @@ try {
         await page.waitForTimeout(600);
         const label = `${screen.name}-${theme}-${String(viewport.width)}`;
         await page.screenshot({ path: join(outputDirectory, `${label}.png`) });
+        if (screen.name.startsWith('gateway') || screen.name.startsWith('onboarding'))
+          await copyFile(join(outputDirectory, `${label}.png`), join(phaseShots, `${label}.png`));
         const problems = await page.evaluate(findViolations);
         const axe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
         report.push({

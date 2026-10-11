@@ -4,6 +4,7 @@ import {
   ProviderRequestOverridesSchema,
   FailureOptionsSchema,
   ProviderHealthSnapshotSchema,
+  isModelFreeForPlan,
   type ProbeResult,
 } from '@ferry/shared';
 import type { ProviderKey } from '@ferry/shared';
@@ -14,6 +15,13 @@ import type { MockStore } from '../types.js';
 export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryClient['providers'] {
   const { state, rng, before, persist, emit } = deps;
   const keys = state.providerKeys;
+  let check: import('@ferry/shared').ProviderCheckProgress = {
+    id: 'previous',
+    running: false,
+    cancelled: false,
+    results: [],
+    error: null,
+  };
   const resume = async (id: import('@ferry/shared').ProviderId) => {
     await before();
     const provider = state.providers.find((item) => item.id === id);
@@ -28,6 +36,56 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
     return structuredClone(provider);
   };
   return {
+    startChecks: () => {
+      check = {
+        id: crypto.randomUUID(),
+        running: false,
+        cancelled: false,
+        results: state.providers
+          .filter(
+            (provider) =>
+              provider.enabled && ['valid', 'not_applicable'].includes(provider.keyStatus),
+          )
+          .flatMap((provider) => {
+            const model = state.models.find(
+              (model) =>
+                model.providerId === provider.id &&
+                isModelFreeForPlan(provider, model) &&
+                model.toolCalling,
+            );
+            return model
+              ? [
+                  {
+                    providerId: provider.id,
+                    modelRef: model.ref,
+                    ok: true,
+                    at: new Date().toISOString(),
+                    firstResponseMs: 100,
+                    completionMs: 180,
+                    sampleCount: 1 as const,
+                    message:
+                      'Web preview fixture: reachable. One sample does not measure coding quality.',
+                    features:
+                      'Text generation tested; tools, structured output and multimodal compatibility require request-specific verification.' as const,
+                  },
+                ]
+              : [];
+          }),
+        error: null,
+      };
+      emit('providers.check', check);
+      return Promise.resolve({ id: check.id });
+    },
+    checkProgress: (id) =>
+      id === undefined || id === check.id
+        ? Promise.resolve(structuredClone(check))
+        : Promise.reject(new Error('Unknown check.')),
+    cancelChecks: (id) => {
+      if (id !== check.id) return Promise.reject(new Error('Unknown check.'));
+      check = { ...check, cancelled: true, running: false };
+      emit('providers.check', check);
+      return Promise.resolve(structuredClone(check));
+    },
     resume,
     async clearFailures(id) {
       await before();

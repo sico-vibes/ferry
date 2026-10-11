@@ -37,6 +37,7 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
   const gatewayKeys: {
     id: string;
     name: string;
+    client?: string;
     profile: string;
     allowedModels: string[];
     rateLimit: number | null;
@@ -143,6 +144,148 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
       requests: async () => {
         await deps.before();
         return gatewayRequests.map((record) => ({ ...record }));
+      },
+      history: async (input = {}) => {
+        await deps.before();
+        const days = input.range === '7d' ? 7 : input.range === '30d' ? 30 : 1;
+        const query = (input.query ?? '').toLowerCase();
+        const records = gatewayRequests.filter(
+          (row) =>
+            Date.parse(row.at) >= Date.now() - days * 86_400_000 &&
+            (!input.keyId || row.keyId === input.keyId) &&
+            (!input.status || row.status === input.status) &&
+            `${row.keyName} ${row.requestedModel} ${row.modelRef ?? ''} ${row.id}`
+              .toLowerCase()
+              .includes(query),
+        );
+        const offset = input.offset ?? 0,
+          limit = input.limit ?? 50;
+        return {
+          records: records.slice(offset, offset + limit),
+          total: records.length,
+          nextOffset: offset + limit < records.length ? offset + limit : null,
+        };
+      },
+      request: (id) => Promise.resolve(gatewayRequests.find((row) => row.id === id) ?? null),
+      activity: () => Promise.resolve({ active: 0, queued: 0 }),
+      routing: async (id) => {
+        await deps.before();
+        const key = gatewayKeys.find((key) => key.id === id && !key.revokedAt);
+        const models = runtime.store.models.filter(
+          (model) =>
+            model.free &&
+            runtime.store.providers.some(
+              (provider) =>
+                provider.id === model.providerId &&
+                provider.enabled &&
+                ['valid', 'not_applicable'].includes(provider.keyStatus),
+            ),
+        );
+        return {
+          profile: key?.profile ?? 'auto-free',
+          summary:
+            'Auto balances suitability, reliability, quota and response time. This web preview uses fixture data.',
+          eligible: models.slice(0, 10).map((model, index) => ({
+            modelRef: model.ref,
+            providerId: model.providerId,
+            order: index + 1,
+            quotaHeadroom: null,
+          })),
+          excluded: [],
+          lastDecision: gatewayRequests.find((row) => !id || row.keyId === id) ?? null,
+        };
+      },
+      usage: async (input = {}) => {
+        const page = await client.gateway.history({ range: input.range ?? '24h', limit: 100 });
+        const groups = new Map<string, import('@ferry/shared').GatewayUsageGroup>();
+        for (const row of page.records) {
+          const name =
+            (input.groupBy === 'provider'
+              ? row.providerId
+              : input.groupBy === 'model'
+                ? row.modelRef
+                : row.keyId) ?? 'Unserved';
+          const group = groups.get(name) ?? {
+            name,
+            requests: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cachedTokens: 0,
+            actualUsd: 0,
+            estimatedUsd: 0,
+            unknownCosts: 0,
+          };
+          group.requests++;
+          group.inputTokens += row.inputTokens;
+          group.outputTokens += row.outputTokens;
+          group.cachedTokens += row.cachedTokens ?? 0;
+          if (row.costUsd == null) group.unknownCosts++;
+          else if (row.estimatedCost) group.estimatedUsd += row.costUsd;
+          else group.actualUsd += row.costUsd;
+          groups.set(name, group);
+        }
+        return {
+          groups: [...groups.values()],
+          allowanceNote: 'Web preview: subscription and credit balances are unavailable.',
+        };
+      },
+      rotateKey: async (id) => {
+        await deps.before();
+        const key = gatewayKeys.find((key) => key.id === id && !key.revokedAt);
+        if (!key) throw new Error('Unknown or revoked Gateway key.');
+        return {
+          key: { id: key.id, name: key.name, profile: key.profile },
+          secret: 'ferry-gw-mock-rotated',
+        };
+      },
+      testConnection: async ({ id, approvedCostUsd }) => {
+        const key = gatewayKeys.find((key) => key.id === id && !key.revokedAt);
+        if (!key) throw new Error('Unknown or revoked Gateway key.');
+        if (key.paidBackup && approvedCostUsd === undefined)
+          throw new Error('Use a free-only key or explicitly approve a test cost ceiling.');
+        gatewaySettings.enabled = true;
+        const model = (await client.gateway.routing(id)).eligible[0]?.modelRef;
+        if (!model)
+          return {
+            ok: false,
+            requestId: null,
+            model: null,
+            message: 'Connect a provider with a free route before testing.',
+          };
+        const record: GatewayRequestRecord = {
+          id: crypto.randomUUID(),
+          at: new Date().toISOString(),
+          keyId: id,
+          keyName: key.name,
+          requestedModel: 'ferry/auto',
+          modelRef: model,
+          providerId: model.split('/')[0] ?? null,
+          status: 'ok',
+          inputTokens: 8,
+          outputTokens: 2,
+          latencyMs: 120,
+          error: null,
+          outcome: 'completed',
+          firstResponseMs: 80,
+          cachedTokens: 0,
+          costUsd: 0,
+          estimatedCost: false,
+          attempts: [{ model, status: 'served', durationMs: 120 }],
+        };
+        gatewayRequests.unshift(record);
+        key.lastUsedAt = record.at;
+        key.usage.requests++;
+        key.usage.successfulRequests++;
+        key.usage.inputTokens += 8;
+        key.usage.outputTokens += 2;
+        deps.emitter.emit('gateway.request', record);
+        return {
+          ok: true,
+          requestId: record.id,
+          model,
+          message:
+            'Fixture request completed in web preview. Desktop setup sends a real request through your key.',
+        };
       },
       start: async () => {
         gatewaySettings = { ...gatewaySettings, enabled: true };

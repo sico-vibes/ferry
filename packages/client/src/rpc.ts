@@ -152,7 +152,11 @@ export function createRpcFerryClient(
           pending.delete(id);
           reject(new RpcError(`RPC request timed out: ${method}`, -32001, 'timeout'));
         },
-        method === 'oauth.login' ? Math.max(timeoutMs, 10 * 60_000 + 5_000) : timeoutMs,
+        method === 'oauth.login'
+          ? Math.max(timeoutMs, 10 * 60_000 + 5_000)
+          : method === 'gateway.testConnection'
+            ? Math.max(timeoutMs, 155_000)
+            : timeoutMs,
       );
       pending.set(id, { resolve, reject, timer });
       transport.send({ jsonrpc: '2.0', id, method, params });

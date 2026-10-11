@@ -1,3 +1,4 @@
+import { recordCodingOutcome, codingObservations } from '../coding-quality.js';
 import { reserveSpend } from '../spending.js';
 import { AgentLoop, SessionStore } from '@ferry/agent';
 import { createHash } from 'node:crypto';
@@ -187,7 +188,16 @@ export function register(host: CoreHost, services: FerryServices): void {
       ...BUILTIN_PROFILES.map((base) => {
         if (base.id === DIRECT_PROFILE_ID) return base;
         const override = builtinOverrides.find((item) => item.id === base.id);
-        return ProfileSchema.parse(override ? { ...base, ...override, builtin: true } : base);
+        return ProfileSchema.parse(
+          override
+            ? {
+                ...base,
+                fallbackChain: override.fallbackChain ?? base.fallbackChain,
+                roles: override.roles,
+                builtin: true,
+              }
+            : base,
+        );
       }),
       ...custom,
     ];
@@ -806,6 +816,7 @@ export function register(host: CoreHost, services: FerryServices): void {
               verifiedModelRefs,
               routing,
               reliability,
+              codingObservations: codingObservations(services),
               random: services.random,
             } as const;
             const chain = chainForProfile(profile);
@@ -918,8 +929,14 @@ export function register(host: CoreHost, services: FerryServices): void {
                   textDelta: event.text,
                 });
               else if (event.type === 'agent.event') host.emit('agent.event', event);
-              else if (event.type === 'run.completed') host.emit('run.completed', event);
-              else if (event.type === 'session.part') {
+              else if (event.type === 'run.completed') {
+                recordCodingOutcome(
+                  services,
+                  event.report,
+                  `${session.id}:${String(runStartedAt)}`,
+                );
+                host.emit('run.completed', event);
+              } else if (event.type === 'session.part') {
                 if (event.part.type === 'error') transcriptFailureRecorded = true;
                 host.emit('session.part', event);
                 if (event.part.type === 'approval_request' && event.part.state === 'pending')
@@ -1093,6 +1110,7 @@ export function register(host: CoreHost, services: FerryServices): void {
                     : undefined;
                 return RoutingSettingsSchema.parse(routing ?? {});
               },
+              codingObservations: codingObservations(services),
               reliabilityState:
                 z
                   .array(

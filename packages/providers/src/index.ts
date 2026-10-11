@@ -11,6 +11,7 @@ import {
   generateText,
   jsonSchema,
   streamText,
+  Output,
   type FlexibleSchema,
   type LanguageModel,
   type ModelMessage,
@@ -338,12 +339,14 @@ export interface ProviderChatInput {
   maxTokens?: number;
   temperature?: number;
   jsonMode?: boolean;
+  structuredOutput?: { name: string; schema: Record<string, unknown>; strict?: boolean };
+  parallelToolCalls?: boolean;
   fetch?: typeof globalThis.fetch;
   baseUrl?: string;
   signal?: AbortSignal;
-  onText?: (text: string) => void;
+  onText?: (text: string) => void | Promise<void>;
   onProgress?: () => void;
-  onToolCall?: (call: { id: string; name: string; arguments: string }) => void;
+  onToolCall?: (call: { id: string; name: string; arguments: string }) => void | Promise<void>;
   onObservation?: (observation: RawCallObservation) => void;
   overrides?: ProviderRequestOverrides;
   sessionId?: string;
@@ -351,6 +354,32 @@ export interface ProviderChatInput {
 
 /** Execute one provider chat turn and return normalized text, tools, usage, and finish state. */
 export async function streamProviderChat(input: ProviderChatInput) {
+  const providerId = providerFromRef(input.model);
+  const configuredOverrides = input.overrides ?? resolveProviderRequestOverrides(providerId);
+  const protectedFields = new Set([
+    'model',
+    'max_tokens',
+    'max_completion_tokens',
+    'max_output_tokens',
+  ]);
+  const overrides = {
+    ...configuredOverrides,
+    stripParams: configuredOverrides.stripParams.filter((field) => !protectedFields.has(field)),
+    forceParams: Object.fromEntries(
+      Object.entries(configuredOverrides.forceParams).filter(
+        ([field]) => !protectedFields.has(field),
+      ),
+    ),
+  };
+  const compatibleControls =
+    input.parallelToolCalls !== undefined &&
+    !['anthropic', 'openai'].includes(providerId) &&
+    !input.model.includes('/claude')
+      ? {
+          ...overrides,
+          forceParams: { ...overrides.forceParams, parallel_tool_calls: input.parallelToolCalls },
+        }
+      : overrides;
   const model = createLanguageModel(input.model, {
     apiKey: input.apiKey,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
@@ -362,7 +391,7 @@ export async function streamProviderChat(input: ProviderChatInput) {
         model: input.model,
       },
       input.fetch ?? globalThis.fetch,
-      input.overrides ?? resolveProviderRequestOverrides(providerFromRef(input.model)),
+      compatibleControls,
     ),
   });
   const sdkTools = Object.fromEntries(
@@ -385,9 +414,25 @@ export async function streamProviderChat(input: ProviderChatInput) {
   const maxOutputTokens =
     input.maxTokens ??
     (Object.keys(reasoningOptions).length ? input.modelInfo?.maxOutput : undefined);
+  const providerOptions = { ...reasoningOptions };
+  if (input.parallelToolCalls !== undefined) {
+    providerOptions.openai = {
+      ...providerOptions.openai,
+      parallelToolCalls: input.parallelToolCalls,
+    };
+    providerOptions.anthropic = {
+      ...providerOptions.anthropic,
+      disableParallelToolUse: !input.parallelToolCalls,
+    };
+  }
+  if (input.structuredOutput?.strict !== undefined)
+    providerOptions.openai = {
+      ...providerOptions.openai,
+      strictJsonSchema: input.structuredOutput.strict,
+    };
   const result = streamText({
     model,
-    ...(Object.keys(reasoningOptions).length ? { providerOptions: reasoningOptions } : {}),
+    ...(Object.keys(providerOptions).length ? { providerOptions } : {}),
     ...(input.system ? { system: input.system } : {}),
     messages: input.messages,
     ...(input.tools?.length ? { tools: sdkTools } : {}),
@@ -403,7 +448,16 @@ export async function streamProviderChat(input: ProviderChatInput) {
       : {}),
     ...(maxOutputTokens ? { maxOutputTokens } : {}),
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
-    ...(input.jsonMode ? { responseFormat: { type: 'json' as const } } : {}),
+    ...(input.structuredOutput
+      ? {
+          output: Output.object({
+            name: input.structuredOutput.name,
+            schema: jsonSchema(input.structuredOutput.schema),
+          }),
+        }
+      : input.jsonMode
+        ? { output: Output.json() }
+        : {}),
     ...(input.signal ? { abortSignal: input.signal } : {}),
     maxRetries: 0,
   });
@@ -420,7 +474,7 @@ export async function streamProviderChat(input: ProviderChatInput) {
       input.onProgress?.();
     if (part.type === 'text-delta') {
       text += part.text;
-      input.onText?.(part.text);
+      await input.onText?.(part.text);
     } else if (part.type === 'reasoning-delta') {
       reasoning += part.text;
     } else if (part.type === 'tool-call') {
@@ -430,7 +484,7 @@ export async function streamProviderChat(input: ProviderChatInput) {
         arguments: JSON.stringify(part.input),
       };
       toolCalls.push(call);
-      input.onToolCall?.(call);
+      await input.onToolCall?.(call);
     } else if (part.type === 'error') {
       throw part.error;
     }

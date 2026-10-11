@@ -22,6 +22,7 @@ import { getModelDiscovery } from './model-discovery.js';
 import { getProviderHealth } from '../provider-health.js';
 import { isCoreWindowActive, onCoreWindowActiveChange } from '../runtime-activity.js';
 import { hasUsableProviderKey, permitsKeylessProvider } from '../services.js';
+import { createProviderChecks } from '../provider-checks.js';
 
 const ProviderIdInput = ProviderIdSchema.transform((id) =>
   ProviderIdSchema.parse(canonicalProviderId(id)),
@@ -178,6 +179,10 @@ const probeBackoff = new WeakMap<
   Map<string, { failures: number; retryAt: number }>
 >();
 export function register(host: CoreHost, services: FerryServices): void {
+  const checks = createProviderChecks(services, (progress) => {
+    host.emit('providers.check', progress);
+  });
+  host.onShutdown(() => checks.close());
   const providerProbeBackoff =
     probeBackoff.get(services) ?? new Map<string, { failures: number; retryAt: number }>();
   probeBackoff.set(services, providerProbeBackoff);
@@ -382,6 +387,9 @@ export function register(host: CoreHost, services: FerryServices): void {
     return provider;
   };
   host.registerDomain('providers', {
+    startChecks: () => checks.start(),
+    checkProgress: (id: unknown) => checks.progress(z.string().max(64).optional().parse(id)),
+    cancelChecks: (id: unknown) => checks.cancel(z.string().max(64).parse(id)),
     failures(rawId?: unknown, rawOptions?: unknown) {
       const id = rawId === undefined ? undefined : ProviderIdInput.parse(rawId);
       if (id) providerRecord(services, id);

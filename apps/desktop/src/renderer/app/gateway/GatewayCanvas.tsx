@@ -3,25 +3,18 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { GatewayRequestRecord } from '@ferry/shared';
 import { Check, Copy, KeyRound, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
-import {
-  FerryMark,
-  PageHeader,
-  ProviderLogo,
-  SegmentedControl,
-  Select,
-  Switch,
-  UiV2,
-} from '@ferry/ui';
-import { listAllModels } from '@ferry/client';
+import { PageHeader, Select, UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../../data/client';
 import { useProfiles } from '../../data/queries';
 import { useToasts } from '../../state/toasts';
 import { useUI } from '../../state/ui';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { formatTokens } from '../modelFacts';
-import { gatewaySnippets } from './snippets';
-import { ModelMultiPicker } from './ModelMultiPicker';
-import { gatewayRoutingMode, NO_PROFILE, type GatewayRoutingMode } from './modelSelection';
+import { KeyLimitsDialog } from './KeyLimitsDialog';
+import { GatewayRequests } from './GatewayRequests';
+import { GatewayRouting, GatewayUsage } from './GatewayRoutingUsage';
+import { GatewayConnect } from './GatewayConnect';
+import { NO_PROFILE } from './modelSelection';
 
 type GatewayKeyRow = Awaited<
   ReturnType<ReturnType<typeof useFerryClient>['gateway']['listKeys']>
@@ -29,9 +22,9 @@ type GatewayKeyRow = Awaited<
 
 const count = new Intl.NumberFormat('en');
 const builtinProfiles = [
-  { value: 'none', label: 'No profile (pick models)' },
-  { value: 'auto-free', label: 'Auto-Free' },
-  { value: 'best', label: 'Best Available' },
+  { value: 'auto-free', label: 'Auto — recommended' },
+  { value: 'none', label: 'Choose a model' },
+  { value: 'best', label: 'Best quality' },
   { value: 'fast', label: 'Fast' },
   { value: 'long-context', label: 'Long Context' },
 ];
@@ -79,392 +72,16 @@ function EndpointRow({ label, value, hint }: { label: string; value: string; hin
   );
 }
 
-function KeyLimitsDialog({
-  gatewayKey,
-  profiles,
-  onClose,
-}: {
-  gatewayKey: GatewayKeyRow | null;
-  profiles: { value: string; label: string }[];
-  onClose: () => void;
-}) {
-  const client = useFerryClient();
-  const cache = useQueryClient();
-  const { data: models = [] } = useQuery({
-    queryKey: ['models'],
-    queryFn: () => listAllModels(client),
-  });
-  const { data: providers = [] } = useQuery({
-    queryKey: ['providers'],
-    queryFn: () => client.providers.list(),
-  });
-  // Profile used when switching back from "Pick models" to "Use a profile".
-  const [lastProfile, setLastProfile] = useState('auto-free');
-  const [draft, setDraft] = useState({
-    profile: 'auto-free',
-    allowedModels: [] as string[],
-    rateLimit: '',
-    tokenLimitPerMinute: '',
-    tokenLimitPerDay: '',
-    concurrencyLimit: '',
-    paidBackup: false,
-    budgetUsd: '',
-    compressToolResults: false,
-    terseSystemPrompt: false,
-  });
-  const [error, setError] = useState('');
-  useEffect(() => {
-    if (!gatewayKey) return;
-    const text = (value: number | null) => (value === null ? '' : String(value));
-    setDraft({
-      profile: gatewayKey.profile,
-      allowedModels: [...gatewayKey.allowedModels],
-      rateLimit: text(gatewayKey.rateLimit),
-      tokenLimitPerMinute: text(gatewayKey.tokenLimitPerMinute),
-      tokenLimitPerDay: text(gatewayKey.tokenLimitPerDay),
-      concurrencyLimit: text(gatewayKey.concurrencyLimit),
-      paidBackup: gatewayKey.paidBackup ?? false,
-      budgetUsd: text(gatewayKey.budgetUsd ?? null),
-      compressToolResults: gatewayKey.compressToolResults,
-      terseSystemPrompt: gatewayKey.terseSystemPrompt,
-    });
-    if (gatewayKey.profile !== NO_PROFILE) setLastProfile(gatewayKey.profile);
-    setError('');
-  }, [gatewayKey]);
-  const routingMode = gatewayRoutingMode(draft.profile);
-  const limit = (
-    field: 'rateLimit' | 'tokenLimitPerMinute' | 'tokenLimitPerDay' | 'concurrencyLimit',
-    label: string,
-  ) => (
-    <label className="v2-gateway-field">
-      <span>{label}</span>
-      <UiV2.Input
-        inputMode="numeric"
-        onChange={(event) => {
-          setDraft((current) => ({ ...current, [field]: event.target.value }));
-        }}
-        placeholder="Unlimited"
-        value={draft[field]}
-      />
-    </label>
-  );
-  const save = async () => {
-    if (!gatewayKey) return;
-    const numberOrNull = (value: string) => (value.trim() ? Number(value) : null);
-    const limits = {
-      rateLimit: numberOrNull(draft.rateLimit),
-      tokenLimitPerMinute: numberOrNull(draft.tokenLimitPerMinute),
-      tokenLimitPerDay: numberOrNull(draft.tokenLimitPerDay),
-      concurrencyLimit: numberOrNull(draft.concurrencyLimit),
-    };
-    if (
-      Object.values(limits).some(
-        (value) => value !== null && (!Number.isInteger(value) || value < 1),
-      )
-    ) {
-      setError('Limits must be whole numbers of at least 1, or empty for unlimited.');
-      return;
-    }
-    const budgetUsd = numberOrNull(draft.budgetUsd);
-    if (draft.paidBackup && (budgetUsd === null || !Number.isFinite(budgetUsd) || budgetUsd <= 0)) {
-      setError('Paid backup requires a positive monthly spending limit.');
-      return;
-    }
-    try {
-      await client.gateway.updateKey({
-        id: gatewayKey.id,
-        patch: {
-          ...limits,
-          paidBackup: draft.paidBackup,
-          budgetUsd,
-          profile: draft.profile,
-          allowedModels: draft.allowedModels,
-          compressToolResults: draft.compressToolResults,
-          terseSystemPrompt: draft.terseSystemPrompt,
-        },
-      });
-      await cache.invalidateQueries({ queryKey: ['gateway-keys'] });
-      onClose();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not save this key. Try again.');
-    }
-  };
-  return (
-    <UiV2.Dialog
-      open={gatewayKey !== null}
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      <UiV2.DialogContent className="v2-gateway-dialog">
-        <UiV2.DialogHeader>
-          <UiV2.DialogTitle>{gatewayKey?.name} settings</UiV2.DialogTitle>
-          <UiV2.DialogDescription>
-            Routing and limits for requests made with this key.
-          </UiV2.DialogDescription>
-        </UiV2.DialogHeader>
-        <div className="v2-gateway-form">
-          <div className="v2-gateway-field">
-            <span>Routing</span>
-            <SegmentedControl
-              label="Routing"
-              value={routingMode}
-              onValueChange={(value) => {
-                const mode = value as GatewayRoutingMode;
-                setDraft((current) => ({
-                  ...current,
-                  profile: mode === 'models' ? NO_PROFILE : lastProfile,
-                }));
-              }}
-              options={[
-                { value: 'profile', label: 'Use a profile' },
-                { value: 'models', label: 'Pick models' },
-              ]}
-            />
-            <small className="v2-gateway-help">
-              {routingMode === 'models'
-                ? 'No profile. Requests go to the models below, tried in this order when one is rate limited or fails.'
-                : 'The profile picks a model for each request. Optionally limit it to the models below.'}
-            </small>
-          </div>
-          {routingMode === 'profile' ? (
-            <Select
-              label="Routing profile"
-              onValueChange={(profile) => {
-                setLastProfile(profile);
-                setDraft((current) => ({ ...current, profile }));
-              }}
-              options={profiles.filter((profile) => profile.value !== NO_PROFILE)}
-              value={draft.profile}
-            />
-          ) : null}
-          <div className="v2-gateway-field">
-            <span>{routingMode === 'models' ? 'Models' : 'Limit to models (optional)'}</span>
-            <ModelMultiPicker
-              emptyLabel={
-                routingMode === 'models'
-                  ? 'No models picked yet: every connected model is allowed.'
-                  : 'No limit: every model the profile allows.'
-              }
-              models={models}
-              providers={providers}
-              value={draft.allowedModels}
-              onChange={(allowedModels) => {
-                setDraft((current) => ({ ...current, allowedModels }));
-              }}
-            />
-          </div>
-          <div className="v2-gateway-form-grid">
-            {limit('rateLimit', 'Requests per minute')}
-            {limit('concurrencyLimit', 'Concurrent requests')}
-            {limit('tokenLimitPerMinute', 'Tokens per minute')}
-            {limit('tokenLimitPerDay', 'Tokens per day')}
-            <label className="v2-gateway-field">
-              <span>Monthly spending limit (USD)</span>
-              <UiV2.Input
-                inputMode="decimal"
-                value={draft.budgetUsd}
-                placeholder="Required for paid backup"
-                onChange={(event) => {
-                  setDraft((current) => ({ ...current, budgetUsd: event.target.value }));
-                }}
-              />
-            </label>
-            <label className="v2-gateway-field">
-              <span>Allow paid backup</span>
-              <Switch
-                checked={draft.paidBackup}
-                onCheckedChange={(paidBackup) => {
-                  setDraft((current) => ({ ...current, paidBackup }));
-                }}
-              />
-            </label>
-            <p className="text-ui-meta text-muted-foreground">
-              Free only by default. Paid calls need a paid-capable profile and this key’s positive
-              limit. Profile and global limits also apply.
-            </p>
-          </div>
-          <label className="v2-gateway-toggle">
-            <span>
-              <strong>Compress tool results</strong>
-              <small>Shorten long tool output before it reaches the model.</small>
-            </span>
-            <UiV2.Switch
-              aria-label="Compress tool results"
-              checked={draft.compressToolResults}
-              onCheckedChange={(compressToolResults) => {
-                setDraft((current) => ({ ...current, compressToolResults }));
-              }}
-            />
-          </label>
-          <label className="v2-gateway-toggle">
-            <span>
-              <strong>Terse system prompt</strong>
-              <small>Ask the model for shorter answers to save tokens.</small>
-            </span>
-            <UiV2.Switch
-              aria-label="Terse system prompt"
-              checked={draft.terseSystemPrompt}
-              onCheckedChange={(terseSystemPrompt) => {
-                setDraft((current) => ({ ...current, terseSystemPrompt }));
-              }}
-            />
-          </label>
-          {error && (
-            <p className="v2-gateway-error" role="alert">
-              {error}
-            </p>
-          )}
-        </div>
-        <div className="v2-gateway-dialog-actions">
-          <UiV2.Button onClick={onClose} variant="secondary">
-            Cancel
-          </UiV2.Button>
-          <UiV2.Button onClick={() => void save()}>Save key settings</UiV2.Button>
-        </div>
-      </UiV2.DialogContent>
-    </UiV2.Dialog>
-  );
-}
-
-function RequestLog({
-  requests,
-  keyNames,
-  now,
-}: {
-  requests: GatewayRequestRecord[];
-  keyNames: string[];
-  now: number;
-}) {
-  const [keyFilter, setKeyFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'ok' | 'error'>('all');
-  const rows = requests.filter(
-    (row) =>
-      (keyFilter === 'all' || row.keyName === keyFilter) &&
-      (statusFilter === 'all' || row.status === statusFilter),
-  );
-  return (
-    <section aria-label="Live requests" className="v2-gateway-card v2-gateway-log">
-      <header className="v2-gateway-card-header">
-        <div>
-          <h2>
-            <span aria-hidden="true" className="v2-live-dot" />
-            Live requests
-          </h2>
-          <p>
-            Recent Gateway requests stored on this device. Metadata only; prompt and response
-            contents are excluded.
-          </p>
-        </div>
-        <div className="v2-gateway-filters">
-          <Select
-            label="Filter by key"
-            onValueChange={setKeyFilter}
-            options={[
-              { value: 'all', label: 'All keys' },
-              ...keyNames.map((name) => ({ value: name, label: name })),
-            ]}
-            value={keyFilter}
-          />
-          <Select
-            label="Filter by status"
-            onValueChange={(value) => {
-              setStatusFilter(value as typeof statusFilter);
-            }}
-            options={[
-              { value: 'all', label: 'All statuses' },
-              { value: 'ok', label: 'Succeeded' },
-              { value: 'error', label: 'Failed' },
-            ]}
-            value={statusFilter}
-          />
-        </div>
-      </header>
-      {rows.length === 0 ? (
-        <p className="v2-gateway-empty">
-          {requests.length === 0
-            ? 'No requests yet. Point a tool at the endpoint above and they will appear here live.'
-            : 'No requests match these filters.'}
-        </p>
-      ) : (
-        <div className="v2-gateway-table-scroll">
-          <table className="v2-gateway-table">
-            <thead>
-              <tr>
-                <th scope="col">Time</th>
-                <th scope="col">Key</th>
-                <th scope="col">Model</th>
-                <th scope="col">Status</th>
-                <th className="v2-num" scope="col">
-                  Tokens
-                </th>
-                <th className="v2-num" scope="col">
-                  Latency
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.slice(0, 50).map((row) => (
-                <tr key={row.id}>
-                  <td className="v2-muted" title={new Date(row.at).toLocaleString()}>
-                    {relativeTime(row.at, now)}
-                  </td>
-                  <td>{row.keyName}</td>
-                  <td>
-                    <span className="v2-gateway-model">
-                      {row.modelRef ? (
-                        <ProviderLogo
-                          model={row.modelRef}
-                          name={row.modelRef}
-                          {...(row.providerId ? { providerId: row.providerId } : {})}
-                          size={14}
-                        />
-                      ) : (
-                        <FerryMark decorative size={14} variant="mono" />
-                      )}
-                      <span className="v2-gateway-model-name">
-                        {row.modelRef ?? row.requestedModel}
-                      </span>
-                      {row.modelRef && row.requestedModel.startsWith('ferry/') && (
-                        <span className="v2-gateway-via">via {row.requestedModel}</span>
-                      )}
-                    </span>
-                  </td>
-                  <td>
-                    <span
-                      className="v2-status-pill"
-                      data-tone={row.status === 'ok' ? 'success' : 'destructive'}
-                      title={row.error ?? undefined}
-                    >
-                      {row.status === 'ok' ? 'OK' : 'Failed'}
-                    </span>
-                  </td>
-                  <td className="v2-num">
-                    {row.status === 'ok'
-                      ? `${formatTokens(row.inputTokens)} / ${formatTokens(row.outputTokens)}`
-                      : '—'}
-                  </td>
-                  <td className="v2-num v2-muted">
-                    {row.latencyMs >= 1000
-                      ? `${(row.latencyMs / 1000).toFixed(1)}s`
-                      : `${String(row.latencyMs)}ms`}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
 /** Gateway dashboard: endpoint, setup, keys and the live request log (reference 11). */
 export function GatewayCanvas() {
   const client = useFerryClient();
   const cache = useQueryClient();
   const pushToast = useToasts((state) => state.push);
   const { data: profileList = [] } = useProfiles();
+  const { data: connectedProviders = [] } = useQuery({
+    queryKey: ['providers'],
+    queryFn: () => client.providers.list(),
+  });
   const { data: gateway } = useQuery({
     queryKey: ['gateway-settings'],
     queryFn: () => client.gateway.settings(),
@@ -473,13 +90,26 @@ export function GatewayCanvas() {
     queryKey: ['gateway-keys'],
     queryFn: () => client.gateway.listKeys(),
   });
-  const { data: initialRequests, isPending: requestsPending } = useQuery({
+  const { data: initialRequests } = useQuery({
     queryKey: ['gateway-requests'],
     queryFn: () => client.gateway.requests(),
   });
   const [requests, setRequests] = useState<GatewayRequestRecord[]>([]);
   const [now, setNow] = useState(() => Date.now());
-  const [snippetId, setSnippetId] = useState('opencode');
+  const [tab, setTab] = useState('Overview');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [rotating, setRotating] = useState<GatewayKeyRow | null>(null);
+  const { data: activity } = useQuery({
+    queryKey: ['gateway-activity'],
+    queryFn: () => client.gateway.activity(),
+    refetchInterval: 2000,
+  });
+  const { data: routing } = useQuery({
+    queryKey: ['gateway-routing', 'default'],
+    queryFn: () => client.gateway.routing(),
+    refetchInterval: 5000,
+  });
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [newProfile, setNewProfile] = useState('auto-free');
@@ -496,6 +126,9 @@ export function GatewayCanvas() {
           [record, ...current.filter((row) => row.id !== record.id)].slice(0, 200),
         );
         void cache.invalidateQueries({ queryKey: ['gateway-keys'] });
+        void cache.invalidateQueries({ queryKey: ['gateway-routing'] });
+        void cache.invalidateQueries({ queryKey: ['gateway-history'] });
+        void cache.invalidateQueries({ queryKey: ['gateway-usage'] });
       }),
     [cache, client],
   );
@@ -521,19 +154,10 @@ export function GatewayCanvas() {
   const running = gateway?.status.running ?? false;
   const port = gateway?.status.port ?? gateway?.port ?? 11435;
   const baseUrl = gateway?.status.url ?? `http://127.0.0.1:${String(port)}`;
-  const snippets = gatewaySnippets(baseUrl);
-  const snippet = snippets.find((item) => item.id === snippetId) ?? snippets[0];
   const activeKeys = keys.filter((key) => !key.revokedAt);
-  const totals = keys.reduce(
-    (sum, key) => ({
-      requests: sum.requests + key.usage.requests,
-      successful: sum.successful + key.usage.successfulRequests,
-      tokens: sum.tokens + key.usage.inputTokens + key.usage.outputTokens,
-    }),
-    { requests: 0, successful: 0, tokens: 0 },
-  );
   const setEnabled = async (enabled: boolean) => {
-    if (!gateway) return;
+    if (!gateway || busy) return;
+    setBusy(true);
     try {
       await client.gateway.setSettings({ enabled, port: gateway.port, allowLan: gateway.allowLan });
       await cache.invalidateQueries({ queryKey: ['gateway-settings'] });
@@ -543,16 +167,26 @@ export function GatewayCanvas() {
         title: enabled ? 'Gateway could not start' : 'Gateway could not stop',
         body: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      setBusy(false);
     }
   };
   const createKey = async () => {
     const name = newName.trim();
-    if (!name) return;
-    const created = await client.gateway.createKey({ name, profile: newProfile });
-    setCreateOpen(false);
-    setNewName('');
-    setSecret(created.secret);
-    await cache.invalidateQueries({ queryKey: ['gateway-keys'] });
+    if (!name || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const created = await client.gateway.createKey({ name, profile: newProfile });
+      setCreateOpen(false);
+      setNewName('');
+      setSecret(created.secret);
+      await cache.invalidateQueries({ queryKey: ['gateway-keys'] });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not create key.');
+    } finally {
+      setBusy(false);
+    }
   };
   return (
     <section aria-label="Gateway" className="v2-gateway-page">
@@ -573,227 +207,324 @@ export function GatewayCanvas() {
               </span>
               <UiV2.Switch
                 aria-label="Enable Gateway"
-                checked={gateway?.enabled ?? false}
-                disabled={!gateway}
+                checked={running}
+                disabled={!gateway || busy}
                 onCheckedChange={(enabled) => void setEnabled(enabled)}
               />
             </div>
           }
         />
-        <div className="v2-gateway-stats">
-          {[
-            ['Requests', count.format(totals.requests), 'All keys, all time'],
-            [
-              'Success rate',
-              totals.requests
-                ? `${String(Math.round((totals.successful / totals.requests) * 100))}%`
-                : '—',
-              `${count.format(totals.successful)} succeeded`,
-            ],
-            ['Tokens', formatTokens(totals.tokens), 'Input and output'],
-            [
-              'Active keys',
-              String(activeKeys.length),
-              `${String(keys.length - activeKeys.length)} revoked`,
-            ],
-          ].map(([label, value, hint]) => (
-            <div className="v2-gateway-stat" key={label}>
-              <span>{label}</span>
-              <strong>{keysPending ? <SkeletonStat /> : value}</strong>
-              <small>{keysPending ? <span aria-hidden="true">—</span> : hint}</small>
-            </div>
-          ))}
-        </div>
-        <div className="v2-gateway-grid">
-          <section aria-label="Endpoint" className="v2-gateway-card">
-            <header className="v2-gateway-card-header">
-              <div>
-                <h2>Endpoint</h2>
-                <p>
-                  {gateway?.allowLan
-                    ? 'Reachable from devices on your local network.'
-                    : 'Only this computer can connect.'}{' '}
-                  <button
-                    className="v2-link-button"
-                    onClick={() => {
-                      useUI.getState().openSettings('Gateway');
-                    }}
-                    type="button"
-                  >
-                    Port and network settings
-                  </button>
-                </p>
-              </div>
-            </header>
-            {!gateway ? (
-              <SkeletonRows rows={3} />
-            ) : (
-              <>
-                <EndpointRow
-                  hint="OpenAI-compatible tools"
-                  label="OpenAI base URL"
-                  value={`${baseUrl}/v1`}
-                />
-                <EndpointRow hint="Claude Code" label="Anthropic base URL" value={baseUrl} />
-                <div className="v2-gateway-models">
-                  <span>Models</span>
-                  {['ferry/auto-free', 'ferry/best', 'ferry/fast', 'ferry/long-context'].map(
-                    (id) => (
-                      <code key={id}>{id}</code>
-                    ),
-                  )}
-                </div>
-              </>
-            )}
-          </section>
-          <section aria-label="Connect a tool" className="v2-gateway-card">
-            <header className="v2-gateway-card-header">
-              <div>
-                <h2>Connect a tool</h2>
-                <p>{snippet?.where}</p>
-              </div>
-            </header>
-            <div aria-label="Tools" className="v2-gateway-tool-tabs" role="tablist">
-              {snippets.map((item) => (
-                <button
-                  aria-selected={item.id === snippetId}
-                  key={item.id}
-                  onClick={() => {
-                    setSnippetId(item.id);
-                  }}
-                  role="tab"
-                  type="button"
+        {error && (
+          <p role="alert" className="v2-gateway-error">
+            {error}
+          </p>
+        )}
+        <UiV2.Tabs value={tab} onValueChange={setTab}>
+          <UiV2.TabsList className="v2-gateway-tab-list" aria-label="Gateway sections">
+            {['Overview', 'Requests', 'Routing', 'Keys', 'Usage & costs', 'Connect'].map(
+              (label) => (
+                <UiV2.TabsTrigger
+                  key={label}
+                  value={label === 'Usage & costs' ? 'usage-costs' : label}
                 >
-                  {item.label}
-                </button>
+                  {label}
+                </UiV2.TabsTrigger>
+              ),
+            )}
+          </UiV2.TabsList>
+          <UiV2.TabsContent value="Overview" className="grid gap-4 pt-4">
+            <div className="v2-gateway-stats">
+              {[
+                [
+                  'Live requests',
+                  activity ? String(activity.active) : 'Unavailable',
+                  'Actual server state',
+                ],
+                [
+                  'Connected providers',
+                  String(
+                    connectedProviders.filter(
+                      (provider) =>
+                        provider.enabled &&
+                        ['valid', 'not_applicable'].includes(provider.keyStatus),
+                    ).length,
+                  ),
+                  'Enabled connections',
+                ],
+                [
+                  'Waiting',
+                  activity ? String(activity.queued) : 'Unavailable',
+                  'Bounded fair queue',
+                ],
+                [
+                  'Active keys',
+                  String(activeKeys.length),
+                  `${String(keys.length - activeKeys.length)} revoked`,
+                ],
+              ].map(([label, value, hint]) => (
+                <div className="v2-gateway-stat" key={label}>
+                  <span>{label}</span>
+                  <strong>{keysPending ? <SkeletonStat /> : value}</strong>
+                  <small>{keysPending ? <span aria-hidden="true">—</span> : hint}</small>
+                </div>
               ))}
             </div>
-            {!gateway ? (
-              <SkeletonRows rows={4} />
-            ) : (
-              snippet && (
-                <div className="v2-gateway-code" role="tabpanel">
-                  <pre aria-label="Configuration snippet" tabIndex={0}>
-                    <code>{snippet.code}</code>
-                  </pre>
-                  <CopyButton label={`Copy ${snippet.label} setup`} value={snippet.code} />
-                </div>
-              )
-            )}
-          </section>
-        </div>
-        <section aria-label="Keys" className="v2-gateway-card">
-          <header className="v2-gateway-card-header">
-            <div>
-              <h2>Keys</h2>
-              <p>One key per tool or device. Free tiers are per person, so do not share keys.</p>
+            <div className="v2-gateway-grid">
+              <section aria-label="Endpoint" className="v2-gateway-card">
+                <header className="v2-gateway-card-header">
+                  <div>
+                    <h2>Endpoint</h2>
+                    <p>
+                      {gateway?.allowLan
+                        ? 'Reachable from devices on your local network.'
+                        : 'Only this computer can connect.'}{' '}
+                      <button
+                        className="v2-link-button"
+                        onClick={() => {
+                          useUI.getState().openSettings('Gateway');
+                        }}
+                        type="button"
+                      >
+                        Port and network settings
+                      </button>
+                    </p>
+                  </div>
+                </header>
+                {!gateway ? (
+                  <SkeletonRows rows={3} />
+                ) : (
+                  <>
+                    <EndpointRow
+                      hint="OpenAI-compatible tools"
+                      label="OpenAI base URL"
+                      value={`${baseUrl}/v1`}
+                    />
+                    <EndpointRow hint="Claude Code" label="Anthropic base URL" value={baseUrl} />
+                    <div className="v2-gateway-models">
+                      <span>Models</span>
+                      {[
+                        'ferry/auto',
+                        'ferry/auto-free',
+                        'ferry/best',
+                        'ferry/fast',
+                        'ferry/long-context',
+                      ].map((id) => (
+                        <code key={id}>{id}</code>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </section>
+              <section aria-label="Gateway readiness" className="v2-gateway-card">
+                <h2>
+                  {running ? (routing?.eligible.length ? 'Ready' : 'Needs setup') : 'Stopped'}
+                </h2>
+                <p className="v2-gateway-help">
+                  {String(routing?.eligible.length ?? 0)} eligible routes. Auto uses one model per
+                  request and starts free only. Paid backup needs this key’s positive spending
+                  limit.
+                </p>
+                <UiV2.Button
+                  onClick={() => {
+                    setTab(activeKeys.length ? 'Connect' : 'Keys');
+                  }}
+                >
+                  {activeKeys.length ? 'Connect a client' : 'Create your first key'}
+                </UiV2.Button>
+                <p className="v2-gateway-help">
+                  {routing?.lastDecision
+                    ? `Last request: ${routing.lastDecision.modelRef ?? 'no serving model'}.`
+                    : 'No routing decision recorded yet.'}
+                </p>
+              </section>
             </div>
-            <UiV2.Button
-              onClick={() => {
-                setCreateOpen(true);
+            <section aria-label="Recent activity" className="grid gap-3">
+              <h2>Recent activity</h2>
+              {requests.length ? (
+                requests.slice(0, 5).map((row) => (
+                  <div className="setting-row" key={row.id}>
+                    <span>
+                      {row.keyName}: {row.modelRef ?? row.requestedModel}
+                    </span>
+                    <small>
+                      {row.outcome ?? row.status} — {relativeTime(row.at, now)}
+                    </small>
+                  </div>
+                ))
+              ) : (
+                <p className="v2-gateway-help">
+                  No recent requests. Connect a client and send a request.
+                </p>
+              )}
+            </section>
+          </UiV2.TabsContent>
+          <UiV2.TabsContent value="Requests" className="pt-4">
+            <GatewayRequests />
+          </UiV2.TabsContent>
+          <UiV2.TabsContent value="Routing" className="pt-4">
+            <GatewayRouting />
+          </UiV2.TabsContent>
+          <UiV2.TabsContent value="usage-costs" className="pt-4">
+            <GatewayUsage />
+          </UiV2.TabsContent>
+          <UiV2.TabsContent value="Connect" className="pt-4">
+            <GatewayConnect
+              onCreateKey={() => {
+                setTab('Keys');
               }}
-              size="sm"
-            >
-              <Plus aria-hidden="true" />
-              Create key
-            </UiV2.Button>
-          </header>
-          {keysPending ? (
-            <SkeletonTable rows={3} columns={6} />
-          ) : keys.length === 0 ? (
-            <p className="v2-gateway-empty">
-              No keys yet. Create one, then paste it into your tool's API key field.
-            </p>
-          ) : (
-            <div className="v2-gateway-table-scroll">
-              <table className="v2-gateway-table">
-                <thead>
-                  <tr>
-                    <th scope="col">Name</th>
-                    <th scope="col">Profile</th>
-                    <th className="v2-num" scope="col">
-                      Requests
-                    </th>
-                    <th className="v2-num" scope="col">
-                      Tokens
-                    </th>
-                    <th scope="col">Last used</th>
-                    <th scope="col">Status</th>
-                    <th scope="col">
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {keys.map((key) => (
-                    <tr data-revoked={Boolean(key.revokedAt)} key={key.id}>
-                      <td>
-                        <span className="v2-gateway-key-name">
-                          <KeyRound aria-hidden="true" size={14} />
-                          {key.name}
-                        </span>
-                      </td>
-                      <td className="v2-muted">
-                        {key.profile === NO_PROFILE
-                          ? key.allowedModels.length
-                            ? `${String(key.allowedModels.length)} picked models`
-                            : 'No profile'
-                          : profileLabel(key.profile)}
-                      </td>
-                      <td className="v2-num">{count.format(key.usage.requests)}</td>
-                      <td className="v2-num">
-                        {formatTokens(key.usage.inputTokens + key.usage.outputTokens)}
-                      </td>
-                      <td className="v2-muted">{relativeTime(key.lastUsedAt, now)}</td>
-                      <td>
-                        <span
-                          className="v2-status-pill"
-                          data-tone={key.revokedAt ? 'muted' : 'success'}
-                        >
-                          {key.revokedAt ? 'Revoked' : 'Active'}
-                        </span>
-                      </td>
-                      <td className="v2-gateway-row-actions">
-                        {!key.revokedAt && (
-                          <>
-                            <UiV2.Button
-                              aria-label={`Settings for ${key.name}`}
-                              onClick={() => {
-                                setEditing(key);
-                              }}
-                              size="icon"
-                              variant="ghost"
+            />
+          </UiV2.TabsContent>
+          <UiV2.TabsContent value="Keys" className="pt-4">
+            <section aria-label="Keys" className="v2-gateway-card">
+              <header className="v2-gateway-card-header">
+                <div>
+                  <h2>Keys</h2>
+                  <p>
+                    One key per tool or device. Free tiers are per person, so do not share keys.
+                  </p>
+                </div>
+                <UiV2.Button
+                  onClick={() => {
+                    setCreateOpen(true);
+                  }}
+                  size="sm"
+                >
+                  <Plus aria-hidden="true" />
+                  Create key
+                </UiV2.Button>
+              </header>
+              {keysPending ? (
+                <SkeletonTable rows={3} columns={6} />
+              ) : keys.length === 0 ? (
+                <p className="v2-gateway-empty">
+                  No keys yet. Create one, then paste it into your tool's API key field.
+                </p>
+              ) : (
+                <div className="v2-gateway-table-scroll">
+                  <table className="v2-gateway-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Name</th>
+                        <th scope="col">Client / preset</th>
+                        <th scope="col">Policy / limits</th>
+                        <th className="v2-num" scope="col">
+                          Requests
+                        </th>
+                        <th className="v2-num" scope="col">
+                          Tokens
+                        </th>
+                        <th scope="col">Last used</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">
+                          <span className="sr-only">Actions</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {keys.map((key) => (
+                        <tr data-revoked={Boolean(key.revokedAt)} key={key.id}>
+                          <td>
+                            <span className="v2-gateway-key-name">
+                              <KeyRound aria-hidden="true" size={14} />
+                              {key.name}
+                            </span>
+                          </td>
+                          <td className="v2-muted">
+                            {key.profile === NO_PROFILE
+                              ? key.allowedModels.length
+                                ? `${String(key.allowedModels.length)} picked models`
+                                : 'No profile'
+                              : profileLabel(key.profile)}
+                            <small>{key.client ?? 'Unassigned client'}</small>
+                          </td>
+                          <td>
+                            {key.paidBackup
+                              ? `Paid ≤ $${String(key.budgetUsd)}/month`
+                              : 'Free only'}
+                            {key.paidBackup && (
+                              <small>
+                                {key.budgetUsedUsd === undefined
+                                  ? 'Spend is not available in this preview'
+                                  : `$${key.budgetUsedUsd.toFixed(4)} used or reserved this month`}
+                              </small>
+                            )}
+                            <small>
+                              {key.allowedModels.length
+                                ? `${String(key.allowedModels.length)} models`
+                                : 'Preset models'}
+                              ;{' '}
+                              {key.tokenLimitPerDay
+                                ? `${String(key.tokenLimitPerDay)} tokens/day`
+                                : 'No daily token cap'}
+                              ;{' '}
+                              {key.tokenLimitPerMinute
+                                ? `${String(key.tokenLimitPerMinute)} tokens/min`
+                                : 'No minute token cap'}
+                              ;{' '}
+                              {key.rateLimit
+                                ? `${String(key.rateLimit)} req/min`
+                                : 'No request cap'}
+                              ; {String(key.concurrencyLimit ?? 4)} concurrent
+                            </small>
+                          </td>
+                          <td className="v2-num">{count.format(key.usage.requests)}</td>
+                          <td className="v2-num">
+                            {formatTokens(key.usage.inputTokens + key.usage.outputTokens)}
+                          </td>
+                          <td className="v2-muted">{relativeTime(key.lastUsedAt, now)}</td>
+                          <td>
+                            <span
+                              className="v2-status-pill"
+                              data-tone={key.revokedAt ? 'muted' : 'success'}
                             >
-                              <SlidersHorizontal aria-hidden="true" />
-                            </UiV2.Button>
-                            <UiV2.Button
-                              aria-label={`Revoke ${key.name}`}
-                              onClick={() => {
-                                setRevoking(key);
-                              }}
-                              size="icon"
-                              variant="ghost"
-                            >
-                              <Trash2 aria-hidden="true" />
-                            </UiV2.Button>
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-        {requestsPending ? (
-          <section aria-label="Recent requests" className="v2-gateway-card">
-            <h2>Recent requests</h2>
-            <SkeletonTable rows={5} />
-          </section>
-        ) : (
-          <RequestLog keyNames={keys.map((key) => key.name)} now={now} requests={requests} />
-        )}
+                              {key.revokedAt ? 'Revoked' : 'Active'}
+                            </span>
+                          </td>
+                          <td className="v2-gateway-row-actions">
+                            {!key.revokedAt && (
+                              <>
+                                <UiV2.Button
+                                  aria-label={`Settings for ${key.name}`}
+                                  onClick={() => {
+                                    setEditing(key);
+                                  }}
+                                  size="icon"
+                                  variant="ghost"
+                                >
+                                  <SlidersHorizontal aria-hidden="true" />
+                                </UiV2.Button>
+                                <UiV2.Button
+                                  aria-label={`Rotate ${key.name}`}
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => {
+                                    setRotating(key);
+                                  }}
+                                >
+                                  Rotate
+                                </UiV2.Button>
+                                <UiV2.Button
+                                  aria-label={`Revoke ${key.name}`}
+                                  onClick={() => {
+                                    setRevoking(key);
+                                  }}
+                                  size="icon"
+                                  variant="ghost"
+                                >
+                                  <Trash2 aria-hidden="true" />
+                                </UiV2.Button>
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </UiV2.TabsContent>
+        </UiV2.Tabs>
       </div>
       <UiV2.Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <UiV2.DialogContent className="v2-gateway-dialog">
@@ -839,7 +570,7 @@ export function GatewayCanvas() {
             >
               Cancel
             </UiV2.Button>
-            <UiV2.Button disabled={!newName.trim()} onClick={() => void createKey()}>
+            <UiV2.Button disabled={!newName.trim() || busy} onClick={() => void createKey()}>
               Create key
             </UiV2.Button>
           </div>
@@ -874,6 +605,28 @@ export function GatewayCanvas() {
           </div>
         </UiV2.DialogContent>
       </UiV2.Dialog>
+      <ConfirmDialog
+        open={!!rotating}
+        onOpenChange={(open) => {
+          if (!open) setRotating(null);
+        }}
+        title={`Rotate ${rotating?.name ?? 'key'}?`}
+        description="The old secret stops working. Replace this client’s configuration with the new key."
+        confirmLabel="Rotate key"
+        onConfirm={() => {
+          const key = rotating;
+          setRotating(null);
+          if (key)
+            void client.gateway
+              .rotateKey(key.id)
+              .then((created) => {
+                setSecret(created.secret);
+              })
+              .catch((cause: unknown) => {
+                setError(cause instanceof Error ? cause.message : 'Could not rotate key.');
+              });
+        }}
+      />
       <KeyLimitsDialog
         gatewayKey={editing}
         onClose={() => {

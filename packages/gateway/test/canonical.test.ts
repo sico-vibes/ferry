@@ -79,6 +79,7 @@ describe('canonical protocol conversions', () => {
     ]);
     expect(canonicalToGatewayMessages(request.messages).messages).toMatchObject([
       { role: 'user', content: 'inspect' },
+      { role: 'assistant', content: [{ type: 'reasoning', text: 'Need inspect before editing.' }] },
       { role: 'assistant', tool_calls: [{ id: 'call_1' }] },
       { role: 'tool', tool_call_id: 'call_1', content: '# Ferry' },
     ]);

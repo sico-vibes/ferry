@@ -23,6 +23,7 @@ import { useFerryClient } from '../../data/client';
 import { useToasts } from '../../state/toasts';
 import { useUI } from '../../state/ui';
 import { ProviderKeyDialog } from '../ProviderKeyDialog';
+import { ProviderReadiness } from '../ProviderReadiness';
 import { OAuthProviderRows } from '../OAuthProviderRows';
 import { ZenSetupPrompt } from '../ZenSetupPrompt';
 import { UsageTab } from './Usage';
@@ -444,6 +445,9 @@ export function ModelsCanvas() {
                 onRetry={() => void refetchOAuth()}
               />
             </Section>
+            <div className="py-6">
+              <ProviderReadiness />
+            </div>
           </UiV2.TabsContent>
           <UiV2.TabsContent className="min-w-0" value="models">
             <Section ariaLabel="Model comparison" className="grid gap-3">

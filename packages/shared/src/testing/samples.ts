@@ -332,6 +332,15 @@ export const sampleSettings: Settings = {
   activeProfileId: profileId,
   paidCaps: { sessionUsd: null, dailyUsd: null, monthlyUsd: null },
   onboardingComplete: true,
+  onboarding: {
+    step: 0,
+    use: 'external',
+    keyId: null,
+    keyName: 'Personal API',
+    paidBackup: false,
+    budgetUsd: null,
+    verifiedRequestId: null,
+  },
   optimizers: sampleOptimizerToggles,
   routing: {
     autoPauseAfterFailedRequests: 5,

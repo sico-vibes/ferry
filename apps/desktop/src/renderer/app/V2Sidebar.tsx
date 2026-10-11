@@ -22,7 +22,6 @@ import {
   X,
 } from 'lucide-react';
 import { FerryMark, UiV2 } from '@ferry/ui';
-import { ZenSetupPrompt } from './ZenSetupPrompt';
 import { useFerryClient } from '../data/client';
 import { keys, useLimits, useSettings } from '../data/queries';
 import { describeReset, describeWindow, tightestDailyWindow } from '../data/limits';
@@ -110,6 +109,11 @@ export function V2Sidebar({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
+  const { data: gatewayState } = useQuery({
+    queryKey: ['gateway-settings'],
+    queryFn: () => client.gateway.settings(),
+    refetchInterval: 5000,
+  });
   const pausedCount = providers.filter((provider) => provider.pausedReason).length;
   const tightest = tightestDailyWindow(limits);
   return (
@@ -159,6 +163,7 @@ export function V2Sidebar({
           />
           <NavButton
             label="Gateway"
+            indicator={gatewayState?.status.running ? 'Running' : 'Stopped'}
             icon={<Network />}
             active={pathname.startsWith('/gateway')}
             collapsed={collapsed}
@@ -170,7 +175,6 @@ export function V2Sidebar({
         {!collapsed && <SidebarProjects onNewChat={onNewChat} />}
         {collapsed && <div className="v2-rail-spacer" />}
         <div className="v2-sidebar-bottom">
-          {!collapsed && <ZenSetupPrompt compact />}
           {!collapsed && !pathname.startsWith('/models') && (
             <button
               aria-label={
@@ -443,7 +447,15 @@ function NavButton({
       {indicator && (
         <span
           aria-label={indicator}
-          className="v2-paused-dot size-2 shrink-0 rounded-full bg-destructive"
+          className="v2-paused-dot size-2 shrink-0 rounded-full"
+          style={{
+            background:
+              indicator === 'Running'
+                ? 'var(--success)'
+                : indicator === 'Stopped'
+                  ? 'var(--muted-foreground)'
+                  : 'var(--destructive)',
+          }}
           role="status"
         />
       )}

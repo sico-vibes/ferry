@@ -1,0 +1,222 @@
+import { useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ProfileIdSchema, type Profile, type ProfileId } from '@ferry/shared';
+import { UiV2 } from '@ferry/ui';
+import { useFerryClient } from '../data/client';
+
+/** Core selects and executes free representative models, with shared bounded cancellation. */
+export function ProviderReadiness() {
+  const client = useFerryClient(),
+    cache = useQueryClient();
+  const [id, setId] = useState<string | undefined>();
+  const [starting, setStarting] = useState(false),
+    [error, setError] = useState('');
+  const [preview, setPreview] = useState<Profile | null>(null),
+    [built, setBuilt] = useState('');
+  const mutation = useRef(false);
+  const [applying, setApplying] = useState(false);
+  const [previous, setPrevious] = useState<ProfileId | null>(null),
+    [applied, setApplied] = useState(false);
+  const checks = useQuery({
+    queryKey: ['provider-check', id ?? 'latest'],
+    queryFn: () => client.providers.checkProgress(id),
+    refetchInterval: (query) => (query.state.data?.running ? 500 : false),
+  });
+  const profiles = useQuery({ queryKey: ['profiles'], queryFn: () => client.profiles.list() });
+  const results = checks.data?.results ?? [];
+  const checkId = checks.data?.id;
+  const busy = starting || applying || !!checks.data?.running;
+  useEffect(
+    () =>
+      client.on('providers.check', (progress) => {
+        cache.setQueryData(['provider-check', progress.id], progress);
+        cache.setQueryData(['provider-check', 'latest'], progress);
+      }),
+    [client, cache],
+  );
+  useEffect(() => {
+    const progress = checks.data;
+    const base = profiles.data?.find((profile) => profile.builtin && profile.name === 'Auto-Free');
+    if (
+      !progress ||
+      progress.running ||
+      progress.cancelled ||
+      progress.id === built ||
+      !base ||
+      !progress.results.length
+    )
+      return;
+    setBuilt(progress.id);
+    const good = progress.results
+      .filter((result) => result.ok)
+      .sort((a, b) => (a.firstResponseMs ?? Infinity) - (b.firstResponseMs ?? Infinity));
+    if (!good.length) return;
+    setPreview({
+      ...base,
+      id: ProfileIdSchema.parse(`profile_optimized_${crypto.randomUUID().replaceAll('-', '_')}`),
+      name: 'Optimized for this device',
+      builtin: false,
+      roles: { ...base.roles, enabled: false },
+      routingObjective: 'balanced',
+      allowedProviders: good.map(
+        (result) => result.providerId as import('@ferry/shared').ProviderId,
+      ),
+      fallbackChain: good.map((result) => ({
+        provider: result.providerId as import('@ferry/shared').ProviderId,
+        patterns: [result.modelRef.slice(result.providerId.length + 1)],
+      })),
+      provenance: {
+        kind: 'provider-check',
+        generatedAt: progress.results.at(-1)?.at ?? new Date().toISOString(),
+        sampleCount: progress.results.length,
+        note: 'One generation per connection measures responsiveness, not coding quality. Auto edits and verification continue to prefer measured coding success.',
+      },
+    });
+  }, [checks.data, profiles.data, built]);
+  const start = async () => {
+    if (busy) return;
+    setStarting(true);
+    setError('');
+    setPreview(null);
+    setApplied(false);
+    try {
+      const result = await client.providers.startChecks();
+      setId(result.id);
+      await cache.invalidateQueries({ queryKey: ['provider-check'] });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not start checks.');
+    } finally {
+      setStarting(false);
+    }
+  };
+  return (
+    <section className="grid gap-3" aria-label="Provider readiness checks">
+      <h3>Check and optimize my providers</h3>
+      <p className="v2-gateway-help">
+        One small free generation per eligible connection, at most two at once. Paid providers are
+        skipped. A response-time sample does not measure coding quality.
+      </p>
+      <div className="button-row">
+        <UiV2.Button variant="secondary" disabled={busy} onClick={() => void start()}>
+          {busy ? 'Checking…' : 'Check free providers'}
+        </UiV2.Button>
+        {busy && checkId && (
+          <UiV2.Button
+            variant="ghost"
+            onClick={() =>
+              void client.providers
+                .cancelChecks(checkId)
+                .then(() => cache.invalidateQueries({ queryKey: ['provider-check'] }))
+                .catch((cause: unknown) => {
+                  setError(cause instanceof Error ? cause.message : 'Could not cancel checks.');
+                })
+            }
+          >
+            Cancel checks
+          </UiV2.Button>
+        )}
+      </div>
+      {checks.isError && (
+        <p role="alert">
+          Could not load check results.{' '}
+          <UiV2.Button variant="secondary" onClick={() => void checks.refetch()}>
+            Retry
+          </UiV2.Button>
+        </p>
+      )}
+      {results.length > 0 && (
+        <ul className="grid gap-3">
+          {results.map((result) => (
+            <li key={result.providerId}>
+              <strong>
+                {result.providerId}: {result.ok ? 'Reachable' : 'Needs attention'}
+              </strong>
+              <p className="v2-gateway-help">
+                {result.firstResponseMs === null
+                  ? 'First response not measured'
+                  : `${String(result.firstResponseMs)}ms first response`}
+                ;{' '}
+                {result.completionMs === null
+                  ? 'Completion not measured'
+                  : `${String(result.completionMs)}ms completion`}
+                . {result.sampleCount} sample. Checked {result.at}. {result.message}{' '}
+                {result.features}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {checks.data?.cancelled && (
+        <p role="status">Checks cancelled. No recommendations will be applied.</p>
+      )}
+      {preview && (
+        <div className="grid gap-3">
+          <h3>Preview: Optimized for this device</h3>
+          <p className="v2-gateway-help">
+            {preview.provenance?.note} {String(preview.provenance?.sampleCount)} samples. Fallback
+            order: {preview.fallbackChain?.map((entry) => entry.provider).join(', ')}.
+          </p>
+          <div className="button-row">
+            <UiV2.Button
+              variant="secondary"
+              disabled={applied || applying || busy}
+              onClick={() =>
+                void (async () => {
+                  if (mutation.current || applied) return;
+                  mutation.current = true;
+                  setApplying(true);
+                  setError('');
+                  try {
+                    const prior = (await client.settings.get()).activeProfileId;
+                    setPrevious(prior);
+                    await client.profiles.save(preview);
+                    await client.profiles.activate(preview.id);
+                    setApplied(true);
+                    await cache.invalidateQueries({ queryKey: ['profiles'] });
+                    await cache.invalidateQueries({ queryKey: ['settings'] });
+                  } catch (cause) {
+                    setError(
+                      cause instanceof Error ? cause.message : 'Could not apply recommendations.',
+                    );
+                  } finally {
+                    mutation.current = false;
+                    setApplying(false);
+                  }
+                })()
+              }
+            >
+              {applying && !applied ? 'Applying…' : 'Apply recommendations'}
+            </UiV2.Button>
+            {applied && previous && (
+              <UiV2.Button
+                variant="ghost"
+                disabled={applying}
+                onClick={() =>
+                  void (async () => {
+                    if (mutation.current) return;
+                    mutation.current = true;
+                    setApplying(true);
+                    setError('');
+                    try {
+                      await client.profiles.activate(previous);
+                      setApplied(false);
+                      await cache.invalidateQueries({ queryKey: ['settings'] });
+                    } catch (cause) {
+                      setError(cause instanceof Error ? cause.message : 'Could not undo.');
+                    } finally {
+                      mutation.current = false;
+                      setApplying(false);
+                    }
+                  })()
+                }
+              >
+                Undo
+              </UiV2.Button>
+            )}
+          </div>
+        </div>
+      )}
+      {(error || checks.data?.error) && <p role="status">{error || checks.data?.error}</p>}
+    </section>
+  );
+}

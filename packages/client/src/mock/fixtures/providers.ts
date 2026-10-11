@@ -51,6 +51,8 @@ export function createProviders(now: Date): MockProvider[] {
     throw new Error('Unable to determine the next Pacific midnight');
   })();
   const specs = [
+    ['ollama', 'Ollama', 'legit', 'ollama', null, null, null, null, null],
+    ['lmstudio', 'LM Studio', 'legit', null, null, null, null, null, null],
     ['gemini', 'Gemini API', 'legit', 'googlegemini', 250, 212, 10, 3, 38],
     ['openrouter', 'OpenRouter (free models)', 'legit', 'openrouter', 1000, 388, 20, 4, 312],
     ['nvidia', 'NVIDIA NIM', 'legit', 'nvidia', null, null, 40, 11, null],
@@ -202,8 +204,9 @@ export function createProviders(now: Date): MockProvider[] {
         tag,
         kind: tag === 'subscription_cli' ? 'cli' : 'api',
         brand,
-        keyStatus:
-          tag === 'subscription_cli'
+        keyStatus: ['ollama', 'lmstudio'].includes(id)
+          ? 'not_applicable'
+          : tag === 'subscription_cli'
             ? id === 'codex-cli'
               ? 'not_applicable'
               : 'unchecked'
@@ -216,8 +219,9 @@ export function createProviders(now: Date): MockProvider[] {
                   : id === 'mistral'
                     ? 'unchecked'
                     : 'valid',
-        enabled:
-          id === 'opencode'
+        enabled: ['ollama', 'lmstudio'].includes(id)
+          ? false
+          : id === 'opencode'
             ? false
             : tag === 'subscription_cli'
               ? true

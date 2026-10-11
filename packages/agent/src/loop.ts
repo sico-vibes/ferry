@@ -274,6 +274,7 @@ export interface AgentOptions {
   onResilienceState?: (entries: ResilienceEntry[]) => void;
   routingSettings?: () => RoutingSettings;
   reliabilityState?: readonly ReliabilityObservation[];
+  codingObservations?: readonly import('@ferry/shared').CodingObservation[];
   onReliabilityState?: (entries: ReliabilityObservation[]) => void;
   routingNow?: () => number;
   acquireQuotaLease?: (model: ModelInfo, tokens: number) => (() => void) | null;
@@ -2899,6 +2900,7 @@ export class AgentLoop {
     )
       return baseline;
     const candidates = scoreModels({
+      codingObservations: this.options.codingObservations ?? [],
       models: this.options.catalog.models,
       capacity: this.options.capacity(),
       profile: this.options.profile,
@@ -2983,6 +2985,7 @@ export class AgentLoop {
         ),
       );
     const candidates = scoreModels({
+      codingObservations: this.options.codingObservations ?? [],
       models: this.options.catalog.models,
       capacity: this.pacingCapacity(),
       profile: this.options.profile,
@@ -3055,6 +3058,7 @@ export class AgentLoop {
       );
     const previousModelRef = [...attemptedRefs].at(-1);
     const ranked = scoreModels({
+      codingObservations: this.options.codingObservations ?? [],
       models: this.options.catalog.models,
       capacity: this.options.capacity(),
       profile: this.options.profile,
@@ -3134,6 +3138,7 @@ export class AgentLoop {
       this.options.resolveCandidates?.(this.options.profile, step, inputTokens) ??
       this.options.catalog.models;
     const ranked = scoreModels({
+      codingObservations: this.options.codingObservations ?? [],
       models,
       capacity: this.options.capacity(),
       profile: this.options.profile,
@@ -3355,6 +3360,7 @@ export class AgentLoop {
   ): boolean {
     if (Number(candidate.tier.slice(1)) < Number(owner.tier.slice(1))) return false;
     const scores = scoreModels({
+      codingObservations: this.options.codingObservations ?? [],
       models: [owner, candidate],
       profile: this.options.profile,
       step,

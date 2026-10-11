@@ -10,6 +10,8 @@ import type {
   RoutingSettings,
 } from '@ferry/shared';
 import { DIRECT_PROFILE_ID, isModelFreeForPlan, isOpenCodeAppModel } from '@ferry/shared';
+import { codingQuality } from './coding-quality.js';
+export * from './coding-quality.js';
 import type { Catalog } from '@ferry/catalog';
 import {
   DEFAULT_AUTO_FREE_CHAIN,
@@ -167,7 +169,7 @@ function builtinProfile(
         ? { cavemanInput: 'lite' as const, terse: 'lite' as const }
         : {}),
     },
-    ...(name === 'Auto-Free' || name === 'Best Available'
+    ...(name === 'Auto-Free'
       ? {
           fallbackChain: DEFAULT_AUTO_FREE_CHAIN.map((entry) => ({
             ...entry,
@@ -184,7 +186,7 @@ function builtinProfile(
             ? 'quality'
             : 'balanced',
     roles: {
-      enabled: name === 'Auto-Free' || name === 'Best Available',
+      enabled: false,
       plannerModelRef: null,
       editorModelRef: null,
       editorFailureThreshold: 2,
@@ -214,7 +216,7 @@ export const BUILTIN_PROFILES: readonly Profile[] = [
   builtinProfile(
     'profile_builtin_auto_free',
     'Auto-Free',
-    'Choose the strongest eligible free model.',
+    'Balance suitability, reliability, quota and responsiveness. Prefer measured coding success for edits and verification.',
     false,
     'all_free',
     tiers,
@@ -224,7 +226,7 @@ export const BUILTIN_PROFILES: readonly Profile[] = [
   builtinProfile(
     'profile_builtin_best_available',
     'Best Available',
-    'Use the best eligible model within configured spend caps.',
+    'Prefer the strongest suitable model within the authorized spending policy.',
     true,
     'all',
     tiers,
@@ -234,7 +236,7 @@ export const BUILTIN_PROFILES: readonly Profile[] = [
   builtinProfile(
     'profile_builtin_fast',
     'Fast',
-    'Prefer responsive models for each step.',
+    'Prefer low first-response latency among sufficiently capable, reliable models.',
     false,
     'all_free',
     { ...tiers, plan: ['T1', 'T2'], edit: ['T1', 'T2'], review: ['T1', 'T2'] },
@@ -244,7 +246,7 @@ export const BUILTIN_PROFILES: readonly Profile[] = [
   builtinProfile(
     'profile_builtin_long_context',
     'Long Context',
-    'Prefer models with ample context capacity.',
+    'Safely fit the conversation, tools, attachments and requested output.',
     false,
     'all_free',
     { ...tiers, long_context: ['T2', 'T3'], summarize: ['T2', 'T3'] },
@@ -412,6 +414,7 @@ export interface ScoreInput {
   trialOptInProviders?: readonly string[];
   avoidTrainingProviders?: boolean;
   reliability?: readonly import('./techniques.js').ReliabilityObservation[];
+  codingObservations?: readonly import('@ferry/shared').CodingObservation[];
   random?: () => number;
 }
 
@@ -468,7 +471,15 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       continue;
     const cooldown = provider.cooldownUntil ? Date.parse(provider.cooldownUntil) : 0;
     const coolingUntil = provider.health === 'cooldown' && Number.isFinite(cooldown) ? cooldown : 0;
-    if (model.contextWindow < (input.estimate.minimumContext ?? 0)) continue;
+    if (
+      model.contextWindow <
+      Math.max(
+        input.estimate.minimumContext ?? 0,
+        (input.estimate.contextTokens ?? input.estimate.inputTokens) +
+          (input.estimate.outputTokens ?? 0),
+      )
+    )
+      continue;
     const toolsSupported = modelSupportsTools(
       model,
       (input.textToolFallbackEnabled ?? input.routing?.textToolFallbackEnabled) === true,
@@ -535,8 +546,17 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
     const qualityPenalty = model.qualityPenalty ?? 0;
     const qualityScore =
       ((quality - 0.35) * qualityConfidence - qualityPenalty) *
-      (input.routing?.qualityWeight ?? (input.profile.routingObjective === 'quality' ? 20 : 4));
-    const coding = codingRank === 0 ? 8 : codingRank === 2 ? -8 : 0;
+      (input.profile.routingObjective === 'quality'
+        ? Math.max(20, input.routing?.qualityWeight ?? 0)
+        : (input.routing?.qualityWeight ?? 4));
+    const measuredCoding = codingQuality(input.codingObservations ?? [], model.ref, nowMs);
+    const coding =
+      (codingRank === 0 ? 8 : codingRank === 2 ? -8 : 0) +
+      (input.profile.routingObjective === 'balanced' &&
+      ['edit', 'review'].includes(input.step) &&
+      measuredCoding.samples > 0
+        ? 120 * (measuredCoding.score - 0.5)
+        : 0);
     const preference = preferredModelRefs.has(model.ref) ? 4 : 0;
     const affinity =
       (prior?.cacheAffinity ?? 0) * 0.6 + (input.previousModelRef === model.ref ? 0.4 : 0);

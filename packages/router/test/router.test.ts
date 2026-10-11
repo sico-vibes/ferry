@@ -301,7 +301,7 @@ describe('step classification and routing', () => {
       models: [model],
       providers: [provider],
       capacity,
-      profile,
+      profile: { ...profile, routingObjective: 'balanced' as const },
       step: 'plan' as const,
       estimate: { inputTokens: 1, requiresTools: true },
     };

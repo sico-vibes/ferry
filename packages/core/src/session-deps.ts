@@ -80,7 +80,12 @@ export interface ModelGateway {
   providerAffinityKey(providerId: string, sessionId: string): string | undefined;
   providerKeyIds(providerId: string): readonly string[];
   unavailableProviderKeyIds(providerId: string, modelRef?: string): readonly string[];
-  resolveCandidates(profile: Profile, stepKind: StepKind, inputTokens?: number): ModelInfo[];
+  resolveCandidates(
+    profile: Profile,
+    stepKind: StepKind,
+    inputTokens?: number,
+    requiresTools?: boolean,
+  ): ModelInfo[];
   recordHandoff(sessionId: string, reason: string): void;
   probeHeuristicCooldowns(): Promise<void>;
 }
@@ -455,7 +460,7 @@ export function createSessionDependencies(
     async probeHeuristicCooldowns() {
       await health.recover();
     },
-    resolveCandidates(profile, stepKind, inputTokens = 1) {
+    resolveCandidates(profile, stepKind, inputTokens = 1, requiresTools = true) {
       const configuredProviders = services.catalog.providers.filter(
         ({ provider, key_required }) => {
           const saved = services.providers.get(provider);
@@ -597,6 +602,7 @@ export function createSessionDependencies(
         profile,
         inputTokens,
         step: stepKind,
+        requiresTools,
         verifiedModelRefs,
         avoidTrainingProviders: routingSettings().avoidTrainingProviders,
         trialOptInProviders: routingSettings().trialOptInProviders,
@@ -615,23 +621,54 @@ export function createSessionDependencies(
         capacity: routingCapacity,
         profile,
         step: stepKind,
-        estimate: { inputTokens, requiresTools: true },
+        estimate: { inputTokens, requiresTools },
         preferredModelRefs,
         verifiedModelRefs,
         routing: routingSettings(),
         trialOptInProviders: routingSettings().trialOptInProviders,
         textToolFallbackEnabled: routingSettings().textToolFallbackEnabled,
         reliability: reliability(),
+        codingObservations: codingObservations(services),
+        stats: modelRoutingStats(services),
         random: services.random,
       });
       const modelByRef = new Map(candidates.map((model) => [model.ref, model]));
-      return [
+      const ordered = [
         ...chainResult.models,
         ...ranked.flatMap(({ ref }) => {
           const model = modelByRef.get(ref);
           return model ? [model] : [];
         }),
       ];
+      if (profile.routingObjective === 'balanced' && ['edit', 'review'].includes(stepKind)) {
+        const observations = codingObservations(services);
+        const now = services.clock.now().getTime();
+        ordered.sort(
+          (a, b) =>
+            codingQuality(observations, b.ref, now).score -
+            codingQuality(observations, a.ref, now).score,
+        );
+        if (profile.provenance?.kind === 'provider-check') {
+          const scores = new Map(
+            scoreModels({
+              models: ordered,
+              providers: providers(),
+              capacity: routingCapacity,
+              profile,
+              step: stepKind,
+              estimate: { inputTokens, requiresTools },
+              codingObservations: observations,
+              routing: routingSettings(),
+              verifiedModelRefs,
+              stats: modelRoutingStats(services),
+            }).map((candidate) => [candidate.ref, candidate.score]),
+          );
+          ordered.sort(
+            (a, b) => (scores.get(b.ref) ?? -Infinity) - (scores.get(a.ref) ?? -Infinity),
+          );
+        }
+      }
+      return ordered;
     },
     recordHandoff(sessionId, reason) {
       services.handoffs.put({ id: newId('handoff'), sessionId, reason });
@@ -1137,3 +1174,6 @@ function isUnavailableModelError(error: unknown): boolean {
     /model_not_found|not found for account|end of life|no longer available/i.test(message)
   );
 }
+import { codingObservations } from './coding-quality.js';
+import { codingQuality } from '@ferry/router';
+import { modelRoutingStats } from './model-routing-stats.js';

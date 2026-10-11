@@ -3,6 +3,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { mapProviderError } from '@ferry/providers';
 import { classifyProviderError } from '@ferry/router';
 import { EffortSchema, type Effort } from '@ferry/shared';
+import { GatewayQueue } from './queue.js';
+export { GatewayQueue, GatewayQueueError } from './queue.js';
 import {
   canonicalToGatewayMessages,
   anthropicToCanonical,
@@ -17,6 +19,7 @@ export type GatewayProfile = string;
 export interface GatewayKey {
   id: string;
   name: string;
+  client?: string;
   profile: GatewayProfile;
   allowedModels: string[];
   rateLimit: number | null;
@@ -25,6 +28,8 @@ export interface GatewayKey {
   concurrencyLimit: number | null;
   paidBackup?: boolean;
   budgetUsd?: number | null;
+  /** Ephemeral Core-issued synthetic-test ceiling; never persisted on keys. */
+  requestCostCapUsd?: number;
   compressToolResults: boolean;
   terseSystemPrompt: boolean;
   createdAt: string;
@@ -68,8 +73,9 @@ export interface GatewayRequest {
   tools?: unknown[];
   tool_choice?: unknown;
   parallel_tool_calls?: boolean;
-  response_format?: { type?: string };
+  response_format?: unknown;
   max_tokens?: number;
+  max_completion_tokens?: number;
   temperature?: number;
   reasoning_effort?: Effort;
   reasoning?: { effort?: Effort };
@@ -90,8 +96,14 @@ export interface GatewayCompletion {
 }
 export interface GatewayAttempt {
   model: string;
-  status: 'started' | 'failed' | 'served';
+  status: 'started' | 'failed' | 'served' | 'skipped';
   reason?: string;
+  durationMs?: number;
+  costUsd?: number;
+  estimatedCost?: boolean;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedTokens?: number;
 }
 export interface GatewayAttemptState {
   servedModel: string;
@@ -129,16 +141,29 @@ export type {
 } from './canonical.js';
 export interface GatewayRuntime {
   store: GatewayStore;
+  inputTokenBound?(key: GatewayKey, model: string): Promise<number>;
+  unavailable?(key: GatewayKey): { code: string; statusCode: number; message: string };
+  rejected?(input: {
+    key: GatewayKey;
+    at: string;
+    traceId: string;
+    code: string;
+    durationMs: number;
+  }): void;
   models(key: GatewayKey, profile?: string): string[] | Promise<string[]>;
   complete(input: {
     key: GatewayKey;
     model: string;
+    requestedModel?: string;
+    receivedAt?: string;
+    queueWaitMs?: number;
     messages: GatewayMessage[];
     instructions?: string;
     tools?: unknown[];
     toolChoice?: unknown;
     parallelToolCalls?: boolean;
     jsonMode?: boolean;
+    structuredOutput?: { name: string; schema: Record<string, unknown>; strict?: boolean };
     maxTokens?: number;
     temperature?: number;
     effort?: Effort;
@@ -146,9 +171,40 @@ export interface GatewayRuntime {
     signal: AbortSignal;
     traceId?: string;
     onAttempt?: (state: GatewayAttemptState) => void;
-    onText?: (delta: string) => void;
-    onToolCall?: (tool: { id: string; name: string; arguments: string }) => void;
+    onText?: (delta: string) => void | Promise<void>;
+    onToolCall?: (tool: { id: string; name: string; arguments: string }) => void | Promise<void>;
   }): Promise<GatewayCompletion>;
+}
+
+export function structuredOutputOptions(value: unknown): {
+  jsonMode?: boolean;
+  structuredOutput?: { name: string; schema: Record<string, unknown>; strict?: boolean };
+} {
+  if (value == null) return {};
+  if (typeof value !== 'object') throw new GatewayRequestError('Invalid structured output format.');
+  const format = value as Record<string, unknown>;
+  if (format.type === 'text') return {};
+  if (format.type === 'json_object') return { jsonMode: true };
+  const nested =
+    format.json_schema && typeof format.json_schema === 'object'
+      ? (format.json_schema as Record<string, unknown>)
+      : format;
+  if (
+    format.type !== 'json_schema' ||
+    !nested.schema ||
+    typeof nested.schema !== 'object' ||
+    Array.isArray(nested.schema)
+  )
+    throw new GatewayRequestError(
+      'Unsupported structured output format. Provide json_object or json_schema with an object schema.',
+    );
+  return {
+    structuredOutput: {
+      name: typeof nested.name === 'string' ? nested.name : 'response',
+      schema: nested.schema as Record<string, unknown>,
+      ...(typeof nested.strict === 'boolean' ? { strict: nested.strict } : {}),
+    },
+  };
 }
 export interface GatewayOptions {
   port?: number;
@@ -156,12 +212,63 @@ export interface GatewayOptions {
   allowLanConfirmed?: boolean;
   runtime: GatewayRuntime;
   /** Ephemeral core-issued tokens; callers must keep this map in memory only. */
-  internalTokens?: Map<string, { keyId: string; expiresAt: number }>;
+  internalTokens?: Map<string, { keyId: string; expiresAt: number; testCostCapUsd?: number }>;
+  queueCapacity?: number;
+  concurrency?: number;
+  requestDeadlineMs?: number;
 }
 export interface GatewayHandle {
   readonly port: number;
   readonly host: string;
+  activity(): { active: number; queued: number };
   close(): Promise<void>;
+}
+
+const requestControllers = new WeakMap<IncomingMessage, AbortController>();
+function requestController(req: IncomingMessage): AbortController {
+  return requestControllers.get(req) ?? new AbortController();
+}
+async function waitForDrain(res: ServerResponse, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  if (!res.writableNeedDrain) return;
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      res.off('drain', drained);
+      res.off('close', closed);
+      signal.removeEventListener('abort', aborted);
+    };
+    const drained = () => {
+      cleanup();
+      resolve();
+    };
+    const closed = () => {
+      cleanup();
+      reject(new Error('Client disconnected during stream.'));
+    };
+    const aborted = () => {
+      cleanup();
+      reject(signal.reason instanceof Error ? signal.reason : new Error('Request cancelled.'));
+    };
+    res.once('drain', drained);
+    res.once('close', closed);
+    signal.addEventListener('abort', aborted, { once: true });
+  });
+}
+async function abortable<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> {
+  signal.throwIfAborted();
+  let rejectAbort: (error: Error) => void = () => undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = () => {
+    rejectAbort(signal.reason instanceof Error ? signal.reason : new Error('Request cancelled.'));
+  };
+  signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    return await Promise.race([work(), aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
 }
 
 const aliases: Record<string, GatewayProfile> = {
@@ -193,6 +300,14 @@ export class GatewayRequestError extends Error {
     this.name = 'GatewayRequestError';
   }
 }
+function outputTokenLimit(value: unknown): number {
+  if (value === undefined) return 4096;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 1_000_000)
+    throw new GatewayRequestError(
+      'Output token limit must be a positive integer, no greater than 1000000.',
+    );
+  return value;
+}
 
 export function createGatewayKey(
   input: Pick<GatewayKey, 'name' | 'profile'> & Partial<GatewayKey>,
@@ -202,6 +317,7 @@ export function createGatewayKey(
   const key: GatewayKey = {
     id: randomBytes(12).toString('hex'),
     name: input.name.trim(),
+    ...(input.client ? { client: input.client } : {}),
     profile: input.profile,
     allowedModels: input.allowedModels ?? [],
     rateLimit: input.rateLimit ?? null,
@@ -298,10 +414,12 @@ function observeCompletion(state: FerryRequestState, completion: GatewayCompleti
 }
 function ferryAttemptOptions(state: FerryRequestState): {
   traceId: string;
+  requestedModel: string;
   onAttempt: (attempt: GatewayAttemptState) => void;
 } {
   return {
     traceId: state.traceId,
+    requestedModel: state.requestedModel,
     onAttempt: (attempt) => {
       observeAttempt(state, attempt);
     },
@@ -370,6 +488,7 @@ function mappedFailure(error: unknown) {
       'quota_exhausted',
       'unsupported_request',
       'request_timeout',
+      'queue_full',
     ].includes(outer.code)
   )
     return {
@@ -424,24 +543,6 @@ function mappedFailure(error: unknown) {
     retryable: classified.retryable,
   };
 }
-function textContent(value: unknown, field: string): string {
-  if (typeof value === 'string') return value;
-  if (value == null) return '';
-  if (!Array.isArray(value)) throw new GatewayRequestError(`${field} must contain text`);
-  return value
-    .map((part) => {
-      if (!part || typeof part !== 'object') return '';
-      const block = part as Record<string, unknown>;
-      if (typeof block.type === 'string' && /image|audio|video|file/.test(block.type))
-        throw new GatewayRequestError('Image, audio, video, and file content is not supported yet');
-      if ((block.type === 'text' || block.type === 'input_text') && typeof block.text === 'string')
-        return block.text;
-      if (block.type === 'tool_use' || block.type === 'tool_result') return '';
-      if (block.type === 'refusal' && typeof block.refusal === 'string') return block.refusal;
-      throw new GatewayRequestError(`Unsupported ${field} content block`);
-    })
-    .join('');
-}
 function normalizeMessages(raw: unknown[]): { messages: GatewayMessage[]; instructions: string } {
   const canonical = openAiChatToCanonical({ model: '', messages: raw });
   if (canonical.messages.length !== raw.length)
@@ -468,10 +569,6 @@ function bearer(req: IncomingMessage): string | undefined {
   const key = req.headers['x-api-key'];
   return match?.[1] ?? (typeof key === 'string' ? key : undefined);
 }
-function anthropicMessages(raw: unknown[]): GatewayMessage[] {
-  const converted = anthropicToCanonical({ model: '', messages: raw }).messages;
-  return canonicalToGatewayMessages(converted).messages;
-}
 function anthropicTools(raw: unknown): unknown[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   return raw.flatMap((entry) => {
@@ -492,15 +589,42 @@ function anthropicTools(raw: unknown): unknown[] | undefined {
   });
 }
 function modelFor(raw: string, key: GatewayKey): string {
-  const alias = aliases[raw];
+  const alias =
+    raw === 'ferry/auto'
+      ? key.profile
+      : (aliases[raw] ??
+        (raw.startsWith('ferry/profile_') ? raw.slice('ferry/'.length) : undefined));
   const model = raw.startsWith('ferry/') ? (alias ? `@profile:${alias}` : '') : raw;
-  if (!model || (key.allowedModels.length > 0 && !key.allowedModels.includes(raw)))
+  if (
+    !model ||
+    (key.allowedModels.length > 0 &&
+      !key.allowedModels.includes(raw) &&
+      !(alias && key.allowedModels.every((ref) => ref.includes('/') && !ref.startsWith('ferry/'))))
+  )
     throw new Error('Unknown model');
   return alias ? `@profile:${alias}` : model;
 }
 function reasoningInput(input: GatewayRequest): { effort?: Effort } {
   const parsed = EffortSchema.safeParse(input.reasoning_effort ?? input.reasoning?.effort);
   return parsed.success ? { effort: parsed.data } : {};
+}
+async function tokenEstimate(
+  runtime: GatewayRuntime,
+  key: GatewayKey,
+  model: string,
+  payload: unknown,
+  messages: GatewayMessage[],
+  output: number,
+): Promise<number> {
+  const bytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+  const image = messages.some(
+    (message) =>
+      Array.isArray(message.content) &&
+      message.content.some((part) => !!part && typeof part === 'object' && 'image' in part),
+  );
+  return image && runtime.inputTokenBound
+    ? Math.max(bytes + output, await runtime.inputTokenBound(key, model))
+    : bytes + output;
 }
 function chatChunk(
   id: string,
@@ -526,6 +650,7 @@ async function handleChat(
   let input: GatewayRequest;
   try {
     input = (await body(req)) as unknown as GatewayRequest;
+    input.max_tokens = outputTokenLimit(input.max_tokens ?? input.max_completion_tokens);
   } catch (error) {
     json(res, 400, errorBody(error instanceof Error ? error.message : 'Invalid JSON'));
     return;
@@ -541,27 +666,42 @@ async function handleChat(
     json(res, 404, errorBody(`Unknown model: ${input.model}`, 'model_not_found'));
     return;
   }
-  const requestedProfile = aliases[input.model];
+  const requestedProfile = input.model === 'ferry/auto' ? key.profile : aliases[input.model];
   if (
     (requestedProfile && (await runtime.models(key, requestedProfile)).length === 0) ||
     (!requestedProfile &&
       !model.startsWith('@profile:') &&
       !(await runtime.models(key)).includes(model))
   ) {
-    json(res, 404, errorBody(`Unknown model: ${input.model}`, 'model_not_found'));
+    if (requestedProfile) {
+      const failure = runtime.unavailable?.(key) ?? {
+        statusCode: 400,
+        code: 'unsupported_request',
+        message: 'No upstream route is available. Connect a provider or review this key’s policy.',
+      };
+      json(res, failure.statusCode, errorBody(failure.message, failure.code, failure.code));
+    } else json(res, 404, errorBody(`Unknown model: ${input.model}`, 'model_not_found'));
     return;
   }
   const ferryState = createFerryRequestState(input.model);
+  let normalized: ReturnType<typeof normalizeMessages>;
+  try {
+    normalized = normalizeMessages(input.messages);
+  } catch (error) {
+    const mapped = mappedFailure(error);
+    json(res, mapped.status, errorBody(mapped.message, mapped.type, mapped.code));
+    return;
+  }
   const reserved = reserve(
     key,
-    Math.ceil(JSON.stringify(input).length / 4) + Math.max(0, input.max_tokens ?? 0),
+    await tokenEstimate(runtime, key, model, input, normalized.messages, input.max_tokens ?? 4096),
   );
   if (reserved.retryAfter !== null) {
     res.setHeader('retry-after', String(reserved.retryAfter));
     json(res, 429, errorBody('Ferry gateway key token budget exceeded', 'rate_limit_error'));
     return;
   }
-  const controller = new AbortController();
+  const controller = requestController(req);
   res.on('close', () => {
     if (!res.writableEnded) controller.abort();
   });
@@ -575,7 +715,6 @@ async function handleChat(
   );
   const usage = { inputTokens: 0, cachedTokens: 0, outputTokens: 0 };
   try {
-    const normalized = normalizeMessages(input.messages);
     if (input.stream) {
       let streamStarted = false;
       const beginStream = (completion?: GatewayCompletion) => {
@@ -600,7 +739,7 @@ async function handleChat(
         ...(input.parallel_tool_calls !== undefined
           ? { parallelToolCalls: input.parallel_tool_calls }
           : {}),
-        jsonMode: input.response_format?.type === 'json_object',
+        ...structuredOutputOptions(input.response_format),
         ...(input.max_tokens ? { maxTokens: input.max_tokens } : {}),
         ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
         ...reasoningInput(input),
@@ -642,7 +781,7 @@ async function handleChat(
         ...(input.parallel_tool_calls !== undefined
           ? { parallelToolCalls: input.parallel_tool_calls }
           : {}),
-        jsonMode: input.response_format?.type === 'json_object',
+        ...structuredOutputOptions(input.response_format),
         ...(input.max_tokens ? { maxTokens: input.max_tokens } : {}),
         ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
         ...reasoningInput(input),
@@ -721,6 +860,7 @@ async function handleAnthropic(
   let payload: Record<string, unknown>;
   try {
     payload = await body(req);
+    payload.max_tokens = outputTokenLimit(payload.max_tokens);
   } catch (error) {
     json(res, 400, errorBody(error instanceof Error ? error.message : 'Invalid JSON'));
     return;
@@ -737,20 +877,60 @@ async function handleAnthropic(
     json(res, 404, anthropicError(`Unknown model: ${originalModel}`, 'not_found_error'));
     return;
   }
-  const requestedProfile = aliases[originalModel];
+  const requestedProfile = originalModel === 'ferry/auto' ? key.profile : aliases[originalModel];
   if (
     (requestedProfile && (await runtime.models(key, requestedProfile)).length === 0) ||
     (!requestedProfile &&
       !model.startsWith('@profile:') &&
       !(await runtime.models(key)).includes(model))
   ) {
-    json(res, 404, anthropicError(`Unknown model: ${originalModel}`, 'not_found_error'));
+    if (requestedProfile) {
+      const failure = runtime.unavailable?.(key) ?? {
+        statusCode: 400,
+        code: 'unsupported_request',
+        message: 'No upstream route is available. Connect a provider or review this key’s policy.',
+      };
+      json(res, failure.statusCode, {
+        type: 'error',
+        error: {
+          type:
+            failure.statusCode === 429
+              ? 'rate_limit_error'
+              : failure.statusCode === 401
+                ? 'authentication_error'
+                : 'invalid_request_error',
+          code: failure.code,
+          message: failure.message,
+        },
+      });
+    } else json(res, 404, anthropicError(`Unknown model: ${originalModel}`, 'not_found_error'));
     return;
   }
   const ferryState = createFerryRequestState(originalModel);
+  let normalized: ReturnType<typeof canonicalToGatewayMessages>;
+  try {
+    normalized = canonicalToGatewayMessages(
+      anthropicToCanonical({
+        model: originalModel,
+        messages: payload.messages,
+        system: payload.system,
+      }).messages,
+    );
+  } catch (error) {
+    const mapped = mappedFailure(error);
+    json(res, mapped.status, anthropicError(mapped.message, mapped.type));
+    return;
+  }
   const reserved = reserve(
     key,
-    Math.ceil(JSON.stringify(payload).length / 4) + Math.max(0, Number(payload.max_tokens) || 0),
+    await tokenEstimate(
+      runtime,
+      key,
+      model,
+      payload,
+      normalized.messages,
+      Number(payload.max_tokens),
+    ),
   );
   if (reserved.retryAfter !== null) {
     res.setHeader('retry-after', String(reserved.retryAfter));
@@ -772,7 +952,7 @@ async function handleAnthropic(
           : rawChoice?.type === 'auto'
             ? 'auto'
             : undefined;
-  const controller = new AbortController();
+  const controller = requestController(req);
   res.on('close', () => {
     if (!res.writableEnded) controller.abort();
   });
@@ -785,12 +965,17 @@ async function handleAnthropic(
         .digest('hex'),
   );
   try {
-    const topLevelSystem = textContent(payload.system, 'system prompt');
-    const normalized = normalizeMessages([
-      ...(topLevelSystem ? [{ role: 'system', content: topLevelSystem }] : []),
-      ...anthropicMessages(payload.messages),
-    ]);
     const messages = normalized.messages;
+    const outputConfig =
+      payload.output_config && typeof payload.output_config === 'object'
+        ? (payload.output_config as Record<string, unknown>)
+        : {};
+    const controls = {
+      ...structuredOutputOptions(outputConfig.format),
+      ...(typeof rawChoice?.disable_parallel_tool_use === 'boolean'
+        ? { parallelToolCalls: !rawChoice.disable_parallel_tool_use }
+        : {}),
+    };
     if (payload.stream === true) {
       const send = (event: string, data: unknown) =>
         res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -827,6 +1012,7 @@ async function handleAnthropic(
         ...(normalized.instructions ? { instructions: normalized.instructions } : {}),
         ...(tools ? { tools } : {}),
         ...(toolChoice !== undefined ? { toolChoice } : {}),
+        ...controls,
         ...(payload.max_tokens ? { maxTokens: Number(payload.max_tokens) } : {}),
         ...anthropicReasoningEffort(payload),
         ...(typeof payload.temperature === 'number' ? { temperature: payload.temperature } : {}),
@@ -920,6 +1106,7 @@ async function handleAnthropic(
         ...(normalized.instructions ? { instructions: normalized.instructions } : {}),
         ...(tools ? { tools } : {}),
         ...(toolChoice !== undefined ? { toolChoice } : {}),
+        ...controls,
         ...(payload.max_tokens ? { maxTokens: Number(payload.max_tokens) } : {}),
         ...anthropicReasoningEffort(payload),
         ...(typeof payload.temperature === 'number' ? { temperature: payload.temperature } : {}),
@@ -988,6 +1175,7 @@ function protocolError(
   protocol: Protocol,
   status: number,
   message: string,
+  code: string | null = null,
 ): void {
   json(
     res,
@@ -1002,6 +1190,7 @@ function protocolError(
               : status >= 500
                 ? 'server_error'
                 : 'invalid_request_error',
+          code,
         )
       : {
           error: {
@@ -1044,6 +1233,9 @@ async function handleCanonicalProtocol(
       protocol === 'responses'
         ? openAiResponsesToCanonical(payload)
         : geminiToCanonical(payload, routeModel ?? '');
+    canonical.maxTokens = outputTokenLimit(
+      protocol === 'responses' ? payload.max_output_tokens : canonical.maxTokens,
+    );
   } catch (error) {
     protocolError(res, protocol, 400, error instanceof Error ? error.message : 'Invalid request');
     return;
@@ -1057,33 +1249,46 @@ async function handleCanonicalProtocol(
     protocolError(res, protocol, 404, `Unknown model: ${originalModel}`);
     return;
   }
-  const requestedProfile = aliases[originalModel];
+  const requestedProfile = originalModel === 'ferry/auto' ? key.profile : aliases[originalModel];
   if (
     (requestedProfile && (await runtime.models(key, requestedProfile)).length === 0) ||
     (!requestedProfile &&
       !model.startsWith('@profile:') &&
       !(await runtime.models(key)).includes(model))
   ) {
-    protocolError(res, protocol, 404, `Unknown model: ${originalModel}`);
+    if (requestedProfile) {
+      const failure = runtime.unavailable?.(key) ?? {
+        statusCode: 400,
+        code: 'unsupported_request',
+        message: 'No upstream route is available. Connect a provider or review this key’s policy.',
+      };
+      protocolError(res, protocol, failure.statusCode, failure.message, failure.code);
+    } else protocolError(res, protocol, 404, `Unknown model: ${originalModel}`);
     return;
   }
   const ferryState = createFerryRequestState(originalModel);
-  const estimate =
-    Math.ceil(JSON.stringify(payload).length / 4) + Math.max(0, canonical.maxTokens ?? 0);
+  const converted = canonicalToGatewayMessages(canonical.messages);
+  const estimate = await tokenEstimate(
+    runtime,
+    key,
+    model,
+    payload,
+    converted.messages,
+    canonical.maxTokens ?? 4096,
+  );
   const reservation = reserve?.(key, estimate);
   if (reservation?.retryAfter !== null && reservation) {
     res.setHeader('retry-after', String(reservation.retryAfter));
     protocolError(res, protocol, 429, 'Ferry gateway key token budget exceeded');
     return;
   }
-  const converted = canonicalToGatewayMessages(canonical.messages);
   const tools = canonical.tools?.map((tool) => ({
     type: 'function',
     function: { name: tool.name, description: tool.description, parameters: tool.parameters },
   }));
   const responseId = protocol === 'responses' ? `resp_${randomBytes(12).toString('hex')}` : '';
   const stream = forceStream || canonical.stream;
-  const controller = new AbortController();
+  const controller = requestController(req);
   res.on('close', () => {
     if (!res.writableEnded) controller.abort();
   });
@@ -1100,6 +1305,9 @@ async function handleCanonicalProtocol(
   const responseSend = (event: string, data: unknown) =>
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   let responseMessageStarted = false;
+  let responseMessageIndex: number | undefined;
+  let nextOutputIndex = 0;
+  const callOutputIndexes = new Map<string, number>();
   let streamStarted = false;
   const beginStream = (completion?: GatewayCompletion) => {
     if (!stream || streamStarted) return;
@@ -1124,6 +1332,10 @@ async function handleCanonicalProtocol(
     }
   };
   try {
+    const responseText =
+      payload.text && typeof payload.text === 'object'
+        ? (payload.text as Record<string, unknown>)
+        : {};
     const result = await runtime.complete({
       key,
       model,
@@ -1134,6 +1346,10 @@ async function handleCanonicalProtocol(
       ...(canonical.maxTokens ? { maxTokens: canonical.maxTokens } : {}),
       ...(canonical.temperature !== undefined ? { temperature: canonical.temperature } : {}),
       ...(canonical.effort ? { effort: canonical.effort } : {}),
+      ...structuredOutputOptions(responseText.format),
+      ...(typeof payload.parallel_tool_calls === 'boolean'
+        ? { parallelToolCalls: payload.parallel_tool_calls }
+        : {}),
       sessionHint,
       signal: controller.signal,
       ...ferryAttemptOptions(ferryState),
@@ -1145,9 +1361,10 @@ async function handleCanonicalProtocol(
               if (protocol === 'responses') {
                 if (!responseMessageStarted) {
                   responseMessageStarted = true;
+                  responseMessageIndex = nextOutputIndex++;
                   responseSend('response.output_item.added', {
                     type: 'response.output_item.added',
-                    output_index: 0,
+                    output_index: responseMessageIndex,
                     item: {
                       type: 'message',
                       id: `${responseId}_message`,
@@ -1159,7 +1376,7 @@ async function handleCanonicalProtocol(
                   responseSend('response.content_part.added', {
                     type: 'response.content_part.added',
                     item_id: `${responseId}_message`,
-                    output_index: 0,
+                    output_index: responseMessageIndex,
                     content_index: 0,
                     part: { type: 'output_text', text: '', annotations: [] },
                   });
@@ -1167,7 +1384,7 @@ async function handleCanonicalProtocol(
                 responseSend('response.output_text.delta', {
                   type: 'response.output_text.delta',
                   item_id: `${responseId}_message`,
-                  output_index: 0,
+                  output_index: responseMessageIndex,
                   content_index: 0,
                   delta: text,
                 });
@@ -1182,7 +1399,8 @@ async function handleCanonicalProtocol(
               streamedCallIds.add(call.id);
               beginStream();
               if (protocol === 'responses') {
-                const outputIndex = (responseMessageStarted ? 1 : 0) + calls.length - 1;
+                const outputIndex = nextOutputIndex++;
+                callOutputIndexes.set(call.id, outputIndex);
                 responseSend('response.output_item.added', {
                   type: 'response.output_item.added',
                   output_index: outputIndex,
@@ -1222,6 +1440,10 @@ async function handleCanonicalProtocol(
     );
     const allCalls = result.toolCalls?.length ? result.toolCalls : calls;
     if (protocol === 'responses') {
+      if (result.text && responseMessageIndex === undefined)
+        responseMessageIndex = nextOutputIndex++;
+      for (const call of allCalls)
+        if (!callOutputIndexes.has(call.id)) callOutputIndexes.set(call.id, nextOutputIndex++);
       const output = [
         ...(result.text
           ? [
@@ -1252,6 +1474,16 @@ async function handleCanonicalProtocol(
             ]
           : []),
       ];
+      if (stream)
+        output.sort(
+          (a, b) =>
+            (a.type === 'message'
+              ? (responseMessageIndex ?? 0)
+              : (callOutputIndexes.get(a.id) ?? nextOutputIndex)) -
+            (b.type === 'message'
+              ? (responseMessageIndex ?? 0)
+              : (callOutputIndexes.get(b.id) ?? nextOutputIndex)),
+        );
       const responseBody = {
         id: responseId,
         object: 'response',
@@ -1262,7 +1494,7 @@ async function handleCanonicalProtocol(
         model: originalModel,
         output,
         output_text: result.text,
-        parallel_tool_calls: true,
+        parallel_tool_calls: payload.parallel_tool_calls !== false,
         usage: {
           input_tokens: result.inputTokens,
           input_tokens_details: { cached_tokens: result.cachedTokens ?? 0 },
@@ -1276,9 +1508,10 @@ async function handleCanonicalProtocol(
       }
       if (!deltas.length && result.text) {
         responseMessageStarted = true;
+        responseMessageIndex ??= nextOutputIndex++;
         responseSend('response.output_item.added', {
           type: 'response.output_item.added',
-          output_index: 0,
+          output_index: responseMessageIndex,
           item: {
             type: 'message',
             id: `${responseId}_message`,
@@ -1290,21 +1523,21 @@ async function handleCanonicalProtocol(
         responseSend('response.content_part.added', {
           type: 'response.content_part.added',
           item_id: `${responseId}_message`,
-          output_index: 0,
+          output_index: responseMessageIndex,
           content_index: 0,
           part: { type: 'output_text', text: '', annotations: [] },
         });
         responseSend('response.output_text.delta', {
           type: 'response.output_text.delta',
           item_id: `${responseId}_message`,
-          output_index: 0,
+          output_index: responseMessageIndex,
           content_index: 0,
           delta: result.text,
         });
       }
-      allCalls.forEach((call, index) => {
+      allCalls.forEach((call) => {
         if (streamedCallIds.has(call.id)) return;
-        const outputIndex = (responseMessageStarted ? 1 : 0) + index;
+        const outputIndex = callOutputIndexes.get(call.id) ?? 0;
         responseSend('response.output_item.added', {
           type: 'response.output_item.added',
           output_index: outputIndex,
@@ -1324,7 +1557,7 @@ async function handleCanonicalProtocol(
           delta: call.arguments,
         });
       });
-      const messageOutputIndex = 0;
+      const messageOutputIndex = responseMessageIndex ?? 0;
       if (result.text) {
         responseSend('response.output_text.done', {
           type: 'response.output_text.done',
@@ -1346,8 +1579,8 @@ async function handleCanonicalProtocol(
           item: output[messageOutputIndex],
         });
       }
-      allCalls.forEach((call, index) => {
-        const outputIndex = (result.text ? 1 : 0) + index;
+      allCalls.forEach((call) => {
+        const outputIndex = callOutputIndexes.get(call.id) ?? 0;
         responseSend('response.function_call_arguments.done', {
           type: 'response.function_call_arguments.done',
           item_id: call.id,
@@ -1467,7 +1700,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
   if (options.allowLan && !options.allowLanConfirmed)
     throw new Error('LAN gateway binding requires explicit confirmation');
   const host = options.allowLan ? '0.0.0.0' : '127.0.0.1';
-  const activeRequests = new Map<string, number>();
+  const queue = new GatewayQueue(options.concurrency, options.queueCapacity);
+  const running = new Set<AbortController>();
+  const tasks = new Set<Promise<void>>();
   const reservedTokens = new Map<string, { minute: number; day: number }>();
   const reserveTokens = (key: GatewayKey, tokens: number) => {
     const now = new Date();
@@ -1511,10 +1746,19 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
       const grant = options.internalTokens?.get(internalToken);
       if (grant) {
         if (grant.expiresAt <= Date.now()) options.internalTokens?.delete(internalToken);
-        else
-          return options.runtime.store
+        else {
+          const key = options.runtime.store
             .list()
             .find((key) => key.id === grant.keyId && !key.revokedAt);
+          return key
+            ? {
+                ...key,
+                ...(grant.testCostCapUsd === undefined
+                  ? {}
+                  : { requestCostCapUsd: grant.testCostCapUsd }),
+              }
+            : undefined;
+        }
       }
     }
     const token = bearer(req);
@@ -1577,8 +1821,15 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
         ...(
           await Promise.all(
             Object.entries(aliases).map(async ([alias, profile]) =>
-              (key.allowedModels.length === 0 || key.allowedModels.includes(alias)) &&
-              (await options.runtime.models(key, profile)).length > 0
+              (key.allowedModels.length === 0 ||
+                key.allowedModels.includes(alias) ||
+                (alias === 'ferry/auto' &&
+                  key.profile !== 'none' &&
+                  key.allowedModels.every(
+                    (ref) => ref.includes('/') && !ref.startsWith('ferry/'),
+                  ))) &&
+              (await options.runtime.models(key, alias === 'ferry/auto' ? key.profile : profile))
+                .length > 0
                 ? alias
                 : null,
             ),
@@ -1644,39 +1895,76 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
           return;
         }
       }
-      if (
-        key.concurrencyLimit !== null &&
-        (activeRequests.get(key.id) ?? 0) >= key.concurrencyLimit
-      ) {
-        res.setHeader('retry-after', '1');
-        json(
-          res,
-          429,
-          path === '/v1/messages'
-            ? anthropicError('Ferry gateway key concurrency limit exceeded', 'rate_limit_error')
-            : protocol === 'gemini'
-              ? {
-                  error: {
-                    code: 429,
-                    status: 'RESOURCE_EXHAUSTED',
-                    message: 'Ferry gateway key concurrency limit exceeded',
-                  },
-                }
-              : errorBody('Ferry gateway key concurrency limit exceeded', 'rate_limit_error'),
+      const controller = new AbortController();
+      requestControllers.set(req, controller);
+      running.add(controller);
+      const timer = setTimeout(() => {
+        controller.abort(
+          Object.assign(new Error('Gateway request deadline reached, including queue time.'), {
+            code: 'request_timeout',
+            statusCode: 504,
+          }),
         );
-        return;
-      }
+      }, options.requestDeadlineMs ?? 150_000);
+      const disconnected = () => {
+        if (!res.writableEnded) controller.abort(new Error('Client disconnected.'));
+      };
+      res.once('close', disconnected);
+      req.once('aborted', disconnected);
+      let release: (() => void) | undefined;
+      const runtime: GatewayRuntime = {
+        ...options.runtime,
+        complete: (input) =>
+          abortable(controller.signal, () =>
+            options.runtime.complete({
+              ...input,
+              receivedAt: requestAt,
+              queueWaitMs: Math.max(0, Date.now() - Date.parse(requestAt)),
+              ...(input.onText
+                ? {
+                    onText: async (delta) => {
+                      await input.onText?.(delta);
+                      await waitForDrain(res, controller.signal);
+                    },
+                  }
+                : {}),
+              ...(input.onToolCall
+                ? {
+                    onToolCall: async (call) => {
+                      await input.onToolCall?.(call);
+                      await waitForDrain(res, controller.signal);
+                    },
+                  }
+                : {}),
+            }),
+          ),
+      };
       const requestAt = new Date().toISOString();
       options.runtime.store.recordRequest(key.id, requestAt);
-      activeRequests.set(key.id, (activeRequests.get(key.id) ?? 0) + 1);
-      options.runtime.store.touch(key.id, new Date().toISOString());
       try {
+        release = await queue.acquire(key.id, key.concurrencyLimit ?? 4, controller.signal);
+        const storedKey = options.runtime.store
+          .list()
+          .find((entry) => entry.id === key.id && !entry.revokedAt);
+        const currentKey = storedKey
+          ? {
+              ...storedKey,
+              ...(key.requestCostCapUsd === undefined
+                ? {}
+                : { requestCostCapUsd: key.requestCostCapUsd }),
+            }
+          : undefined;
+        if (!currentKey) {
+          badAuthentication(req, res, protocol);
+          return;
+        }
+        options.runtime.store.touch(key.id, new Date().toISOString());
         if (protocol)
           await handleCanonicalProtocol(
             req,
             res,
-            options.runtime,
-            key,
+            runtime,
+            currentKey,
             protocol,
             protocol === 'gemini' ? decodeURIComponent(geminiRoute?.[1] ?? '') : undefined,
             geminiRoute?.[2] === 'streamGenerateContent' ||
@@ -1684,19 +1972,43 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
             reserveTokens,
           );
         else if (path === '/v1/messages')
-          await handleAnthropic(req, res, options.runtime, key, reserveTokens);
-        else await handleChat(req, res, options.runtime, key, reserveTokens);
+          await handleAnthropic(req, res, runtime, currentKey, reserveTokens);
+        else await handleChat(req, res, runtime, currentKey, reserveTokens);
+      } catch (error) {
+        if (!release)
+          options.runtime.rejected?.({
+            key,
+            at: requestAt,
+            traceId: `ferry_${randomBytes(12).toString('hex')}`,
+            code: controller.signal.aborted ? 'cancelled' : mappedFailure(error).code,
+            durationMs: Math.max(0, Date.now() - Date.parse(requestAt)),
+          });
+        if (!res.destroyed && !res.writableEnded) {
+          const mapped = mappedFailure(error);
+          if (!res.headersSent) {
+            res.setHeader('retry-after', '1');
+            json(res, mapped.status, errorBody(mapped.message, mapped.type, mapped.code));
+          } else res.destroy();
+        }
       } finally {
-        const active = activeRequests.get(key.id) ?? 1;
-        if (active <= 1) activeRequests.delete(key.id);
-        else activeRequests.set(key.id, active - 1);
+        release?.();
+        clearTimeout(timer);
+        running.delete(controller);
+        res.off('close', disconnected);
+        req.off('aborted', disconnected);
       }
       return;
     }
     json(res, 404, errorBody('Not found', 'not_found'));
   };
   const server: Server = createServer((req, res) => {
-    void handleRequest(req, res);
+    const task = handleRequest(req, res).catch(() => {
+      if (!res.destroyed) res.destroy();
+    });
+    tasks.add(task);
+    void task.finally(() => {
+      tasks.delete(task);
+    });
   });
   const wantedPort = options.port ?? 11435;
   const port = await new Promise<number>((resolve, reject) => {
@@ -1724,12 +2036,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
   return {
     port,
     host,
-    close: () =>
-      new Promise((resolve, reject) => {
+    activity: () => queue.state,
+    close: async () => {
+      queue.close();
+      for (const controller of running) controller.abort(new Error('Gateway shutting down.'));
+      await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) reject(error);
           else resolve();
         });
-      }),
+        server.closeAllConnections();
+      });
+      await Promise.allSettled([...tasks]);
+    },
   };
 }

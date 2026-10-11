@@ -80,12 +80,11 @@ async function connection(
     throw new Error(
       'This key selects OpenCode-app models. Use ferry run opencode --native or select a standard API model.',
     );
-  const alias =
-    selected?.profile && selected.profile !== 'none'
-      ? `ferry/${selected.profile}`
-      : 'ferry/auto-free';
+  const alias = 'ferry/auto';
   const models = allowed.length
-    ? allowed
+    ? selected?.profile === 'none'
+      ? allowed
+      : [alias, ...allowed]
     : [alias, ...catalog.filter((model) => !isOpenCodeAppModel(model)).map((model) => model.ref)];
   const model =
     options.model ??
@@ -94,7 +93,11 @@ async function connection(
       models.map((id) => ({ id, label: id })),
       models[0] ?? alias,
     ));
-  if (allowed.length && !allowed.includes(model))
+  if (
+    allowed.length &&
+    !allowed.includes(model) &&
+    !(selected?.profile !== 'none' && model === alias)
+  )
     throw new Error(`Model is not allowed by Gateway key ${keyId}: ${model}`);
   const status = (await client.gateway.start()) as { url?: string; status?: { url?: string } };
   const url = status.url ?? status.status?.url;

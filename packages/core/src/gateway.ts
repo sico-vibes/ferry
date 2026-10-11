@@ -18,11 +18,13 @@ import {
 } from '@ferry/router';
 import {
   DIRECT_PROFILE_ID,
+  ProfileSchema,
   RoutingSettingsSchema,
   providerDefinition,
-  redactKnownSecretText,
   type GatewayRequestRecord,
+  type GatewayRoutingExplanation,
 } from '@ferry/shared';
+import { gatewayHistory, gatewayRequest, gatewayUsageSummary } from './gateway-history.js';
 import {
   type GatewayRuntime,
   startGateway,
@@ -110,15 +112,19 @@ export function toGatewayModelMessages(messages: GatewayMessage[]): ModelMessage
         try {
           input = JSON.parse(call.function.arguments) as unknown;
         } catch {
-          input = {};
+          throw Object.assign(new Error('Assistant tool arguments must contain valid JSON.'), {
+            code: 'unsupported_request',
+            statusCode: 400,
+          });
         }
         return [
           { type: 'tool-call' as const, toolCallId: call.id, toolName: call.function.name, input },
         ];
       });
       return [
-        ...(typeof message.content === 'string' && message.content
-          ? [{ role: 'assistant' as const, content: message.content }]
+        ...((typeof message.content === 'string' && message.content) ||
+        (Array.isArray(message.content) && message.content.length)
+          ? [{ role: 'assistant' as const, content: message.content as never }]
           : []),
         { role: 'assistant', content: content as never },
       ];
@@ -136,7 +142,12 @@ export function toGatewayModelMessages(messages: GatewayMessage[]): ModelMessage
             {
               type: 'tool-result',
               toolCallId: message.tool_call_id,
-              toolName: message.name ?? '',
+              toolName:
+                message.name ??
+                messages
+                  .flatMap((item) => item.tool_calls ?? [])
+                  .find((call) => call.id === message.tool_call_id)?.function.name ??
+                '',
               output: {
                 type: 'text',
                 value:
@@ -195,7 +206,28 @@ export function createGatewayController(
   onRequest?: (record: GatewayRequestRecord) => void,
 ) {
   let handle: GatewayHandle | undefined;
-  const internalTokens = new Map<string, { keyId: string; expiresAt: number }>();
+  let lifecycle = Promise.resolve();
+  const serialize = <T>(work: () => Promise<T>): Promise<T> => {
+    const next = lifecycle.then(work);
+    lifecycle = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  };
+  const statusNow = () =>
+    handle
+      ? {
+          running: true,
+          port: handle.port,
+          host: handle.host,
+          url: `http://${handle.host === '0.0.0.0' ? '127.0.0.1' : handle.host}:${String(handle.port)}`,
+        }
+      : { running: false, port: null, host: null, url: null };
+  const internalTokens = new Map<
+    string,
+    { keyId: string; expiresAt: number; testCostCapUsd?: number }
+  >();
   // Metadata survives Core restarts; prompt and response content is never stored here.
   const requestLog: GatewayRequestRecord[] = (
     services.db.client
@@ -203,6 +235,7 @@ export function createGatewayController(
       .all(requestLogLimit) as { data_json: string }[]
   ).map((row) => JSON.parse(row.data_json) as GatewayRequestRecord);
   const logRequest = (record: GatewayRequestRecord) => {
+    if (!services.db.client.open) return;
     services.db.client
       .prepare('INSERT OR REPLACE INTO gateway_requests(id,at,data_json) VALUES(?,?,?)')
       .run(record.id, record.at, JSON.stringify(record));
@@ -254,7 +287,12 @@ export function createGatewayController(
         );
       })
       .map((model) => model.ref);
-  const routeableCandidates = async (key: GatewayKey, profileName: string, inputTokens = 1) => {
+  const routeableCandidates = async (
+    key: GatewayKey,
+    profileName: string,
+    inputTokens = 1,
+    requiresTools = false,
+  ) => {
     const allowedConcrete = key.allowedModels.filter(
       (ref) => ref.includes('/') && !ref.startsWith('ferry/'),
     );
@@ -269,11 +307,35 @@ export function createGatewayController(
     const allProfiles = [...BUILTIN_PROFILES];
     const custom = services.settings.get('profiles');
     if (Array.isArray(custom)) allProfiles.push(...(custom as typeof BUILTIN_PROFILES));
-    const selected = allProfiles.find((entry) => entry.id === profileId(profileName));
+    const overrides =
+      ProfileSchema.array().safeParse(services.settings.get('profile-overrides')).data ?? [];
+    const base = allProfiles.find((entry) => entry.id === profileId(profileName));
+    const selected = base
+      ? {
+          ...base,
+          ...(overrides.some((item) => item.id === base.id)
+            ? {
+                fallbackChain:
+                  overrides.find((item) => item.id === base.id)?.fallbackChain ??
+                  base.fallbackChain,
+                roles: overrides.find((item) => item.id === base.id)?.roles ?? base.roles,
+              }
+            : {}),
+        }
+      : undefined;
     if (!selected) return [];
+    const effective =
+      selected.id === 'profile_builtin_auto_free' && key.paidBackup && (key.budgetUsd ?? 0) > 0
+        ? { ...selected, paidAllowed: true, allowedProviders: 'all' as const }
+        : selected;
     const runtimeDeps = await import('./session-deps.js');
     const requestDeps = runtimeDeps.createSessionDependencies(services, () => undefined);
-    const eligible = requestDeps.gateway.resolveCandidates(selected, 'plan', inputTokens);
+    const eligible = requestDeps.gateway.resolveCandidates(
+      effective,
+      requiresTools ? 'edit' : 'plan',
+      inputTokens,
+      requiresTools,
+    );
     return allowedConcrete.length
       ? allowedConcrete.flatMap((ref) => {
           const model = eligible.find((item) => item.ref === ref);
@@ -282,6 +344,95 @@ export function createGatewayController(
       : eligible;
   };
   const runtime: GatewayRuntime = {
+    async inputTokenBound(key, model) {
+      const requested = model.startsWith('@profile:')
+        ? model.slice('@profile:'.length)
+        : key.profile;
+      const assigned = new Set(
+        (await routeableCandidates(key, key.profile)).map((model) => model.ref),
+      );
+      return Math.max(
+        0,
+        ...(await routeableCandidates(key, requested))
+          .filter((model) => assigned.has(model.ref) && model.capability?.vision === true)
+          .map((model) => model.contextWindow),
+      );
+    },
+    unavailable(key) {
+      const connected = services.providers.list().filter((provider) => provider.enabled);
+      if (connected.some((provider) => provider.keyStatus === 'invalid'))
+        return {
+          code: 'upstream_credentials',
+          statusCode: 401,
+          message: 'Replace the invalid upstream provider credentials in Models.',
+        };
+      if (
+        connected.some(
+          (provider) =>
+            provider.health === 'cooldown' ||
+            provider.health === 'down' ||
+            !!provider.pausedReason ||
+            !health.tracker.available(provider.id) ||
+            services.models
+              .list(provider.id)
+              .some(
+                (model) =>
+                  services.quota.health(provider.id, model.ref, provider.id).health !== 'ok',
+              ),
+        )
+      )
+        return {
+          code: 'quota_exhausted',
+          statusCode: 429,
+          message:
+            'Eligible providers are unavailable or cooling down. Review Models → Health and quota resets.',
+        };
+      if (
+        !key.paidBackup &&
+        allModels().some((ref) =>
+          availableModels().some((model) => model.ref === ref && (model.priceInPerM ?? 0) > 0),
+        )
+      )
+        return {
+          code: 'budget_exhausted',
+          statusCode: 402,
+          message:
+            'No route fits this free-only policy. Connect a free provider or explicitly authorize paid backup with a spending cap.',
+        };
+      return {
+        code: 'unsupported_request',
+        statusCode: 400,
+        message:
+          'No model fits this key and preset. Connect an eligible provider or review routing restrictions.',
+      };
+    },
+    rejected(input) {
+      logRequest({
+        id: input.traceId,
+        at: input.at,
+        keyId: input.key.id,
+        keyName: input.key.name,
+        requestedModel: 'Not dispatched (queue admission)',
+        traceId: input.traceId,
+        modelRef: null,
+        providerId: null,
+        status: 'error',
+        outcome: input.code === 'cancelled' ? 'cancelled' : 'failed',
+        attempts: [],
+        inputTokens: 0,
+        outputTokens: 0,
+        latencyMs: input.durationMs,
+        firstResponseMs: null,
+        queueWaitMs: input.durationMs,
+        costUsd: 0,
+        estimatedCost: false,
+        error:
+          input.code === 'queue_full'
+            ? 'Gateway queue full. Retry shortly.'
+            : 'Cancelled or stopped before dispatch.',
+        constraints: ['Not dispatched; request body and content were not read.'],
+      });
+    },
     store: {
       list: () => keys(services),
       put: (key) => {
@@ -354,7 +505,12 @@ export function createGatewayController(
       },
     },
     async models(key, profileName = key.profile) {
-      const eligible = await routeableCandidates(key, profileName);
+      const assigned = new Set(
+        (await routeableCandidates(key, key.profile)).map((model) => model.ref),
+      );
+      const eligible = (await routeableCandidates(key, profileName)).filter((model) =>
+        assigned.has(model.ref),
+      );
       const concreteAllowlist = key.allowedModels.filter(
         (model) => model.includes('/') && !model.startsWith('ferry/'),
       );
@@ -385,15 +541,17 @@ export function createGatewayController(
       return [...concreteModels.map((model) => model.ref), ...availableLogical];
     },
     async complete(input) {
-      const started = services.clock.now();
+      const started = input.receivedAt ? new Date(input.receivedAt) : services.clock.now();
       const base = {
         id: `gwreq_${String(started.getTime())}_${Math.random().toString(36).slice(2, 8)}`,
         at: started.toISOString(),
         keyId: input.key.id,
         keyName: input.key.name,
-        requestedModel: input.model.startsWith('@profile:')
-          ? `ferry/${input.model.slice('@profile:'.length)}`
-          : input.model,
+        requestedModel:
+          input.requestedModel ??
+          (input.model.startsWith('@profile:')
+            ? `ferry/${input.model.slice('@profile:'.length)}`
+            : input.model),
       };
       const traceId = input.traceId ?? base.id;
       const attemptState: GatewayAttemptState = { servedModel: '', attempts: [] };
@@ -403,8 +561,79 @@ export function createGatewayController(
         input.onAttempt?.(state);
       };
       const latencyMs = () => Math.max(0, services.clock.now().getTime() - started.getTime());
+      let firstResponseMs: number | null = null;
+      const outputState = { visible: false };
+      const progress = () => {
+        firstResponseMs ??= latencyMs();
+      };
+      const constraints = [
+        `Assigned preset: ${input.key.profile}`,
+        input.key.paidBackup
+          ? `Paid backup: monthly key cap $${String(input.key.budgetUsd)}; profile and global caps also apply.`
+          : 'Free only; paid routing disabled.',
+        input.key.allowedModels.length
+          ? `Restricted to ${input.key.allowedModels.join(', ')}`
+          : 'All models allowed by assigned policy.',
+        input.tools?.length ? 'Requires native tool calls.' : 'Text request.',
+        'Context includes conversation, tools and requested output. Prompts and responses are excluded from history.',
+      ];
+      const cost = () => {
+        if (!services.db.client.open) return { costUsd: null, estimatedCost: true };
+        const row = services.db.client
+          .prepare(
+            'SELECT sum(amount_usd) AS amount, max(estimated) AS estimated FROM spend_charges WHERE id LIKE ?',
+          )
+          .get(`${base.id}:%`) as { amount: number | null; estimated: number | null };
+        return { costUsd: row.amount ?? 0, estimatedCost: row.estimated === 1 };
+      };
+      const reserveUnreportedTokens = () => {
+        const usage = gatewayUsage(services, input.key.id);
+        const at = services.clock.now().toISOString();
+        services.settings.put(`gateway-usage:${input.key.id}`, {
+          ...usage,
+          tokenEvents: [
+            ...usage.tokenEvents.filter(
+              (event) => Date.parse(at) - Date.parse(event.at) < 86_400_000,
+            ),
+            {
+              at,
+              tokens:
+                Buffer.byteLength(
+                  JSON.stringify(input.messages) +
+                    JSON.stringify(input.tools ?? []) +
+                    (input.instructions ?? ''),
+                  'utf8',
+                ) + (input.maxTokens ?? 4096),
+            },
+          ],
+        });
+      };
       try {
-        const result = await routeCompletion({ ...input, traceId, onAttempt }, base.id);
+        const result = await routeCompletion(
+          {
+            ...input,
+            traceId,
+            onAttempt,
+            onText: async (delta) => {
+              progress();
+              if (input.onText) {
+                outputState.visible = true;
+                await input.onText(delta);
+              }
+            },
+            onToolCall: async (call) => {
+              progress();
+              if (input.onToolCall) {
+                outputState.visible = true;
+                await input.onToolCall(call);
+              }
+            },
+          },
+          base.id,
+          () => outputState.visible,
+        );
+        const usageReported = result.inputTokens > 0 || result.outputTokens > 0;
+        if (!usageReported) reserveUnreportedTokens();
         logRequest({
           ...base,
           traceId,
@@ -419,30 +648,48 @@ export function createGatewayController(
           outputTokens: result.outputTokens,
           latencyMs: latencyMs(),
           error: null,
+          outcome: 'completed',
+          firstResponseMs,
+          queueWaitMs: input.queueWaitMs ?? 0,
+          usageReported,
+          cachedTokens: result.cachedTokens ?? 0,
+          ...cost(),
+          constraints,
         });
         return { ...result, traceId, attempts: result.attempts ?? attemptState.attempts };
       } catch (error) {
+        if (
+          attemptState.attempts.some(
+            (attempt) => attempt.status === 'failed' || attempt.status === 'served',
+          )
+        )
+          reserveUnreportedTokens();
         logRequest({
           ...base,
           traceId,
           modelRef: null,
           servedModel:
-            attemptState.attempts.at(-1)?.status === 'served' ? attemptState.servedModel : null,
+            outputState.visible || attemptState.attempts.at(-1)?.status === 'served'
+              ? attemptState.servedModel
+              : null,
           attempts: attemptState.attempts,
-          providerId: null,
+          providerId: outputState.visible ? (attemptState.servedModel.split('/')[0] ?? null) : null,
           status: 'error',
           inputTokens: 0,
           outputTokens: 0,
           latencyMs: latencyMs(),
-          error: redactKnownSecretText(
-            input.messages.reduce(
-              (message, item) =>
-                typeof item.content === 'string' && item.content.length > 3
-                  ? message.replaceAll(item.content, '[request content redacted]')
-                  : message,
-              error instanceof Error ? error.message : String(error),
-            ),
-          ).slice(0, 300),
+          error:
+            error instanceof BudgetError
+              ? 'Spending policy blocked this request. Check key, preset and global limits.'
+              : input.signal.aborted
+                ? 'Request cancelled or its deadline expired.'
+                : 'Upstream request failed. Review the attempted routes and provider health. Request content is excluded from diagnostics.',
+          outcome: outputState.visible ? 'partial' : input.signal.aborted ? 'cancelled' : 'failed',
+          firstResponseMs,
+          queueWaitMs: input.queueWaitMs ?? 0,
+          usageReported: false,
+          ...cost(),
+          constraints,
         });
         throw error;
       }
@@ -451,6 +698,7 @@ export function createGatewayController(
   async function routeCompletion(
     input: Parameters<GatewayRuntime['complete']>[0],
     ledgerRequestId: string,
+    hasVisibleOutput: () => boolean,
   ): ReturnType<GatewayRuntime['complete']> {
     const requestStarted = Date.now();
     const selectedProfile = input.model.startsWith('@profile:')
@@ -464,6 +712,7 @@ export function createGatewayController(
       input.key,
       selectedProfile,
       Math.max(1, JSON.stringify(input.messages).length / 4),
+      !!input.tools?.length,
     );
     const keyEligible = new Set(
       (
@@ -471,6 +720,7 @@ export function createGatewayController(
           input.key,
           input.key.profile,
           Math.max(1, JSON.stringify(input.messages).length / 4),
+          !!input.tools?.length,
         )
       ).map((model) => model.ref),
     );
@@ -508,10 +758,22 @@ export function createGatewayController(
         requestedEligible.has(model.ref) &&
         (!hasConcreteAllowlist(input.key) || input.key.allowedModels.includes(model.ref)),
     );
+    if (input.requestedModel === 'ferry/auto-free') {
+      const providers = requestDeps.providers();
+      ordered = ordered.filter((model) => {
+        const provider = providers.find((provider) => provider.id === model.providerId);
+        return (
+          !!provider &&
+          isFreeForRouting(provider, model, routingSettings(services).trialOptInProviders)
+        );
+      });
+    }
     if (input.tools?.length)
       ordered = ordered.filter(
         (model) => model.toolCalling && model.capability?.toolCall !== false,
       );
+    const effort = input.effort;
+    if (effort) ordered = ordered.filter((model) => model.reasoningEfforts?.includes(effort));
     const containsImage = input.messages.some(
       (message) =>
         Array.isArray(message.content) &&
@@ -589,9 +851,23 @@ export function createGatewayController(
       input.signal.throwIfAborted();
       const remainingMs = 150_000 - (Date.now() - requestStarted);
       if (remainingMs <= 0) throw new GatewayTimeoutError('Gateway request deadline reached.');
-      if (services.providers.get(model.providerId)?.enabled === false) continue;
+      if (services.providers.get(model.providerId)?.enabled === false) {
+        lastAttemptHistory.push({
+          model: model.ref,
+          status: 'skipped',
+          reason: 'Provider disabled or paused.',
+        });
+        continue;
+      }
       const providerId = model.providerId;
-      if (!health.tracker.available(providerId, model.ref)) continue;
+      if (!health.tracker.available(providerId, model.ref)) {
+        lastAttemptHistory.push({
+          model: model.ref,
+          status: 'skipped',
+          reason: 'Provider or model cooldown.',
+        });
+        continue;
+      }
       const entries = services.providerKeyEntries.list(providerId);
       if (!entries.length && !health.tracker.available(providerId, model.ref, providerId)) continue;
       const stickyKeyId = stickyRoutes.get(input.sessionHint)?.providerKeyId;
@@ -617,6 +893,7 @@ export function createGatewayController(
         : services.providerKeyEntries.list(providerId).length === 0 && legacyKeyRef
           ? await services.secrets.get(legacyKeyRef)
           : undefined;
+      input.signal.throwIfAborted();
       if (!key && !permitsKeylessProvider(services, providerId) && !oauth) {
         lastError = Object.assign(
           new Error(`Connect or replace the upstream credentials for ${providerId}.`),
@@ -625,7 +902,7 @@ export function createGatewayController(
         continue;
       }
       const envName = `FERRY_PROVIDER_BASE_URL_${providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-      const outputState = { started: false };
+      const attemptStarted = Date.now();
       const attempts = lastAttemptHistory;
       attempts.push({ model: model.ref, status: 'started' });
       input.onAttempt?.({ servedModel: model.ref, attempts: [...attempts] });
@@ -658,10 +935,25 @@ export function createGatewayController(
             throw new BudgetError(
               'Automatic paid routing is blocked because this model’s pricing is unknown. Choose a model with published pricing.',
             );
+          const billedInputTokens = containsImage
+            ? Math.max(inputTokens, model.contextWindow - outputTokens)
+            : inputTokens;
           const amountUsd = oauth
             ? 0
-            : (inputTokens * (model.priceInPerM ?? 0) + outputTokens * (model.priceOutPerM ?? 0)) /
+            : (billedInputTokens * Math.max(model.priceInPerM ?? 0, model.priceCachedInPerM ?? 0) +
+                outputTokens * (model.priceOutPerM ?? 0)) /
               1_000_000;
+          if (input.key.requestCostCapUsd !== undefined) {
+            const previous = services.db.client
+              .prepare(
+                'SELECT coalesce(sum(amount_usd),0) AS spent FROM spend_charges WHERE id LIKE ?',
+              )
+              .get(`${ledgerRequestId}:%`) as { spent: number };
+            if (previous.spent + amountUsd > input.key.requestCostCapUsd)
+              throw new BudgetError(
+                'This verification request would exceed its approved test cost ceiling.',
+              );
+          }
           const global = services.settings.get('global') as
             | {
                 paidCaps?: {
@@ -753,6 +1045,10 @@ export function createGatewayController(
               maxTokens: outputTokens,
               ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
               ...(input.jsonMode ? { jsonMode: true } : {}),
+              ...(input.structuredOutput ? { structuredOutput: input.structuredOutput } : {}),
+              ...(input.parallelToolCalls === undefined
+                ? {}
+                : { parallelToolCalls: input.parallelToolCalls }),
               ...(input.toolChoice === 'auto' ||
               input.toolChoice === 'none' ||
               input.toolChoice === 'required'
@@ -775,20 +1071,19 @@ export function createGatewayController(
               onObservation: requestDeps.observe,
               signal,
               onProgress: progress,
-              onText: (delta: string) => {
+              onText: async (delta: string) => {
                 if (signal.aborted) return;
-                outputState.started = true;
-                input.onText?.(delta);
+                await input.onText?.(delta);
               },
-              onToolCall: (call: { id: string; name: string; arguments: string }) => {
+              onToolCall: async (call: { id: string; name: string; arguments: string }) => {
                 if (signal.aborted) return;
-                outputState.started = true;
-                input.onToolCall?.(call);
+                await input.onToolCall?.(call);
               },
             } satisfies Parameters<typeof streamProviderChat>[0];
             if (oauth) {
               if (
                 input.jsonMode ||
+                input.structuredOutput ||
                 (input.toolChoice && input.toolChoice !== 'auto') ||
                 input.parallelToolCalls !== undefined
               )
@@ -857,7 +1152,16 @@ export function createGatewayController(
           expiresAt: services.clock.now().getTime() + 30 * 60 * 1000,
         });
         recordRequestSuccess(services, providerId, model.ref);
-        attempts[attempts.length - 1] = { model: model.ref, status: 'served' };
+        attempts[attempts.length - 1] = {
+          model: model.ref,
+          status: 'served',
+          durationMs: Date.now() - attemptStarted,
+          costUsd: chargedUsd,
+          estimatedCost: usageMissing,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          cachedTokens: result.cachedTokens ?? 0,
+        };
         input.onAttempt?.({ servedModel: model.ref, attempts: [...attempts] });
         return {
           id: `gw-${String(Date.now())}`,
@@ -875,6 +1179,13 @@ export function createGatewayController(
             'code' in error &&
             error.code === 'unsupported_request')
         ) {
+          attempts[attempts.length - 1] = {
+            model: model.ref,
+            status: 'skipped',
+            reason: error instanceof Error ? error.message : 'Policy constraint',
+            durationMs: Date.now() - attemptStarted,
+          };
+          input.onAttempt?.({ servedModel: model.ref, attempts: [...attempts] });
           lastError = error;
           continue;
         }
@@ -915,12 +1226,15 @@ export function createGatewayController(
             ? 'cancelled'
             : ledgerKind(typed.family, typed.status, typed.message),
           statusCode: typed.status,
-          message: typed.message,
+          message: `${typed.family}; upstream HTTP ${String(typed.status ?? 'unknown')}. Request content is excluded.`,
         });
         attempts[attempts.length - 1] = {
           model: model.ref,
           status: 'failed',
           reason: typed.family,
+          durationMs: Date.now() - attemptStarted,
+          costUsd: reservation?.estimatedUsd ?? 0,
+          estimatedCost: !!reservation,
         };
         input.onAttempt?.({ servedModel: model.ref, attempts: [...attempts] });
         const providerStatus = Number(
@@ -987,7 +1301,7 @@ export function createGatewayController(
                 },
               );
         const canFallback = typed.scope !== 'none' || typed.retryable;
-        if (input.signal.aborted || outputState.started || !canFallback) throw error;
+        if (input.signal.aborted || hasVisibleOutput() || !canFallback) throw error;
       }
     }
     throw lastError instanceof Error
@@ -995,6 +1309,154 @@ export function createGatewayController(
       : new Error('All eligible providers failed before returning output');
   }
   const controller = {
+    history: (input: import('@ferry/shared').GatewayHistoryQuery = {}) =>
+      gatewayHistory(services, input),
+    request: (id: string) => gatewayRequest(services, id),
+    usage: (
+      range: import('@ferry/shared').GatewayHistoryQuery['range'],
+      groupBy: 'key' | 'provider' | 'model',
+    ) => gatewayUsageSummary(services, range, groupBy),
+    activity: () => handle?.activity() ?? { active: 0, queued: 0 },
+    async routing(keyId?: string): Promise<GatewayRoutingExplanation> {
+      const key = keyId
+        ? keys(services).find((key) => key.id === keyId && !key.revokedAt)
+        : keys(services).find((key) => !key.revokedAt);
+      const policy = key ?? createGatewayKey({ name: 'Readiness', profile: 'auto-free' }).key;
+      if (keyId && !key) throw new Error('Unknown or revoked Gateway key.');
+      const ordered = await routeableCandidates(policy, policy.profile);
+      const refs = new Set(ordered.map((model) => model.ref));
+      const excluded = availableModels()
+        .filter((model) => !refs.has(model.ref))
+        .map((model) => {
+          const saved = services.providers.get(model.providerId);
+          const definition = providerDefinition(model.providerId);
+          const reason = isOpenCodeAppModel(model)
+            ? 'Available in the OpenCode app; standard Gateway routing unavailable.'
+            : definition?.releaseState === 'Coming soon'
+              ? 'Integration coming soon.'
+              : definition?.releaseState === 'Beta' && saved?.enabled !== true
+                ? 'Beta provider requires explicit enablement.'
+                : saved?.enabled === false
+                  ? 'Provider disabled or paused.'
+                  : !allModels().includes(model.ref)
+                    ? 'Connect valid credentials, restore quota, or remove model exclusion.'
+                    : policy.allowedModels.length && !policy.allowedModels.includes(model.ref)
+                      ? 'Outside this key’s model restriction.'
+                      : 'Excluded by preset tier, capability, context, quota or spending policy.';
+          return { modelRef: model.ref, reason };
+        });
+      return {
+        profile: policy.profile,
+        summary:
+          policy.profile === 'fast'
+            ? 'Prefer responsive, sufficiently capable free models.'
+            : policy.profile === 'best'
+              ? 'Prefer suitable quality within key, preset and global spending limits.'
+              : policy.profile === 'long-context'
+                ? 'Prefer safe conversation and output headroom.'
+                : policy.profile === 'none'
+                  ? 'Use the selected model, then the allowed fallback order.'
+                  : 'Auto balances suitability, reliability, quota and response time. Free first; coding results guide edits and verification.',
+        eligible: ordered.map((model, index) => ({
+          modelRef: model.ref,
+          providerId: model.providerId,
+          order: index + 1,
+          quotaHeadroom: services.quota
+            .getWindows(model.providerId)
+            .filter(
+              (window) =>
+                window.remaining !== null &&
+                window.metric === 'requests' &&
+                (window.modelRef === null || window.modelRef === model.ref),
+            )
+            .reduce<number | null>(
+              (remaining, window) => Math.min(remaining ?? Infinity, window.remaining ?? Infinity),
+              null,
+            ),
+        })),
+        excluded,
+        lastDecision:
+          this.history({ ...(key ? { keyId: key.id } : {}), limit: 1 }).records[0] ?? null,
+      };
+    },
+    async testConnection(
+      id: string,
+      protocol: 'chat' | 'responses' | 'anthropic' = 'chat',
+      approvedCostUsd?: number,
+    ) {
+      const key = this.key(id);
+      if (!key) throw new Error('Unknown or revoked Gateway key.');
+      if (key.paidBackup && approvedCostUsd === undefined)
+        throw new Error(
+          'Use a free-only key or explicitly approve a cost ceiling for this paid-capable verification request.',
+        );
+      if (!handle) await this.start();
+      const token = this.issueInternalToken(id, approvedCostUsd);
+      const url = this.status.url;
+      if (!url) {
+        this.revokeInternalToken(token);
+        throw new Error('Gateway stopped before verification. Start it and retry.');
+      }
+      try {
+        const path =
+          protocol === 'responses'
+            ? '/v1/responses'
+            : protocol === 'anthropic'
+              ? '/v1/messages'
+              : '/v1/chat/completions';
+        const model =
+          key.profile === 'none' ? (key.allowedModels[0] ?? 'ferry/auto') : 'ferry/auto';
+        const response = await fetch(`${url}${path}`, {
+          method: 'POST',
+          headers: { 'x-ferry-internal-token': token, 'content-type': 'application/json' },
+          body: JSON.stringify(
+            protocol === 'responses'
+              ? { model, input: 'Reply with Ready.', max_output_tokens: 32 }
+              : {
+                  model,
+                  messages: [{ role: 'user', content: 'Reply with Ready.' }],
+                  max_tokens: 32,
+                },
+          ),
+          signal: AbortSignal.timeout(150_000),
+        });
+        await response.arrayBuffer();
+        const traceId = response.headers.get('x-ferry-trace-id');
+        const row = traceId
+          ? (services.db.client
+              .prepare(
+                "SELECT data_json FROM gateway_requests WHERE json_extract(data_json,'$.traceId')=?",
+              )
+              .get(traceId) as { data_json: string } | undefined)
+          : undefined;
+        const record = row ? (JSON.parse(row.data_json) as GatewayRequestRecord) : undefined;
+        return {
+          ok: response.ok,
+          requestId: record?.id ?? null,
+          model: record?.modelRef ?? null,
+          message: response.ok
+            ? 'A real request through this key completed. Client installation still needs verification in the client.'
+            : `Gateway request failed (${String(response.status)}). Check request details and provider readiness.`,
+        };
+      } finally {
+        this.revokeInternalToken(token);
+      }
+    },
+    async rotateKey(id: string, saveSecret: (secret: string) => Promise<void>) {
+      const current = keys(services).find((key) => key.id === id && !key.revokedAt);
+      if (!current) throw new Error('Unknown or revoked Gateway key.');
+      const created = createGatewayKey(current, services.clock.now());
+      await saveSecret(created.secret);
+      const latest = keys(services).find((key) => key.id === id && !key.revokedAt);
+      if (!latest) throw new Error('This key was revoked during rotation.');
+      runtime.store.put({ ...latest, hash: created.key.hash });
+      for (const [token, grant] of internalTokens)
+        if (grant.keyId === id) internalTokens.delete(token);
+      return {
+        key: { id: current.id, name: current.name, profile: current.profile },
+        secret: created.secret,
+      };
+    },
     requests() {
       return (
         services.db.client
@@ -1003,43 +1465,30 @@ export function createGatewayController(
       ).map((row) => JSON.parse(row.data_json) as GatewayRequestRecord);
     },
     get status() {
-      return handle
-        ? {
-            running: true,
-            port: handle.port,
-            host: handle.host,
-            url: `http://${handle.host === '0.0.0.0' ? '127.0.0.1' : handle.host}:${String(handle.port)}`,
-          }
-        : { running: false, port: null, host: null, url: null };
+      return statusNow();
     },
     async start(settings = gatewaySettings(services)) {
-      if (handle) return this.status;
-      handle = await startGateway({
-        runtime,
-        internalTokens,
-        port: settings.port,
-        allowLan: settings.allowLan,
-        allowLanConfirmed: settings.allowLan,
-      });
-      return this.status;
+      return await serialize(() => startNow(settings));
     },
     async stop() {
-      await handle?.close();
-      handle = undefined;
-      return this.status;
+      return await serialize(stopNow);
     },
     createKey(name: string, profile: string) {
       const created = createGatewayKey({ name, profile });
       runtime.store.put(created.key);
       return { ...created, key: { ...created.key, hash: undefined } };
     },
-    issueInternalToken(id: string) {
+    issueInternalToken(id: string, testCostCapUsd?: number) {
       const key = keys(services).find((entry) => entry.id === id && !entry.revokedAt);
       if (!key) throw new Error(`Gateway key not found: ${id}`);
       const token = randomBytes(32).toString('base64url');
       for (const [value, grant] of internalTokens)
         if (grant.expiresAt <= Date.now()) internalTokens.delete(value);
-      internalTokens.set(token, { keyId: id, expiresAt: Date.now() + 10 * 60_000 });
+      internalTokens.set(token, {
+        keyId: id,
+        expiresAt: Date.now() + 10 * 60_000,
+        ...(testCostCapUsd === undefined ? {} : { testCostCapUsd }),
+      });
       return token;
     },
     key(id: string) {
@@ -1057,6 +1506,7 @@ export function createGatewayController(
         Pick<
           GatewayKey,
           | 'paidBackup'
+          | 'client'
           | 'budgetUsd'
           | 'profile'
           | 'allowedModels'
@@ -1084,6 +1534,18 @@ export function createGatewayController(
       return keys(services).map(({ hash: _hash, ...key }) => ({
         ...key,
         usage: runtime.store.usage(key.id),
+        budgetUsedUsd: (
+          services.db.client
+            .prepare(
+              'SELECT coalesce(sum(amount_usd),0) AS spent FROM (SELECT amount_usd FROM spend_charges WHERE key_id=? AND at >= ? UNION ALL SELECT amount_usd FROM spend_reservations WHERE key_id=? AND at >= ?)',
+            )
+            .get(
+              key.id,
+              `${services.clock.now().toISOString().slice(0, 7)}-01T00:00:00.000Z`,
+              key.id,
+              `${services.clock.now().toISOString().slice(0, 7)}-01T00:00:00.000Z`,
+            ) as { spent: number }
+        ).spent,
       }));
     },
     revokeKey(id: string) {
@@ -1098,12 +1560,37 @@ export function createGatewayController(
       return gatewaySettings(services);
     },
     async setSettings(settings: GatewaySettings) {
-      services.settings.put('gateway-settings', settings);
-      if (handle) await this.stop();
-      if (settings.enabled) await this.start(settings);
-      return { ...settings, status: this.status };
+      return await serialize(async () => {
+        const previous = gatewaySettings(services),
+          wasRunning = !!handle;
+        services.settings.put('gateway-settings', settings);
+        try {
+          if (handle) await stopNow();
+          if (settings.enabled) await startNow(settings);
+          return { ...settings, status: statusNow() };
+        } catch (error) {
+          services.settings.put('gateway-settings', previous);
+          if (wasRunning) await startNow(previous);
+          throw error;
+        }
+      });
     },
   };
+  async function startNow(settings: GatewaySettings) {
+    handle ??= await startGateway({
+      runtime,
+      internalTokens,
+      port: settings.port,
+      allowLan: settings.allowLan,
+      allowLanConfirmed: settings.allowLan,
+    });
+    return statusNow();
+  }
+  async function stopNow() {
+    await handle?.close();
+    handle = undefined;
+    return statusNow();
+  }
   controllers.set(services, controller);
   return controller;
 }

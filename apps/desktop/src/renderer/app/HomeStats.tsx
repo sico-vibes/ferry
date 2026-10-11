@@ -1,10 +1,10 @@
 import { useMemo } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { SkeletonRows, SkeletonChart, SkeletonStat, ProviderLogo, UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { activityLevel, summarizeUsage } from './usageSummary';
 import { formatTokens } from './modelFacts';
-import { ZenSetupPrompt } from './ZenSetupPrompt';
 
 const count = new Intl.NumberFormat('en');
 
@@ -124,31 +124,45 @@ function UsageStats() {
 
 export function HomeStats() {
   const client = useFerryClient();
-  const { data: providers = [] } = useQuery({
-    queryKey: ['providers'],
-    queryFn: () => client.providers.list(),
+  const navigate = useNavigate();
+  const { data: gateway } = useQuery({
+    queryKey: ['gateway-settings'],
+    queryFn: () => client.gateway.settings(),
+    refetchInterval: 5000,
   });
-  const ready = providers.some(
-    (p) =>
-      ['opencode', 'opencode-zen'].includes(p.id) &&
-      p.enabled &&
-      p.keyStatus === 'valid' &&
-      p.health !== 'down' &&
-      !p.freeTierUnsupported,
-  );
-  if (ready) return <UsageStats />;
+  const { data: routing } = useQuery({
+    queryKey: ['gateway-routing', 'default'],
+    queryFn: () => client.gateway.routing(),
+    refetchInterval: 10000,
+  });
+  const { data: keys = [] } = useQuery({
+    queryKey: ['gateway-keys'],
+    queryFn: () => client.gateway.listKeys(),
+  });
+  const state = !gateway
+    ? 'Checking Gateway…'
+    : !gateway.status.running
+      ? 'Gateway stopped'
+      : !routing?.eligible.length
+        ? 'Gateway needs a provider'
+        : 'Gateway ready';
+  const next = !keys.some((key) => !key.revokedAt)
+    ? 'Create an API key'
+    : !routing?.eligible.length
+      ? 'Check provider readiness'
+      : 'Connect a client';
   return (
-    <UiV2.Tabs defaultValue="overview" className="grid gap-3">
-      <UiV2.TabsList aria-label="New chat overview">
-        <UiV2.TabsTrigger value="overview">Overview</UiV2.TabsTrigger>
-        <UiV2.TabsTrigger value="zen">OpenCode Zen</UiV2.TabsTrigger>
-      </UiV2.TabsList>
-      <UiV2.TabsContent value="overview">
-        <UsageStats />
-      </UiV2.TabsContent>
-      <UiV2.TabsContent value="zen">
-        <ZenSetupPrompt />
-      </UiV2.TabsContent>
-    </UiV2.Tabs>
+    <div className="grid gap-4">
+      <section aria-label="Gateway readiness" className="setting-row">
+        <div>
+          <strong>{state}</strong>
+          <small>Use Auto for your agent. Use Gateway to connect external apps.</small>
+        </div>
+        <UiV2.Button variant="secondary" onClick={() => void navigate({ to: '/gateway' })}>
+          {next}
+        </UiV2.Button>
+      </section>
+      <UsageStats />
+    </div>
   );
 }

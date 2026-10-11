@@ -30,6 +30,7 @@ const storageMigrationFiles = [
   '0006_outbox_claims.sql',
   '0007_request_failures.sql',
   '0008_gateway_safety.sql',
+  '0009_gateway_history.sql',
 ];
 export const STORAGE_SCHEMA_VERSION = storageMigrationFiles.length;
 /** Observes successful local writes so cloud mode can persist them for later sync. */
