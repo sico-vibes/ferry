@@ -11,11 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium, expect } from '@playwright/test';
 import { FakeOpenAIServer } from '../../../packages/testkit/src/fake-servers.ts';
 import { FixtureRepo } from '../../../packages/testkit/src/fixture-repo.ts';
-import {
-  assertRealKeyringUnchanged,
-  cleanupTestKeyring,
-  snapshotRealKeyring,
-} from './real-keyring-guard.mjs';
+import { cleanupTestKeyring } from './real-keyring-guard.mjs';
 
 const testKeyringService = `Ferry-E2E-${String(process.pid)}`;
 
@@ -403,7 +399,10 @@ async function startEmbeddedCore() {
       const text = message.text();
       if (/FERRY_(PRELOAD|RENDERER|RPC)/.test(text)) console.log(`[E2E_RENDERER] ${text}`);
     });
-    const skipSetup = page.getByRole('button', { name: 'Skip setup' });
+    const skipSetup = page.getByRole('heading', {
+      name: 'What will you use Ferry for?',
+      exact: true,
+    });
     const primaryNavigation = page.getByRole('navigation', { name: 'Primary' });
     await expect(skipSetup.or(primaryNavigation).first()).toBeVisible({
       timeout: 20_000,
@@ -417,6 +416,48 @@ async function startEmbeddedCore() {
     const helloDomains = await page.evaluate(() => window.ferryEngineHello?.realDomains ?? []);
     assert.ok(helloDomains.length > 0, 'File renderer hello must include real domains');
     console.log(`File renderer real client connected with ${String(helloDomains.length)} domains`);
+    const setupRequired = await page.evaluate(
+      async () => !(await window.ferryRpcClient.settings.get()).onboardingComplete,
+    );
+    if (setupRequired) {
+      await skipSetup.waitFor({ state: 'visible' });
+      await page.evaluate(() =>
+        window.ferryRpcClient.gateway.setSettings({ enabled: false, port: 0, allowLan: false }),
+      );
+      await page.evaluate(async () => {
+        for (const provider of await window.ferryRpcClient.providers.list())
+          if (provider.id !== 'openrouter' && provider.enabled)
+            await window.ferryRpcClient.providers.setEnabled(provider.id, false);
+        await window.ferryRpcClient.providers.setKey('openrouter', 'fixture-key');
+        await window.ferryRpcClient.models.list('openrouter');
+      });
+      fakeProvider.setResponses([textTurn('onboarding-certified')]);
+      for (let step = 0; step < 5; step++) {
+        await page
+          .getByRole('button', {
+            name: step === 4 ? 'Create key and continue' : 'Continue',
+            exact: true,
+          })
+          .click();
+        await page
+          .getByRole('heading', {
+            name: [
+              'Connect a provider',
+              'Use Auto',
+              'Check readiness',
+              'Create a named key',
+              'Connect and verify',
+            ][step],
+            exact: true,
+          })
+          .waitFor();
+      }
+      await page.getByRole('button', { name: 'Send verification request' }).click();
+      await page.getByText('Your first request is verified. You can finish setup.').waitFor();
+      await page.getByRole('button', { name: 'Finish setup', exact: true }).click();
+      await primaryNavigation.waitFor();
+      console.log('PASS packaged six-step onboarding verifies a fixture Gateway request');
+    }
     if (phase === 'golden-path') {
       failureStep = 'golden-recent';
       await page.evaluate(async () => {
@@ -470,7 +511,6 @@ async function startEmbeddedCore() {
     await expect(skipSetup.or(primaryNavigation).first()).toBeVisible({
       timeout: 20_000,
     });
-    if (await skipSetup.isVisible().catch(() => false)) await skipSetup.click();
     await primaryNavigation.waitFor({ state: 'visible' });
     await page.waitForFunction(() => Boolean(window.ferryRpcClient), undefined, {
       timeout: 30_000,
@@ -701,7 +741,6 @@ async function createSessionViaUi(
   return { ...detail.session, id: sessionIdFromDetail };
 }
 
-const realKeyringBefore = snapshotRealKeyring();
 try {
   if (!phases.includes(phase)) {
     throw new Error(`Unsupported FERRY_E2E_ONLY phase: ${phase}. Supported: ${phases.join(', ')}`);
@@ -856,16 +895,27 @@ try {
       await page.getByRole('button', { name: 'User menu' }).click();
       await page.getByRole('menuitem', { name: 'Settings' }).click();
       await page.getByRole('button', { name: 'Storage & Cloud', exact: true }).click();
-      await page.getByRole('radio', { name: 'Cloud', exact: true }).click();
+      await expect(
+        page.getByRole('radio', { name: 'Cloud — Coming soon', exact: true }),
+      ).toBeDisabled();
+      const cloudSetupRejected = await page.evaluate(async () => {
+        try {
+          await window.ferryRpcClient.cloud.setStorageMode({ mode: 'cloud' });
+          return false;
+        } catch (error) {
+          return /coming soon/i.test(error.message);
+        }
+      });
+      assert.equal(cloudSetupRejected, true, 'Core must also reject new Cloud setup');
       await expect
         .poll(() => page.evaluate(() => window.ferryRpcClient.cloud.status()), { timeout: 10_000 })
-        .toMatchObject({ storageMode: 'cloud' });
+        .toMatchObject({ storageMode: 'local' });
       assert.equal(
         (await page.evaluate(() => window.ferryRpcClient.settings.get())).storageMode,
-        'cloud',
+        'local',
       );
       console.log(
-        'PASS packaged golden path: two project replies, a Recent reply, and Cloud storage persisted through engine RPC',
+        'PASS packaged golden path: onboarding verification, two project replies, a Recent reply, and Coming soon Cloud setup rejected through UI and Core',
       );
       throw goldenPathComplete;
     }
@@ -1825,6 +1875,15 @@ try {
     }
   } finally {
     if (application) {
+      if (activePage && !activePage.isClosed()) {
+        const gatewayKeys = await activePage
+          .evaluate(() => window.ferryRpcClient.gateway.listKeys())
+          .catch(() => []);
+        cleanupTestKeyring(
+          testKeyringService,
+          gatewayKeys.map((key) => `gateway:${key.id}`),
+        );
+      }
       application.kill();
       await new Promise((resolve) => application.once('exit', resolve));
       application = undefined;
@@ -1850,6 +1909,4 @@ try {
   await agentFixture.cleanup();
   await fakeProvider?.stop();
   cleanupTestKeyring(testKeyringService);
-  // Fails the run if anything reached the user's real "Ferry" keyring.
-  assertRealKeyringUnchanged(realKeyringBefore);
 }

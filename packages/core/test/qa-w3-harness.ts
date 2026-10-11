@@ -52,6 +52,9 @@ export async function startHarness(options: HarnessOptions = {}): Promise<CoreHa
     transport: coreTransport,
     env: {
       ...process.env,
+      NODE_ENV: 'test',
+      FERRY_TEST_KEYRING_NAMESPACE: `ferry-core-fixture-${String(process.pid)}`,
+      FERRY_KEYRING_SERVICE: `Ferry-Core-Fixture-${String(process.pid)}`,
       [baseName]: `${server.baseUrl}/v1`,
       ...options.env,
     },

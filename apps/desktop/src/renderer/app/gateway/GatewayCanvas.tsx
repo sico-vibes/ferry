@@ -1,5 +1,5 @@
 import { SkeletonRows, SkeletonTable, SkeletonStat } from '@ferry/ui';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { GatewayRequestRecord } from '@ferry/shared';
 import { Check, Copy, KeyRound, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
@@ -74,6 +74,7 @@ function EndpointRow({ label, value, hint }: { label: string; value: string; hin
 
 /** Gateway dashboard: endpoint, setup, keys and the live request log (reference 11). */
 export function GatewayCanvas() {
+  const createButton = useRef<HTMLButtonElement>(null);
   const client = useFerryClient();
   const cache = useQueryClient();
   const pushToast = useToasts((state) => state.push);
@@ -384,6 +385,7 @@ export function GatewayCanvas() {
                   </p>
                 </div>
                 <UiV2.Button
+                  ref={createButton}
                   onClick={() => {
                     setCreateOpen(true);
                   }}
@@ -527,7 +529,13 @@ export function GatewayCanvas() {
         </UiV2.Tabs>
       </div>
       <UiV2.Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <UiV2.DialogContent className="v2-gateway-dialog">
+        <UiV2.DialogContent
+          className="v2-gateway-dialog"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            createButton.current?.focus();
+          }}
+        >
           <UiV2.DialogHeader>
             <UiV2.DialogTitle>Create a Ferry key</UiV2.DialogTitle>
             <UiV2.DialogDescription>
@@ -582,7 +590,13 @@ export function GatewayCanvas() {
           if (!open) setSecret('');
         }}
       >
-        <UiV2.DialogContent className="v2-gateway-dialog">
+        <UiV2.DialogContent
+          className="v2-gateway-dialog"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            createButton.current?.focus();
+          }}
+        >
           <UiV2.DialogHeader>
             <UiV2.DialogTitle>Copy your key now</UiV2.DialogTitle>
             <UiV2.DialogDescription>

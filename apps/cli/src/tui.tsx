@@ -15,6 +15,7 @@ import type {
 } from '@ferry/shared';
 import { bad, good, gradient, muted, warn } from './format.js';
 import { executeSlashCommand, parseSlashCommand } from './slash.js';
+import { controlCPresses } from './interrupt.js';
 import { Picker, type PickerOption } from './components/picker.js';
 import { Composer } from './components/composer.js';
 import { SettingsPanel } from './components/settings-panel.js';
@@ -98,7 +99,11 @@ export function Chat({
   };
   const pressCtrlC = () => {
     ctrlC.current++;
-    if (ctrlC.current >= 2) exit();
+    if (ctrlC.current >= 2) {
+      if (ctrlTimer.current) clearTimeout(ctrlTimer.current);
+      exit();
+      return;
+    }
     if (ctrlTimer.current) clearTimeout(ctrlTimer.current);
     ctrlTimer.current = setTimeout(() => {
       ctrlC.current = 0;
@@ -259,7 +264,11 @@ export function Chat({
     };
   }, [client, input, project, passwordEmail]);
   useInput((value, key) => {
-    if (key.ctrl && value === 'c') pressCtrlC();
+    const interrupts = controlCPresses(value, key.ctrl);
+    if (interrupts) {
+      for (let index = 0; index < interrupts; index++) pressCtrlC();
+      return;
+    }
     if (panel || settingsOpen || connectOpen) return;
     if (key.escape && running && sessionRef.current)
       void client.sessions.cancel(sessionRef.current).catch(showError);

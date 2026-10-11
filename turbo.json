@@ -1,5 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalEnv": ["FERRY_KEYRING_SERVICE", "FERRY_TEST_KEYRING_NAMESPACE", "FERRY_BROWSER_PATH"],
   "tasks": {
     "typecheck": { "dependsOn": ["^typecheck"] },
     "lint": {

@@ -45,7 +45,8 @@ describe('NSIS update preservation', () => {
   it('stops every process from the install folder and waits before files are removed', () => {
     const init = macro('customUnInit');
     // A Ferry hidden in the tray (and its engine processes) must be gone, not just signalled.
-    expect(init).toContain("$$dir='$INSTDIR'");
+    expect(init).toContain('$$dir=$$env:FERRY_UNINSTALL_DIRECTORY');
+    expect(init).toContain('kernel32::SetEnvironmentVariable');
     expect(init).toContain('Stop-Process -Id $$_.ProcessId -Force');
     expect(init).toContain('while ((Get-Date) -lt $$deadline)');
     expect(init).toContain('[StringComparison]::OrdinalIgnoreCase');
