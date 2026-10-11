@@ -8,6 +8,7 @@ import { createServer } from 'node:net';
 import { join, resolve, relative } from 'node:path';
 import { chromium } from '@playwright/test';
 import { cleanupTestKeyring } from './real-keyring-guard.mjs';
+import { powershellUtf8Arguments } from './powershell-utf8.mjs';
 
 if (process.platform !== 'win32') throw new Error('The installer smoke requires Windows.');
 const args = process.argv.slice(2);
@@ -116,11 +117,12 @@ async function run(command, args, overrides = {}) {
   });
 }
 function query(script) {
-  const result = spawnSync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', script],
-    { encoding: 'utf8', windowsHide: true, env, timeout: 30_000 },
-  );
+  const result = spawnSync('powershell.exe', powershellUtf8Arguments(script), {
+    encoding: 'utf8',
+    windowsHide: true,
+    env,
+    timeout: 30_000,
+  });
   if (result.error || result.status !== 0) throw new Error('Isolated registry query failed');
   return result.stdout.trim();
 }
