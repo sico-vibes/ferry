@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { createGatewayController } from '../gateway.js';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
+import { GatewayHistoryQuerySchema } from '@ferry/shared';
 
 const settingsSchema = z.object({
   enabled: z.boolean(),
@@ -17,6 +18,9 @@ const idSchema = z.string().min(1).max(64);
 const updateSchema = z.object({
   id: idSchema,
   patch: z.object({
+    paidBackup: z.boolean().optional(),
+    client: z.string().max(80).optional(),
+    budgetUsd: z.number().positive().nullable().optional(),
     profile: z.string().optional(),
     allowedModels: z.array(z.string()).optional(),
     rateLimit: z.number().int().positive().nullable().optional(),
@@ -66,6 +70,9 @@ export function register(host: CoreHost, services: FerryServices): void {
     updateKey(value: unknown) {
       const parsed = updateSchema.parse(value);
       const patch = {
+        ...(parsed.patch.client === undefined ? {} : { client: parsed.patch.client }),
+        ...(parsed.patch.paidBackup === undefined ? {} : { paidBackup: parsed.patch.paidBackup }),
+        ...(parsed.patch.budgetUsd === undefined ? {} : { budgetUsd: parsed.patch.budgetUsd }),
         ...(parsed.patch.profile === undefined ? {} : { profile: parsed.patch.profile }),
         ...(parsed.patch.allowedModels === undefined
           ? {}
@@ -97,6 +104,37 @@ export function register(host: CoreHost, services: FerryServices): void {
       return gateway.listKeys();
     },
     requests: () => gateway.requests(),
+    history: (value: unknown = {}) => gateway.history(GatewayHistoryQuerySchema.parse(value)),
+    request: (value: unknown) => gateway.request(idSchema.parse(value)),
+    usage: (value: unknown = {}) => {
+      const parsed = z
+        .object({
+          range: z.enum(['24h', '7d', '30d']).default('24h'),
+          groupBy: z.enum(['key', 'provider', 'model']).default('key'),
+        })
+        .parse(value);
+      return gateway.usage(parsed.range, parsed.groupBy);
+    },
+    activity: () => gateway.activity(),
+    routing: (value: unknown) =>
+      gateway.routing(value === undefined ? undefined : idSchema.parse(value)),
+    async rotateKey(value: unknown) {
+      const id = idSchema.parse(value);
+      const created = await gateway.rotateKey(id, (secret) =>
+        services.gatewaySecrets.set(`gateway:${id}`, secret),
+      );
+      return created;
+    },
+    testConnection: (value: unknown) => {
+      const parsed = z
+        .object({
+          id: idSchema,
+          protocol: z.enum(['chat', 'responses', 'anthropic']).default('chat'),
+          approvedCostUsd: z.number().positive().max(1).optional(),
+        })
+        .parse(value);
+      return gateway.testConnection(parsed.id, parsed.protocol, parsed.approvedCostUsd);
+    },
     async start() {
       return await gateway.start();
     },

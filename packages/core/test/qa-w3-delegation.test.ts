@@ -162,8 +162,10 @@ describe('QA W3 delegation: trust, isolation and lifecycle', () => {
   }, 40_000);
 
   it('detects ACP agents over the delegation RPC with registry metadata', async () => {
-    const { h } = await setupDelegation();
+    const { h, capture } = await setupDelegation();
     try {
+      // Discovery tests execute fixture CLIs only; installed agents may invoke updaters.
+      h.services.env.PATH = dirname(capture);
       const agents = await h.rpc.delegation.detectAgents();
       expect(agents.map(({ id }) => id)).toContain('opencode');
       expect(

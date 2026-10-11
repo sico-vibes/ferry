@@ -1,5 +1,12 @@
 import { ProviderIdSchema } from '@ferry/shared';
-import type { FallbackChainEntry, ModelInfo, Profile, Provider, StepKind } from '@ferry/shared';
+import type {
+  FallbackChainEntry,
+  ModelInfo,
+  Profile,
+  Provider,
+  RoutingSettings,
+  StepKind,
+} from '@ferry/shared';
 import type { CapacityView } from './index.js';
 import { explainModelRouting, scoreModels } from './index.js';
 import { mayUsePromptsForTraining } from './data-use.js';
@@ -122,10 +129,12 @@ export function resolveFallbackChain(input: {
   profile: Profile;
   step?: StepKind;
   inputTokens: number;
+  requiresTools?: boolean;
   verifiedModelRefs?: readonly string[];
   avoidTrainingProviders?: boolean;
   trialOptInProviders?: readonly string[];
   textToolFallbackEnabled?: boolean;
+  routing?: RoutingSettings;
   now?: number;
 }): ResolvedFallbackChain {
   const now = input.now ?? Date.parse(input.capacity.now ?? new Date().toISOString());
@@ -195,7 +204,10 @@ export function resolveFallbackChain(input: {
           coolingUntil = provider.cooldownUntil;
           continue;
         }
-        if (!modelSupportsTools(model, input.textToolFallbackEnabled ?? false)) {
+        if (
+          (input.requiresTools ?? true) &&
+          !modelSupportsTools(model, input.textToolFallbackEnabled ?? false)
+        ) {
           diagnostics.push({
             provider: entry.provider,
             pattern,
@@ -220,9 +232,10 @@ export function resolveFallbackChain(input: {
           capacity: input.capacity,
           profile: input.profile,
           step: input.step ?? 'plan',
-          estimate: { inputTokens: input.inputTokens, requiresTools: true },
+          estimate: { inputTokens: input.inputTokens, requiresTools: input.requiresTools ?? true },
           verifiedModelRefs: verified,
           textToolFallbackEnabled: input.textToolFallbackEnabled ?? false,
+          ...(input.routing ? { routing: input.routing } : {}),
           ...(input.trialOptInProviders ? { trialOptInProviders: input.trialOptInProviders } : {}),
         } as const;
         if (!scoreModels(scoreInput).length) {
@@ -287,7 +300,5 @@ export function resolveFallbackChain(input: {
 
 export function chainForProfile(profile: Profile): readonly FallbackChainEntry[] {
   if (profile.fallbackChain) return profile.fallbackChain;
-  return profile.name === 'Auto-Free' || profile.name === 'Best Available'
-    ? DEFAULT_AUTO_FREE_CHAIN
-    : [];
+  return profile.name === 'Auto-Free' ? DEFAULT_AUTO_FREE_CHAIN : [];
 }

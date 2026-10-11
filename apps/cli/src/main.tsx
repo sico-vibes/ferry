@@ -1,3 +1,6 @@
+import { canonicalProviderId, providerDefinition } from '@ferry/shared';
+import { Writable } from 'node:stream';
+import { runOAuthLogin } from './oauth-login.js';
 import { defineCommand, runMain } from 'citty';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -372,6 +375,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     });
     if (toolCommand && isSupportedTool(tool)) {
       const options = {
+        native: command === 'run' && flags.values.native === true,
         keyId: stringFlag(flags.values.key),
         model: stringFlag(flags.values.model),
         preview: flags.values[command === 'run' ? 'dry-run' : 'print'] === true,
@@ -650,7 +654,9 @@ async function assertLocalProvidersConfigured(client: FerryClient): Promise<void
 function isProviderConfigured(provider: Provider): boolean {
   return (
     provider.enabled &&
-    (provider.keyStatus !== 'missing' || (!provider.keyRequired && provider.modelCount > 0))
+    (provider.keyRequired === false
+      ? provider.modelCount > 0
+      : provider.keyStatus !== 'missing' && provider.keyStatus !== 'not_applicable')
   );
 }
 
@@ -859,6 +865,19 @@ function gatewayLimitPatch(
   options: Record<string, string | boolean>,
 ): NonNullable<Parameters<FerryClient['gateway']['updateKey']>[0]['patch']> {
   const patch: NonNullable<Parameters<FerryClient['gateway']['updateKey']>[0]['patch']> = {};
+  if (options['paid-backup'] !== undefined) {
+    const value = options['paid-backup'];
+    if (value !== true && value !== 'true' && value !== 'false')
+      throw new CliError(2, 'Use --paid-backup true|false.');
+    patch.paidBackup = value === true || value === 'true';
+  }
+  if (options['budget-usd'] !== undefined) {
+    const value = options['budget-usd'];
+    const amount = typeof value === 'string' && value.trim() ? Number(value) : NaN;
+    if (!Number.isFinite(amount) || amount <= 0)
+      throw new CliError(2, '--budget-usd must be a positive monthly dollar limit.');
+    patch.budgetUsd = amount;
+  }
   if (options['allowed-models'] !== undefined) {
     const value = options['allowed-models'];
     if (typeof value !== 'string' || !value.trim())
@@ -1361,7 +1380,10 @@ async function quotaWatch(client: FerryClient, json: boolean): Promise<number> {
   });
 }
 export async function providers(client: FerryClient, args: string[], json = false) {
-  const [action, id] = args;
+  const [action, rawId] = args;
+  const id = rawId ? canonicalProviderId(rawId) : undefined;
+  if (id && providerDefinition(id)?.releaseState === 'Coming soon' && action !== 'list')
+    throw new CliError(2, `${id} is coming soon.`);
   if (action === 'resume' && id) {
     const provider = await client.providers.resume(ProviderIdSchema.parse(id));
     writeResult(json, provider, `${provider.name} resumed\n`);
@@ -1462,22 +1484,61 @@ async function oauth(
       }
       if (answer !== 'y' && answer !== 'yes') return 2;
     }
-    const off = client.on('oauth.progress', (event) => {
-      if (event.id !== id || event.type === 'success' || event.type === 'error') return;
-      const message =
-        event.type === 'open_url'
-          ? `Open ${event.url}${event.instructions ? `\n${event.instructions}` : ''}`
-          : `Enter ${event.userCode} at ${event.verificationUri}`;
-      if (json)
-        process.stdout.write(`${JSON.stringify({ type: 'oauth.progress', payload: event })}\n`);
-      else process.stderr.write(`${message}\n`);
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    process.once('SIGINT', cancel);
+    process.once('SIGTERM', cancel);
+    let hidden = false;
+    const output = new Writable({
+      write(chunk: Buffer, _encoding, callback) {
+        if (!hidden) process.stderr.write(chunk);
+        callback();
+      },
     });
+    const terminal = createInterface({
+      input: process.stdin,
+      output,
+      terminal: process.stdin.isTTY,
+    });
+    terminal.on('SIGINT', cancel);
+    const inputLines = process.stdin.isTTY ? null : terminal[Symbol.asyncIterator]();
     try {
-      await client.oauth.login(provider.id);
+      await runOAuthLogin(client, id, {
+        signal: controller.signal,
+        write: (message) => {
+          if (!json) process.stderr.write(`${message}\n`);
+        },
+        event: (event) => {
+          if (json)
+            process.stdout.write(`${JSON.stringify({ type: 'oauth.progress', payload: event })}\n`);
+        },
+        read: async (prompt, signal) => {
+          if (inputLines) {
+            process.stderr.write(`${prompt.message}: `);
+            const next = await inputLines.next();
+            if (next.done)
+              throw new Error(
+                'Authorization input ended. Run interactively or provide an input line for each prompt.',
+              );
+            signal.throwIfAborted();
+            return next.value;
+          }
+          hidden = prompt.kind === 'secret';
+          if (hidden) process.stderr.write(`${prompt.message}: `);
+          try {
+            return await terminal.question(hidden ? '' : `${prompt.message}: `, { signal });
+          } finally {
+            if (hidden) process.stderr.write('\n');
+            hidden = false;
+          }
+        },
+      });
       writeResult(json, { providerId: id, connected: true }, `Logged in to ${provider.name}.\n`);
       return 0;
     } finally {
-      off();
+      terminal.close();
+      process.removeListener('SIGINT', cancel);
+      process.removeListener('SIGTERM', cancel);
     }
   }
   if (action === 'logout' && id) {

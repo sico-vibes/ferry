@@ -1,3 +1,5 @@
+import { providerBaseUrl } from './provider-endpoints.js';
+import { isOpenCodeAppModel } from '@ferry/shared';
 import {
   createStepGenerator,
   type AgentEvent,
@@ -10,6 +12,8 @@ import type { TraceContext } from '@ferry/shared';
 import { ProviderKeyRotation, resolveProviderRequestOverrides } from '@ferry/providers';
 import {
   ProviderIdSchema,
+  oauthProviderId,
+  providerDefinition,
   ProviderSchema,
   RoutingSettingsSchema,
   UsageRecordSchema,
@@ -31,7 +35,12 @@ import {
   type CapacityView,
 } from '@ferry/router';
 import { oauthModelCatalog, streamOAuthStep } from '@ferry/oauth';
-import { hasUsableProviderKey, recordProviderKeyFailure, type FerryServices } from './services.js';
+import {
+  hasUsableProviderKey,
+  recordProviderKeyFailure,
+  permitsKeylessProvider,
+  type FerryServices,
+} from './services.js';
 import { z } from 'zod';
 import {
   classifyLedgerError,
@@ -52,6 +61,7 @@ export function invalidateSessionProviderKeyCache(
 }
 
 function hasProviderKey(services: FerryServices, providerId: string): boolean {
+  if (permitsKeylessProvider(services, providerId)) return true;
   let cache = providerKeyPresence.get(services);
   if (!cache) {
     cache = new Map();
@@ -71,7 +81,12 @@ export interface ModelGateway {
   providerAffinityKey(providerId: string, sessionId: string): string | undefined;
   providerKeyIds(providerId: string): readonly string[];
   unavailableProviderKeyIds(providerId: string, modelRef?: string): readonly string[];
-  resolveCandidates(profile: Profile, stepKind: StepKind, inputTokens?: number): ModelInfo[];
+  resolveCandidates(
+    profile: Profile,
+    stepKind: StepKind,
+    inputTokens?: number,
+    requiresTools?: boolean,
+  ): ModelInfo[];
   recordHandoff(sessionId: string, reason: string): void;
   probeHeuristicCooldowns(): Promise<void>;
 }
@@ -106,8 +121,7 @@ export function createSessionDependencies(
   const keyRetryAfter = new Map<string, string>();
   const providerBaseUrls = Object.fromEntries(
     services.catalog.providers.flatMap(({ provider }) => {
-      const envName = `FERRY_PROVIDER_BASE_URL_${provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-      const baseUrl = services.env[envName];
+      const baseUrl = providerBaseUrl(services, provider);
       return baseUrl ? [[provider, baseUrl]] : [];
     }),
   );
@@ -128,12 +142,17 @@ export function createSessionDependencies(
         const id = ProviderIdSchema.parse(provider);
         const saved = services.providers.get(id);
         const keyPresent = hasProviderKey(services, id);
-        const enabled = saved?.enabled ?? keyPresent;
-        const keyStatus: Provider['keyStatus'] = keyPresent
-          ? (saved?.keyStatus ?? 'unchecked')
-          : key_required === false && enabled
+        const enabled = saved?.enabled ?? (keyPresent || key_required === false);
+        const keyStatus: Provider['keyStatus'] =
+          permitsKeylessProvider(services, id) &&
+          !services.providerKeys.get(id) &&
+          !services.providerKeyEntries.list(id).length
             ? 'not_applicable'
-            : 'missing';
+            : keyPresent
+              ? (saved?.keyStatus ?? 'unchecked')
+              : key_required === false && enabled
+                ? 'not_applicable'
+                : 'missing';
         const cooldown = services.cooldowns.get(id);
         const activeCooldown =
           cooldown && Date.parse(cooldown.until) > services.clock.now().getTime();
@@ -190,7 +209,7 @@ export function createSessionDependencies(
       return ProviderSchema.parse({
         id,
         name:
-          id === 'anthropic'
+          oauthProviderId(id) === 'anthropic'
             ? 'Anthropic Claude Pro/Max'
             : id === 'openai-codex'
               ? 'OpenAI ChatGPT'
@@ -411,10 +430,13 @@ export function createSessionDependencies(
       return selected?.providerId === providerId ? selected.keyId : undefined;
     },
     providerKeyIds(providerId) {
+      if (permitsKeylessProvider(services, providerId)) return [providerId];
       const entries = services.providerKeyEntries.list(providerId);
       return entries.length ? entries.map((entry) => entry.id) : [providerId];
     },
     unavailableProviderKeyIds(providerId, modelRef) {
+      if (permitsKeylessProvider(services, providerId))
+        return health.tracker.available(providerId, modelRef, providerId) ? [] : [providerId];
       const now = services.clock.now().getTime();
       const entries = services.providerKeyEntries.list(providerId);
       if (!entries.length && !health.tracker.available(providerId, modelRef, providerId))
@@ -438,15 +460,21 @@ export function createSessionDependencies(
     async probeHeuristicCooldowns() {
       await health.recover();
     },
-    resolveCandidates(profile, stepKind, inputTokens = 1) {
+    resolveCandidates(profile, stepKind, inputTokens = 1, requiresTools = true) {
       const configuredProviders = services.catalog.providers.filter(
         ({ provider, key_required }) => {
           const saved = services.providers.get(provider);
+          const definition = providerDefinition(provider);
+          if (
+            definition?.releaseState === 'Coming soon' ||
+            (definition?.releaseState === 'Beta' && saved?.enabled !== true)
+          )
+            return false;
           const enabled = saved?.enabled ?? hasProviderKey(services, provider);
           const entries = services.providerKeyEntries.list(provider);
           const availableKey =
             hasUsableProviderKey(services, provider) &&
-            (entries.length === 0
+            (permitsKeylessProvider(services, provider) || entries.length === 0
               ? health.tracker.available(provider, undefined, provider)
               : entries.some(
                   (entry) =>
@@ -467,6 +495,7 @@ export function createSessionDependencies(
         const saved = services.providers.get(provider);
         return services.models
           .list(provider)
+          .filter((model) => !isOpenCodeAppModel(model))
           .filter(
             (model) =>
               !saved?.excludedModelRefs?.includes(model.ref) &&
@@ -573,10 +602,12 @@ export function createSessionDependencies(
         profile,
         inputTokens,
         step: stepKind,
+        requiresTools,
         verifiedModelRefs,
         avoidTrainingProviders: routingSettings().avoidTrainingProviders,
         trialOptInProviders: routingSettings().trialOptInProviders,
         textToolFallbackEnabled: routingSettings().textToolFallbackEnabled,
+        routing: routingSettings(),
         now: services.clock.now().getTime(),
       });
       const chainRefs = new Set(chainResult.models.map((model) => model.ref));
@@ -590,23 +621,54 @@ export function createSessionDependencies(
         capacity: routingCapacity,
         profile,
         step: stepKind,
-        estimate: { inputTokens, requiresTools: true },
+        estimate: { inputTokens, requiresTools },
         preferredModelRefs,
         verifiedModelRefs,
         routing: routingSettings(),
         trialOptInProviders: routingSettings().trialOptInProviders,
         textToolFallbackEnabled: routingSettings().textToolFallbackEnabled,
         reliability: reliability(),
+        codingObservations: codingObservations(services),
+        stats: modelRoutingStats(services),
         random: services.random,
       });
       const modelByRef = new Map(candidates.map((model) => [model.ref, model]));
-      return [
+      const ordered = [
         ...chainResult.models,
         ...ranked.flatMap(({ ref }) => {
           const model = modelByRef.get(ref);
           return model ? [model] : [];
         }),
       ];
+      if (profile.routingObjective === 'balanced' && ['edit', 'review'].includes(stepKind)) {
+        const observations = codingObservations(services);
+        const now = services.clock.now().getTime();
+        ordered.sort(
+          (a, b) =>
+            codingQuality(observations, b.ref, now).score -
+            codingQuality(observations, a.ref, now).score,
+        );
+        if (profile.provenance?.kind === 'provider-check') {
+          const scores = new Map(
+            scoreModels({
+              models: ordered,
+              providers: providers(),
+              capacity: routingCapacity,
+              profile,
+              step: stepKind,
+              estimate: { inputTokens, requiresTools },
+              codingObservations: observations,
+              routing: routingSettings(),
+              verifiedModelRefs,
+              stats: modelRoutingStats(services),
+            }).map((candidate) => [candidate.ref, candidate.score]),
+          );
+          ordered.sort(
+            (a, b) => (scores.get(b.ref) ?? -Infinity) - (scores.get(a.ref) ?? -Infinity),
+          );
+        }
+      }
+      return ordered;
     },
     recordHandoff(sessionId, reason) {
       services.handoffs.put({ id: newId('handoff'), sessionId, reason });
@@ -697,14 +759,14 @@ export function createSessionDependencies(
         preferredKeyId,
       );
       if (selectedKey) selectedProviderKeys.set(sessionId, { providerId, keyId: selectedKey.id });
+      else selectedProviderKeys.delete(sessionId);
+      const legacyKeyRef = services.providerKeys.get(providerId)?.keyringRef;
       const key = selectedKey
         ? await services.secrets.get(selectedKey.keyringRef)
-        : entries.length === 0 && hasProviderKey(services, providerId)
-          ? await services.secrets.get(
-              services.providerKeys.get(providerId)?.keyringRef ?? providerId,
-            )
+        : entries.length === 0 && legacyKeyRef
+          ? await services.secrets.get(legacyKeyRef)
           : undefined;
-      if (!key && entries.length > 0)
+      if (!key && entries.length > 0 && !permitsKeylessProvider(services, providerId))
         throw Object.assign(new Error(`All configured keys for ${providerId} are unavailable.`), {
           statusCode: 429,
         });
@@ -1112,3 +1174,6 @@ function isUnavailableModelError(error: unknown): boolean {
     /model_not_found|not found for account|end of life|no longer available/i.test(message)
   );
 }
+import { codingObservations } from './coding-quality.js';
+import { codingQuality } from '@ferry/router';
+import { modelRoutingStats } from './model-routing-stats.js';

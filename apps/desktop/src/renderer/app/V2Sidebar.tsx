@@ -109,6 +109,11 @@ export function V2Sidebar({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
+  const { data: gatewayState } = useQuery({
+    queryKey: ['gateway-settings'],
+    queryFn: () => client.gateway.settings(),
+    refetchInterval: 5000,
+  });
   const pausedCount = providers.filter((provider) => provider.pausedReason).length;
   const tightest = tightestDailyWindow(limits);
   return (
@@ -158,6 +163,7 @@ export function V2Sidebar({
           />
           <NavButton
             label="Gateway"
+            indicator={gatewayState?.status.running ? 'Running' : 'Stopped'}
             icon={<Network />}
             active={pathname.startsWith('/gateway')}
             collapsed={collapsed}
@@ -441,7 +447,15 @@ function NavButton({
       {indicator && (
         <span
           aria-label={indicator}
-          className="v2-paused-dot size-2 shrink-0 rounded-full bg-destructive"
+          className="v2-paused-dot size-2 shrink-0 rounded-full"
+          style={{
+            background:
+              indicator === 'Running'
+                ? 'var(--success)'
+                : indicator === 'Stopped'
+                  ? 'var(--muted-foreground)'
+                  : 'var(--destructive)',
+          }}
           role="status"
         />
       )}

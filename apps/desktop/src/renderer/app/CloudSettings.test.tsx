@@ -52,13 +52,13 @@ describe('CloudSettings', () => {
       'Email or password is incorrect.',
     );
   });
-  it('calls the storage mode operation', async () => {
+  it('marks Cloud coming soon and disables normal setup', async () => {
     const client = mount();
     const setMode = vi.spyOn(client.cloud, 'setStorageMode');
-    fireEvent.click(await screen.findByRole('radio', { name: 'Cloud' }));
-    await waitFor(() => {
-      expect(setMode).toHaveBeenCalledWith({ mode: 'cloud' });
-    });
+    const cloud = await screen.findByRole('radio', { name: 'Cloud — Coming soon' });
+    expect(cloud.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(cloud);
+    expect(setMode).not.toHaveBeenCalled();
   });
   it('calls sign out for a signed-in account', async () => {
     const client = createMockFerryClient({ behavior: 'test' });

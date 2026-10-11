@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Box, Text, useInput, usePaste } from 'ink';
 import { blue, muted } from '../colors.js';
 import { SLASH_COMMANDS } from '../slash.js';
+import { controlCPresses } from '../interrupt.js';
 
 export function commandMatches(value: string) {
   return value.startsWith('/') && !/\s/.test(value)
@@ -58,7 +59,7 @@ export function Composer({
   );
   useInput((input, key) => {
     const current = Math.min(selectionRef.current, Math.max(0, choices.length - 1));
-    if (disabled || (key.ctrl && input === 'c') || key.pageUp || key.pageDown) return;
+    if (disabled || controlCPresses(input, key.ctrl) > 0 || key.pageUp || key.pageDown) return;
     if (key.escape) {
       setDismissed(true);
       return;
@@ -136,7 +137,7 @@ export function Composer({
     }
     if (key.ctrl || key.meta || key.tab || key.leftArrow || key.rightArrow) return;
     if (key.backspace || key.delete) {
-      change(value.slice(0, -1));
+      change(Array.from(value).slice(0, -1).join(''));
       return;
     }
     // A single trailing Enter in a fast terminal chunk is submission. Multiple lines are paste.

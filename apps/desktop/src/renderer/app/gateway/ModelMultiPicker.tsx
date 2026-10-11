@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, Search, X } from 'lucide-react';
-import type { ModelInfo, Provider } from '@ferry/shared';
+import { isOpenCodeAppModel, type ModelInfo, type Provider } from '@ferry/shared';
 import { ProviderLogo, UiV2 } from '@ferry/ui';
 import { moveItem, toggleModel } from './modelSelection';
 
@@ -47,6 +47,7 @@ export function ModelMultiPicker({
   const available = models.filter(
     (model) =>
       connected.has(model.providerId) &&
+      !isOpenCodeAppModel(model) &&
       (!needle ||
         `${model.name} ${model.ref} ${providerById.get(model.providerId)?.name ?? ''}`
           .toLocaleLowerCase()
@@ -72,6 +73,9 @@ export function ModelMultiPicker({
                 </span>
                 {model && !connected.has(model.providerId) ? (
                   <small className="v2-model-multi-warning">Not connected</small>
+                ) : null}
+                {model && isOpenCodeAppModel(model) ? (
+                  <small className="v2-model-multi-warning">Available in the OpenCode app</small>
                 ) : null}
                 <UiV2.Button
                   aria-label={`Move ${model?.name ?? ref} up`}

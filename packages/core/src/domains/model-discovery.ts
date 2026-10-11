@@ -1,18 +1,15 @@
+import { providerBaseUrl } from '../provider-endpoints.js';
 import { discoverProviderModels } from '@ferry/providers';
 import { ProviderIdSchema, redactKnownSecretText } from '@ferry/shared';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { createBackgroundQueue } from '../background-queue.js';
 import { getProviderHealth } from '../provider-health.js';
+import { permitsKeylessProvider } from '../services.js';
 
 const modelsMaxAgeMs = 6 * 60 * 60 * 1000;
 const discoveryTimeoutMs = 4_000;
 const retryDelaysMs = [60_000, 120_000, 300_000, 900_000, 3_600_000] as const;
-
-function baseUrlFor(services: FerryServices, id: string): string | undefined {
-  const envName = `FERRY_PROVIDER_BASE_URL_${id.replace(/[^a-z0-9]/gi, '_').toUpperCase()}`;
-  return services.env[envName];
-}
 
 function isLoopbackUrl(value: string | undefined): boolean {
   if (!value) return false;
@@ -73,7 +70,7 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
       const current = services.providers.get(id);
       if (!limits || !current?.enabled) return;
 
-      const baseUrl = baseUrlFor(services, id);
+      const baseUrl = providerBaseUrl(services, id);
       if (services.env.NODE_ENV === 'test' && !isLoopbackUrl(baseUrl)) return;
 
       const keyEntries = services.providerKeyEntries.list(id);
@@ -91,11 +88,10 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
             Date.parse(entry.cooldownUntil) <= services.clock.now().getTime()),
       );
       // A persisted legacy key must not bypass disabled/invalid sibling entries.
-      if (keyEntries.length > 0 && !usableEntry) return;
-      const key =
-        (await services.secrets.get(
-          usableEntry?.keyringRef ?? services.providerKeys.get(id)?.keyringRef ?? id,
-        )) ?? '';
+      const anonymous = permitsKeylessProvider(services, id);
+      if (!anonymous && keyEntries.length > 0 && !usableEntry) return;
+      const keyRef = usableEntry?.keyringRef ?? services.providerKeys.get(id)?.keyringRef;
+      const key = keyRef ? ((await services.secrets.get(keyRef)) ?? '') : '';
       const keylessEnabled = limits.key_required === false && current.enabled;
       if (!key && !keylessEnabled) return;
 
@@ -109,6 +105,9 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
         if (aborted()) return;
         const models = discovered.map((model) => ({
           ...model,
+          apiAccessVerified:
+            services.models.list(id).find((saved) => saved.ref === model.ref)?.apiAccessVerified ??
+            false,
           verified: true,
           verifiedAt: fetchedAt,
         }));
@@ -152,7 +151,7 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
           errorClass === 'not_found' ||
           (error instanceof Error && error.message === 'Provider has no model list endpoint');
         const authFailure = errorClass === 'auth';
-        if (authFailure && usableEntry) {
+        if (authFailure && usableEntry && !anonymous) {
           services.providerKeyEntries.put({
             ...usableEntry,
             status: 'invalid',
@@ -163,20 +162,22 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
             updatedAt: failedAt,
           });
         }
-        const anotherUsableKey = keyEntries.some(
-          (entry) =>
-            entry.keyId !== usableEntry?.keyId &&
-            entry.enabled &&
-            entry.status !== 'invalid' &&
-            (entry.status !== 'disabled' ||
-              Boolean(
-                entry.cooldownUntil &&
-                Date.parse(entry.cooldownUntil) <= services.clock.now().getTime(),
-              )) &&
-            (entry.status !== 'rate_limited' ||
-              !entry.cooldownUntil ||
-              Date.parse(entry.cooldownUntil) <= services.clock.now().getTime()),
-        );
+        const anotherUsableKey =
+          !anonymous &&
+          keyEntries.some(
+            (entry) =>
+              entry.keyId !== usableEntry?.keyId &&
+              entry.enabled &&
+              entry.status !== 'invalid' &&
+              (entry.status !== 'disabled' ||
+                Boolean(
+                  entry.cooldownUntil &&
+                  Date.parse(entry.cooldownUntil) <= services.clock.now().getTime(),
+                )) &&
+              (entry.status !== 'rate_limited' ||
+                !entry.cooldownUntil ||
+                Date.parse(entry.cooldownUntil) <= services.clock.now().getTime()),
+          );
         const providerAuthFailure = authFailure && !anotherUsableKey;
         const updated = {
           ...saved,

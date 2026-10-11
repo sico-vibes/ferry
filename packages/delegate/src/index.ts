@@ -11,6 +11,7 @@ import type {
   SessionModeState,
 } from '@agentclientprotocol/sdk';
 import { Readable, Writable } from 'node:stream';
+import { stripVTControlCharacters } from 'node:util';
 import { DelegationRunSchema, LaneSchema, newId } from '@ferry/shared';
 import {
   canonicalizePath,
@@ -384,6 +385,7 @@ export interface AdapterResult {
   artifactsDir: string;
 }
 export interface CliDetection {
+  authStatus?: 'signed_in' | 'signed_out' | 'unknown' | 'not_checked';
   available: boolean;
   authenticated: boolean;
   version: string | null;
@@ -614,24 +616,25 @@ export interface DetectedAcpAgent extends AcpAgentDefinition {
   error?: string;
 }
 export async function detectAcpAgents(
-  options: { cwd?: string; timeoutMs?: number } = {},
+  options: { cwd?: string; timeoutMs?: number; environment?: NodeJS.ProcessEnv } = {},
 ): Promise<DetectedAcpAgent[]> {
   return await Promise.all(ACP_AGENT_REGISTRY.map((agent) => detectAcpAgent(agent.id, options)));
 }
 export async function detectAcpAgent(
   id: string,
-  options: { cwd?: string; timeoutMs?: number } = {},
+  options: { cwd?: string; timeoutMs?: number; environment?: NodeJS.ProcessEnv } = {},
 ): Promise<DetectedAcpAgent> {
   const agent = ACP_AGENT_REGISTRY.find((entry) => entry.id === id);
   if (!agent) throw new Error(`Unknown ACP agent: ${id}`);
   try {
-    const executable = await executablePath(agent.command);
+    const executable = await executablePath(agent.command, undefined, options.environment);
     const invocation = commandInvocation(executable, [...agent.detectArgs]);
     const result = await execa(invocation.file, invocation.args, {
       ...(options.cwd ? { cwd: options.cwd } : {}),
       reject: false,
       windowsHide: true,
       timeout: options.timeoutMs ?? 10_000,
+      ...(options.environment ? { env: options.environment, extendEnv: false } : {}),
       ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
     });
     return {
@@ -657,7 +660,7 @@ export function resolveAcpCommand(executable: string, args: string[]) {
 }
 export function assertSafeArguments(args: readonly string[]): void {
   for (const arg of args) {
-    const shellSyntax = /[\0\r\n%!'"`]/.test(arg) || /\$\([^)]*\)|%[^%]+%/.test(arg);
+    const shellSyntax = /[\0\r\n%!"`]/.test(arg) || /\$\([^)]*\)|%[^%]+%/.test(arg);
     if (shellSyntax) throw new Error(`Unsafe CLI argument rejected: ${arg}`);
   }
 }
@@ -1030,13 +1033,21 @@ function parseEvent(
   }
 }
 
-async function executablePath(name: string, custom?: string): Promise<string> {
+async function executablePath(
+  name: string,
+  custom?: string,
+  environment = process.env,
+): Promise<string> {
   if (custom) return custom;
   const command = name;
   if (process.platform === 'win32') {
-    for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    const searchPath =
+      environment.PATH ??
+      Object.entries(environment).find(([name]) => name.toLowerCase() === 'path')?.[1] ??
+      '';
+    for (const dir of searchPath.split(delimiter).filter(Boolean)) {
       for (const suffix of ['.cmd', '.exe', '.bat']) {
-        const candidate = join(dir, `${command}${suffix}`);
+        const candidate = join(dir.replace(/^"|"$/g, ''), `${command}${suffix}`);
         try {
           await access(candidate);
           return candidate;
@@ -1555,13 +1566,20 @@ function commandInvocation(
 
 export async function detectCli(
   name: Implementer,
-  options: { executable?: string; cwd?: string; timeoutMs?: number; checkAuth?: boolean } = {},
+  options: {
+    executable?: string;
+    cwd?: string;
+    timeoutMs?: number;
+    checkAuth?: boolean;
+    environment?: NodeJS.ProcessEnv;
+  } = {},
 ): Promise<CliDetection> {
-  const executable = await executablePath(name, options.executable);
+  const executable = await executablePath(name, options.executable, options.environment);
   const timeoutMs = options.timeoutMs ?? 15_000;
   try {
     const versionInvocation = commandInvocation(executable, ['--version']);
     const version = await execa(versionInvocation.file, versionInvocation.args, {
+      ...(options.environment ? { env: options.environment, extendEnv: false } : {}),
       ...(options.cwd ? { cwd: options.cwd } : {}),
       reject: false,
       windowsHide: true,
@@ -1578,6 +1596,7 @@ export async function detectCli(
       };
     if (options.checkAuth === false)
       return {
+        authStatus: 'not_checked',
         available: true,
         authenticated: false,
         version: version.stdout.trim() || null,
@@ -1591,15 +1610,18 @@ export async function detectCli(
           : ['auth', 'status'];
     const authInvocation = commandInvocation(executable, authArgs);
     const auth = await execa(authInvocation.file, authInvocation.args, {
+      ...(options.environment ? { env: options.environment, extendEnv: false } : {}),
       ...(options.cwd ? { cwd: options.cwd } : {}),
       reject: false,
       windowsHide: true,
       timeout: timeoutMs,
       ...(authInvocation.verbatim ? { windowsVerbatimArguments: true } : {}),
     });
+    const authStatus = cliAuthStatus(auth.stdout, auth.stderr, auth.failed);
     return {
       available: true,
-      authenticated: !auth.failed,
+      authenticated: authStatus === 'signed_in',
+      authStatus,
       version: version.stdout.trim() || null,
       executable,
     };
@@ -1612,6 +1634,27 @@ export async function detectCli(
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+export function cliAuthStatus(
+  stdout: string,
+  stderr: string,
+  failed: boolean,
+): 'signed_in' | 'signed_out' | 'unknown' {
+  const text = stripVTControlCharacters(`${stdout}\n${stderr}`);
+  if (
+    failed ||
+    /not (?:logged|signed) in|no credentials|\b0 credentials?\b|"(?:loggedIn|authenticated)"\s*:\s*false/i.test(
+      text,
+    )
+  )
+    return 'signed_out';
+  if (
+    /\b(?:logged|signed) in\b|\b[1-9]\d* credentials?\b|"(?:loggedIn|authenticated)"\s*:\s*true/i.test(
+      text,
+    )
+  )
+    return 'signed_in';
+  return 'unknown';
 }
 
 export async function runAdapter(

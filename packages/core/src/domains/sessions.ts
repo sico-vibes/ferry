@@ -1,3 +1,5 @@
+import { recordCodingOutcome, codingObservations } from '../coding-quality.js';
+import { reserveSpend } from '../spending.js';
 import { AgentLoop, SessionStore } from '@ferry/agent';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -160,6 +162,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       month: string;
     }
   >();
+  const spendHandles = new Map<string, ReturnType<typeof reserveSpend>>();
   let shuttingDown = false;
   const approvals = new Map<
     string,
@@ -185,7 +188,16 @@ export function register(host: CoreHost, services: FerryServices): void {
       ...BUILTIN_PROFILES.map((base) => {
         if (base.id === DIRECT_PROFILE_ID) return base;
         const override = builtinOverrides.find((item) => item.id === base.id);
-        return ProfileSchema.parse(override ? { ...base, ...override, builtin: true } : base);
+        return ProfileSchema.parse(
+          override
+            ? {
+                ...base,
+                fallbackChain: override.fallbackChain ?? base.fallbackChain,
+                roles: override.roles,
+                builtin: true,
+              }
+            : base,
+        );
       }),
       ...custom,
     ];
@@ -577,9 +589,18 @@ export function register(host: CoreHost, services: FerryServices): void {
             riskyRoot: isRiskyWorkspaceRoot(workspace.path),
           },
         );
-      const profile = profileList().find((item) => item.id === session.profileId);
-      if (!profile)
+      const savedProfile = profileList().find((item) => item.id === session.profileId);
+      if (!savedProfile)
         throw rpcDomainError(-32044, 'not_found', `Profile not found: ${session.profileId}`);
+      const optimizerSettings = services.settings.get('global') as
+        { globalOptimizerOverride?: boolean; optimizers?: Profile['optimizers'] } | undefined;
+      const profile =
+        savedProfile.builtin &&
+        savedProfile.id !== DIRECT_PROFILE_ID &&
+        optimizerSettings?.globalOptimizerOverride &&
+        optimizerSettings.optimizers
+          ? { ...savedProfile, optimizers: { ...optimizerSettings.optimizers } }
+          : savedProfile;
       const traceId = newTraceId();
       const traceContext = {
         traceId,
@@ -804,6 +825,7 @@ export function register(host: CoreHost, services: FerryServices): void {
               verifiedModelRefs,
               routing,
               reliability,
+              codingObservations: codingObservations(services),
               random: services.random,
             } as const;
             const chain = chainForProfile(profile);
@@ -916,8 +938,14 @@ export function register(host: CoreHost, services: FerryServices): void {
                   textDelta: event.text,
                 });
               else if (event.type === 'agent.event') host.emit('agent.event', event);
-              else if (event.type === 'run.completed') host.emit('run.completed', event);
-              else if (event.type === 'session.part') {
+              else if (event.type === 'run.completed') {
+                recordCodingOutcome(
+                  services,
+                  event.report,
+                  `${session.id}:${String(runStartedAt)}`,
+                );
+                host.emit('run.completed', event);
+              } else if (event.type === 'session.part') {
                 if (event.part.type === 'error') transcriptFailureRecorded = true;
                 host.emit('session.part', event);
                 if (event.part.type === 'approval_request' && event.part.state === 'pending')
@@ -1091,6 +1119,7 @@ export function register(host: CoreHost, services: FerryServices): void {
                     : undefined;
                 return RoutingSettingsSchema.parse(routing ?? {});
               },
+              codingObservations: codingObservations(services),
               reliabilityState:
                 z
                   .array(
@@ -1149,6 +1178,19 @@ export function register(host: CoreHost, services: FerryServices): void {
                 services.quota.acquireLease(model.providerId, model.ref, tokens) ?? null,
               probeHeuristicCooldowns: () => runtime.gateway.probeHeuristicCooldowns(),
               permissionRules: [
+                ...z
+                  .array(
+                    z.object({
+                      effect: z.enum(['allow', 'ask', 'deny']),
+                      tool: z.string(),
+                      pattern: z.string(),
+                    }),
+                  )
+                  .parse(
+                    (globalSettings as { permissionRules?: unknown } | undefined)
+                      ?.permissionRules ?? [],
+                  )
+                  .map((rule) => ({ ...rule, level: 'user' as const })),
                 ...(projectConfigApproved &&
                 rawProjectConfig?.parsed.success &&
                 hasOwnProperty(rawProjectConfig.source, 'permissionRules')
@@ -1472,12 +1514,41 @@ export function register(host: CoreHost, services: FerryServices): void {
                     };
                   }
                 }
+                if (reservationId && monetaryPaid) {
+                  try {
+                    spendHandles.set(
+                      reservationId,
+                      reserveSpend(services, {
+                        id: reservationId,
+                        profileId: profile.id,
+                        sessionId: session.id,
+                        amountUsd,
+                        profileCaps: {
+                          sessionUsd: profile.caps.sessionUsd ?? null,
+                          dailyUsd: profile.caps.dailyUsd,
+                          monthlyUsd: profile.caps.monthlyUsd,
+                        },
+                        globalCaps,
+                      }),
+                    );
+                  } catch (error) {
+                    paidReservations.delete(reservationId);
+                    return {
+                      allowed: false,
+                      message: error instanceof Error ? error.message : 'Spending limit reached.',
+                    };
+                  }
+                }
                 return {
                   allowed: true,
                   ...(reservationId
                     ? {
                         usageId: reservationId,
-                        release: () => paidReservations.delete(reservationId),
+                        release: () => {
+                          spendHandles.get(reservationId)?.settle();
+                          spendHandles.delete(reservationId);
+                          return paidReservations.delete(reservationId);
+                        },
                       }
                     : {}),
                 };
@@ -1538,6 +1609,8 @@ export function register(host: CoreHost, services: FerryServices): void {
                       }
                     : {}),
                 });
+                spendHandles.get(record.id)?.settle(priced.amountUsd, priced.estimated, true);
+                spendHandles.delete(record.id);
               },
               onHandoff: (reason, from, to) => {
                 runtime.gateway.recordHandoff(session.id, reason);
@@ -1617,11 +1690,21 @@ export function register(host: CoreHost, services: FerryServices): void {
                   );
                 }),
               filterOutput: async (name, output, command, sourcePath) => {
+                if (!profile.optimizers.toolOutputFilters) return { text: output, filtered: false };
                 const { optimizeOutput } = await import('@ferry/optimizer');
-                const result = optimizeOutput(command ?? name, output);
+                const result = optimizeOutput(command ?? name, output, {
+                  blobStore: {
+                    put: () => '',
+                    get: () => undefined,
+                    deleteSession: () => undefined,
+                  },
+                });
                 if (sourcePath && isProtectedWorkspacePath(sourcePath))
                   return { text: result.output, filtered: result.output !== output };
-                const handle = result.output === output ? undefined : newId('recovery');
+                const handle =
+                  result.output === output || !profile.optimizers.recoveryHandles
+                    ? undefined
+                    : newId('recovery');
                 if (handle)
                   services.db.client
                     .prepare('INSERT INTO optimizer_blobs (id,data_json,updated_at) VALUES (?,?,?)')

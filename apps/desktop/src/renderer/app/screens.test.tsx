@@ -40,7 +40,16 @@ async function renderRoute(
     component: OnboardingCanvas,
   });
   const router = createRouter({
-    routeTree: root.addChildren([home, settings, onboarding]),
+    routeTree: root.addChildren([
+      home,
+      settings,
+      onboarding,
+      createRoute({
+        getParentRoute: () => root,
+        path: '/gateway',
+        component: () => <div>Gateway route</div>,
+      }),
+    ]),
     history: createMemoryHistory({ initialEntries: [`/${path}`] }),
   });
   await router.load();
@@ -80,6 +89,7 @@ describe('Settings and onboarding screens', () => {
     });
     // Built-in profiles are read-only apart from roles and fallback order; edit a copy.
     await user.click(await screen.findByRole('button', { name: 'Duplicate to customize' }));
+    await user.click(screen.getByText('Advanced', { selector: 'summary' }));
     await user.clear(screen.getByRole('textbox', { name: 'Per day cap ($)' }));
     await user.type(screen.getByRole('textbox', { name: 'Per day cap ($)' }), '4');
     await user.clear(screen.getByRole('textbox', { name: 'Per month cap ($)' }));
@@ -99,7 +109,19 @@ describe('Settings and onboarding screens', () => {
     await client.settings.update({ onboardingComplete: false });
     localStorage.removeItem('ferry.onboardingStep');
     await renderRoute('onboarding', client);
-    await userEvent.click(await screen.findByRole('button', { name: 'Skip setup' }));
+    const user = userEvent.setup({ delay: null });
+    for (const title of [
+      'Connect a provider',
+      'Use Auto',
+      'Check readiness',
+      'Create a named key',
+    ]) {
+      await user.click(await screen.findByRole('button', { name: 'Continue' }));
+      await screen.findByRole('heading', { name: title });
+    }
+    await user.click(screen.getByRole('button', { name: 'Create key and continue' }));
+    await user.click(await screen.findByRole('button', { name: 'Send verification request' }));
+    await user.click(await screen.findByRole('button', { name: 'Finish setup' }));
     await waitFor(async () => {
       const settings = await client.settings.get();
       const autoFree = (await client.profiles.list()).find((item) => item.name === 'Auto-Free');
@@ -109,14 +131,81 @@ describe('Settings and onboarding screens', () => {
     });
   }, 15000);
 
-  it('shows researched reasons for unavailable providers in onboarding', async () => {
+  it('uses shared provider connections and explains the legitimate Zen path', async () => {
     const client = createDemoFerryClient();
     await client.settings.update({ onboardingComplete: false });
     localStorage.removeItem('ferry.onboardingStep');
     await renderRoute('onboarding', client);
-    await userEvent.click(await screen.findByRole('button', { name: 'Continue on this device' }));
-    await userEvent.click(screen.getByText('Unavailable'));
-    expect(screen.getByText('Kiro')).toBeTruthy();
-    expect(screen.getByText('The free API was retired on July 30, 2026.')).toBeTruthy();
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+    expect(await screen.findByText(/Zen’s OpenCode-only free models/)).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Manage connection' }).length).toBeGreaterThan(0);
   }, 15000);
+
+  it('resumes setup with the same named key and does not finish when verification fails', async () => {
+    const client = createDemoFerryClient({ speed: 0, latencyMs: 0 });
+    const key = await client.gateway.createKey({ name: 'Personal API', profile: 'auto-free' });
+    const defaults = (await client.settings.get()).onboarding;
+    await client.settings.update({
+      onboardingComplete: false,
+      onboarding: { ...defaults, step: 4, keyId: key.key.id },
+    });
+    const create = vi.spyOn(client.gateway, 'createKey');
+    vi.spyOn(client.gateway, 'testConnection').mockResolvedValue({
+      ok: false,
+      requestId: null,
+      model: null,
+      message: 'Connect valid credentials.',
+    });
+    await renderRoute('onboarding', client);
+    await userEvent.click(await screen.findByRole('button', { name: 'Reuse key and continue' }));
+    expect(create).not.toHaveBeenCalled();
+    await userEvent.click(await screen.findByRole('button', { name: 'Send verification request' }));
+    await screen.findByText('Connect valid credentials.');
+    expect(screen.queryByRole('button', { name: 'Finish setup' })).toBeNull();
+    expect((await client.settings.get()).onboardingComplete).toBe(false);
+  });
+
+  it('cancels the journey while retaining resumable progress and keeping the folder optional', async () => {
+    const client = createDemoFerryClient({ speed: 0, latencyMs: 0 });
+    await client.settings.update({ onboardingComplete: false });
+    const folders = vi.spyOn(client.workspaces, 'open');
+    await renderRoute('onboarding', client);
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Set up later' }));
+    await screen.findByText('Gateway route');
+    expect((await client.settings.get()).onboarding).toMatchObject({ step: 1 });
+    expect((await client.settings.get()).onboardingComplete).toBe(false);
+    expect(folders).not.toHaveBeenCalled();
+  });
+  it('clears paid authorization when reusing an onboarding key after disabling backup', async () => {
+    const client = createDemoFerryClient({ speed: 0, latencyMs: 0 });
+    const key = await client.gateway.createKey({ name: 'Personal API', profile: 'auto-free' });
+    await client.gateway.updateKey({ id: key.key.id, patch: { paidBackup: true, budgetUsd: 5 } });
+    const defaults = (await client.settings.get()).onboarding;
+    await client.settings.update({
+      onboardingComplete: false,
+      onboarding: { ...defaults, step: 4, keyId: key.key.id, paidBackup: false, budgetUsd: null },
+    });
+    await renderRoute('onboarding', client);
+    await userEvent.click(await screen.findByRole('button', { name: 'Reuse key and continue' }));
+    await screen.findByRole('heading', { name: 'Connect and verify' });
+    expect(
+      (await client.gateway.listKeys()).find((saved) => saved.id === key.key.id),
+    ).toMatchObject({ paidBackup: false, budgetUsd: null });
+    expect(screen.queryByText('Approve one paid-capable test under a cost ceiling')).toBeNull();
+  });
+  it('allows Back from Use Auto while the paid spending limit is invalid', async () => {
+    const client = createDemoFerryClient({ speed: 0, latencyMs: 0 });
+    const defaults = (await client.settings.get()).onboarding;
+    await client.settings.update({
+      onboardingComplete: false,
+      onboarding: { ...defaults, step: 2, paidBackup: true, budgetUsd: null },
+    });
+    await renderRoute('onboarding', client);
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+    await screen.findByRole('alert');
+    await userEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await screen.findByRole('heading', { name: 'Connect a provider' });
+    expect((await client.settings.get()).onboarding.step).toBe(1);
+  });
 });

@@ -1,4 +1,5 @@
 import { mkdir, rename } from 'node:fs/promises';
+import { pruneLogFiles } from './log-retention.js';
 import { resolve } from 'node:path';
 import { createLogger, getDataPaths, DEFAULT_SETTINGS, type DataPaths } from '@ferry/config';
 import { BUILTIN_PROFILES } from '@ferry/router';
@@ -15,6 +16,8 @@ import {
   ProfileSchema,
   isModelFreeForPlan,
   ProviderIdSchema,
+  oauthConnectionId,
+  providerDefinition,
 } from '@ferry/shared';
 import { canonicalizePath } from '@ferry/shared/node-paths';
 import {
@@ -73,6 +76,8 @@ export interface ServiceOptions {
   random?: () => number;
   env?: NodeJS.ProcessEnv;
   secrets?: SecretStore;
+  /** Short intervals are for deterministic retention integration fixtures. */
+  retentionIntervalMs?: number;
   /** Supplies a fake or alternate Supabase client for cloud runtime tests. */
   cloudClientFactory?: (config: import('@ferry/cloud').CloudConfig) => FerrySupabaseClient;
 }
@@ -203,6 +208,7 @@ export async function createServices({
   env = process.env,
   secrets,
   cloudClientFactory,
+  retentionIntervalMs = 60 * 60_000,
 }: ServiceOptions): Promise<FerryServices> {
   const home = canonicalizePath(dataDir);
   const paths = getDataPaths({ ...env, FERRY_HOME: home });
@@ -239,10 +245,45 @@ export async function createServices({
     logger.error({ err: error, backupPath, salvagedTables }, 'Database recovery completed');
   }
   const catalog = await loadCatalog({ now: clock?.now() ?? new Date() });
-  runTelemetryRetention(db.client);
   const requestFailures = new RequestFailureRepository(db.client);
   requestFailures.prune(clock?.now() ?? new Date());
   const settings = new SettingsRepository(db.client);
+  for (const provider of new ProviderRepository(db.client).list()) {
+    if (provider.tag !== 'subscription_oauth' || provider.id.startsWith('oauth-')) continue;
+    const repository = new ProviderRepository(db.client);
+    repository.put({ ...provider, id: ProviderIdSchema.parse(oauthConnectionId(provider.id)) });
+    repository.delete(provider.id);
+  }
+  // Remove stale identity overrides from the unfinished Zen setup; keep unrelated settings.
+  const legacySettings = settings.get('global') as
+    | { routing?: { providerOverrides?: Record<string, { headers?: Record<string, string> }> } }
+    | undefined;
+  const legacyHeaders = legacySettings?.routing?.providerOverrides?.opencode?.headers;
+  if (legacyHeaders) {
+    for (const [name, value] of Object.entries(legacyHeaders)) {
+      if (
+        (name.toLowerCase() === 'user-agent' && /^opencode\//i.test(value)) ||
+        name.toLowerCase().startsWith('x-opencode-')
+      )
+        Reflect.deleteProperty(legacyHeaders, name);
+    }
+    settings.put('global', legacySettings);
+  }
+  const pruneLogs = () => {
+    const value = settings.get('global') as { logRetentionDays?: number | null } | undefined;
+    const days = value?.logRetentionDays === undefined ? 30 : value.logRetentionDays;
+    if (days === null) return;
+    const cutoff = new Date((clock?.now() ?? new Date()).getTime() - days * 86_400_000);
+    runTelemetryRetention(db.client, cutoff);
+    return pruneLogFiles(paths.logs, cutoff).catch((error: unknown) => {
+      logger.warn({ err: error }, 'Could not prune rotated logs');
+    });
+  };
+  await pruneLogs();
+  const retentionTimer = setInterval(() => {
+    void pruneLogs();
+  }, retentionIntervalMs);
+  retentionTimer.unref();
   const eventLogs = new EventLogRepository(db.client);
   const turnLogs = new TurnLogRepository(db.client);
   const modelSwitches = new ModelSwitchRepository(db.client);
@@ -696,6 +737,7 @@ export async function createServices({
     async dispose() {
       if (disposed) return;
       disposed = true;
+      clearInterval(retentionTimer);
       await stopOpenRouterPolling();
       if (cloudRuntime) await cloudRuntime.dispose();
       if (localSecretStore instanceof MemorySecretStore) localSecretStore.clear();
@@ -707,6 +749,7 @@ export async function createServices({
 }
 
 export function hasUsableProviderKey(services: FerryServices, providerId: string): boolean {
+  if (permitsKeylessProvider(services, providerId)) return true;
   const entries = services.providerKeyEntries.list(providerId);
   if (!entries.length) return Boolean(services.providerKeys.get(providerId));
   const now = services.clock.now().getTime();
@@ -719,6 +762,16 @@ export function hasUsableProviderKey(services: FerryServices, providerId: string
       (entry.status !== 'rate_limited' ||
         !entry.cooldownUntil ||
         Date.parse(entry.cooldownUntil) <= now),
+  );
+}
+
+export function permitsKeylessProvider(services: FerryServices, providerId: string): boolean {
+  const auth = providerDefinition(providerId)?.auth;
+  return (
+    auth === 'anonymous' ||
+    auth === 'local' ||
+    services.catalog.providers.find((entry) => entry.provider === providerId)?.key_required ===
+      false
   );
 }
 

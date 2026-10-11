@@ -1,5 +1,5 @@
 import { MockNotFoundError } from '../errors.js';
-import { DIRECT_PROFILE_ID, ProfileSchema } from '@ferry/shared';
+import { DIRECT_PROFILE_ID, ProfileSchema, BenchCodingReportSchema } from '@ferry/shared';
 import type { FerryClient } from '../../ferry-client.js';
 import type { MockDeps } from './deps.js';
 import type { MockStore } from '../types.js';
@@ -7,6 +7,13 @@ import type { MockStore } from '../types.js';
 export function createProfilesDomain(_store: MockStore, deps: MockDeps): FerryClient['profiles'] {
   const { state, before, persist, syncStore, session, updateSession } = deps;
   return {
+    importCodingResults: (value) => {
+      const report = BenchCodingReportSchema.parse(value);
+      const imported = report.dryRun
+        ? 0
+        : report.runs.filter((run) => run.status !== 'skipped').length;
+      return Promise.resolve({ imported, total: imported });
+    },
     async list() {
       await before();
       return structuredClone(state.profiles);

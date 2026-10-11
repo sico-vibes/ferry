@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Ferry 1.0 local Gateway dashboard: Overview, Requests, Routing, Keys, Usage & costs and
+  Connect, with durable request metadata, named client keys, rotation and revocation.
+- Resumable provider → Auto → key → client onboarding, shared desktop/CLI client configuration,
+  Responses support for Codex, and fixture certification for OpenCode, Claude Code and OpenAI HTTP.
+- User-initiated provider checks with bounded free requests, separately approved paid ceilings,
+  Optimized profile preview/Apply/Undo, custom API endpoints and local model discovery.
+- CLI `/connect`, `/gateway` and `/doctor`; isolated Windows installer/portable lifecycle smokes,
+  keyboard journeys and accessibility coverage at 100%, 125% and 150% renderer scaling.
 - Ferry waits a few seconds for short per-minute limits instead of switching to a weaker model,
   keeps the model that started a task, and gives up on a provider that does not answer in 25 s.
 - A run that already changed files now finishes with a warning instead of failing, and every run
@@ -24,12 +32,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Auto is free-first; paid backup requires explicit authorization, known prices and a positive
+  spending limit. Gateway requests preserve fidelity by default; free native profiles retain Lite.
+- Provider readiness distinguishes connection health, routing eligibility and verification evidence.
+  Unsupported account integrations and new Cloud setup remain Coming soon; existing Cloud recovery remains.
 - Chats read like Claude Code: one quiet line per stretch of tool work, the scrollbar at the window
   edge, a round jump-to-latest button, real Markdown lists and single-surface code blocks.
 - Settings are flat sections with grouped navigation; loading states show skeletons.
 
 ### Fixed
 
+- Gateway enforces intersected key/profile/global budgets, atomic reservations, bounded queues,
+  dispatch deadlines, cancellation and safe partial-stream handling across client protocols.
+- Permission rules and telemetry retention persist in Core; diagnostics exclude credentials and
+  request bodies. Windows apostrophe/Unicode paths and installed CLI Ctrl+C exit are covered.
 - Groq models no longer fail on their second step, the CLI can attach to an engine with large
   provider lists, and quota events no longer fire every second.
 

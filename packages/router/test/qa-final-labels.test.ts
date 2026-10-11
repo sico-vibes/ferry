@@ -187,12 +187,12 @@ describe('QA final: provider labels and free routing', () => {
     expect(excluded[0]?.reasons).toContain('model not marked free for this provider plan');
   });
 
-  it('built-in profile roles default to on only for Auto-Free and Best Available', () => {
+  it('built-in profiles serve one model by default and retain advanced roles', () => {
     expect(chainForProfile(builtinProfile('Auto-Free')).length).toBeGreaterThan(0);
-    expect(chainForProfile(builtinProfile('Best Available')).length).toBeGreaterThan(0);
+    expect(chainForProfile(builtinProfile('Best Available'))).toEqual([]);
     expect(chainForProfile(builtinProfile('Fast'))).toEqual([]);
-    expect(builtinProfile('Auto-Free').roles.enabled).toBe(true);
-    expect(builtinProfile('Best Available').roles.enabled).toBe(true);
+    expect(builtinProfile('Auto-Free').roles.enabled).toBe(false);
+    expect(builtinProfile('Best Available').roles.enabled).toBe(false);
     expect(builtinProfile('Fast').roles.enabled).toBe(false);
     expect(builtinProfile('Long Context').roles.enabled).toBe(false);
   });

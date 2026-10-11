@@ -1,5 +1,6 @@
 export * from './ferry-client.js';
 export * from './events.js';
+export * from './diagnostics.js';
 export * from './rpc.js';
 export { createMockFerryClient, MockNotFoundError } from './mock/client.js';
 export { MockInjectedError } from './mock/behavior.js';

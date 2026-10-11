@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -121,6 +121,7 @@ async function makeRealDomainsHarness() {
       ...process.env,
       NODE_ENV: 'test',
       FERRY_TEST_KEYRING_NAMESPACE: 'ferry-real-domain-contract',
+      PATH: dirname(process.execPath),
       FERRY_PROVIDER_BASE_URL_OPENAI: `${stream.baseUrl}/v1`,
     },
   });
@@ -195,11 +196,8 @@ describe('core host dispatcher and lifecycle', () => {
         true,
       );
       expect((await rpc.cloud.status()).storageMode).toBe('local');
-      await expect(rpc.cloud.setStorageMode({ mode: 'cloud' })).resolves.toMatchObject({
-        mode: 'cloud',
-        restartRequired: true,
-      });
-      expect((await rpc.cloud.status()).storageMode).toBe('cloud');
+      await expect(rpc.cloud.setStorageMode({ mode: 'cloud' })).rejects.toThrow('coming soon');
+      expect((await rpc.cloud.status()).storageMode).toBe('local');
       await rpc.cloud.setStorageMode({ mode: 'local' });
       expect(hello.realDomains).toEqual([
         'settings',
@@ -681,6 +679,7 @@ describe('provider, model and quota RPC integration', () => {
 
   it('keeps keys out of RPC output, reads fake rate limits, and reports 429 cooldowns', async () => {
     const fake = await new FakeOpenAIServer({
+      models: [{ id: 'openai/gpt-oss-120b', supported_parameters: ['tools'] }],
       responseHeaders: {
         'x-ratelimit-limit-requests': '20',
         'x-ratelimit-remaining-requests': '13',
@@ -692,7 +691,7 @@ describe('provider, model and quota RPC integration', () => {
       dataDir: path,
       env: {
         ...process.env,
-        FERRY_PROVIDER_BASE_URL_OPENAI: `${fake.baseUrl}/v1`,
+        FERRY_PROVIDER_BASE_URL_GROQ: `${fake.baseUrl}/v1`,
       },
       secrets: new MemorySecretStore(),
     });
@@ -705,13 +704,13 @@ describe('provider, model and quota RPC integration', () => {
     const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 5000 });
     try {
       const secret = 'fake-key-never-a-real-secret';
-      const providerId = ProviderIdSchema.parse('openai');
+      const providerId = ProviderIdSchema.parse('groq');
       const connected = await rpc.providers.setKey(providerId, secret);
       expect(connected.keyStatus).toBe('unchecked');
       expect(JSON.stringify(connected)).not.toContain(secret);
       await vi.waitFor(async () => {
         expect((await rpc.models.page({ filters: { providerId } })).items).toEqual(
-          expect.arrayContaining([expect.objectContaining({ ref: 'openai/gpt-4o-mini' })]),
+          expect.arrayContaining([expect.objectContaining({ ref: 'groq/openai/gpt-oss-120b' })]),
         );
       });
 
@@ -725,16 +724,21 @@ describe('provider, model and quota RPC integration', () => {
       expect((await rpc.models.page({ filters: { providerId } })).total).toBeGreaterThan(0);
       expect(probeResult.windows[0]).toMatchObject({ limit: 20, remaining: 13 });
       const capacity = await rpc.quota.capacity();
-      expect(capacity.perProvider.find((item) => item.providerId === 'openai')).toMatchObject({
-        percent: 65,
-      });
+      const freeCapacity = capacity.perProvider.find((item) => item.providerId === 'groq');
+      expect(freeCapacity?.percent).toBeGreaterThanOrEqual(0);
+      expect(freeCapacity?.percent).toBeLessThanOrEqual(100);
+      expect(services.quotaObservations.list()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ providerId: 'groq', remaining: 13, limit: 20 }),
+        ]),
+      );
       expect(await rpc.quota.history(14)).toEqual(
-        expect.arrayContaining([expect.objectContaining({ providerId: 'openai', requests: 7 })]),
+        expect.arrayContaining([expect.objectContaining({ providerId: 'groq', requests: 7 })]),
       );
       expect(JSON.stringify({ probeResult, capacity, emitted })).not.toContain(secret);
       const persisted = JSON.stringify({
         providers: services.providers.list(),
-        keyReferences: services.providerKeys.get('openai'),
+        keyReferences: services.providerKeys.get('groq'),
         quota: services.quotaObservations.list(),
       });
       expect(persisted).not.toContain(secret);

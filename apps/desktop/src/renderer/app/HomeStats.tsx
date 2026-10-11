@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { SkeletonRows, SkeletonChart, SkeletonStat, ProviderLogo, UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
@@ -8,7 +9,7 @@ import { formatTokens } from './modelFacts';
 const count = new Intl.NumberFormat('en');
 
 /** Usage at a glance under the Home composer (reference 06): activity, this month, top providers. */
-export function HomeStats() {
+function UsageStats() {
   const client = useFerryClient();
   const { data: history } = useQuery({
     queryKey: ['quota-history', 30],
@@ -118,5 +119,50 @@ export function HomeStats() {
         </div>
       </section>
     </UiV2.TooltipProvider>
+  );
+}
+
+export function HomeStats() {
+  const client = useFerryClient();
+  const navigate = useNavigate();
+  const { data: gateway } = useQuery({
+    queryKey: ['gateway-settings'],
+    queryFn: () => client.gateway.settings(),
+    refetchInterval: 5000,
+  });
+  const { data: routing } = useQuery({
+    queryKey: ['gateway-routing', 'default'],
+    queryFn: () => client.gateway.routing(),
+    refetchInterval: 10000,
+  });
+  const { data: keys = [] } = useQuery({
+    queryKey: ['gateway-keys'],
+    queryFn: () => client.gateway.listKeys(),
+  });
+  const state = !gateway
+    ? 'Checking Gateway…'
+    : !gateway.status.running
+      ? 'Gateway stopped'
+      : !routing?.eligible.length
+        ? 'Gateway needs a provider'
+        : 'Gateway ready';
+  const next = !keys.some((key) => !key.revokedAt)
+    ? 'Create an API key'
+    : !routing?.eligible.length
+      ? 'Check provider readiness'
+      : 'Connect a client';
+  return (
+    <div className="grid gap-4">
+      <section aria-label="Gateway readiness" className="setting-row">
+        <div>
+          <strong>{state}</strong>
+          <small>Use Auto for your agent. Use Gateway to connect external apps.</small>
+        </div>
+        <UiV2.Button variant="secondary" onClick={() => void navigate({ to: '/gateway' })}>
+          {next}
+        </UiV2.Button>
+      </section>
+      <UsageStats />
+    </div>
   );
 }

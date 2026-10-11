@@ -70,17 +70,7 @@ export function createModels(): ModelInfo[] {
       null,
       null,
     ],
-    [
-      'opencode-zen/big-pickle',
-      'opencode-zen',
-      'Big Pickle',
-      'T2',
-      200000,
-      32768,
-      true,
-      null,
-      null,
-    ],
+    ['opencode/big-pickle', 'opencode', 'Big Pickle', 'T2', 200000, 32768, true, null, null],
     ['opencode-go/glm-5.3', 'opencode-go', 'GLM 5.3', 'T1', 200000, 65536, false, 0.6, 2.2],
     ['opencode-go/kimi-k3', 'opencode-go', 'Kimi K3', 'T1', 256000, 65536, false, 1.2, 4.8],
     [
@@ -105,6 +95,23 @@ export function createModels(): ModelInfo[] {
       2,
       10,
     ],
+    ['xai-api/grok-4.7', 'xai-api', 'Grok 4.7', 'T1', 500000, 500000, false, 2, 6],
+    ['cohere/command-r-08-2024', 'cohere', 'Command R', 'T2', 128000, 4000, false, 0.15, 0.6],
+    ['moonshot/kimi-k3', 'moonshot', 'Kimi K3', 'T1', 1048576, 1048576, false, 3, 15],
+    ['minimax/MiniMax-M3', 'minimax', 'MiniMax-M3', 'T1', 1000000, 512000, false, 0.3, 1.2],
+    [
+      'siliconflow/ByteDance-Seed/Seed-OSS-36B-Instruct',
+      'siliconflow',
+      'ByteDance-Seed/Seed-OSS-36B-Instruct',
+      'T2',
+      262000,
+      262000,
+      false,
+      0.21,
+      0.57,
+    ],
+    ['inception/mercury-2.5', 'inception', 'Mercury 2.5', 'T1', 260000, 65536, false, 0.04, 0.15],
+    ['perplexity/sonar-pro', 'perplexity', 'Sonar Pro', 'T2', 200000, 8192, false, 3, 15],
     ['openai/gpt-6-sol', 'openai', 'GPT 6 Sol', 'T1', 400000, 128000, false, 2, 10],
   ];
   const models: ModelInfo[] = modelSpecs.map(
@@ -142,6 +149,45 @@ const nemotron: Partial<ModelInfo> = {
   inputModalities: ['text'],
 };
 const facts: Record<string, Partial<ModelInfo>> = {
+  'xai-api/grok-4.7': {
+    toolCalling: true,
+    description:
+      "xAI's frontier model for long-running agents, coding, knowledge work, and visual projects",
+    inputModalities: ['text', 'image', 'pdf'],
+  },
+  'cohere/command-r-08-2024': {
+    toolCalling: true,
+    description: 'Cohere retrieval model for long-context chat and enterprise RAG workflows',
+    inputModalities: ['text'],
+  },
+  'moonshot/kimi-k3': {
+    toolCalling: true,
+    description:
+      'Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work',
+    inputModalities: ['text', 'image', 'video'],
+  },
+  'minimax/MiniMax-M3': {
+    toolCalling: true,
+    description: 'MiniMax multimodal model for long-context coding, perception, and agent planning',
+    inputModalities: ['text', 'image', 'video'],
+  },
+  'siliconflow/ByteDance-Seed/Seed-OSS-36B-Instruct': {
+    toolCalling: true,
+    description:
+      'Tool-capable chat model for instruction following and agentic application workflows',
+    inputModalities: ['text'],
+  },
+  'inception/mercury-2.5': {
+    toolCalling: true,
+    description:
+      'Mercury 2.5 is the fastest reasoning LLM, and the latest diffusion LLM (dLLM) from Inception',
+    inputModalities: ['text'],
+  },
+  'perplexity/sonar-pro': {
+    toolCalling: false,
+    description: 'Deeper Sonar search model with broader retrieval and stronger synthesis',
+    inputModalities: ['text', 'image'],
+  },
   'gemini/gemini-3.8-flash': {
     description: 'Fast multimodal model for everyday coding, search and long documents.',
     releaseDate: '2026-07-15',

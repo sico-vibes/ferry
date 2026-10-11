@@ -57,6 +57,9 @@ import { ProvidersTable } from './ProvidersTable';
 import { OAuthProviderRows } from './OAuthProviderRows';
 import { CloudSettings } from './CloudSettings';
 import { ConfirmDialog } from './ConfirmDialog';
+import { DiagnosticsPanel } from './DiagnosticsPanel';
+import { OPTIMIZATION_PRESETS, optimizationPreset } from '@ferry/shared';
+import { parseKeybindings } from '@ferry/config/keybindings';
 import { saveKeybindings, useKeybindings } from '../state/keybindings';
 import type { SettingsSection } from '../state/ui.types';
 const settingsSectionIcons: Record<SettingsSection, LucideIcon> = {
@@ -201,19 +204,6 @@ const routingRows: {
   },
 ];
 
-function isPermissionRule(
-  value: unknown,
-): value is { effect: string; pattern: string; tool: string } {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const rule = value as Record<string, unknown>;
-  return (
-    typeof rule.effect === 'string' &&
-    ['allow', 'ask', 'deny'].includes(rule.effect) &&
-    typeof rule.pattern === 'string' &&
-    typeof rule.tool === 'string'
-  );
-}
-
 function SettingsInput({
   label,
   value,
@@ -280,6 +270,20 @@ export function SettingsCanvas() {
   const [keybindingsDraft, setKeybindingsDraft] = useState(keybindings.content);
   const [keybindingsSaved, setKeybindingsSaved] = useState(false);
   const [keybindingsSaveError, setKeybindingsSaveError] = useState<string | null>(null);
+  const [shortcutQuery, setShortcutQuery] = useState('');
+  const [optimizationAdvanced, setOptimizationAdvanced] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [actionError, setActionError] = useState('');
+  const [pendingActions, setPendingActions] = useState<string[]>([]);
+  const actionLocks = useRef(new Set<string>());
+  const keybindingValidation = (() => {
+    try {
+      return parseKeybindings(JSON.parse(keybindingsDraft) as unknown).errors;
+    } catch (error) {
+      return [error instanceof Error ? error.message : 'Invalid JSON'];
+    }
+  })();
   useEffect(() => {
     setKeybindingsDraft(keybindings.content);
   }, [keybindings.content]);
@@ -299,12 +303,6 @@ export function SettingsCanvas() {
   const [addMcp, setAddMcp] = useState(false);
   const [mcpName, setMcpName] = useState('');
   const [mcpAddress, setMcpAddress] = useState('');
-  const [benchmarkMode, setBenchmarkMode] = useState(
-    () => localStorage.getItem('ferry.benchmarkMode') === 'true',
-  );
-  const [logRetention, setLogRetention] = useState(
-    () => localStorage.getItem('ferry.logRetention') ?? '30',
-  );
   const [updateState, setUpdateState] = useState<UpdateSnapshot>({
     status: 'idle',
     version: null,
@@ -364,6 +362,12 @@ export function SettingsCanvas() {
   const { data: lanes = [], isPending: lanesPending } = useQuery({
     queryKey: ['lanes'],
     queryFn: () => client.delegation.lanes(),
+  });
+  const [inspectClientAuth, setInspectClientAuth] = useState(false);
+  const delegationClients = useQuery({
+    queryKey: ['delegation-clients', inspectClientAuth],
+    queryFn: () => client.delegation.clients(inspectClientAuth),
+    enabled: section === 'Delegation',
   });
   const { data: acpAgents = [], isPending: acpAgentsPending } = useQuery({
     queryKey: ['delegation', 'detected-agents'],
@@ -476,7 +480,9 @@ export function SettingsCanvas() {
     return Promise.resolve();
   };
   const saveSettings = async () => {
-    if (!pendingSettings) return;
+    if (!pendingSettings || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
     try {
       await client.settings.update(pendingSettings);
       await cache.invalidateQueries({ queryKey: keys.settings });
@@ -487,6 +493,11 @@ export function SettingsCanvas() {
       });
       setSaveFeedback((current) => ({ ...current, [section]: { kind: 'saved' } }));
     } catch (error) {
+      setPendingBySection((current) => {
+        const next = { ...current };
+        Reflect.deleteProperty(next, section);
+        return next;
+      });
       setSaveFeedback((current) => ({
         ...current,
         [section]: {
@@ -494,6 +505,9 @@ export function SettingsCanvas() {
           message: error instanceof Error ? error.message : String(error),
         },
       }));
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
   };
   const toggleOptimizer = (
@@ -502,14 +516,31 @@ export function SettingsCanvas() {
     if (settings)
       void update({ optimizers: { ...settings.optimizers, [key]: !settings.optimizers[key] } });
   };
-  const toggleSkill = async (id: (typeof skills)[number]['id'], enabled: boolean) => {
-    await client.skills.setEnabled(id, enabled);
-    await cache.invalidateQueries({ queryKey: ['skills'] });
+  const runAction = async (
+    id: string,
+    action: () => Promise<unknown>,
+    query: readonly unknown[],
+  ) => {
+    if (actionLocks.current.has(id)) return;
+    actionLocks.current.add(id);
+    setPendingActions([...actionLocks.current]);
+    setActionError('');
+    try {
+      await action();
+      await cache.invalidateQueries({ queryKey: query });
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error ? cause.message : 'Could not change this setting. Retry.',
+      );
+    } finally {
+      actionLocks.current.delete(id);
+      setPendingActions([...actionLocks.current]);
+    }
   };
-  const toggleMcp = async (id: (typeof mcps)[number]['id'], enabled: boolean) => {
-    await client.mcp.setEnabled(id, enabled);
-    await cache.invalidateQueries({ queryKey: keys.mcp });
-  };
+  const toggleSkill = (id: (typeof skills)[number]['id'], enabled: boolean) =>
+    runAction(id, () => client.skills.setEnabled(id, enabled), ['skills']);
+  const toggleMcp = (id: (typeof mcps)[number]['id'], enabled: boolean) =>
+    runAction(id, () => client.mcp.setEnabled(id, enabled), keys.mcp);
   const body = () => {
     if (
       !settings &&
@@ -646,6 +677,12 @@ export function SettingsCanvas() {
           )}
           {section === 'Shortcuts' && (
             <>
+              <SettingsInput
+                label="Search shortcuts"
+                value={shortcutQuery}
+                onChange={setShortcutQuery}
+                placeholder="Search commands or keys"
+              />
               {[
                 ['Chats', ['chat.new', 'search.open', 'tab.close', 'tab.next']],
                 [
@@ -671,7 +708,13 @@ export function SettingsCanvas() {
                 .map(([area, commands]) => (
                   <Group title={String(area)} key={String(area)}>
                     {keybindings.bindings
-                      .filter((binding) => commands?.includes(binding.command))
+                      .filter(
+                        (binding) =>
+                          commands?.includes(binding.command) &&
+                          `${shortcutLabels[binding.command] ?? binding.command} ${binding.key}`
+                            .toLowerCase()
+                            .includes(shortcutQuery.toLowerCase()),
+                      )
                       .map((binding) => (
                         <div className="setting-row" key={binding.command}>
                           <strong>{shortcutLabels[binding.command] ?? binding.command}</strong>
@@ -684,7 +727,7 @@ export function SettingsCanvas() {
                 <p className="muted">
                   Edit keybindings.json in Ferry's config folder. Changes reload automatically.
                 </p>
-                {keybindings.errors.map((error) => (
+                {keybindingValidation.map((error) => (
                   <p className="text-meta text-warn" key={error}>
                     {error}
                   </p>
@@ -705,7 +748,11 @@ export function SettingsCanvas() {
                 {keybindingsDraft !== keybindings.content && (
                   <UiV2.Button
                     size="sm"
+                    disabled={saving || keybindingValidation.length > 0}
                     onClick={() => {
+                      if (savingRef.current) return;
+                      savingRef.current = true;
+                      setSaving(true);
                       saveKeybindings(keybindingsDraft)
                         .then((errors) => {
                           if (errors.length) setKeybindingsSaveError(errors.join('; '));
@@ -715,6 +762,10 @@ export function SettingsCanvas() {
                           setKeybindingsSaveError(
                             error instanceof Error ? error.message : String(error),
                           );
+                        })
+                        .finally(() => {
+                          savingRef.current = false;
+                          setSaving(false);
                         });
                     }}
                   >
@@ -744,8 +795,9 @@ export function SettingsCanvas() {
         <>
           <Group title="Provider access">
             <p className="muted">
-              Keys are stored locally. Use keys you own under one account; pooling accounts to
-              multiply free tiers may violate provider terms.
+              Keys use your operating system keyring in local mode or your account Vault in existing
+              cloud mode. Use keys you own under one account; pooling accounts to multiply free
+              tiers may violate provider terms.
             </p>
             <ProvidersTable
               loading={providersPending}
@@ -904,328 +956,344 @@ export function SettingsCanvas() {
     if (section === 'Routing')
       return (
         <>
-          <Group title="Model selection">
-            <SettingRow
-              title="When a picked model runs out"
-              helper="If the model you picked hits a usage limit or fails, Ferry can hand the task to the next eligible model with a handover note, ask you first, or stop."
-            >
-              <SegmentedControl
-                label="When a picked model runs out"
-                value={settings?.routing.pinnedExhaustion ?? 'handover'}
-                onValueChange={(value) =>
+          <Group title="Auto routing">
+            <p className="muted">
+              Auto balances capability, measured coding success, reliability and quota. It starts
+              free-only; paid backup requires an explicit Gateway key budget. First-response and
+              rate-limit settings below also govern Gateway requests.
+            </p>
+            <UiV2.Button variant="secondary" onClick={() => void navigate({ to: '/gateway' })}>
+              View current routing decisions
+            </UiV2.Button>
+          </Group>
+          <details className="settings-developer-details">
+            <summary>Advanced</summary>
+            <Group title="Model selection">
+              <SettingRow
+                title="When a picked model runs out"
+                helper="If the model you picked hits a usage limit or fails, Ferry can hand the task to the next eligible model with a handover note, ask you first, or stop."
+              >
+                <SegmentedControl
+                  label="When a picked model runs out"
+                  value={settings?.routing.pinnedExhaustion ?? 'handover'}
+                  onValueChange={(value) =>
+                    settings &&
+                    void update({
+                      routing: {
+                        ...settings.routing,
+                        pinnedExhaustion: value as typeof settings.routing.pinnedExhaustion,
+                      },
+                    })
+                  }
+                  options={[
+                    { value: 'handover', label: 'Hand over' },
+                    { value: 'ask', label: 'Ask me' },
+                    { value: 'fail', label: 'Stop' },
+                  ]}
+                />
+              </SettingRow>
+              <SettingRow
+                title="Planner/editor roles"
+                helper="Role model selection uses catalog quality priors, context fit, tool support, and observed reliability."
+              >
+                <button
+                  type="button"
+                  className="v2-link-button"
+                  onClick={() => {
+                    useUI.getState().setSettingsSection('Profiles');
+                  }}
+                >
+                  Configure per profile
+                </button>
+              </SettingRow>
+              <SettingRow
+                title="Benchmark quality weight"
+                helper="Give published coding and tool-use scores more or less influence. Models without scores remain neutral."
+              >
+                <div className="range-control">
+                  <Slider
+                    label="Benchmark quality weight"
+                    min={0}
+                    max={12}
+                    step={1}
+                    value={settings?.routing.qualityWeight ?? 4}
+                    onValueChange={(value) =>
+                      settings &&
+                      void update({ routing: { ...settings.routing, qualityWeight: value } })
+                    }
+                  />
+                  <span>{settings?.routing.qualityWeight ?? 4}</span>
+                </div>
+              </SettingRow>
+              <SettingRow
+                title="Tool-call repair for weaker models"
+                helper="Automatically recover tool calls written as text when native tool calling is unreliable."
+              >
+                <Switch
+                  label="Tool-call repair for weaker models"
+                  checked={settings?.toolCallRepair ?? true}
+                  onCheckedChange={(toolCallRepair) => void update({ toolCallRepair })}
+                />
+              </SettingRow>
+            </Group>
+            <Group title="Rate limits and reliability">
+              <p className="muted">
+                Choose how Ferry balances continuity, reliability, and provider capacity.
+              </p>
+              <SettingRow
+                title="Wait for short rate limits"
+                helper="Stay on the same model while a per-minute limit refills."
+              >
+                <Switch
+                  label="Wait for short rate limits"
+                  checked={settings?.routing.paceShortLimits ?? true}
+                  onCheckedChange={(paceShortLimits) => {
+                    if (settings)
+                      void update({ routing: { ...settings.routing, paceShortLimits } });
+                  }}
+                />
+              </SettingRow>
+              <SettingRow
+                title="Maximum wait"
+                helper="Longer waits switch to another available model."
+              >
+                <div className="range-control">
+                  <Slider
+                    label="Maximum wait for short rate limits in seconds"
+                    min={0}
+                    max={120}
+                    step={1}
+                    value={settings?.routing.paceMaxWaitSeconds ?? 30}
+                    onValueChange={(paceMaxWaitSeconds) => {
+                      if (settings)
+                        void update({
+                          routing: {
+                            ...settings.routing,
+                            paceMaxWaitSeconds: Math.round(paceMaxWaitSeconds),
+                          },
+                        });
+                    }}
+                  />
+                  <span className="whitespace-nowrap">
+                    {settings?.routing.paceMaxWaitSeconds ?? 30} s
+                  </span>
+                </div>
+              </SettingRow>
+              <SettingRow
+                title="First-response timeout"
+                helper="Try another provider if no response begins. Local models are exempt."
+              >
+                <div className="range-control">
+                  <Slider
+                    label="First response timeout in seconds"
+                    min={1}
+                    max={120}
+                    step={1}
+                    value={settings?.routing.firstTokenTimeoutSeconds ?? 25}
+                    onValueChange={(firstTokenTimeoutSeconds) => {
+                      if (settings)
+                        void update({
+                          routing: {
+                            ...settings.routing,
+                            firstTokenTimeoutSeconds: Math.round(firstTokenTimeoutSeconds),
+                          },
+                        });
+                    }}
+                  />
+                  <span className="whitespace-nowrap">
+                    {settings?.routing.firstTokenTimeoutSeconds ?? 25} s
+                  </span>
+                </div>
+              </SettingRow>
+              <SettingRow
+                title="Pause a provider after N failed requests"
+                helper="Different requests since the last success, within 24 hours. Rate limits and quota never count. 0 = never."
+              >
+                <UiV2.Input
+                  type="number"
+                  min={0}
+                  step={1}
+                  className="w-20"
+                  aria-label="Pause a provider after N failed requests"
+                  value={settings?.routing.autoPauseAfterFailedRequests ?? 5}
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    if (settings && Number.isSafeInteger(value) && value >= 0)
+                      void update({
+                        routing: { ...settings.routing, autoPauseAfterFailedRequests: value },
+                      });
+                  }}
+                />
+              </SettingRow>
+              {routingRows
+                .filter((row) => row.key === 'stickySessions')
+                .map((row) => (
+                  <SettingRow key={row.key} title={row.title} helper={row.helper}>
+                    <div className="inline-control">
+                      <Switch
+                        label={row.title}
+                        checked={settings?.routing[row.key] ?? true}
+                        onCheckedChange={(value) => {
+                          if (settings)
+                            void update({ routing: { ...settings.routing, [row.key]: value } });
+                        }}
+                      />
+                    </div>
+                  </SettingRow>
+                ))}
+
+              <SettingRow
+                title="Sticky session TTL"
+                helper="How long a conversation keeps its selected model."
+              >
+                <div className="range-control">
+                  <Slider
+                    label="Sticky session TTL in minutes"
+                    min={1}
+                    max={120}
+                    step={1}
+                    value={settings?.routing.stickyTtlMinutes ?? 30}
+                    onValueChange={(value) =>
+                      settings &&
+                      void update({
+                        routing: { ...settings.routing, stickyTtlMinutes: Math.round(value) },
+                      })
+                    }
+                  />
+                  <span>{settings?.routing.stickyTtlMinutes ?? 30} min</span>
+                </div>
+              </SettingRow>
+              {routingRows
+                .filter((row) => row.key !== 'stickySessions')
+                .sort(
+                  (a, b) =>
+                    Number(a.key === 'textToolFallbackEnabled') -
+                    Number(b.key === 'textToolFallbackEnabled'),
+                )
+                .map((row) => (
+                  <SettingRow key={row.key} title={row.title} helper={row.helper}>
+                    <div className="inline-control">
+                      <Switch
+                        label={row.title}
+                        checked={settings?.routing[row.key] ?? true}
+                        onCheckedChange={(value) => {
+                          if (settings)
+                            void update({ routing: { ...settings.routing, [row.key]: value } });
+                        }}
+                      />
+                    </div>
+                  </SettingRow>
+                ))}
+
+              <SettingRow
+                title="Ramp start"
+                helper="Begin gradual demotion below this fraction of quota remaining."
+              >
+                <div className="range-control">
+                  <Slider
+                    label="Quota ramp start"
+                    min={0.05}
+                    max={0.5}
+                    step={0.01}
+                    value={settings?.routing.rampStart ?? 0.2}
+                    onValueChange={(value) =>
+                      settings &&
+                      void update({ routing: { ...settings.routing, rampStart: value } })
+                    }
+                  />
+                  <span>{Math.round((settings?.routing.rampStart ?? 0.2) * 100)}%</span>
+                </div>
+              </SettingRow>
+              <SettingRow
+                title="Ramp floor"
+                helper="Keep at least this routing score while quota is low."
+              >
+                <div className="range-control">
+                  <Slider
+                    label="Quota ramp floor"
+                    min={0}
+                    max={0.5}
+                    step={0.01}
+                    value={settings?.routing.rampFloor ?? 0.1}
+                    onValueChange={(value) =>
+                      settings &&
+                      void update({ routing: { ...settings.routing, rampFloor: value } })
+                    }
+                  />
+                  <span>{Math.round((settings?.routing.rampFloor ?? 0.1) * 100)}%</span>
+                </div>
+              </SettingRow>
+              <UiV2.Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
                   settings &&
                   void update({
                     routing: {
                       ...settings.routing,
-                      pinnedExhaustion: value as typeof settings.routing.pinnedExhaustion,
+                      stickyTtlMinutes: 30,
+                      paceShortLimits: true,
+                      paceMaxWaitSeconds: 30,
+                      firstTokenTimeoutSeconds: 25,
+                      qualityWeight: 4,
+                      rampStart: 0.2,
+                      rampFloor: 0.1,
                     },
                   })
                 }
-                options={[
-                  { value: 'handover', label: 'Hand over' },
-                  { value: 'ask', label: 'Ask me' },
-                  { value: 'fail', label: 'Stop' },
-                ]}
-              />
-            </SettingRow>
-            <SettingRow
-              title="Planner/editor roles"
-              helper="Role model selection uses catalog quality priors, context fit, tool support, and observed reliability."
-            >
-              <button
-                type="button"
-                className="v2-link-button"
-                onClick={() => {
-                  useUI.getState().setSettingsSection('Profiles');
-                }}
               >
-                Configure per profile
-              </button>
-            </SettingRow>
-            <SettingRow
-              title="Benchmark quality weight"
-              helper="Give published coding and tool-use scores more or less influence. Models without scores remain neutral."
-            >
-              <div className="range-control">
-                <Slider
-                  label="Benchmark quality weight"
-                  min={0}
-                  max={12}
-                  step={1}
-                  value={settings?.routing.qualityWeight ?? 4}
-                  onValueChange={(value) =>
-                    settings &&
-                    void update({ routing: { ...settings.routing, qualityWeight: value } })
-                  }
-                />
-                <span>{settings?.routing.qualityWeight ?? 4}</span>
-              </div>
-            </SettingRow>
-            <SettingRow
-              title="Tool-call repair for weaker models"
-              helper="Automatically recover tool calls written as text when native tool calling is unreliable."
-            >
-              <Switch
-                label="Tool-call repair for weaker models"
-                checked={settings?.toolCallRepair ?? true}
-                onCheckedChange={(toolCallRepair) => void update({ toolCallRepair })}
-              />
-            </SettingRow>
-          </Group>
-          <Group title="Rate limits and reliability">
-            <p className="muted">
-              Choose how Ferry balances continuity, reliability, and provider capacity.
-            </p>
-            <SettingRow
-              title="Wait for short rate limits"
-              helper="Stay on the same model while a per-minute limit refills."
-            >
-              <Switch
-                label="Wait for short rate limits"
-                checked={settings?.routing.paceShortLimits ?? true}
-                onCheckedChange={(paceShortLimits) => {
-                  if (settings) void update({ routing: { ...settings.routing, paceShortLimits } });
-                }}
-              />
-            </SettingRow>
-            <SettingRow
-              title="Maximum wait"
-              helper="Longer waits switch to another available model."
-            >
-              <div className="range-control">
-                <Slider
-                  label="Maximum wait for short rate limits in seconds"
-                  min={0}
-                  max={120}
-                  step={1}
-                  value={settings?.routing.paceMaxWaitSeconds ?? 30}
-                  onValueChange={(paceMaxWaitSeconds) => {
-                    if (settings)
-                      void update({
-                        routing: {
-                          ...settings.routing,
-                          paceMaxWaitSeconds: Math.round(paceMaxWaitSeconds),
-                        },
-                      });
-                  }}
-                />
-                <span className="whitespace-nowrap">
-                  {settings?.routing.paceMaxWaitSeconds ?? 30} s
-                </span>
-              </div>
-            </SettingRow>
-            <SettingRow
-              title="First-response timeout"
-              helper="Try another provider if no response begins. Local models are exempt."
-            >
-              <div className="range-control">
-                <Slider
-                  label="First response timeout in seconds"
-                  min={1}
-                  max={120}
-                  step={1}
-                  value={settings?.routing.firstTokenTimeoutSeconds ?? 25}
-                  onValueChange={(firstTokenTimeoutSeconds) => {
-                    if (settings)
-                      void update({
-                        routing: {
-                          ...settings.routing,
-                          firstTokenTimeoutSeconds: Math.round(firstTokenTimeoutSeconds),
-                        },
-                      });
-                  }}
-                />
-                <span className="whitespace-nowrap">
-                  {settings?.routing.firstTokenTimeoutSeconds ?? 25} s
-                </span>
-              </div>
-            </SettingRow>
-            <SettingRow
-              title="Pause a provider after N failed requests"
-              helper="Different requests since the last success, within 24 hours. Rate limits and quota never count. 0 = never."
-            >
-              <UiV2.Input
-                type="number"
-                min={0}
-                step={1}
-                className="w-20"
-                aria-label="Pause a provider after N failed requests"
-                value={settings?.routing.autoPauseAfterFailedRequests ?? 5}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
-                  if (settings && Number.isSafeInteger(value) && value >= 0)
-                    void update({
-                      routing: { ...settings.routing, autoPauseAfterFailedRequests: value },
-                    });
-                }}
-              />
-            </SettingRow>
-            {routingRows
-              .filter((row) => row.key === 'stickySessions')
-              .map((row) => (
-                <SettingRow key={row.key} title={row.title} helper={row.helper}>
-                  <div className="inline-control">
-                    <Switch
-                      label={row.title}
-                      checked={settings?.routing[row.key] ?? true}
-                      onCheckedChange={(value) => {
-                        if (settings)
-                          void update({ routing: { ...settings.routing, [row.key]: value } });
-                      }}
-                    />
-                  </div>
-                </SettingRow>
-              ))}
-
-            <SettingRow
-              title="Sticky session TTL"
-              helper="How long a conversation keeps its selected model."
-            >
-              <div className="range-control">
-                <Slider
-                  label="Sticky session TTL in minutes"
-                  min={1}
-                  max={120}
-                  step={1}
-                  value={settings?.routing.stickyTtlMinutes ?? 30}
-                  onValueChange={(value) =>
+                Reset tune defaults
+              </UiV2.Button>
+            </Group>
+            <Group title="Spending caps">
+              <p className="muted">
+                Global limits apply across every profile. Profile limits can make these stricter.
+              </p>
+              <div className="settings-caps-grid">
+                <SettingsInput
+                  label="Global session cap ($)"
+                  value={settings?.paidCaps.sessionUsd?.toString() ?? ''}
+                  placeholder="No cap"
+                  onChange={(value) =>
                     settings &&
                     void update({
-                      routing: { ...settings.routing, stickyTtlMinutes: Math.round(value) },
+                      paidCaps: { ...settings.paidCaps, sessionUsd: value ? Number(value) : null },
                     })
                   }
                 />
-                <span>{settings?.routing.stickyTtlMinutes ?? 30} min</span>
-              </div>
-            </SettingRow>
-            {routingRows
-              .filter((row) => row.key !== 'stickySessions')
-              .sort(
-                (a, b) =>
-                  Number(a.key === 'textToolFallbackEnabled') -
-                  Number(b.key === 'textToolFallbackEnabled'),
-              )
-              .map((row) => (
-                <SettingRow key={row.key} title={row.title} helper={row.helper}>
-                  <div className="inline-control">
-                    <Switch
-                      label={row.title}
-                      checked={settings?.routing[row.key] ?? true}
-                      onCheckedChange={(value) => {
-                        if (settings)
-                          void update({ routing: { ...settings.routing, [row.key]: value } });
-                      }}
-                    />
-                  </div>
-                </SettingRow>
-              ))}
-
-            <SettingRow
-              title="Ramp start"
-              helper="Begin gradual demotion below this fraction of quota remaining."
-            >
-              <div className="range-control">
-                <Slider
-                  label="Quota ramp start"
-                  min={0.05}
-                  max={0.5}
-                  step={0.01}
-                  value={settings?.routing.rampStart ?? 0.2}
-                  onValueChange={(value) =>
-                    settings && void update({ routing: { ...settings.routing, rampStart: value } })
+                <SettingsInput
+                  label="Global daily cap ($)"
+                  value={settings?.paidCaps.dailyUsd?.toString() ?? ''}
+                  placeholder="No cap"
+                  onChange={(value) =>
+                    settings &&
+                    void update({
+                      paidCaps: { ...settings.paidCaps, dailyUsd: value ? Number(value) : null },
+                    })
                   }
                 />
-                <span>{Math.round((settings?.routing.rampStart ?? 0.2) * 100)}%</span>
-              </div>
-            </SettingRow>
-            <SettingRow
-              title="Ramp floor"
-              helper="Keep at least this routing score while quota is low."
-            >
-              <div className="range-control">
-                <Slider
-                  label="Quota ramp floor"
-                  min={0}
-                  max={0.5}
-                  step={0.01}
-                  value={settings?.routing.rampFloor ?? 0.1}
-                  onValueChange={(value) =>
-                    settings && void update({ routing: { ...settings.routing, rampFloor: value } })
+                <SettingsInput
+                  label="Global monthly cap ($)"
+                  value={settings?.paidCaps.monthlyUsd?.toString() ?? ''}
+                  placeholder="No cap"
+                  onChange={(value) =>
+                    settings &&
+                    void update({
+                      paidCaps: { ...settings.paidCaps, monthlyUsd: value ? Number(value) : null },
+                    })
                   }
                 />
-                <span>{Math.round((settings?.routing.rampFloor ?? 0.1) * 100)}%</span>
               </div>
-            </SettingRow>
-            <UiV2.Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                settings &&
-                void update({
-                  routing: {
-                    ...settings.routing,
-                    stickyTtlMinutes: 30,
-                    paceShortLimits: true,
-                    paceMaxWaitSeconds: 30,
-                    firstTokenTimeoutSeconds: 25,
-                    qualityWeight: 4,
-                    rampStart: 0.2,
-                    rampFloor: 0.1,
-                  },
-                })
-              }
-            >
-              Reset tune defaults
-            </UiV2.Button>
-          </Group>
-          <Group title="Spending caps">
-            <p className="muted">
-              Global limits apply across every profile. Profile limits can make these stricter.
-            </p>
-            <div className="settings-caps-grid">
-              <SettingsInput
-                label="Global session cap ($)"
-                value={settings?.paidCaps.sessionUsd?.toString() ?? ''}
-                placeholder="No cap"
-                onChange={(value) =>
-                  settings &&
-                  void update({
-                    paidCaps: { ...settings.paidCaps, sessionUsd: value ? Number(value) : null },
-                  })
-                }
+            </Group>
+            {settings && (
+              <RoutingMappingsEditor
+                routing={settings.routing}
+                loadingProviders={providersPending}
+                providers={providers}
+                update={(routing) => void update({ routing })}
               />
-              <SettingsInput
-                label="Global daily cap ($)"
-                value={settings?.paidCaps.dailyUsd?.toString() ?? ''}
-                placeholder="No cap"
-                onChange={(value) =>
-                  settings &&
-                  void update({
-                    paidCaps: { ...settings.paidCaps, dailyUsd: value ? Number(value) : null },
-                  })
-                }
-              />
-              <SettingsInput
-                label="Global monthly cap ($)"
-                value={settings?.paidCaps.monthlyUsd?.toString() ?? ''}
-                placeholder="No cap"
-                onChange={(value) =>
-                  settings &&
-                  void update({
-                    paidCaps: { ...settings.paidCaps, monthlyUsd: value ? Number(value) : null },
-                  })
-                }
-              />
-            </div>
-          </Group>
-          {settings && (
-            <RoutingMappingsEditor
-              routing={settings.routing}
-              loadingProviders={providersPending}
-              providers={providers}
-              update={(routing) => void update({ routing })}
-            />
-          )}
+            )}
+          </details>
         </>
       );
     if (section === 'Optimizers') {
@@ -1239,8 +1307,33 @@ export function SettingsCanvas() {
       return (
         <>
           <Group title="Global defaults">
+            <SettingRow
+              title="Optimization preset"
+              helper="Gateway/API clients preserve fidelity. Saving these defaults changes built-in native agent profiles; custom profiles retain their own choices. Free native defaults are Caveman Lite and Lite replies."
+            >
+              <Select
+                label="Optimization preset"
+                value={
+                  optimizationAdvanced
+                    ? 'advanced'
+                    : settings
+                      ? optimizationPreset(settings.optimizers)
+                      : 'fidelity'
+                }
+                options={[
+                  { value: 'fidelity', label: 'Preserve fidelity' },
+                  { value: 'savings', label: 'Safe savings' },
+                  { value: 'advanced', label: 'Advanced' },
+                ]}
+                onValueChange={(value) => {
+                  setOptimizationAdvanced(value === 'advanced');
+                  if (settings && (value === 'fidelity' || value === 'savings'))
+                    void update({ optimizers: OPTIMIZATION_PRESETS[value] });
+                }}
+              />
+            </SettingRow>
             <p className="muted">
-              Profiles can override these.{' '}
+              Custom profiles override these.{' '}
               <button
                 className="v2-link-button"
                 type="button"
@@ -1251,97 +1344,99 @@ export function SettingsCanvas() {
                 Open Profiles
               </button>
             </p>
-            <SettingRow title="Reply style" helper={preview}>
-              <SegmentedControl
-                label="Reply style"
-                value={terse}
-                onValueChange={(value) => {
-                  if (settings)
+            <details
+              className="settings-developer-details"
+              open={optimizationAdvanced}
+              onToggle={(event) => {
+                setOptimizationAdvanced(event.currentTarget.open);
+              }}
+            >
+              <summary>Advanced</summary>
+              <SettingRow title="Reply style" helper={preview}>
+                <SegmentedControl
+                  label="Reply style"
+                  value={terse}
+                  onValueChange={(value) => {
+                    if (settings)
+                      void update({
+                        optimizers: { ...settings.optimizers, terse: value as typeof terse },
+                      });
+                  }}
+                  options={['off', 'lite', 'full', 'ultra'].map((value) => ({
+                    value,
+                    label:
+                      value === 'off' ? 'Normal' : value.charAt(0).toUpperCase() + value.slice(1),
+                  }))}
+                />
+              </SettingRow>
+              <SettingRow
+                title="Compress older conversation (Caveman)"
+                helper="Keep recent messages intact and compress older conversation to save input tokens."
+              >
+                <SegmentedControl
+                  label="Compress older conversation (Caveman)"
+                  value={settings?.optimizers.cavemanInput ?? 'off'}
+                  options={[
+                    { value: 'off', label: 'Off' },
+                    { value: 'lite', label: 'Lite' },
+                    { value: 'standard', label: 'Standard' },
+                  ]}
+                  onValueChange={(value) =>
+                    settings &&
                     void update({
-                      optimizers: { ...settings.optimizers, terse: value as typeof terse },
-                    });
-                }}
-                options={['off', 'lite', 'full', 'ultra'].map((value) => ({
-                  value,
-                  label:
-                    value === 'off' ? 'Normal' : value.charAt(0).toUpperCase() + value.slice(1),
-                }))}
-              />
-            </SettingRow>
-            <SettingRow
-              title="Compress older conversation (Caveman)"
-              helper="Keep recent messages intact and compress older conversation to save input tokens."
-            >
-              <SegmentedControl
-                label="Compress older conversation (Caveman)"
-                value={settings?.optimizers.cavemanInput ?? 'off'}
-                options={[
-                  { value: 'off', label: 'Off' },
-                  { value: 'lite', label: 'Lite' },
-                  { value: 'standard', label: 'Standard' },
-                ]}
-                onValueChange={(value) =>
-                  settings &&
-                  void update({
-                    optimizers: {
-                      ...settings.optimizers,
-                      cavemanInput: value as NonNullable<
-                        typeof settings
-                      >['optimizers']['cavemanInput'],
-                    },
-                  })
-                }
-              />
-            </SettingRow>
-            <SettingRow title="Tool-output filters" helper="Trim repeated build and test output.">
-              <Switch
-                label="Tool-output filters"
-                checked={settings?.optimizers.toolOutputFilters ?? false}
-                onCheckedChange={() => {
-                  toggleOptimizer('toolOutputFilters');
-                }}
-              />
-            </SettingRow>
-            <SettingRow title="Recovery handles" helper="Keep a way to recover filtered output.">
-              <Switch
-                label="Recovery handles"
-                checked={settings?.optimizers.recoveryHandles ?? false}
-                onCheckedChange={() => {
-                  toggleOptimizer('recoveryHandles');
-                }}
-              />
-            </SettingRow>
-            <SettingRow title="Context hygiene" helper="Remove stale context between steps.">
-              <Switch
-                label="Context hygiene"
-                checked={settings?.optimizers.contextHygiene ?? false}
-                onCheckedChange={() => {
-                  toggleOptimizer('contextHygiene');
-                }}
-              />
-            </SettingRow>
-            <SettingRow title="RTK" helper="Downloads a pinned, checksum-verified binary.">
-              <Switch
-                label="RTK"
-                checked={settings?.optimizers.rtk ?? false}
-                onCheckedChange={() => {
-                  toggleOptimizer('rtk');
-                }}
-              />
-            </SettingRow>
-            <SettingRow
-              title="Benchmark mode"
-              helper="Show measured changes for optimizer choices."
-            >
-              <Switch
-                label="Benchmark mode"
-                checked={benchmarkMode}
-                onCheckedChange={(value) => {
-                  setBenchmarkMode(value);
-                  localStorage.setItem('ferry.benchmarkMode', String(value));
-                }}
-              />
-            </SettingRow>
+                      optimizers: {
+                        ...settings.optimizers,
+                        cavemanInput: value as NonNullable<
+                          typeof settings
+                        >['optimizers']['cavemanInput'],
+                      },
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow title="Tool-output filters" helper="Trim repeated build and test output.">
+                <Switch
+                  label="Tool-output filters"
+                  checked={settings?.optimizers.toolOutputFilters ?? false}
+                  onCheckedChange={() => {
+                    toggleOptimizer('toolOutputFilters');
+                  }}
+                />
+              </SettingRow>
+              <SettingRow title="Recovery handles" helper="Keep a way to recover filtered output.">
+                <Switch
+                  label="Recovery handles"
+                  checked={settings?.optimizers.recoveryHandles ?? false}
+                  onCheckedChange={() => {
+                    toggleOptimizer('recoveryHandles');
+                  }}
+                />
+              </SettingRow>
+              <SettingRow
+                title="Context hygiene"
+                helper="Remove stale context between steps when recovery handles are enabled."
+              >
+                <Switch
+                  label="Context hygiene"
+                  checked={settings?.optimizers.contextHygiene ?? false}
+                  onCheckedChange={() => {
+                    toggleOptimizer('contextHygiene');
+                  }}
+                />
+              </SettingRow>
+              <SettingRow
+                title="RTK"
+                helper="Use an installed RTK binary to compress supported shell commands. If it is not on PATH, commands run normally."
+              >
+                <Switch
+                  label="RTK"
+                  checked={settings?.optimizers.rtk ?? false}
+                  onCheckedChange={() => {
+                    toggleOptimizer('rtk');
+                  }}
+                />
+              </SettingRow>
+            </details>
           </Group>
           <Group title="Measurements">
             <div className="stats-summary">
@@ -1433,31 +1528,60 @@ export function SettingsCanvas() {
             )}
           </Group>
           <Group title="Coding CLIs">
-            <p className="muted">Command-line agents Ferry found on this computer.</p>
-            {providersPending ? (
+            <p className="muted">
+              Installed, signed-in and verified are separate states. Sign-in checks read the
+              client’s local authentication status; verified means a completed run reported usage.
+              Suggest remains the default delegation mode.
+            </p>
+            <UiV2.Button
+              variant="secondary"
+              disabled={delegationClients.isFetching}
+              onClick={() => {
+                if (inspectClientAuth) void delegationClients.refetch();
+                else setInspectClientAuth(true);
+              }}
+            >
+              {delegationClients.isFetching ? 'Checking…' : 'Check client sign-ins'}
+            </UiV2.Button>
+            {delegationClients.isPending ? (
               <SkeletonRows rows={3} />
+            ) : delegationClients.isError ? (
+              <p role="alert">
+                Could not inspect installed clients.{' '}
+                <UiV2.Button variant="secondary" onClick={() => void delegationClients.refetch()}>
+                  Retry
+                </UiV2.Button>
+              </p>
             ) : (
               <ul className="v2-list" aria-label="Coding CLIs">
-                {providers
-                  .filter((provider) => provider.kind === 'cli')
-                  .map((provider) => (
-                    <li className="v2-list-row" key={provider.id}>
-                      <span className="v2-list-main">
-                        <strong>{provider.name}</strong>
-                        <small>
-                          {provider.keyStatus === 'not_applicable'
-                            ? 'Detected and ready'
-                            : 'Installed; sign-in not verified'}
-                        </small>
-                      </span>
-                      <span
-                        className="v2-status-pill"
-                        data-tone={provider.keyStatus === 'not_applicable' ? 'success' : 'muted'}
-                      >
-                        {provider.keyStatus === 'not_applicable' ? 'Available' : 'Installed'}
-                      </span>
-                    </li>
-                  ))}
+                {delegationClients.data.map((row) => (
+                  <li className="v2-list-row" key={row.id}>
+                    <span className="v2-list-main">
+                      <strong>
+                        {row.id === 'claude'
+                          ? 'Claude Code'
+                          : row.id === 'codex'
+                            ? 'Codex'
+                            : 'OpenCode'}
+                      </strong>
+                      <small>
+                        {row.installed
+                          ? row.signedIn === null
+                            ? 'Installed; sign-in not checked'
+                            : row.signedIn
+                              ? 'Installed and signed in'
+                              : 'Installed; sign in through the client CLI'
+                          : 'Not detected; install the client or check its version command'}
+                        {row.version ? ` · ${row.version}` : ''}
+                      </small>
+                    </span>
+                    <span className="v2-list-meta">
+                      {row.verifiedAt
+                        ? `Verified by run ${new Date(row.verifiedAt).toLocaleDateString()}`
+                        : 'Generation not verified'}
+                    </span>
+                  </li>
+                ))}
               </ul>
             )}
           </Group>
@@ -1491,7 +1615,7 @@ export function SettingsCanvas() {
                         )}
                       </span>
                       {agent.verified && (
-                        <span className="v2-list-meta">Verified {agent.verifiedAt}</span>
+                        <span className="v2-list-meta">Adapter tested {agent.verifiedAt}</span>
                       )}
                       {agent.caution && (
                         <span className="v2-status-pill" data-tone="warning">
@@ -1515,6 +1639,8 @@ export function SettingsCanvas() {
     if (section === 'Permissions')
       return (
         <PermissionsContent
+          rules={settings?.permissionRules ?? []}
+          onRules={(permissionRules) => void update({ permissionRules })}
           mode={settings?.permissionMode ?? 'ask'}
           onMode={(value) =>
             void update({ permissionMode: value as NonNullable<typeof settings>['permissionMode'] })
@@ -1563,10 +1689,13 @@ export function SettingsCanvas() {
             >
               <Select
                 label="Log retention"
-                value={logRetention}
+                value={
+                  settings?.logRetentionDays === null
+                    ? 'forever'
+                    : String(settings?.logRetentionDays ?? 30)
+                }
                 onValueChange={(value) => {
-                  setLogRetention(value);
-                  localStorage.setItem('ferry.logRetention', value);
+                  void update({ logRetentionDays: value === 'forever' ? null : Number(value) });
                 }}
                 options={[
                   { value: '7', label: '7 days' },
@@ -1576,16 +1705,7 @@ export function SettingsCanvas() {
                 ]}
               />
             </SettingRow>
-            <SettingRow title="Your data" helper="Export or delete data stored on this device.">
-              <div className="button-row">
-                <UiV2.Button size="sm" variant="outline" disabled>
-                  Export data
-                </UiV2.Button>
-                <UiV2.Button size="sm" variant="destructive" disabled>
-                  Delete local data
-                </UiV2.Button>
-              </div>
-            </SettingRow>
+            <DiagnosticsPanel />
           </Group>
         </>
       );
@@ -1614,6 +1734,7 @@ export function SettingsCanvas() {
                     <Switch
                       label={server.name}
                       checked={server.status === 'connected'}
+                      disabled={pendingActions.includes(server.id)}
                       onCheckedChange={(value) => void toggleMcp(server.id, value)}
                     />
                   </div>
@@ -1647,6 +1768,7 @@ export function SettingsCanvas() {
                   <Switch
                     label={skill.name}
                     checked={skill.enabled}
+                    disabled={pendingActions.includes(skill.id)}
                     onCheckedChange={(value) => void toggleSkill(skill.id, value)}
                   />
                 </SettingRow>
@@ -1774,6 +1896,7 @@ export function SettingsCanvas() {
             <span>OmniRoute Caveman rules · MIT</span>
           </div>
         </Group>
+        <DiagnosticsPanel />
         <details className="settings-developer-details">
           <summary>Developer diagnostics</summary>
           <DeveloperSettings
@@ -1900,7 +2023,12 @@ export function SettingsCanvas() {
             (section !== 'Profiles' && saveFeedback[section]) ? (
               <div className="v2-settings-actions">
                 {pendingSettings && (
-                  <UiV2.Button size="sm" variant="default" onClick={() => void saveSettings()}>
+                  <UiV2.Button
+                    size="sm"
+                    variant="default"
+                    disabled={saving}
+                    onClick={() => void saveSettings()}
+                  >
                     Save changes
                   </UiV2.Button>
                 )}
@@ -1919,6 +2047,7 @@ export function SettingsCanvas() {
           }
         />
         {body()}
+        {actionError && <p role="alert">{actionError}</p>}
       </div>
       <ProviderKeyDialog
         showRoutingControls
@@ -2184,11 +2313,39 @@ function RoutingMappingsEditor({
 /** Desktop-only preferences kept by the main process (tray, close button, OS notifications). */
 export function NotificationSettings() {
   const [preferences, setPreferences] = useState<ShellPreferences | null>(null);
+  const [error, setError] = useState(''),
+    [busy, setBusy] = useState(false);
+  const lock = useRef(false);
+  const load = () => {
+    void window.ferryHost
+      ?.getShellPreferences()
+      .then(setPreferences)
+      .catch((cause: unknown) => {
+        setError(
+          cause instanceof Error ? cause.message : 'Could not load notification preferences.',
+        );
+      });
+  };
   useEffect(() => {
-    void window.ferryHost?.getShellPreferences().then(setPreferences);
+    load();
   }, []);
   const change = (patch: Partial<ShellPreferences>) => {
-    void window.ferryHost?.setShellPreferences(patch).then(setPreferences);
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setError('');
+    void window.ferryHost
+      ?.setShellPreferences(patch)
+      .then(setPreferences)
+      .catch((cause: unknown) => {
+        setError(
+          cause instanceof Error ? cause.message : 'Could not save notification preferences.',
+        );
+      })
+      .finally(() => {
+        lock.current = false;
+        setBusy(false);
+      });
   };
   if (!window.ferryHost)
     return (
@@ -2199,11 +2356,21 @@ export function NotificationSettings() {
   if (!preferences)
     return (
       <Group title="Notify me">
-        <SkeletonRows rows={3} />
+        {error ? (
+          <p role="alert">
+            {error}{' '}
+            <UiV2.Button variant="secondary" onClick={load}>
+              Retry
+            </UiV2.Button>
+          </p>
+        ) : (
+          <SkeletonRows rows={3} />
+        )}
       </Group>
     );
   return (
     <>
+      {error && <p role="alert">{error}</p>}
       <Group title="Notify me">
         <SettingRow
           title="When a chat finishes"
@@ -2212,6 +2379,7 @@ export function NotificationSettings() {
           <Switch
             label="Notify when a chat finishes"
             checked={preferences.notifyChatFinished}
+            disabled={busy}
             onCheckedChange={(enabled) => {
               change({ notifyChatFinished: enabled });
             }}
@@ -2224,6 +2392,7 @@ export function NotificationSettings() {
           <Switch
             label="Notify when a chat needs approval"
             checked={preferences.notifyApproval}
+            disabled={busy}
             onCheckedChange={(enabled) => {
               change({ notifyApproval: enabled });
             }}
@@ -2271,26 +2440,23 @@ function SettingRow({
     </div>
   );
 }
-function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: string) => void }) {
-  const [rules, setRules] = useState(() => {
-    try {
-      const parsed: unknown = JSON.parse(
-        localStorage.getItem('ferry.permissionRules') ??
-          '[{"effect":"ask","pattern":"npm test*","tool":"run_command"}]',
-      );
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter(isPermissionRule);
-    } catch {
-      return [];
-    }
-  });
-  const persist = (next: typeof rules) => {
-    setRules(next);
-    localStorage.setItem('ferry.permissionRules', JSON.stringify(next));
-  };
+function PermissionsContent({
+  mode,
+  onMode,
+  rules,
+  onRules: persist,
+}: {
+  mode: string;
+  onMode: (value: string) => void;
+  rules: import('@ferry/shared').UserPermissionRule[];
+  onRules: (rules: import('@ferry/shared').UserPermissionRule[]) => void;
+}) {
   return (
     <Group title="Permissions">
-      <SettingRow title="Default mode" helper="Rules apply in order for matching tools.">
+      <SettingRow
+        title="Default mode"
+        helper="Deny takes precedence, then Ask, then user Allow. Project rules can tighten permissions."
+      >
         <SegmentedControl
           label="Permission mode"
           value={mode}
@@ -2322,7 +2488,11 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
             label="Rule effect"
             value={rule.effect}
             onValueChange={(value) => {
-              persist(rules.map((item, i) => (i === index ? { ...item, effect: value } : item)));
+              persist(
+                rules.map((item, i) =>
+                  i === index ? { ...item, effect: value as typeof item.effect } : item,
+                ),
+              );
             }}
             options={['ask', 'allow', 'deny'].map((value) => ({
               value,

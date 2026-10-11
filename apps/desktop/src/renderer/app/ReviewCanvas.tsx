@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Check, CircleAlert, FileCode2, X } from 'lucide-react';
@@ -28,6 +28,9 @@ export function ReviewCanvas() {
   const [rework, setRework] = useState(false);
   const [brief, setBrief] = useState('');
   const [fullOutput, setFullOutput] = useState<string | null>(null);
+  const [pending, setPending] = useState(false),
+    [decisionError, setDecisionError] = useState('');
+  const decisionLock = useRef(false);
   const {
     data: runs,
     isLoading,
@@ -40,7 +43,12 @@ export function ReviewCanvas() {
   const run = runs?.find((item) => item.id === runId);
   const change = run?.touchedFiles[selected];
   const canDecide = Boolean(
-    run && run.status !== 'running' && run.touchedFiles.length > 0 && run.gateResults.length > 0,
+    run &&
+    ['completed', 'failed'].includes(run.status) &&
+    run.decision === null &&
+    !pending &&
+    run.touchedFiles.length > 0 &&
+    run.gateResults.length > 0,
   );
   const laneName = (lane: string) =>
     lane.toLowerCase() === 'impl' ? 'Implementation' : lane.charAt(0).toUpperCase() + lane.slice(1);
@@ -104,12 +112,22 @@ export function ReviewCanvas() {
     );
 
   const decide = async (decision: 'accepted' | 'rejected' | 'rework') => {
-    if (!canDecide) return;
-    await decideReview(client, run.id, decision, decision === 'rework' ? brief : undefined);
-    if (decision === 'accepted')
-      window.dispatchEvent(new CustomEvent('ferry:success-pulse', { detail: { sessionId } }));
-    await cache.invalidateQueries({ queryKey: ['delegation', sessionId] });
-    await navigate({ to: '/s/$sessionId', params: { sessionId } });
+    if (!canDecide || decisionLock.current) return;
+    decisionLock.current = true;
+    setPending(true);
+    setDecisionError('');
+    try {
+      await decideReview(client, run.id, decision, decision === 'rework' ? brief : undefined);
+      if (decision === 'accepted')
+        window.dispatchEvent(new CustomEvent('ferry:success-pulse', { detail: { sessionId } }));
+      await cache.invalidateQueries({ queryKey: ['delegation', sessionId] });
+      await navigate({ to: '/s/$sessionId', params: { sessionId } });
+    } catch (cause) {
+      setDecisionError(cause instanceof Error ? cause.message : 'Could not save decision. Retry.');
+    } finally {
+      decisionLock.current = false;
+      setPending(false);
+    }
   };
   const theme = (monaco: typeof import('monaco-editor')) => {
     const css = getComputedStyle(document.documentElement);
@@ -133,6 +151,7 @@ export function ReviewCanvas() {
 
   return (
     <section aria-label="Delegation review" className="canvas review-canvas">
+      {decisionError && <p role="alert">{decisionError}</p>}
       <PageHeader
         title="Review"
         subtitle={`${laneName(run.lane)} changes by ${implementerName(run.implementer)}`}

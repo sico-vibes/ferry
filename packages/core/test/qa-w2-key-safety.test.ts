@@ -1,7 +1,7 @@
 import { readFile, readdir, rm, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createRpcFerryClient, RpcError } from '@ferry/client';
 import { MemorySecretStore, KeyringSecretStore } from '@ferry/secrets';
 import { ProviderIdSchema } from '@ferry/shared';
@@ -264,6 +264,18 @@ describe('QA-w2 core: key safety across every surface', () => {
   it('reports a 429 as a cooldown while keeping the key out of the provider event', async () => {
     const fake = await startServer([{ status: 429, body: { error: { message: 'rate limited' } } }]);
     const h = await makeHarness(fake);
+    const originalFetch = globalThis.fetch;
+    const fetchFixture = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      return url === `${fake.baseUrl}/v1/models`
+        ? Promise.resolve(
+            Response.json(
+              { error: { message: 'rate limited' } },
+              { status: 429, headers: { 'retry-after': '30' } },
+            ),
+          )
+        : originalFetch(input, init);
+    });
     try {
       await h.rpc.providers.setKey(ProviderIdSchema.parse('openai'), KEY);
       const first = await h.rpc.providers.probe(ProviderIdSchema.parse('openai'));
@@ -273,6 +285,7 @@ describe('QA-w2 core: key safety across every surface', () => {
       expect(provider?.cooldownUntil).not.toBeNull();
       expectNoKey(JSON.stringify({ first, provider, events: h.events }), '429 surfaces');
     } finally {
+      fetchFixture.mockRestore();
       await h.close();
       await fake.stop();
     }

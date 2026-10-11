@@ -51,13 +51,26 @@ export function createProviders(now: Date): MockProvider[] {
     throw new Error('Unable to determine the next Pacific midnight');
   })();
   const specs = [
+    [
+      'openai-compatible',
+      'Custom OpenAI-compatible API',
+      'paid',
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+    ],
+    ['ollama', 'Ollama', 'legit', 'ollama', null, null, null, null, null],
+    ['lmstudio', 'LM Studio', 'legit', null, null, null, null, null, null],
     ['gemini', 'Gemini API', 'legit', 'googlegemini', 250, 212, 10, 3, 38],
     ['openrouter', 'OpenRouter (free models)', 'legit', 'openrouter', 1000, 388, 20, 4, 312],
     ['nvidia', 'NVIDIA NIM', 'legit', 'nvidia', null, null, 40, 11, null],
     ['cerebras', 'Cerebras', 'caution', null, null, null, 5, 1, 27],
     ['groq', 'Groq', 'legit', null, 1000, 140, 8000, 2100, 43],
     ['mistral', 'Mistral (Experiment)', 'legit', 'mistralai', null, null, 1, 0, null],
-    ['opencode-zen', 'OpenCode Zen (free models)', 'promo', null, null, null, null, null, null],
+    ['opencode', 'OpenCode Zen', 'promo', null, null, null, null, null, null],
     ['sambanova', 'SambaNova Cloud', 'legit', null, null, null, null, null, null],
     ['llm7', 'LLM7.io', 'caution', null, null, null, null, null, null],
     ['cloudflare-workers-ai', 'Cloudflare Workers AI', 'legit', null, null, null, null, null, null],
@@ -77,6 +90,13 @@ export function createProviders(now: Date): MockProvider[] {
     ['together', 'Together AI', 'credits', null, null, null, null, null, null],
     ['stepfun', 'StepFun', 'credits', null, null, null, null, null, null],
     ['opencode-go', 'OpenCode Go', 'paid', null, null, null, null, null, null],
+    ['xai-api', 'xAI API', 'paid', null, null, null, null, null, null],
+    ['cohere', 'Cohere API', 'paid', null, null, null, null, null, null],
+    ['moonshot', 'Moonshot AI', 'paid', null, null, null, null, null, null],
+    ['minimax', 'MiniMax API', 'paid', null, null, null, null, null, null],
+    ['siliconflow', 'SiliconFlow API', 'paid', null, null, null, null, null, null],
+    ['inception', 'Inception API', 'paid', null, null, null, null, null, null],
+    ['perplexity', 'Perplexity Sonar', 'paid', null, null, null, null, null, null],
     ['anthropic', 'Anthropic API', 'paid', 'anthropic', null, null, null, null, null],
     ['openai', 'OpenAI API', 'paid', 'openai', null, null, null, null, null],
     ['codex-cli', 'Codex CLI', 'subscription_cli', 'openai', null, null, null, null, null],
@@ -113,6 +133,13 @@ export function createProviders(now: Date): MockProvider[] {
     'stepfun',
   ]);
   const providerLinks: Record<string, string> = {
+    'xai-api': 'https://console.x.ai/',
+    cohere: 'https://dashboard.cohere.com/api-keys',
+    moonshot: 'https://platform.moonshot.ai/console/api-keys',
+    minimax: 'https://platform.minimax.io/user-center/basic-information/interface-key',
+    siliconflow: 'https://cloud.siliconflow.com/account/ak',
+    inception: 'https://portal.inceptionlabs.ai/',
+    perplexity: 'https://www.perplexity.ai/settings/api',
     sambanova: 'https://cloud.sambanova.ai/',
     llm7: 'https://dash.llm7.io/',
     'cloudflare-workers-ai': 'https://dash.cloudflare.com/',
@@ -185,11 +212,13 @@ export function createProviders(now: Date): MockProvider[] {
       return {
         id: id as Provider['id'],
         name,
+        keyRequired: !['ollama', 'lmstudio', 'ovhcloud', 'kilo'].includes(id),
         tag,
         kind: tag === 'subscription_cli' ? 'cli' : 'api',
         brand,
-        keyStatus:
-          tag === 'subscription_cli'
+        keyStatus: ['ollama', 'lmstudio'].includes(id)
+          ? 'not_applicable'
+          : tag === 'subscription_cli'
             ? id === 'codex-cli'
               ? 'not_applicable'
               : 'unchecked'
@@ -202,12 +231,15 @@ export function createProviders(now: Date): MockProvider[] {
                   : id === 'mistral'
                     ? 'unchecked'
                     : 'valid',
-        enabled:
-          tag === 'subscription_cli'
-            ? true
-            : tag === 'paid' || optionalProviderIds.has(id)
-              ? false
-              : true,
+        enabled: ['ollama', 'lmstudio'].includes(id)
+          ? false
+          : id === 'opencode'
+            ? false
+            : tag === 'subscription_cli'
+              ? true
+              : tag === 'paid' || optionalProviderIds.has(id)
+                ? false
+                : true,
         health: id === 'cerebras' ? 'cooldown' : 'ok',
         cooldownUntil: id === 'cerebras' ? new Date(now.getTime() + 90000).toISOString() : null,
         dataUse:
@@ -233,7 +265,7 @@ export function createProviders(now: Date): MockProvider[] {
             ? '1,000/day after a one-time $10 credit purchase; otherwise 50/day.'
             : id === 'groq'
               ? '8K tokens/min makes it a helper, not a main coder.'
-              : id === 'opencode-zen'
+              : id === 'opencode'
                 ? 'Promotional free models; may end without notice.'
                 : id === 'sambanova'
                   ? 'Free tier has per-model daily request limits; RPD is the binding request cap.'

@@ -66,6 +66,7 @@ export interface ToolRegistryOptions {
   stepNumber?: () => number;
   dataDir: string;
   permissionMode: PermissionMode;
+  rewriteCommand?: (command: string) => string;
   permissionRules?: PermissionRule[];
   onPart(part: MessagePart): void;
   onCheckpointCreated?(checkpointId: string, label: string): void;
@@ -282,7 +283,11 @@ export function createWorkspaceTools(options: ToolRegistryOptions): {
       ...definition,
       execute: async (raw: unknown, context: ToolContext) => {
         checkAbort(context.signal);
-        const args = definition.schema.parse(raw);
+        let args: unknown = definition.schema.parse(raw);
+        if (definition.name === 'run_command' && options.rewriteCommand) {
+          const parsed = CommandSchema.parse(args);
+          args = { ...parsed, command: options.rewriteCommand(parsed.command) };
+        }
         const path = definition.permission?.path?.(args);
         const command = definition.permission?.command?.(args);
         const commandArgs = definition.name === 'run_command' ? CommandSchema.parse(args) : null;

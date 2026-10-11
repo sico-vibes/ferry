@@ -59,7 +59,7 @@ export async function interactive(
       />,
       // selectTerminalStreams already proved this is a console. Without this, Ink stops drawing
       // whenever CI is set (GitHub runners, some shells) and the chat never appears.
-      { stdin: terminal.stdin, stdout: terminal.stdout, interactive: true },
+      { stdin: terminal.stdin, stdout: terminal.stdout, interactive: true, exitOnCtrlC: false },
     );
     await app.waitUntilExit();
     return 0;

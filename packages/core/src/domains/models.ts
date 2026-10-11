@@ -6,6 +6,7 @@ import {
   SessionIdSchema,
   SessionSchema,
   newId,
+  isOpenCodeAppModel,
 } from '@ferry/shared';
 import { oauthModelCatalog } from '@ferry/oauth';
 import { modelSupportsTools } from '@ferry/router';
@@ -173,7 +174,9 @@ export function register(host: CoreHost, services: FerryServices): void {
         (id) => services.providers.get(id),
         (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
       );
-      const enabled = models.filter((model) => modelSupportsTools(model));
+      const enabled = models.filter(
+        (model) => modelSupportsTools(model) && !isOpenCodeAppModel(model),
+      );
       const oauthModels = oauthModelCatalog
         .filter((model) => services.providers.get(model.providerId)?.enabled)
         .map((model) => ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }))
@@ -229,6 +232,13 @@ export function register(host: CoreHost, services: FerryServices): void {
           const key = getGatewayController(services)?.key(keyId);
           if (!key) throw new Error(`Unknown or revoked Gateway key: ${keyId}`);
         } else {
+          const known =
+            services.catalog.providers
+              .flatMap(({ provider }) => services.models.list(provider))
+              .find((model) => model.ref === modelRef) ??
+            services.catalog.models.find((model) => model.ref === modelRef);
+          if (known && isOpenCodeAppModel(known))
+            throw new Error('Available in the OpenCode app. Use ferry run opencode --native.');
           const available =
             services.catalog.models.some((model) => model.ref === modelRef) ||
             services.catalog.providers.some(({ provider }) =>

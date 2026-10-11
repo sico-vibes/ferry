@@ -57,6 +57,16 @@ export function createDelegationDomain(
     stringId,
   } = deps;
   return {
+    async clients(checkAuth = false) {
+      await before();
+      return (['codex', 'opencode', 'claude'] as const).map((id) => ({
+        id,
+        installed: id === 'codex',
+        signedIn: checkAuth && id === 'codex' ? true : null,
+        version: id === 'codex' ? 'Preview fixture' : null,
+        verifiedAt: null,
+      }));
+    },
     async detectAgents() {
       await before();
       return structuredClone(mockAgents);

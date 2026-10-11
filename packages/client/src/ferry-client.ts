@@ -7,6 +7,12 @@ import type {
   DelegationRun,
   AcpAgentDetection,
   GatewayRequestRecord,
+  GatewayHistoryQuery,
+  GatewayHistoryPage,
+  GatewayUsageSummary,
+  GatewayRoutingExplanation,
+  GatewayActivity,
+  GatewayConnectionTest,
   HandoffStat,
   Lane,
   McpServer,
@@ -29,6 +35,7 @@ import type {
   SessionDetail,
   SessionId,
   Settings,
+  SettingsPatch,
   Skill,
   SkillId,
   SystemInfo,
@@ -71,12 +78,16 @@ export interface FerryClient {
       {
         id: string;
         name: string;
+        client?: string;
         profile: string;
         allowedModels: string[];
         rateLimit: number | null;
         tokenLimitPerMinute: number | null;
         tokenLimitPerDay: number | null;
         concurrencyLimit: number | null;
+        paidBackup?: boolean;
+        budgetUsd?: number | null;
+        budgetUsedUsd?: number;
         compressToolResults: boolean;
         terseSystemPrompt: boolean;
         createdAt: string;
@@ -97,19 +108,38 @@ export interface FerryClient {
     updateKey(input: {
       id: string;
       patch: {
+        client?: string;
         profile?: string;
         allowedModels?: string[];
         rateLimit?: number | null;
         tokenLimitPerMinute?: number | null;
         tokenLimitPerDay?: number | null;
         concurrencyLimit?: number | null;
+        paidBackup?: boolean;
+        budgetUsd?: number | null;
         compressToolResults?: boolean;
         terseSystemPrompt?: boolean;
       };
     }): Promise<unknown>;
     revokeKey(id: string): Promise<unknown>;
-    /** Recent requests routed by the Gateway, newest first (metadata only, kept in memory). */
+    /** Recent requests routed by the Gateway, newest first (metadata only, persisted locally). */
     requests(): Promise<GatewayRequestRecord[]>;
+    history(input?: GatewayHistoryQuery): Promise<GatewayHistoryPage>;
+    request(id: string): Promise<GatewayRequestRecord | null>;
+    usage(input?: {
+      range?: '24h' | '7d' | '30d';
+      groupBy?: 'key' | 'provider' | 'model';
+    }): Promise<GatewayUsageSummary>;
+    activity(): Promise<GatewayActivity>;
+    routing(keyId?: string): Promise<GatewayRoutingExplanation>;
+    rotateKey(
+      id: string,
+    ): Promise<{ key: { id: string; name: string; profile: string }; secret: string }>;
+    testConnection(input: {
+      id: string;
+      protocol?: 'chat' | 'responses' | 'anthropic';
+      approvedCostUsd?: number;
+    }): Promise<GatewayConnectionTest>;
     start(): Promise<unknown>;
     stop(): Promise<unknown>;
   };
@@ -185,6 +215,9 @@ export interface FerryClient {
     restore(id: CheckpointId, paths?: string[]): Promise<void>;
   };
   providers: {
+    startChecks(options?: import('@ferry/shared').ProviderCheckOptions): Promise<{ id: string }>;
+    checkProgress(id?: string): Promise<import('@ferry/shared').ProviderCheckProgress>;
+    cancelChecks(id: string): Promise<import('@ferry/shared').ProviderCheckProgress>;
     failures(
       providerId?: ProviderId,
       options?: import('@ferry/shared').FailureOptions,
@@ -223,6 +256,8 @@ export interface FerryClient {
   oauth: {
     list(): Promise<OAuthProvider[]>;
     login(id: OAuthProviderId, options?: { gateway?: string }): Promise<void>;
+    respond(id: OAuthProviderId, promptId: string, value: string): Promise<void>;
+    cancel(id: OAuthProviderId): Promise<void>;
     logout(id: OAuthProviderId): Promise<void>;
     status(id: OAuthProviderId): Promise<boolean>;
   };
@@ -239,14 +274,16 @@ export interface FerryClient {
     select(sessionId: SessionId, ref: ModelRef | 'auto'): Promise<void>;
   };
   profiles: {
+    importCodingResults(report: unknown): Promise<{ imported: number; total: number }>;
     list(): Promise<Profile[]>;
     save(p: Profile): Promise<Profile>;
     remove(id: ProfileId): Promise<void>;
     activate(id: ProfileId, sessionId?: SessionId): Promise<void>;
   };
-  settings: { get(): Promise<Settings>; update(patch: Partial<Settings>): Promise<Settings> };
+  settings: { get(): Promise<Settings>; update(patch: SettingsPatch): Promise<Settings> };
   optimizer: { stats(): Promise<OptimizerStats> };
   delegation: {
+    clients(checkAuth?: boolean): Promise<import('@ferry/shared').DelegationClientStatus[]>;
     lanes(): Promise<Lane[]>;
     detectAgents(): Promise<AcpAgentDetection[]>;
     approveProjectLanes(): Promise<Lane[]>;

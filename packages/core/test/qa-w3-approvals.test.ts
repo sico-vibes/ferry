@@ -24,8 +24,6 @@ describe('QA W3 approvals: adversarial responses', () => {
     const h = await startHarness({ turns: [textTurn('hello')] });
     try {
       const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
-      await h.rpc.sessions.send(session.id, { text: 'go' });
-      await waitFor(async () => (await h.rpc.sessions.get(session.id)).session.status === 'idle');
       await expect(
         h.rpc.approvals.respond(session.id, 'part_does_not_exist' as PartId, 'allow_once'),
       ).rejects.toMatchObject({ kind: 'not_found' });

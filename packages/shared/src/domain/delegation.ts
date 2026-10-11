@@ -20,6 +20,14 @@ export const LaneSchema = z.object({
   trusted: z.boolean(),
 });
 export type Lane = z.infer<typeof LaneSchema>;
+export const DelegationClientStatusSchema = z.object({
+  id: z.enum(['codex', 'opencode', 'claude']),
+  installed: z.boolean(),
+  signedIn: z.boolean().nullable(),
+  version: z.string().nullable(),
+  verifiedAt: z.iso.datetime().nullable(),
+});
+export type DelegationClientStatus = z.infer<typeof DelegationClientStatusSchema>;
 export const AcpAgentDetectionSchema = z.object({
   id: z.string(),
   name: z.string(),

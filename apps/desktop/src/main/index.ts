@@ -7,6 +7,7 @@ import {
   shell,
   session,
   utilityProcess,
+  powerMonitor,
   type UtilityProcess,
 } from 'electron';
 import updater, { type NsisUpdater } from 'electron-updater';
@@ -29,6 +30,7 @@ import {
   WINDOW_SYMBOL,
 } from './window-theme.js';
 import { buildCoreEnvironment } from './core-environment.js';
+import { attachPowerLifecycle } from './power-lifecycle.js';
 import { isTrustedRendererOrigin } from './renderer-origin.js';
 import { isAllowlistedExternal } from './external-links.js';
 import { UpdateController, type UpdateSnapshot } from './update-state.js';
@@ -709,6 +711,15 @@ app
       }
     }
     if (gotLock) {
+      const detachPower = attachPowerLifecycle(powerMonitor, {
+        suspend: () => coreProcess?.postMessage({ type: 'ferry:ui-active', active: false }),
+        resume: () => {
+          if (shuttingDown) return;
+          if (coreProcess && !utilityProcessIsAlive(coreProcess)) handleCoreExit(coreProcess, null);
+          coreProcess?.postMessage({ type: 'ferry:ui-active', active: !windowBackgrounded });
+        },
+      });
+      app.once('will-quit', detachPower);
       launchCore();
       if (process.env.FERRY_E2E_USER_DATA_DIR) console.log('FERRY_MAIN_READY');
       if (!process.env.FERRY_E2E_CORE_ONLY) {

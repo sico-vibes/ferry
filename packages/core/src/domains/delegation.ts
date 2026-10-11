@@ -1,4 +1,5 @@
 import { sessionWorkspace } from '../session-workspace.js';
+import { delegationClientStatus } from '../delegation-client-status.js';
 import {
   decide,
   detectAcpAgents,
@@ -161,8 +162,16 @@ export function register(host: CoreHost, services: FerryServices): void {
     return parsed;
   };
   host.registerDomain('delegation', {
+    clients: (checkAuth: unknown) =>
+      delegationClientStatus(
+        services.env,
+        services.delegations.list(),
+        z.boolean().parse(checkAuth ?? false),
+      ),
     async detectAgents() {
-      return (await detectAcpAgents()).map((agent) => AcpAgentDetectionSchema.parse(agent));
+      return (await detectAcpAgents({ environment: services.env })).map((agent) =>
+        AcpAgentDetectionSchema.parse(agent),
+      );
     },
     async lanes() {
       const workspace = services.workspaces.list()[0];

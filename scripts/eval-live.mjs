@@ -234,6 +234,7 @@ export async function runEvalLive(args = process.argv.slice(2), lifecycle = {}) 
       runScenario: (scenario) =>
         runScenario({
           scenario,
+          allowedProviders: providerList,
           services,
           client: rpc,
           options,
@@ -289,6 +290,7 @@ export async function runEvalLive(args = process.argv.slice(2), lifecycle = {}) 
 
 async function runScenario({
   scenario,
+  allowedProviders,
   services,
   client,
   options,
@@ -301,18 +303,28 @@ async function runScenario({
   const fixture = await createFixtureRepo(scenario.template);
   const before = await snapshot(fixture.path);
   const profileName = options.profile === 'auto-free' ? 'Auto-Free' : 'Best Available';
-  let savedProfile;
-  let changedProfile = false;
+  let evalProfile;
   try {
-    if (options.roles !== undefined) {
-      savedProfile = (await client.profiles.list()).find((profile) => profile.name === profileName);
-      if (!savedProfile) throw new Error(`Profile not found: ${profileName}`);
-      const enabled = options.roles === 'on';
-      if (savedProfile.roles.enabled !== enabled) {
-        await client.profiles.save({ ...savedProfile, roles: { ...savedProfile.roles, enabled } });
-        changedProfile = true;
-      }
-    }
+    const base = (await client.profiles.list()).find((profile) => profile.name === profileName);
+    if (!base) throw new Error(`Profile not found: ${profileName}`);
+    const id = `profile_eval_${globalThis.crypto.randomUUID()}`;
+    const permittedRef = (ref) =>
+      ref && allowedProviders.includes(ref.slice(0, ref.indexOf('/'))) ? ref : null;
+    // Include/exclude policy must constrain dispatch, including keyless providers, without editing user profiles.
+    evalProfile = await client.profiles.save({
+      ...base,
+      id,
+      name: `${profileName} (${id})`,
+      builtin: false,
+      pinned: false,
+      allowedProviders,
+      roles: {
+        ...base.roles,
+        ...(options.roles !== undefined ? { enabled: options.roles === 'on' } : {}),
+        plannerModelRef: permittedRef(base.roles.plannerModelRef),
+        editorModelRef: permittedRef(base.roles.editorModelRef),
+      },
+    });
     await mkdir(join(fixture.path, '.ferry'), { recursive: true });
     await writeFile(
       join(fixture.path, '.ferry', 'config.json'),
@@ -331,7 +343,7 @@ async function runScenario({
       client,
       prompt: scenario.prompt,
       cwd: fixture.path,
-      profileName,
+      profileName: evalProfile.name,
       modelRef: options.model,
       maxSteps: options.maxSteps,
       timeoutMs: options.timeoutMs,
@@ -426,7 +438,7 @@ async function runScenario({
     };
   } finally {
     try {
-      if (changedProfile && savedProfile) await client.profiles.save(savedProfile);
+      if (evalProfile) await client.profiles.remove(evalProfile.id);
     } finally {
       await fixture.cleanup();
     }

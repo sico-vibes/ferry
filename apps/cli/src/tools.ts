@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import type { FerryClient } from '@ferry/client';
+import { nativeOpenCodeLaunch, isOpenCodeAppModel } from '@ferry/shared';
 import { toolProcess } from './tool-process.js';
 import {
   configuredContent,
@@ -15,6 +16,7 @@ import {
 } from './tool-config.js';
 
 export interface ToolOptions {
+  native?: boolean;
   keyId?: string | undefined;
   model?: string | undefined;
   preview?: boolean;
@@ -48,6 +50,10 @@ async function connection(
   tool: SupportedTool,
   options: ToolOptions,
 ): Promise<ToolConnection> {
+  const catalog = await client.models.list();
+  const appModels = new Set<string>(catalog.filter(isOpenCodeAppModel).map((model) => model.ref));
+  if (options.model && appModels.has(options.model))
+    throw new Error('Available in the OpenCode app. Use ferry run opencode --native.');
   const keys = (await client.gateway.listKeys()).filter((key) => !key.revokedAt);
   let keyId = options.keyId;
   keyId ??= await pick(
@@ -69,14 +75,17 @@ async function connection(
     secret = await client.gateway.keySecret(keyId);
   }
   const selected = keys.find((key) => key.id === keyId);
-  const allowed = selected?.allowedModels ?? [];
-  const alias =
-    selected?.profile && selected.profile !== 'none'
-      ? `ferry/${selected.profile}`
-      : 'ferry/auto-free';
+  const allowed = (selected?.allowedModels ?? []).filter((ref) => !appModels.has(ref));
+  if (selected?.allowedModels.length && !allowed.length)
+    throw new Error(
+      'This key selects OpenCode-app models. Use ferry run opencode --native or select a standard API model.',
+    );
+  const alias = 'ferry/auto';
   const models = allowed.length
-    ? allowed
-    : [alias, ...(await client.models.list()).map((model) => model.ref)];
+    ? selected?.profile === 'none'
+      ? allowed
+      : [alias, ...allowed]
+    : [alias, ...catalog.filter((model) => !isOpenCodeAppModel(model)).map((model) => model.ref)];
   const model =
     options.model ??
     (await pick(
@@ -84,7 +93,11 @@ async function connection(
       models.map((id) => ({ id, label: id })),
       models[0] ?? alias,
     ));
-  if (allowed.length && !allowed.includes(model))
+  if (
+    allowed.length &&
+    !allowed.includes(model) &&
+    !(selected?.profile !== 'none' && model === alias)
+  )
     throw new Error(`Model is not allowed by Gateway key ${keyId}: ${model}`);
   const status = (await client.gateway.start()) as { url?: string; status?: { url?: string } };
   const url = status.url ?? status.status?.url;
@@ -96,11 +109,19 @@ export async function runTool(
   tool: SupportedTool,
   options: ToolOptions,
 ): Promise<number> {
-  const selected = await connection(client, tool, options);
-  const launch = toolLaunch(tool, selected, options.args);
+  if (options.native && tool !== 'opencode')
+    throw new Error('--native is available for ferry run opencode.');
+  const selected = options.native ? undefined : await connection(client, tool, options);
+  const launch = selected
+    ? toolLaunch(tool, selected, options.args)
+    : nativeOpenCodeLaunch(options.model, options.args);
   if (options.preview) {
     process.stdout.write(
-      JSON.stringify(masked(launch, selected.secret), null, options.json ? undefined : 2) + '\n',
+      JSON.stringify(
+        selected ? masked(launch, selected.secret) : launch,
+        null,
+        options.json ? undefined : 2,
+      ) + '\n',
     );
     return 0;
   }

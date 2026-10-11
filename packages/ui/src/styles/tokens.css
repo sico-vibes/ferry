@@ -1,4 +1,5 @@
 :root {
+  --height-titlebar: 44px;
   --bg-app: #1c1d20;
   --bg-rail-tile: #2b2c30;
   --bg-rail-tile-active: #35363b;

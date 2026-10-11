@@ -1,16 +1,8 @@
 import { useMemo, useState } from 'react';
-import {
-  ExternalLink,
-  KeyRound,
-  LogIn,
-  LogOut,
-  MoreHorizontal,
-  RefreshCw,
-  Search,
-} from 'lucide-react';
+import { ExternalLink, LogIn, LogOut, MoreHorizontal, RefreshCw, Search } from 'lucide-react';
 import { Popover } from 'radix-ui';
 import type { OAuthProvider } from '@ferry/shared';
-import { ShowMoreList, SkeletonRows } from '@ferry/ui';
+import { ShowMoreList, SkeletonRows, ProviderLogo } from '@ferry/ui';
 
 const groupLabels = [
   ['official', 'Official OAuth'],
@@ -36,6 +28,7 @@ export function OAuthProviderRows({
   onLogout,
   loadError,
   onRetry,
+  pendingProviderId,
 }: {
   providers: OAuthProvider[];
   loading?: boolean;
@@ -44,6 +37,7 @@ export function OAuthProviderRows({
   /** Set when the sign-in list could not be loaded, so an empty list isn't mistaken for "no match". */
   loadError?: string | null;
   onRetry?: () => void;
+  pendingProviderId?: string | null;
 }) {
   const [query, setQuery] = useState('');
   const [gateways, setGateways] = useState<Record<string, string>>({});
@@ -93,14 +87,15 @@ export function OAuthProviderRows({
                 const available = provider.actionAvailable !== false;
                 return (
                   <li
-                    className="grid min-h-[52px] grid-cols-[minmax(150px,1.5fr)_minmax(130px,1fr)_minmax(90px,.7fr)_auto] items-center gap-3 oauth-setting-row py-2 max-sm:grid-cols-[1fr_auto]"
+                    className="grid min-h-[52px] grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_7rem_9rem] items-center gap-3 oauth-setting-row py-2 max-sm:grid-cols-[1fr_auto]"
                     key={provider.id}
                   >
                     <div className="flex min-w-0 items-center gap-2">
-                      <KeyRound
-                        aria-hidden="true"
-                        className="shrink-0 text-muted-foreground"
-                        size={16}
+                      <ProviderLogo
+                        providerId={provider.id}
+                        name={provider.name}
+                        size={20}
+                        className="shrink-0"
                       />
                       <div className="min-w-0">
                         <strong className="block truncate text-ui-label text-foreground">
@@ -118,15 +113,17 @@ export function OAuthProviderRows({
                       </div>
                     </div>
                     <span className="truncate text-ui-meta text-muted-foreground">
-                      {status === 'expired'
-                        ? 'Expired'
-                        : provider.connected
-                          ? `Connected${provider.account ? ` as ${provider.account}` : ''}`
-                          : group === 'unavailable'
-                            ? 'Unavailable'
-                            : group === 'coming_soon'
-                              ? 'Coming soon'
-                              : 'Not connected'}
+                      {pendingProviderId === provider.id
+                        ? 'Awaiting authorization'
+                        : status === 'expired'
+                          ? 'Expired'
+                          : provider.connected
+                            ? `Connected${provider.account ? ` as ${provider.account}` : ''}`
+                            : group === 'unavailable'
+                              ? 'Unavailable'
+                              : group === 'coming_soon'
+                                ? 'Coming soon'
+                                : 'Not connected'}
                     </span>
                     <span
                       className={`w-fit rounded-full px-2 py-1 text-ui-meta ${provider.riskLevel === 'high' ? 'bg-warning/10 text-warning' : provider.riskLevel === 'medium' ? 'bg-muted text-muted-foreground' : 'bg-success/10 text-success'}`}
@@ -202,7 +199,10 @@ export function OAuthProviderRows({
                             if (provider.connected) onLogout(provider);
                             else onLogin(provider, gateways[provider.id]);
                           }}
-                          disabled={Boolean(provider.advanced && !gateways[provider.id])}
+                          disabled={
+                            Boolean(pendingProviderId) ||
+                            (provider.advanced === true && !gateways[provider.id])
+                          }
                           type="button"
                         >
                           {provider.connected ? (

@@ -140,7 +140,8 @@ describe('live probe runner', () => {
       provider: 'opencode',
       ok: false,
       errorKind: 'unsupported_free_tier',
-      message: "Zen's free models only work inside OpenCode; Zen here needs paid balance",
+      message:
+        'Available in the OpenCode app. Use ferry run opencode or select a standard API model with your own key.',
     });
     expect(urls.some((url) => url.endsWith('/models'))).toBe(true);
     expect(urls.some((url) => url.endsWith('/chat/completions'))).toBe(true);
@@ -168,6 +169,8 @@ describe('live probe runner', () => {
       'novita',
       'together',
       'stepfun',
+      'ollama',
+      'lmstudio',
     ];
     const keys = Object.fromEntries(catalogProviders.map((provider) => [provider, 'fixture-key']));
     const fetch: typeof globalThis.fetch = (input) => {

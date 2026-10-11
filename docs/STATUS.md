@@ -1,6 +1,6 @@
 # Ferry status
 
-Last updated: 2026-10-09. Ferry is a Windows-first desktop + CLI coding agent: local core over JSON-RPC,
+Last updated: 2026-10-11. Ferry is a Windows-first desktop + CLI coding agent: local core over JSON-RPC,
 SQLite storage, free-first provider routing with quota tracking and handoffs, workspace tools with
 checkpoints, measured token optimizers, delegation to Codex / OpenCode / Claude / ACP agents, a local
 OpenAI/Anthropic-compatible Gateway, and subscription OAuth (opt-in). Public beta channel on GitHub
@@ -8,6 +8,11 @@ Releases (`v0.9.0-beta.N`, auto-published on every merge to `main`; installed ap
 
 ## Where we are
 
+1. **1.0 Gateway release preparation (`release/1.0-gateway`):** phases A–C implemented;
+   phase D adds four-client wire certification, isolated installer/portable and lifecycle validation,
+   DPI/keyboard/accessibility coverage, and the [support matrix](SUPPORT-MATRIX.md). Work is local
+   and awaits orchestrator review; this does not declare a published 1.0 release. Fixture verification
+   is separate from live installed-client/account certification, which remains opt-in.
 1. **Original master plan: complete** (integrated on `main` 2026-09-30; milestones below).
 2. **v0.10 upgrade waves: first batch on `main`** (`41eb69c`, beta `v0.9.0-beta.10`): P0/P2, P1, U1, U5, U2. P3/P6 parked (see below).
 3. **UI remake v2: complete on `main`** (2026-10-02, `a649d0a`): UI-0 foundation, UI-1 shell/Home/Session/drawer (user-approved at checkpoint C-UI, with seamless tone-based separation), UI-2 Library/Models/Settings/Onboarding/Review/palette/states, UI-3 legacy cleanup + polish. Gates: check 63/63, e2e 5/5 phases, 20/20 web flows, screenshots `design/screenshots/v2/` (both themes, 1440 and 1024). Remaining v0.10 work is listed below.
@@ -20,7 +25,8 @@ Releases (`v0.9.0-beta.N`, auto-published on every merge to `main`; installed ap
 |---|---|---|
 | v0.11 | Complete | Wave F and N1–N5 integrated; CLI parity and free-model consistency are on `main`. No v0.11 work remains. |
 | v0.12 UI | S + U released (beta.38); T, M, H, G implemented 2026-10-05, awaiting user review | `docs/plans/v0.12-ui-and-updates.md` (UI pass record); preview with `pnpm preview:web` |
-| WIP branches | None, except parked P3/P6 | `wave/p3-caching` is parked. Its migration must be renumbered when resumed: `0004` is now `provider_key_entries`, so P3/P6 must use `0005`. |
+| 1.0 release | Local implementation on `release/1.0-gateway`, awaiting orchestrator review | Four client protocols, provider checks, persistent policies/history, CLI parity and isolated Windows release checks; see `SUPPORT-MATRIX.md`. |
+| Parked work | P3/P6 | `wave/p3-caching` is parked. Renumber its migrations against the current storage migration list before resuming. |
 
 ## Milestones (original plan)
 

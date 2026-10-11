@@ -72,6 +72,7 @@ describe('Settings audit', () => {
     const client = createMockFerryClient({ behavior: 'test' });
     useUI.setState({ settingsSection: 'Routing' });
     const view = await mount(<SettingsCanvas />, client);
+    fireEvent.click(await screen.findByText('Advanced', { selector: 'summary' }));
     await screen.findByRole('switch', { name: 'Sticky sessions' });
     const content = view.container.querySelector('.v2-settings-content');
     if (!(content instanceof HTMLElement)) throw new Error('Missing settings scroller');
@@ -182,6 +183,13 @@ describe('Loading content', () => {
     const keys = deferred<Awaited<ReturnType<typeof client.gateway.listKeys>>>();
     vi.spyOn(client.gateway, 'listKeys').mockReturnValue(keys.promise);
     await mount(<GatewayCanvas />, client);
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Keys' }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: 'Keys' })).toBeTruthy();
+    });
     const region = screen.getByRole('region', { name: 'Keys' });
     expect(region.querySelector('[aria-busy="true"]')).toBeTruthy();
     expect(screen.queryByText(/No keys yet/)).toBeNull();

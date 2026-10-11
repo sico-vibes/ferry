@@ -39,7 +39,7 @@ export function StorageChoice({ onContinue }: { onContinue: () => void }) {
     if (!status.auth.signedIn)
       return (
         <div className="grid w-full max-w-[420px] gap-3 text-left">
-          <p className="muted">Sign in to Ferry Cloud to sync this device.</p>
+          <p className="muted">Sign in to recover existing Ferry Cloud data.</p>
           <CloudSignInForm ownerEmail={status.ownerEmail} />
           <UiV2.Button variant="ghost" disabled={busy} onClick={() => void choose('local')}>
             Use this device only instead
@@ -60,17 +60,12 @@ export function StorageChoice({ onContinue }: { onContinue: () => void }) {
         <UiV2.Button disabled={busy} onClick={() => void choose('local')}>
           Continue on this device
         </UiV2.Button>
-        {status?.configured ? (
-          <UiV2.Button variant="secondary" disabled={busy} onClick={() => void choose('cloud')}>
-            Sign in to Ferry Cloud
-          </UiV2.Button>
-        ) : null}
+        <UiV2.Button variant="secondary" disabled>
+          Ferry Cloud — Coming soon
+        </UiV2.Button>
       </div>
       {status?.configured ? (
-        <p className="muted">
-          Ferry Cloud keeps sessions, settings, logs and API keys in your account. You can switch
-          later in Settings → Storage &amp; Cloud.
-        </p>
+        <p className="muted">Ferry Cloud is coming soon. Local storage is active.</p>
       ) : null}
       {error ? (
         <p className="v2-settings-save-error" role="alert">

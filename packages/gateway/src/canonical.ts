@@ -301,11 +301,16 @@ export function openAiResponsesToCanonical(input: Record<string, unknown>): Cano
       })
     : undefined;
   const canonicalTools = convertTools(tools);
+  const choice = record(input.tool_choice);
+  const toolChoice =
+    choice?.type === 'function' && typeof choice.name === 'string'
+      ? { type: 'function', function: { name: choice.name } }
+      : input.tool_choice;
   return {
     model: input.model,
     messages,
     ...(canonicalTools ? { tools: canonicalTools } : {}),
-    ...(input.tool_choice !== undefined ? { toolChoice: input.tool_choice } : {}),
+    ...(toolChoice !== undefined ? { toolChoice } : {}),
     ...(typeof input.max_output_tokens === 'number' ? { maxTokens: input.max_output_tokens } : {}),
     ...canonicalReasoningEffort(input),
     stream: input.stream === true,
@@ -459,9 +464,7 @@ export function canonicalToGatewayMessages(messages: CanonicalMessage[]): {
           : [],
       );
       const visible = item.parts.filter((part) => part.type !== 'tool_result');
-      const providerVisible = visible.filter(
-        (part) => part.type === 'text' || part.type === 'image',
-      );
+      const providerVisible = visible;
       const text = providerVisible
         .filter((part) => part.type === 'text')
         .map((part) => (part as { text: string }).text)
@@ -469,6 +472,9 @@ export function canonicalToGatewayMessages(messages: CanonicalMessage[]): {
       const imageParts = providerVisible
         .filter((part) => part.type === 'image')
         .map((part) => ({ type: 'image', image: (part as { url: string }).url }));
+      const reasoningParts = providerVisible
+        .filter((part) => part.type === 'reasoning')
+        .map((part) => ({ type: 'reasoning', text: (part as { text: string }).text }));
       const toolCalls = item.toolCalls?.map((call) => ({
         id: call.id,
         type: 'function',
@@ -476,9 +482,10 @@ export function canonicalToGatewayMessages(messages: CanonicalMessage[]): {
       }));
       const message: GatewayMessage = {
         role: item.role,
-        content: imageParts.length
-          ? [...(text ? [{ type: 'text', text }] : []), ...imageParts]
-          : text,
+        content:
+          imageParts.length || reasoningParts.length
+            ? [...(text ? [{ type: 'text', text }] : []), ...imageParts, ...reasoningParts]
+            : text,
         ...(toolCalls?.length ? { tool_calls: toolCalls } : {}),
         ...(item.toolCallId ? { tool_call_id: item.toolCallId } : {}),
       };

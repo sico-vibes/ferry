@@ -147,10 +147,17 @@ export function createRpcFerryClient(
     if (closed) throw new RpcError('RPC client is closed', -32000, 'unavailable');
     const id = ++nextId;
     return await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        reject(new RpcError(`RPC request timed out: ${method}`, -32001, 'timeout'));
-      }, timeoutMs);
+      const timer = setTimeout(
+        () => {
+          pending.delete(id);
+          reject(new RpcError(`RPC request timed out: ${method}`, -32001, 'timeout'));
+        },
+        method === 'oauth.login'
+          ? Math.max(timeoutMs, 10 * 60_000 + 5_000)
+          : method === 'gateway.testConnection'
+            ? Math.max(timeoutMs, 155_000)
+            : timeoutMs,
+      );
       pending.set(id, { resolve, reject, timer });
       transport.send({ jsonrpc: '2.0', id, method, params });
     });

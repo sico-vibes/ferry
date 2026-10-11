@@ -1,3 +1,4 @@
+import { isOpenCodeAppModel } from '@ferry/shared';
 import { SkeletonTable, SkeletonStat } from '@ferry/ui';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -22,7 +23,9 @@ import { useFerryClient } from '../../data/client';
 import { useToasts } from '../../state/toasts';
 import { useUI } from '../../state/ui';
 import { ProviderKeyDialog } from '../ProviderKeyDialog';
+import { ProviderReadiness } from '../ProviderReadiness';
 import { OAuthProviderRows } from '../OAuthProviderRows';
+import { ZenSetupPrompt } from '../ZenSetupPrompt';
 import { UsageTab } from './Usage';
 import { PausedProviders } from './Failures';
 import { HealthTab } from './Health';
@@ -78,6 +81,7 @@ export function ModelsCanvas() {
   const [activeOAuthProvider, setActiveOAuthProvider] = useState<OAuthProvider | null>(null);
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
+  const [pendingOAuthId, setPendingOAuthId] = useState<string | null>(null);
   const [probing, setProbing] = useState<string | null>(null);
   const [probeFeedback, setProbeFeedback] = useState<Record<string, string>>({});
   const [recentlyUpdatedProviderIds, setRecentlyUpdatedProviderIds] = useState<Set<string>>(
@@ -165,6 +169,10 @@ export function ModelsCanvas() {
     const query = search.trim().toLowerCase();
     const matchesFilter =
       providerFilter === 'All' ||
+      (providerFilter === 'Paid' &&
+        (['paid', 'credits', 'subscription_cli'].includes(provider.tag) ||
+          provider.id === 'openrouter' ||
+          provider.billingEnabled === true)) ||
       (providerFilter === 'Free' &&
         provider.tag !== 'paid' &&
         provider.tag !== 'subscription_oauth' &&
@@ -217,7 +225,12 @@ export function ModelsCanvas() {
             ? result.message
             : `Key invalid \u00B7 ${result.message}`,
       }));
-      if (!result.ok) pushToast({ kind: 'error', title: 'Key invalid', body: result.message });
+      if (!result.ok)
+        pushToast({
+          kind: 'error',
+          title: result.keyValid ? 'Provider test failed' : 'Key invalid',
+          body: result.message,
+        });
       else
         pushToast({
           kind: 'success',
@@ -266,11 +279,14 @@ export function ModelsCanvas() {
         await client.settings.update({
           subscriptionOAuthAcknowledged: [...acknowledged, provider.id],
         });
+      setActiveOAuthProvider(null);
+      setPendingOAuthId(provider.id);
       await client.oauth.login(provider.id, ...(gateway ? [{ gateway }] : []));
       await cache.invalidateQueries({ queryKey: ['oauth-providers'] });
       setActiveOAuthProvider(null);
       setRiskAcknowledged(false);
     } catch (error) {
+      if (error instanceof Error && /cancel/i.test(error.message)) return;
       pushToast({
         kind: 'error',
         title: 'Subscription login failed',
@@ -278,6 +294,7 @@ export function ModelsCanvas() {
       });
     } finally {
       setOauthLoading(false);
+      setPendingOAuthId(null);
     }
   };
   const requestOAuthAction = (provider: OAuthProvider, gateway?: string) => {
@@ -358,7 +375,7 @@ export function ModelsCanvas() {
                 aria-label="Provider filters"
                 className="flex flex-wrap gap-1 rounded-button bg-muted p-1"
               >
-                {(['All', 'Free', 'Needs attention', 'Configured'] as const).map((item) => (
+                {(['All', 'Free', 'Paid', 'Needs attention', 'Configured'] as const).map((item) => (
                   <button
                     aria-pressed={providerFilter === item}
                     className={`rounded-control px-3 py-1.5 text-ui-label transition-colors ${providerFilter === item ? 'bg-card text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
@@ -417,7 +434,9 @@ export function ModelsCanvas() {
               />
             )}
             <Section title="Subscription sign-ins">
+              <ZenSetupPrompt />
               <OAuthProviderRows
+                pendingProviderId={pendingOAuthId}
                 onLogin={requestOAuthAction}
                 onLogout={requestOAuthAction}
                 loading={oauthPending}
@@ -426,6 +445,9 @@ export function ModelsCanvas() {
                 onRetry={() => void refetchOAuth()}
               />
             </Section>
+            <div className="py-6">
+              <ProviderReadiness />
+            </div>
           </UiV2.TabsContent>
           <UiV2.TabsContent className="min-w-0" value="models">
             <Section ariaLabel="Model comparison" className="grid gap-3">
@@ -549,6 +571,16 @@ export function ModelsCanvas() {
                             size={16}
                           />
                           <span>{model.name}</span>
+                          <small className="block text-ui-meta text-muted-foreground">
+                            {model.apiAccessVerified
+                              ? 'Verified on this account'
+                              : model.verified
+                                ? 'Discovered on this connection'
+                                : 'Catalogued; access not checked'}
+                            {model.verifiedAt
+                              ? ` · ${new Date(model.verifiedAt).toLocaleDateString()}`
+                              : ''}
+                          </small>
                           {model.failing && (
                             <UiV2.Badge variant="destructive" className="ml-2">
                               Failing
@@ -606,7 +638,7 @@ export function ModelsCanvas() {
                         </td>
                         <td className="px-3">
                           <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
-                            {model.tier}
+                            {{ T1: 'Top', T2: 'Strong', T3: 'Light' }[model.tier]}
                           </span>
                         </td>
                         <td className="px-3 tabular-nums text-muted-foreground">
@@ -624,7 +656,24 @@ export function ModelsCanvas() {
                           )}
                         </td>
                         <td className="px-3 text-muted-foreground">
-                          {model.free ? 'Free' : 'Paid'}
+                          {isOpenCodeAppModel(model) ? (
+                            <span className="grid gap-1">
+                              <span>Available in the OpenCode app</span>
+                              <a
+                                className="text-link underline"
+                                href="https://opencode.ai/docs/"
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Configure OpenCode
+                              </a>
+                              <code>ferry run opencode --native</code>
+                            </span>
+                          ) : model.free ? (
+                            'Free'
+                          ) : (
+                            'Paid'
+                          )}
                         </td>
                         <td className="px-3 tabular-nums text-muted-foreground">
                           {compact(model.priceInPerM)}

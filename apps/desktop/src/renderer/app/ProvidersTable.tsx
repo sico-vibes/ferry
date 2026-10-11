@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { useFerryClient } from '../data/client';
-import { ProviderStatusBadge } from './ProviderStatusBadge';
 import { useMemo, useState } from 'react';
-import type { Provider, QuotaWindow } from '@ferry/shared';
+import { providerDefinition, type Provider, type QuotaWindow } from '@ferry/shared';
 import {
   ArrowDown,
   ArrowUp,
   Ban,
   CircleCheck,
+  CirclePause,
   CircleDashed,
   CircleHelp,
   CircleX,
@@ -38,7 +38,6 @@ export function providerStatus(
   now = Date.now(),
 ): { label: string; tone: Tone } {
   if (provider.pausedReason) return { label: 'Paused', tone: 'destructive' };
-  if (!provider.enabled) return { label: 'Off', tone: 'muted' };
   if (provider.health === 'auth_invalid' || provider.keyStatus === 'invalid')
     return { label: 'Invalid key', tone: 'destructive' };
   if (provider.health === 'account_disabled')
@@ -65,6 +64,7 @@ export function providerStatus(
 const statusRank: Record<Tone, number> = { destructive: 0, warning: 1, success: 2, muted: 3 };
 
 function statusIcon(label: string): LucideIcon {
+  if (label === 'Paused') return CirclePause;
   if (label === 'Healthy' || label === 'Key valid') return CircleCheck;
   if (label.startsWith('Cool')) return Timer;
   if (label === 'Invalid key' || label === 'Key missing') return KeyRound;
@@ -231,7 +231,9 @@ export function ProvidersTable({
               const StatusIcon = statusIcon(status.label);
               const training = dataUseStatus(provider.dataUse);
               const note = provider.termsNote ?? provider.dataUse;
-              const toggleable = provider.tag !== 'subscription_oauth';
+              const definition = providerDefinition(provider.id);
+              const comingSoon = definition?.releaseState === 'Coming soon';
+              const toggleable = provider.tag !== 'subscription_oauth' && !comingSoon;
               return (
                 <tr
                   data-enabled={provider.enabled}
@@ -244,6 +246,9 @@ export function ProvidersTable({
                       <span className="v2-provider-name" title={provider.name}>
                         {provider.name}
                       </span>
+                      {definition && (
+                        <UiV2.Badge variant="secondary">{definition.releaseState}</UiV2.Badge>
+                      )}
                       <TagBadge kind={tagKind(provider)} />
                       {(failures?.providers.find((row) => row.providerId === provider.id)
                         ?.failed24h ?? 0) > 0 && (
@@ -274,13 +279,11 @@ export function ProvidersTable({
                     </span>
                   </td>
                   <td className="v2-col-status">
-                    {provider.pausedReason ? (
-                      <ProviderStatusBadge status="disabled" paused />
-                    ) : (
+                    {
                       <UiV2.Tooltip>
                         <UiV2.TooltipTrigger asChild>
                           <span className="v2-status-icon" data-tone={status.tone} tabIndex={0}>
-                            <StatusIcon aria-hidden="true" size={16} strokeWidth={1.9} />
+                            <StatusIcon aria-hidden="true" size={16} strokeWidth={1.75} />
                             <span className="sr-only">{status.label}</span>
                           </span>
                         </UiV2.TooltipTrigger>
@@ -289,7 +292,7 @@ export function ProvidersTable({
                           {feedback?.[provider.id] ? ` · ${feedback[provider.id] ?? ''}` : ''}
                         </UiV2.TooltipContent>
                       </UiV2.Tooltip>
-                    )}
+                    }
                     {feedback?.[provider.id] && (
                       <span aria-live="polite" className="sr-only" role="status">
                         {feedback[provider.id]}
@@ -324,7 +327,7 @@ export function ProvidersTable({
                         <UiV2.TooltipTrigger asChild>
                           <UiV2.Button
                             aria-label={`Test ${provider.name}`}
-                            disabled={testing === provider.id || !provider.enabled}
+                            disabled={comingSoon || testing === provider.id || !provider.enabled}
                             onClick={() => {
                               onTest(provider);
                             }}
@@ -341,6 +344,7 @@ export function ProvidersTable({
                         <UiV2.TooltipContent>Test connection</UiV2.TooltipContent>
                       </UiV2.Tooltip>
                       <UiV2.Button
+                        disabled={comingSoon}
                         aria-label="Manage key"
                         className="v2-manage-key"
                         onClick={() => {

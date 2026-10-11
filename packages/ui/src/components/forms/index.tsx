@@ -186,15 +186,21 @@ export function Select({
   options,
   label,
   placeholder,
+  disabled = false,
 }: {
   value: string;
   onValueChange: (value: string) => void;
   options: { value: string; label: string }[];
   label?: string;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   return (
-    <SelectPrimitive.Root {...(value ? { value } : {})} onValueChange={onValueChange}>
+    <SelectPrimitive.Root
+      {...(value ? { value } : {})}
+      onValueChange={onValueChange}
+      disabled={disabled}
+    >
       <SelectPrimitive.Trigger aria-label={label} className={cn('ferry-select-trigger', control)}>
         <SelectPrimitive.Value placeholder={placeholder ?? 'Choose'} />
         <SelectPrimitive.Icon>

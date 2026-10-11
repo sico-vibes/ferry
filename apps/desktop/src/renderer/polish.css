@@ -936,3 +936,70 @@
 :root.light .text-warning {
   color: color-mix(in srgb, var(--warning) 70%, var(--foreground));
 }
+/* Gateway control centre inherits the existing page and flat Settings rhythm. */
+.v2-gateway-tab-list {
+  display: flex;
+  flex-wrap: wrap;
+  height: auto;
+  max-width: 100%;
+  width: fit-content;
+}
+.gateway-request-drawer {
+  top: var(--height-titlebar);
+  height: calc(100dvh - var(--height-titlebar));
+  z-index: var(--z-modal);
+}
+.gateway-request-overlay {
+  z-index: var(--z-modal-overlay);
+}
+:root.light .v2-status-pill[data-tone='success'] {
+  color: color-mix(in srgb, var(--success) 80%, var(--foreground));
+}
+.v2-gateway-table td small {
+  display: block;
+  max-width: 24ch;
+  white-space: normal;
+  color: var(--muted-foreground);
+}
+.v2-gateway-filters {
+  flex-wrap: wrap;
+}
+.v2-gateway-filters input {
+  flex: 1;
+  min-width: 0;
+}
+.v2-gateway-page summary,
+.onboarding-page summary {
+  cursor: pointer;
+  padding-block: var(--space-2);
+}
+.onboarding-content {
+  display: grid;
+  gap: var(--space-4);
+}
+.onboarding-content .setting-row {
+  min-width: 0;
+}
+
+.v2-titlebar {
+  height: var(--height-titlebar);
+  flex-basis: var(--height-titlebar);
+}
+.provider-connection-row > div.provider-connection-summary:first-child {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.provider-connection-copy {
+  display: grid;
+  gap: var(--space-2);
+}
+.onboarding-content > h1 {
+  font-size: var(--text-ui-page);
+  line-height: var(--text-ui-page--line-height);
+  font-weight: 600;
+}
+.model-free-pill {
+  color: var(--foreground);
+  background: var(--muted);
+}

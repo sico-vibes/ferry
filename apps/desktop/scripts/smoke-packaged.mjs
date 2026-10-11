@@ -1,12 +1,19 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium, expect } from '@playwright/test';
 
 const packageRoot = resolve(import.meta.dirname, '..');
+// Every CLI child inherits isolation too, including daemon start/stop before GUI launch.
+if (
+  !process.env.FERRY_KEYRING_SERVICE ||
+  process.env.FERRY_KEYRING_SERVICE.trim().toLowerCase() === 'ferry'
+)
+  process.env.FERRY_KEYRING_SERVICE = `Ferry-Packaged-Smoke-${process.pid}`;
 const executable =
   process.env.FERRY_SMOKE_EXECUTABLE ?? join(packageRoot, 'release', 'win-unpacked', 'Ferry.exe');
 const iconMetadata = spawnSync(
@@ -148,6 +155,8 @@ console.log('Packaged providers list works');
 const doctorResult = runCliShim(['doctor', '--json', '--data-dir', cliDataDirectory], {
   encoding: 'utf8',
   timeout: 30_000,
+  // This gate certifies bundled modules, not unrelated globally installed agent launchers.
+  env: { ...process.env, PATH: join(process.env.SystemRoot ?? 'C:\\Windows', 'System32') },
 });
 const doctorRows = parseCliJson('Packaged doctor', doctorResult);
 for (const required of ['SQLite', 'keyring', 'pty', 'ripgrep']) {
@@ -190,6 +199,30 @@ if (
 )
   throw new Error('Packaged CLI mock run did not emit a successful terminal idle status.');
 console.log('Packaged CLI run streams to an idle terminal status');
+// Keep daemon smoke listeners separate from any real Ferry Gateway on the default port.
+const Database = createRequire(join(packageRoot, 'package.json'))('better-sqlite3');
+const daemonSettingsDb = new Database(join(cliDataDirectory, 'db', 'ferry.sqlite'));
+try {
+  daemonSettingsDb
+    .prepare('INSERT OR REPLACE INTO settings_kv(key,value_json,updated_at) VALUES (?,?,?)')
+    .run(
+      'gateway-settings',
+      JSON.stringify({ enabled: false, port: 0, allowLan: false }),
+      new Date().toISOString(),
+    );
+} finally {
+  daemonSettingsDb.close();
+}
+await writeFile(
+  join(cliDataDirectory, 'core.lock'),
+  JSON.stringify({ pid: 2147483647, protocol: 'ferry/1' }),
+  'utf8',
+);
+await writeFile(
+  join(cliDataDirectory, 'gateway-status.json'),
+  JSON.stringify({ pid: 2147483647, url: 'http://127.0.0.1:1', port: 1, host: '127.0.0.1' }),
+  'utf8',
+);
 const gatewayStartResult = runCliShim(
   ['gateway', 'start', '--json', '--data-dir', cliDataDirectory],
   { encoding: 'utf8', timeout: 45_000 },
@@ -213,6 +246,22 @@ try {
   );
   assertCliSuccess('Packaged Gateway stop cleanup', gatewayStopResult);
 }
+const restarted = parseCliJson(
+  'Packaged Gateway restart',
+  runCliShim(['gateway', 'start', '--json', '--data-dir', cliDataDirectory], {
+    encoding: 'utf8',
+    timeout: 45_000,
+  }),
+);
+if (!restarted.url) throw new Error('Gateway restart did not return its endpoint');
+assertCliSuccess(
+  'Packaged Gateway restart cleanup',
+  runCliShim(['gateway', 'stop', '--json', '--data-dir', cliDataDirectory], {
+    encoding: 'utf8',
+    timeout: 30_000,
+  }),
+);
+console.log('Packaged Gateway recovers stale locks, stops and restarts');
 const coreLogPath = join(userDataDirectory, 'engine', 'logs', 'ferry.log');
 const smokeStartedAt = new Date();
 const portServer = createServer();
@@ -330,7 +379,10 @@ async function waitForRendererLoad() {
           const readyState = await page.evaluate(() => document.readyState);
           if (readyState === 'complete') {
             const composer = page.getByRole('textbox', { name: 'Message Ferry' });
-            const skipSetup = page.getByRole('button', { name: 'Skip setup' });
+            const skipSetup = page.getByRole('heading', {
+              name: 'What will you use Ferry for?',
+              exact: true,
+            });
             const primaryNavigation = page.getByRole('navigation', { name: 'Primary' });
             // After an upgrade, What's new opens once over the app; close it like a user would.
             const whatsNew = page.getByRole('dialog', { name: /What.s new/ });
@@ -376,6 +428,9 @@ async function waitForRendererLoad() {
             )
               throw new Error(`Packaged real-domain hello failed: ${JSON.stringify(domains)}`);
             console.log(`Packaged renderer hello reports ${String(domains.length)} real domains`);
+            const beforeAttach = JSON.parse(
+              await readFile(join(userDataDirectory, 'engine', 'core.lock'), 'utf8'),
+            );
             const attachedStatusResult = runCliShim(['status', '--json'], {
               encoding: 'utf8',
               timeout: 30_000,
@@ -411,6 +466,11 @@ async function waitForRendererLoad() {
                 'Packaged providers over the app control channel did not return an array',
               );
             console.log('Packaged CLI attaches to the running app core');
+            const afterAttach = JSON.parse(
+              await readFile(join(userDataDirectory, 'engine', 'core.lock'), 'utf8'),
+            );
+            if (afterAttach.pid !== beforeAttach.pid)
+              throw new Error('Desktop/CLI did not preserve the single Core owner');
             await expect(skipSetup.or(primaryNavigation).first()).toBeVisible({
               timeout: 20_000,
             });
@@ -428,16 +488,76 @@ async function waitForRendererLoad() {
                 if (!client) throw new Error('RPC client unavailable for persistence check');
                 const settings = await client.settings.update({ theme: 'light' });
                 const workspace = await client.workspaces.open(workspacePath);
+                await client.workspaces.trust(workspace.id);
                 const session = await client.sessions.create({
                   workspaceId: workspace.id,
                   title: 'Installer persistence smoke',
                 });
-                return { theme: settings.theme, sessionId: session.id };
+                // Core deliberately prunes unused empty chats on restart. Seed a durable
+                // user message with every provider disabled, so no generation can dispatch.
+                for (const provider of await client.providers.list())
+                  if (provider.enabled) await client.providers.setEnabled(provider.id, false);
+                await client.sessions.send(session.id, { text: 'Installer persistence sentinel' });
+                if (!(await client.sessions.get(session.id)).messages.length)
+                  throw new Error('Persistence fixture did not record its synthetic user message');
+                const base = (await client.profiles.list()).find(
+                  (profile) => profile.name === 'Auto-Free',
+                );
+                if (!base) throw new Error('Missing Auto-Free profile');
+                const profile = await client.profiles.save({
+                  ...base,
+                  id: 'install-smoke-routing',
+                  name: 'Installer routing',
+                  builtin: false,
+                  routingObjective: 'latency',
+                });
+                const key = await client.gateway.createKey({
+                  name: 'Installer key',
+                  profile: profile.id,
+                });
+                return {
+                  theme: settings.theme,
+                  sessionId: session.id,
+                  profileId: profile.id,
+                  keyId: key.key.id,
+                };
               }, fixturePath);
               await writeFile(
                 process.env.FERRY_SMOKE_STATE_FILE,
                 JSON.stringify(persisted),
                 'utf8',
+              );
+            }
+            if (
+              process.env.FERRY_SMOKE_STATE_FILE &&
+              process.env.FERRY_SMOKE_SEED_DATA !== 'true'
+            ) {
+              const saved = JSON.parse(await readFile(process.env.FERRY_SMOKE_STATE_FILE, 'utf8'));
+              const restored = await page.evaluate(async (state) => {
+                const client = window.ferryRpcClient;
+                const profiles = await client.profiles.list();
+                const keys = await client.gateway.listKeys();
+                return {
+                  theme: (await client.settings.get()).theme,
+                  title: (await client.sessions.get(state.sessionId)).session.title,
+                  profile: profiles.find((profile) => profile.id === state.profileId)
+                    ?.routingObjective,
+                  keyProfile: keys.find((key) => key.id === state.keyId)?.profile,
+                  hasSecret: Boolean(await client.gateway.keySecret(state.keyId)),
+                };
+              }, saved);
+              if (
+                restored.theme !== saved.theme ||
+                restored.title !== 'Installer persistence smoke' ||
+                restored.profile !== 'latency' ||
+                restored.keyProfile !== saved.profileId ||
+                !restored.hasSecret
+              )
+                throw new Error(
+                  'Upgrade did not restore settings/session/routing/key configuration',
+                );
+              console.log(
+                'Packaged restart restores settings, custom routing and retrievable Gateway key',
               );
             }
             console.log(`Packaged app became interactive after ${String(interactiveMs)} ms`);
@@ -449,7 +569,14 @@ async function waitForRendererLoad() {
               );
             if (interactiveMs > 10_000)
               throw new Error(`Packaged app TTI exceeded 10000 ms: ${String(interactiveMs)} ms`);
-            if (firstRunOnboardingVisible) await skipSetup.click();
+            if (firstRunOnboardingVisible) {
+              // This native-module smoke does not generate provider traffic. The packaged
+              // golden path separately completes the real six-step Gateway onboarding.
+              await page.evaluate(() =>
+                window.ferryRpcClient.settings.update({ onboardingComplete: true }),
+              );
+              await page.reload();
+            }
             try {
               await composer.waitFor({ state: 'visible' });
             } catch (error) {

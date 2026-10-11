@@ -1,0 +1,13 @@
+provider: openai-compatible
+name: Custom OpenAI-compatible API
+tag: paid
+optional: true
+signup_url: null
+docs_url: https://platform.openai.com/docs/api-reference
+terms_note: Configure the endpoint and your own key. Pricing and capabilities must be supplied by the server; unknown paid prices block Auto.
+data_use: Requests go to your configured endpoint. Review its privacy policy.
+verified_at: '2026-10-11'
+source_url: https://platform.openai.com/docs/api-reference
+models_endpoint: /models
+key_required: true
+windows: []

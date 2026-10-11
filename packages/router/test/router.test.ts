@@ -160,6 +160,58 @@ const task: TaskRecord = {
 };
 
 describe('step classification and routing', () => {
+  it('excludes OpenCode-only free models even with custom headers', () => {
+    const zen: Provider = {
+      ...provider,
+      id: 'opencode' as Provider['id'],
+      tag: 'promo',
+      freePlan: { sourceUrl: 'https://opencode.ai/docs/zen/', models: ['*-free', 'big-pickle'] },
+    };
+    const free: ModelInfo = {
+      ...model,
+      ref: 'opencode/big-pickle' as ModelInfo['ref'],
+      providerId: zen.id,
+    };
+    const paid: ModelInfo = {
+      ...free,
+      ref: 'opencode/claude-sonnet-4' as ModelInfo['ref'],
+      free: false,
+      priceInPerM: 3,
+      priceOutPerM: 15,
+    };
+    const input = {
+      models: [free, paid],
+      providers: [zen],
+      profile: { ...profile, paidAllowed: false, allowedProviders: 'all_free' as const },
+      capacity: { ...capacity, providers: [zen] },
+      step: 'plan' as const,
+      estimate: { inputTokens: 1 },
+    };
+    expect(scoreModels(input)).toHaveLength(0);
+    const routing = {
+      ...DEFAULT_ROUTING_SETTINGS,
+      providerOverrides: {
+        opencode: {
+          stripParams: [],
+          forceParams: {},
+          statusRemaps: [],
+          headers: { 'user-agent': 'opencode/1.18.35' },
+        },
+      },
+    };
+    expect(scoreModels({ ...input, routing })).toHaveLength(0);
+    expect(
+      resolveFallbackChain({
+        ...input,
+        routing,
+        inputTokens: 1,
+        chain: [{ provider: zen.id, patterns: ['big-pickle'] }],
+      }).models.map((candidate) => candidate.ref),
+    ).toEqual([]);
+    expect(
+      scoreModels({ ...input, routing, providers: [{ ...zen, freeTierUnsupported: true }] }),
+    ).toHaveLength(0);
+  });
   it('uses minimumContext for eligibility after compaction', () => {
     const small = { ...model, ref: 'groq/small' as ModelInfo['ref'], contextWindow: 1_000 };
     const large = { ...model, ref: 'groq/large' as ModelInfo['ref'], contextWindow: 8_000 };
@@ -249,7 +301,7 @@ describe('step classification and routing', () => {
       models: [model],
       providers: [provider],
       capacity,
-      profile,
+      profile: { ...profile, routingObjective: 'balanced' as const },
       step: 'plan' as const,
       estimate: { inputTokens: 1, requiresTools: true },
     };
@@ -1148,6 +1200,30 @@ describe('briefing budget properties', () => {
         });
         return results.length === 0;
       }),
+    );
+  });
+});
+
+describe('distinct routing objectives', () => {
+  it('gives Fast extra responsiveness weight and Long Context extra context headroom', () => {
+    const large = { ...model, ref: 'groq/large' as ModelInfo['ref'], contextWindow: 512_000 };
+    const input = {
+      models: [model, large],
+      providers: [provider],
+      capacity,
+      profile,
+      step: 'plan' as const,
+      estimate: { inputTokens: 1_000 },
+    };
+    const balanced = scoreModels(input);
+    const fast = scoreModels({ ...input, profile: { ...profile, routingObjective: 'latency' } });
+    const long = scoreModels({ ...input, profile: { ...profile, routingObjective: 'context' } });
+    expect(fast[0]?.scoreBreakdown?.latency ?? 0).toBeGreaterThan(
+      balanced[0]?.scoreBreakdown?.latency ?? 0,
+    );
+    expect(long[0]?.ref).toBe(large.ref);
+    expect(long[0]?.scoreBreakdown?.tierFit).toBeGreaterThan(
+      balanced[0]?.scoreBreakdown?.tierFit ?? 0,
     );
   });
 });

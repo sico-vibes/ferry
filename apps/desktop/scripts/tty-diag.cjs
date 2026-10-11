@@ -27,12 +27,13 @@ for (const [key, name] of [
       } catch (error) {
         entry.rawMode = String(error.message);
       }
+      stream.unref();
       stream.destroy();
     } else if (key === 'conout' && entry.isatty) {
       const stream = new tty.WriteStream(fd);
       entry.columns = stream.columns ?? null;
-      stream.write('');
-      fs.closeSync(fd);
+      stream.unref();
+      stream.write('', () => stream.destroy());
     } else fs.closeSync(fd);
     result[key] = entry;
   } catch (error) {

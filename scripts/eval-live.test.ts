@@ -326,7 +326,8 @@ describe('live eval harness helpers', () => {
     ]);
     expect(output.text).toContain('Results:');
     expect(output.reportExitMs).toBeLessThan(5000);
-    expect(output.code).toBe(0);
+    expect(output.code, output.text).toBe(0);
+    expect(server.requests.some(({ url }) => url.endsWith('/chat/completions'))).toBe(true);
     await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
   }, 30_000);
 

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { stageCliRuntime } from '../../cli/scripts/stage-runtime.mjs';
 import { electronBuilderConfigForVersion, packageManifestWithVersion } from './release-config.mjs';
+import { smokeConfiguration } from './smoke-config.mjs';
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(scriptDirectory, '..');
@@ -106,9 +107,27 @@ const packageFiles = [
 ];
 const restoreFiles = new Map();
 try {
+  if (process.env.FERRY_INSTALL_SMOKE_ROOT) {
+    const configPath = resolve(packageRoot, 'electron-builder.yml');
+    const original = await readFile(configPath, 'utf8');
+    restoreFiles.set(configPath, original);
+    const isolated = smokeConfiguration(
+      original,
+      await readFile(resolve(packageRoot, 'nsis/installer.nsh'), 'utf8'),
+      process.env.FERRY_INSTALL_SMOKE_ROOT,
+      process.env.FERRY_INSTALL_SMOKE_NAMESPACE ?? '',
+    );
+    await writeFile(
+      resolve(process.env.FERRY_INSTALL_SMOKE_ROOT, 'installer.nsh'),
+      isolated.include,
+      'utf8',
+    );
+    await writeFile(configPath, isolated.config, 'utf8');
+  }
   if (releaseVersion) {
     for (const path of packageFiles) restoreFiles.set(path, await readFile(path, 'utf8'));
-    for (const [path, original] of restoreFiles) {
+    for (const path of packageFiles) {
+      const original = restoreFiles.get(path);
       const manifest = JSON.parse(original);
       await writeFile(
         path,
@@ -118,7 +137,7 @@ try {
     }
     const builderConfigPath = resolve(packageRoot, 'electron-builder.yml');
     const builderConfig = await readFile(builderConfigPath, 'utf8');
-    restoreFiles.set(builderConfigPath, builderConfig);
+    if (!restoreFiles.has(builderConfigPath)) restoreFiles.set(builderConfigPath, builderConfig);
     await writeFile(
       builderConfigPath,
       electronBuilderConfigForVersion(builderConfig, releaseVersion),

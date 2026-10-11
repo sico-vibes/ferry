@@ -4,15 +4,28 @@ Ferry Gateway exposes Ferry's configured providers through a local OpenAI-compat
 
 ## Start and create a key
 
-In Ferry, open **Settings → Gateway**, enable the gateway, and create a named key. The secret is shown once. Ferry stores its SHA-256 hash in its local SQLite settings table; the provider credentials remain in Ferry's secret store.
+In Ferry, open **Gateway**, enable the server, and create a named key in **Keys**. Ferry stores a SHA-256 verification hash in SQLite and keeps the secret in the operating system keyring for client setup. The Connect tab can retrieve that secret, preview and back up a configuration, and verify a request.
 
 The default listener is `127.0.0.1:11435`. If that port is busy, Ferry selects an available local port and shows the chosen URL. LAN binding is off by default. Enabling it binds all interfaces, so use it only on a trusted network. `/health` returns service status and never returns a key or provider data.
 
-Available profile aliases are `ferry/auto-free`, `ferry/best`, `ferry/fast`, and `ferry/long-context`; these reserved aliases take precedence over user mappings. Logical model names such as `gpt-oss-120b` map to one or more provider-specific upstream IDs and are resolved through the selected profile's normal eligibility, free-first scoring, quota checks, and handoff rules. Enabled concrete model IDs keep the `provider/model` form and pass through unchanged. `/v1/models` advertises profile aliases and logical names only when an eligible mapped model is available. A key can be limited to selected model IDs and requests per minute.
+`ferry/auto` follows the key's assigned preset. Existing aliases (`ferry/auto-free`, `ferry/best`, `ferry/fast`, `ferry/long-context`), custom profile IDs and logical mappings remain supported. Profile keys with concrete model restrictions may use Auto; No profile keys retain their ordered concrete model list. Alias changes cannot loosen key, profile or global spending limits.
 
-Add custom logical mappings in **Settings > Routing > Logical model mappings**. Each row contains a slash-free logical name, provider ID, and upstream model ID. For example, a logical name may map to `groq` / `openai/gpt-oss-120b`, `cerebras` / `gpt-oss-120b`, and `openrouter` / `openai/gpt-oss-120b:free`. User entries replace the catalog mapping for the same logical name and provider; entries for other providers stay in the pool.
+## Control centre and request history
 
-Available profile aliases are `ferry/auto-free`, `ferry/best`, `ferry/fast`, and `ferry/long-context`. Enabled concrete model IDs use `provider/model`. `/v1/models` advertises the profile aliases even when no concrete model is currently available. Each key can be limited to selected model IDs, requests per minute, estimated tokens per minute, tokens per UTC day, and concurrent requests. Leave a limit blank in Settings to keep it unlimited.
+Gateway has Overview, Requests, Routing, Keys, Usage & costs, and Connect tabs. Requests offers search, key/status filters, 24-hour/7-day/30-day ranges and paging. Its drawer shows the requested and serving model, correlation ID, attempt durations, failures/skips, policy constraints and completed/cancelled/partial outcomes. SQLite stores metadata without prompts or response bodies; Core retention applies. Usage groups by key, provider or model, and separates reported tokens and actual/estimated charges. Provider/model costs include charged failed attempts. Unknown metrics explain what was not reported.
+
+Named keys have a client assignment, preset, concrete restrictions, request/token limits, a monthly USD limit and rotation/revocation. Rotation preserves the key ID, policy and accounting while invalidating the old secret. Global accounting covers agent and Gateway spend. Paid backup needs explicit authorization and a positive key limit; unknown metered pricing blocks automatic paid execution.
+
+The server allows 16 active requests with up to 64 waiting globally and 8 waiting per key. Key concurrency defaults to 4; an explicit key limit remains enforced. Waiting is FIFO within a key and rotates between keys. The 150-second overall deadline includes queue time, with the existing routing first-response setting and agent inactivity setting applied upstream. Disconnect, cancel and shutdown abort work and release slots. Slow-client writes await socket drain. Transparent retries stop after visible text or tool output; a partial stream reports an error without pretending to finish successfully.
+
+Output defaults to a bounded 4096 tokens when omitted; clients may supply a positive output cap. Token reservations use a conservative UTF-8 input bound plus requested output. Missing usage or interrupted dispatch retains a conservative token estimate; it is not displayed as reported usage. Budget accounting survives metadata retention.
+
+Connection verification uses a small request through the selected key and protocol (chat, Responses or Anthropic Messages). Paid-capable tests require a separately approved request cost ceiling (up to $1); the default UI ceiling is $0.01, and key/profile/global caps still apply. This verifies the Gateway protocol, not an installed external client's full workflow.
+
+Core free provider checks select one eligible representative model per connection, run at most two generations concurrently, support cancellation and bounded deadlines, and record timing, sample count and measurement age. Preview recommendations before Apply; Undo restores the prior preset. Responsiveness checks are not coding benchmarks. Import `scripts/bench` JSON from Profiles → Advanced; Auto edits/reviews also use bounded, decaying coding outcomes with checklist evidence. Ordinary chat success does not improve coding scores.
+
+Onboarding saves its six-step journey in Core, leaves folders optional, reuses its named Personal API key after resuming, and finishes only after a successful request. Account routing must be enabled explicitly; subscription/account models also need the key's authorized paid-backup policy. API requests preserve fidelity by default, while free native-agent built-ins retain Caveman Lite. Planner/editor splitting remains an advanced agent option.
+
 
 ## OpenCode
 
@@ -49,6 +62,10 @@ aider --model ferry/auto-free
 ```
 
 Continue's OpenAI-compatible provider uses the same base URL, key, and model ID.
+
+## OpenCode Zen
+
+Use your own OpenCode key for the standard Zen API. Models restricted to the OpenCode app are launched with `ferry run opencode --native` or the delegation lane; they are not Ferry routes.
 
 ## Claude Code
 
@@ -119,7 +136,31 @@ Before a provider call, Ferry estimates input tokens from the request body and r
 ## Security
 
 - Keep the gateway disabled until a client needs it. Bind to loopback by default.
-- Treat keys like local passwords. They are shown only at creation, hashed at rest, and can be revoked. Never share them: provider free-tier allowances belong to the provider account owner.
+- Treat keys like local passwords. Authentication metadata keeps a verification hash; the bearer secret is retained in the operating system keyring for client configuration. Keys can be revoked. Never share them: provider free-tier allowances belong to the provider account owner.
 - LAN mode opens the endpoint to devices able to reach the host. Ferry gateway keys are bearer credentials; use a trusted network and revoke keys you no longer need.
 - `GET /health` is unauthenticated and reports only whether the service is responding. Model and inference routes require an active Ferry key.
 - Prompts go from Ferry to the configured upstream provider. Ferry's provider-specific data-use notes and account terms still apply.
+
+## Spending policy and deadlines
+
+New keys are free only and preserve prompts and tool schemas by default. Paid execution needs an explicit paid-backup policy, a positive monthly key limit, and a paid-capable assigned profile. Unknown metered pricing blocks automatic paid dispatch. Profile and global limits apply even when the client requests a different model or alias.
+
+Set key policy with `ferry gateway keys update <id> --paid-backup true --budget-usd 5`. Reservations are atomic in SQLite and settle against reported usage; interrupted dispatches retain a conservative estimated charge. Global limits also cover the native agent.
+
+Gateway execution uses the routing first-token timeout, the agent step inactivity timeout, a 150-second overall deadline and at most five dispatches. Provider cooldowns and Retry-After remain authoritative. Request history is persisted locally as metadata, with Core retention settings applied at startup and hourly.
+
+OpenCode-only models use the real OpenCode app's own providers and credentials. Launch with `ferry run opencode --native --model opencode/big-pickle`; this path does not create a Gateway key, start the Gateway, or inject Ferry provider configuration.
+
+## Interactive CLI and provider readiness
+
+Use `/connect` to choose an API, supported account sign-in, or a keyless/authenticated local server. Credentials are entered without echo or history. Escape closes a connection/picker overlay first; it cancels the agent only when no overlay is open. Configure a custom or regional endpoint with `/connect <provider> endpoint <base-url>` and check saved access with `/connect <provider> check`.
+
+`/gateway` reports the shared Core server and key spending policies. `/gateway start`, `stop`, `requests`, and `routing` use the same Core operations as the dashboard. `/gateway configure codex|opencode|claude` prints a masked configuration; adding `--apply` writes through the existing configuration/backup helper. `/doctor` reads a sanitized Core/provider diagnostic summary without opening an agent chat. Scripted generation remains available through `ferry run`; the interactive UI requires a terminal.
+
+Models and onboarding expose free checks, a recommendation preview, Apply and Undo. Paid API checks require separate approval of a positive total ceiling, at most USD 1. The ceiling covers both workers together and shared global spend caps remain enforced. Cancellation or missing usage retains a conservative charge. Paid checks never enable paid inference; supported account models use the Gateway verification operation. A small synthetic generation tests responsiveness and access, not coding ability or installed-client certification.
+
+Preserve fidelity disables lossy agent transforms. Safe savings enables recoverable output filtering and context hygiene. Advanced exposes individual switches, including RTK when installed. Saving global optimizer controls applies them to built-in native agent profiles; custom profiles retain their explicit overrides. Gateway prompts and tool structures retain their independent fidelity defaults. Free native profiles retain Caveman Lite and Lite replies until explicitly changed. Savings appear from recorded transform measurements; cost estimates and missing usage are labelled separately.
+
+Custom OpenAI-compatible APIs and regional template endpoints persist in Core. Changing an endpoint clears old model and check evidence. Local discovery uses advertised context/tool metadata; unadvertised local/custom tool support remains unavailable. Beta integrations remain excluded from default Auto until enabled. Kilo's API template is separate from its Coming soon account connection; Qoder and Cline account controls also remain unavailable until supported authentication exists.
+
+Data & privacy and About can export allowlisted diagnostics containing version, Gateway state and provider health. The export excludes credentials, configuration headers, paths, prompts, responses and arbitrary log/error bodies.

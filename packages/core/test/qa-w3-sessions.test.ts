@@ -453,14 +453,22 @@ describe('QA W3 sessions: run lifecycle and races', () => {
         if (event.sessionId === session.id) approvals.push(event.part.id);
       });
       await h.rpc.sessions.send(session.id, { text: 'write the file' });
-      await waitFor(async () => (await sessionStatus(h.rpc, session.id)) === 'idle');
+      // This includes native file/checkpoint work and multiple model steps. Slow
+      // Windows runners need more than the harness's short polling default.
+      await waitFor(async () => {
+        if (approvals.length) throw new Error('Full-auto requested a safe-tool approval');
+        const status = await sessionStatus(h.rpc, session.id);
+        if (status === 'error') throw new Error('Full-auto run reached an error status');
+        return status === 'idle';
+      }, 20_000);
       off();
       expect(approvals).toEqual([]);
       expect(await h.rpc.sessions.get(session.id)).toMatchObject({ session: { status: 'idle' } });
+      expect(await readFile(join(h.workspacePath, 'auto.txt'), 'utf8')).toBe('automatic');
     } finally {
       await h.close();
     }
-  }, 30_000);
+  }, 45_000);
 
   it('ignores unapproved project permission mode and allow rules', async () => {
     const h = await startHarness({

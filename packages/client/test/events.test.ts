@@ -108,6 +108,7 @@ const samples = {
   'quota.updated': sampleCapacitySummary satisfies CapacitySummary,
   'quota.limits.updated': [],
   'provider.updated': sampleProvider satisfies Provider,
+  'providers.check': { id: 'fixture', running: false, cancelled: false, results: [], error: null },
   'providers.health.updated': {
     providerId: sampleProvider.id,
     state: 'healthy',

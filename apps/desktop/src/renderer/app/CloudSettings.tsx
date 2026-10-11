@@ -74,7 +74,7 @@ export function CloudSettings() {
     <div className="profile-settings-v3">
       <Section
         title="Storage mode"
-        helper="Local keeps everything on this device. Cloud also syncs sessions, settings, logs and API keys to your Ferry account."
+        helper="Local keeps everything on this device. Ferry Cloud is coming soon. Existing cloud installs can recover their account data."
       >
         <div className="setting-row">
           <div>
@@ -90,7 +90,7 @@ export function CloudSettings() {
             }}
             options={[
               { value: 'local', label: 'Local', disabled: busy },
-              { value: 'cloud', label: 'Cloud', disabled: busy },
+              { value: 'cloud', label: 'Cloud — Coming soon', disabled: true },
             ]}
           />
         </div>
@@ -107,8 +107,8 @@ export function CloudSettings() {
 
       {mode === 'cloud' && status.configured && !status.pendingMode ? (
         <Section
-          title="Cloud account"
-          helper="Sign in to sync. While signed out, Ferry keeps working locally and uploads later."
+          title="Recover existing cloud data"
+          helper="Sign in to recover data from an existing cloud account."
         >
           {status.auth.signedIn ? (
             <>

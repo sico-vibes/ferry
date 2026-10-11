@@ -71,6 +71,8 @@ describe('@ferry/cli', () => {
     expect(
       await gatewayCommand(['keys', 'create', 'CLI fixture'], true, api, undefined, {
         rpm: '30',
+        'paid-backup': 'true',
+        'budget-usd': '2.50',
         concurrency: '2',
         'tokens-per-min': '4000',
         'tokens-per-day': '50000',
@@ -87,6 +89,8 @@ describe('@ferry/cli', () => {
     expect(JSON.parse(output.mock.calls[0]?.[0]?.toString() ?? '{}')).toMatchObject({
       id: created.key.id,
       rateLimit: 30,
+      paidBackup: true,
+      budgetUsd: 2.5,
       concurrencyLimit: 2,
       tokenLimitPerMinute: 4000,
       tokenLimitPerDay: 50000,

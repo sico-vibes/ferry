@@ -1,3 +1,4 @@
+import { isOpenCodeAppModel } from '@ferry/shared';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
@@ -744,6 +745,7 @@ export function ComposerModelChip({
   const connectedModels = models.filter(
     (model) =>
       configuredProviderIds.has(model.providerId) &&
+      !isOpenCodeAppModel(model) &&
       !providerExclusions.get(model.providerId)?.has(model.ref),
   );
   const availableModels = freeOnly
@@ -870,8 +872,8 @@ export function ComposerModelChip({
                   className="model-picker-filter"
                   title={
                     freeOnly && hiddenPaidCount > 0
-                      ? `${String(hiddenPaidCount)} paid models hidden`
-                      : 'Show only free models'
+                      ? `${String(hiddenPaidCount)} paid models hidden; display filter only. Spending policy is unchanged.`
+                      : 'Display filter only. Spending policy is unchanged.'
                   }
                   type="button"
                   onClick={() => {
@@ -896,6 +898,21 @@ export function ComposerModelChip({
                 <ModelCommand.Empty className="model-picker-empty">
                   No models match.
                 </ModelCommand.Empty>
+                <ModelCommand.Group heading="Route">
+                  <ModelCommand.Item
+                    className="model-candidate auto"
+                    value={autoValue}
+                    onSelect={() => void select('auto')}
+                    onClick={() => void select('auto')}
+                  >
+                    <FerryMark className="model-row-logo" decorative size={16} variant="brand" />
+                    <strong>Auto (recommended)</strong>
+                    <span className="model-row-meta">{autoModel}</span>
+                    {mode === 'auto' ? (
+                      <Check aria-hidden="true" className="model-row-check" size={14} />
+                    ) : null}
+                  </ModelCommand.Item>
+                </ModelCommand.Group>
                 {onProfileSelect ? (
                   <ModelCommand.Group heading="Profile">
                     <ModelCommand.Item
@@ -930,21 +947,7 @@ export function ComposerModelChip({
                     ))}
                   </ModelCommand.Group>
                 ) : null}
-                <ModelCommand.Group heading="Model">
-                  <ModelCommand.Item
-                    className="model-candidate auto"
-                    value={autoValue}
-                    onSelect={() => void select('auto')}
-                    onClick={() => void select('auto')}
-                  >
-                    <FerryMark className="model-row-logo" decorative size={16} variant="brand" />
-                    <strong>Auto (recommended)</strong>
-                    <span className="model-row-meta">{autoModel}</span>
-                    {mode === 'auto' ? (
-                      <Check aria-hidden="true" className="model-row-check" size={14} />
-                    ) : null}
-                  </ModelCommand.Item>
-                </ModelCommand.Group>
+
                 {usableGatewayKeys.length ? (
                   <ModelCommand.Group
                     heading={

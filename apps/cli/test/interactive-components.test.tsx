@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Text } from 'ink';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, cleanup } from 'ink-testing-library';
 import { createMockFerryClient } from '@ferry/client';
@@ -16,6 +17,7 @@ import {
   sessionOptions,
 } from '../src/picker-options.js';
 import { Chat } from '../src/tui.js';
+import { ConnectPanel } from '../src/components/connect-panel.js';
 import { fileMentions } from '../src/attachments.js';
 
 type App = ReturnType<typeof render>;
@@ -42,6 +44,67 @@ afterEach(() => {
 });
 
 describe('interactive pickers', () => {
+  it('closing a connection while risk approval saves never starts a late sign-in', async () => {
+    const client = createMockFerryClient();
+    const risk = (await client.oauth.list()).find(
+      (row) =>
+        row.riskLevel === 'high' && row.actionAvailable !== false && row.status !== 'unavailable',
+    );
+    if (!risk) throw new Error('Missing supported account fixture');
+    const settings = await client.settings.get();
+    vi.spyOn(client.providers, 'list').mockResolvedValue([]);
+    vi.spyOn(client.oauth, 'list').mockResolvedValue([risk]);
+    const login = vi.spyOn(client.oauth, 'login').mockResolvedValue();
+    let release: ((value: typeof settings) => void) | undefined;
+    const pending = new Promise<typeof settings>((resolve) => {
+      release = resolve;
+    });
+    const update = vi.spyOn(client.settings, 'update').mockReturnValue(pending);
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      return open ? (
+        <ConnectPanel
+          client={client}
+          onClose={() => {
+            setOpen(false);
+          }}
+        />
+      ) : (
+        <Text>Connection closed</Text>
+      );
+    }
+    const app = render(<Harness />);
+    await frame(app, 'Connect a provider');
+    await key(app, '\r');
+    await frame(app, 'Subscription sign-in');
+    await key(app, '\x1b[B');
+    await key(app, '\r');
+    await vi.waitFor(() => {
+      expect(update).toHaveBeenCalledOnce();
+    });
+    await key(app, '\x1b');
+    await frame(app, 'Connection closed');
+    release?.(settings);
+    await pending;
+    await new Promise<void>((resolve) => {
+      queueMicrotask(resolve);
+    });
+    expect(login).not.toHaveBeenCalled();
+  });
+  it('smokes /connect, /gateway and /doctor without creating an agent chat', async () => {
+    const client = createMockFerryClient();
+    const create = vi.spyOn(client.sessions, 'create');
+    const profile = (await client.profiles.list())[0];
+    const app = render(<Chat client={client} workspace={null} profile={profile} />);
+    await key(app, '/connect\r');
+    await frame(app, 'Connect a provider');
+    await key(app, '\x1b');
+    await key(app, '/gateway\r');
+    await frame(app, 'requested route ferry/auto');
+    await key(app, '/doctor\r');
+    await frame(app, 'Read-only diagnostics');
+    expect(create).not.toHaveBeenCalled();
+  });
   it('keeps every rapid arrow press before Enter', async () => {
     const selected = vi.fn();
     const app = render(

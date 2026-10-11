@@ -54,7 +54,7 @@ export interface UIState extends PersistedLayout {
   selectedWorkspaceId: string | null;
   settingsSection: SettingsSection;
   settingsOpen: boolean;
-  exploreFilter: 'All' | 'Free' | 'Needs attention' | 'Configured';
+  exploreFilter: 'All' | 'Free' | 'Paid' | 'Needs attention' | 'Configured';
   openTab: (tab: OpenTab) => void;
   requestComposerFocus: () => void;
   consumeComposerFocus: () => void;

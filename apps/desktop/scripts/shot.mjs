@@ -1,5 +1,5 @@
 import { mkdir, readdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serveDirectory } from './static-server.mjs';
 
@@ -9,7 +9,9 @@ process.env.PLAYWRIGHT_BROWSERS_PATH ??= '0';
 const { chromium } = await import('@playwright/test');
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const packageDirectory = join(scriptDirectory, '..');
-const screenshotDirectory = join(packageDirectory, '..', '..', 'design', 'screenshots', 'app');
+const screenshotDirectory = process.env.FERRY_SCREENSHOT_DIRECTORY
+  ? resolve(process.env.FERRY_SCREENSHOT_DIRECTORY)
+  : join(packageDirectory, '..', '..', 'design', 'screenshots', 'app');
 await mkdir(screenshotDirectory, { recursive: true });
 const hostedUrl = process.env.FERRY_E2E_URL;
 const served = hostedUrl ? null : await serveDirectory(join(packageDirectory, 'out', 'web'));

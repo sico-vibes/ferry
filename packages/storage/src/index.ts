@@ -29,6 +29,8 @@ const storageMigrationFiles = [
   '0005_cloud_outbox_and_telemetry.sql',
   '0006_outbox_claims.sql',
   '0007_request_failures.sql',
+  '0008_gateway_safety.sql',
+  '0009_gateway_history.sql',
 ];
 export const STORAGE_SCHEMA_VERSION = storageMigrationFiles.length;
 /** Observes successful local writes so cloud mode can persist them for later sync. */
@@ -1215,6 +1217,18 @@ export function runTelemetryRetention(
   client: Database.Database,
   before = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
 ): number {
-  return client.prepare('DELETE FROM telemetry_logs WHERE ts < ?').run(before.toISOString())
-    .changes;
+  const cutoff = before.toISOString();
+  return client.transaction(() => {
+    let deleted = client.prepare('DELETE FROM telemetry_logs WHERE ts < ?').run(cutoff).changes;
+    deleted += client
+      .prepare('DELETE FROM telemetry_turns WHERE coalesce(finished_at,started_at,created_at) < ?')
+      .run(cutoff).changes;
+    deleted += client
+      .prepare('DELETE FROM telemetry_model_switches WHERE created_at < ?')
+      .run(cutoff).changes;
+    deleted += client.prepare('DELETE FROM gateway_requests WHERE at < ?').run(cutoff).changes;
+    deleted += client.prepare('DELETE FROM request_failures WHERE at < ?').run(cutoff).changes;
+    deleted += runRetention(client, before);
+    return deleted;
+  })();
 }

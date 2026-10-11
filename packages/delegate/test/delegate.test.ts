@@ -259,7 +259,12 @@ describe('external CLI adapters', () => {
     ]);
     expect(ACP_AGENT_REGISTRY.find(({ id }) => id === 'kiro')?.caution).toBe(true);
     expect(ACP_AGENT_SUGGESTIONS.some(({ id }) => id === 'kiro')).toBe(false);
-    const detected = await detectAcpAgents({ timeoutMs: 250 });
+    const fixtureBin = await tempRoot();
+    await installFakeClis(fixtureBin);
+    const detected = await detectAcpAgents({
+      timeoutMs: 2_000,
+      environment: { ...process.env, PATH: fixtureBin },
+    });
     expect(detected).toHaveLength(ACP_AGENT_REGISTRY.length);
     expect(detected.every(({ installHint }) => installHint.length > 0)).toBe(true);
   });

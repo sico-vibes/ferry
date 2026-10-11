@@ -247,6 +247,28 @@ describe('provider adapters', () => {
     expect(fake.requests[0]?.url).toContain('/v1/chat/completions');
   });
 
+  it('keeps the authorized route and output cap despite provider transport overrides', async () => {
+    const fake = await new FakeOpenAIServer().start();
+    servers.push(fake);
+    await streamProviderChat({
+      model: ModelRefSchema.parse('custom/free-model'),
+      apiKey: 'fixture-key',
+      baseUrl: `${fake.baseUrl}/v1`,
+      messages: [{ role: 'user', content: 'Hello' }],
+      maxTokens: 32,
+      overrides: {
+        ...ProviderRequestOverridesSchema.parse({}),
+        stripParams: ['model', 'max_tokens'],
+        forceParams: { model: 'paid-model', max_tokens: 9999, temperature: 0.2 },
+      },
+    });
+    expect(fake.requests[0]?.body).toMatchObject({
+      model: 'free-model',
+      max_tokens: 32,
+      temperature: 0.2,
+    });
+  }, 30_000);
+
   it('sends instructions outside the SDK messages field and requests streaming usage', async () => {
     const fake = await new FakeOpenAIServer({
       responses: [

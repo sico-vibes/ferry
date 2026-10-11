@@ -3,6 +3,22 @@ import { createMockFerryClient } from '@ferry/client';
 import { executeSlashCommand, parseSlashCommand } from '../src/slash.js';
 
 describe('interactive slash commands', () => {
+  it('connect, gateway and doctor use shared Core domains without leaking secrets', async () => {
+    const client = createMockFerryClient();
+    const session = (await client.sessions.list())[0];
+    if (!session) throw new Error('Missing fixture');
+    const ctx = context(client, session.id);
+    const key = await client.gateway.createKey({ name: 'Smoke client', profile: 'auto-free' });
+    expect(await executeSlashCommand(ctx, '/connect')).toContain('openrouter');
+    expect(await executeSlashCommand(ctx, '/gateway start')).toContain('started');
+    const status = await executeSlashCommand(ctx, '/gateway status');
+    expect(status).toContain('Smoke client');
+    expect(status).toContain('free only');
+    expect(status).not.toContain(key.secret);
+    expect(await executeSlashCommand(ctx, '/gateway requests')).toContain('No Gateway requests');
+    expect(await executeSlashCommand(ctx, '/doctor')).toContain('No credentials');
+    expect(await executeSlashCommand(ctx, '/gateway stop')).toContain('stopped');
+  });
   it('parses slash command names case-insensitively and preserves arguments', () => {
     expect(parseSlashCommand('  /MODEL openai/gpt-4  ')).toEqual({
       name: '/model',

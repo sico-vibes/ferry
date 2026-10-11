@@ -237,6 +237,7 @@ export const sampleOptimizerToggles: OptimizerToggles = {
   rtk: false,
 };
 export const sampleProfile: Profile = {
+  routingObjective: 'balanced',
   id: profileId,
   name: 'Balanced',
   icon: 'Layers',
@@ -314,6 +315,11 @@ export const sampleOptimizerStats: OptimizerStats = {
   byOptimizer: [{ id: 'terse', name: 'Terse', enabled: true, savedTokens: 100, percent: 5 }],
 };
 export const sampleSettings: Settings = {
+  providerEndpoints: {},
+  globalOptimizerOverride: false,
+  permissionRules: [],
+  logRetentionDays: 30,
+  browserPreferencesMigrated: false,
   storageMode: 'local',
   cloudOnboardingChoice: 'local',
   theme: 'dark',
@@ -328,6 +334,15 @@ export const sampleSettings: Settings = {
   activeProfileId: profileId,
   paidCaps: { sessionUsd: null, dailyUsd: null, monthlyUsd: null },
   onboardingComplete: true,
+  onboarding: {
+    step: 0,
+    use: 'external',
+    keyId: null,
+    keyName: 'Personal API',
+    paidBackup: false,
+    budgetUsd: null,
+    verifiedRequestId: null,
+  },
   optimizers: sampleOptimizerToggles,
   routing: {
     autoPauseAfterFailedRequests: 5,

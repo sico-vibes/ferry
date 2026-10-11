@@ -725,28 +725,73 @@ describe('QA agent: budgets and compaction', () => {
 });
 
 describe('QA agent: optimizer recovery wiring', () => {
-  it('attaches a recovery handle to shortened tool output', async () => {
+  it('preserves full tool output when filtering is disabled', async () => {
     const state = await setup();
     try {
-      const file = `secret line\n${Array.from({ length: 500 }, (_, i) => `line ${String(i)}`).join('\n')}`;
-      await writeFile(path.join(state.root, 'huge.txt'), file, 'utf8');
+      const file = Array.from({ length: 500 }, (_, i) => `line ${String(i)}`).join('\n');
+      await writeFile(path.join(state.root, 'fidelity.txt'), file, 'utf8');
       const loop = makeLoop(state, {
+        profile: {
+          ...testAutoFree,
+          optimizers: { ...testAutoFree.optimizers, toolOutputFilters: false },
+        },
         generator: async () =>
           partsOf(state).some((part) => part.type === 'tool_call')
             ? { text: 'done', finishReason: 'stop' }
             : {
-                toolCalls: [{ name: 'read_file', input: { path: 'huge.txt' } }],
+                toolCalls: [{ name: 'read_file', input: { path: 'fidelity.txt' } }],
                 finishReason: 'tool-calls',
               },
       });
       await loop.run({ sessionId: state.session.id });
       const call = partsOf(state).find((part) => part.type === 'tool_call');
-      expect(call?.type === 'tool_call' ? call.output?.filtered : false).toBe(true);
-      expect(call?.type === 'tool_call' ? call.output?.recoveryHandle : null).toBeTruthy();
+      expect(call?.type === 'tool_call' ? call.output?.text : undefined).toBe(
+        file
+          .split('\n')
+          .map((line, index) => `${String(index + 1)}: ${line}`)
+          .join('\n'),
+      );
+      expect(call?.type === 'tool_call' ? call.output?.filtered : undefined).toBe(false);
     } finally {
       state.database.close();
     }
-  }, 30_000);
+  }, 30000);
+  it.each([false, true])(
+    'shortens output with recovery handles enabled=%s',
+    async (recoveryHandles) => {
+      const state = await setup();
+      try {
+        const file = `secret line\n${Array.from({ length: 500 }, (_, i) => `line ${String(i)}`).join('\n')}`;
+        await writeFile(path.join(state.root, 'huge.txt'), file, 'utf8');
+        const loop = makeLoop(state, {
+          profile: {
+            ...testAutoFree,
+            optimizers: {
+              ...testAutoFree.optimizers,
+              toolOutputFilters: true,
+              recoveryHandles,
+            },
+          },
+          generator: async () =>
+            partsOf(state).some((part) => part.type === 'tool_call')
+              ? { text: 'done', finishReason: 'stop' }
+              : {
+                  toolCalls: [{ name: 'read_file', input: { path: 'huge.txt' } }],
+                  finishReason: 'tool-calls',
+                },
+        });
+        await loop.run({ sessionId: state.session.id });
+        const call = partsOf(state).find((part) => part.type === 'tool_call');
+        expect(call?.type === 'tool_call' ? call.output?.filtered : false).toBe(true);
+        expect(Boolean(call?.type === 'tool_call' ? call.output?.recoveryHandle : null)).toBe(
+          recoveryHandles,
+        );
+      } finally {
+        state.database.close();
+      }
+    },
+    30_000,
+  );
 
   it('read_output returns the byte-exact original through the loop', async () => {
     // Recovery must return the original text captured before filtering.
@@ -757,6 +802,14 @@ describe('QA agent: optimizer recovery wiring', () => {
       let returned: string | undefined;
       let calls = 0;
       const loop = makeLoop(state, {
+        profile: {
+          ...testAutoFree,
+          optimizers: {
+            ...testAutoFree.optimizers,
+            toolOutputFilters: true,
+            recoveryHandles: true,
+          },
+        },
         filterOutput: async (name, text) => {
           if (name === 'read_file') {
             originals.set('H', text);

@@ -9,7 +9,11 @@ describe('gateway setup snippets', () => {
     expect(byId.opencode).toContain('"baseURL": "http://127.0.0.1:11435/v1"');
     expect(byId.codex).toContain('base_url = "http://127.0.0.1:11435/v1"');
     expect(byId.curl).toContain('http://127.0.0.1:11435/v1/chat/completions');
-    expect(byId['claude-code']).toContain("ANTHROPIC_BASE_URL = 'http://127.0.0.1:11435'");
+    expect(JSON.parse(byId['claude-code'] ?? '{}')).toMatchObject({
+      env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:11435' },
+    });
+    expect(byId.codex).toContain('wire_api = "responses"');
+    expect(byId['curl-powershell']).toContain('curl.exe');
   });
 
   it('never embeds a real key, only the placeholder', () => {

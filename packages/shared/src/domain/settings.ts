@@ -34,6 +34,9 @@ const RoutingSettingsFieldsSchema = z.object({
   autoPauseAfterFailedRequests: z.number().int().nonnegative(),
   stickySessions: z.boolean(),
   smartReliability: z.boolean(),
+  qualityWeight: z.number().min(0).max(20),
+  textToolFallbackEnabled: z.boolean(),
+  avoidTrainingProviders: z.boolean(),
   quotaReservations: z.boolean(),
   pinnedExhaustion: z.enum(['handover', 'ask', 'fail']),
   cooldownReasons: z.boolean(),
@@ -82,7 +85,32 @@ export const PaidCapsSchema = z.object({
   monthlyUsd: z.number().nonnegative().nullable().default(null),
 });
 export type PaidCaps = z.infer<typeof PaidCapsSchema>;
+export const UserPermissionRuleSchema = z.object({
+  effect: z.enum(['allow', 'ask', 'deny']),
+  tool: z.string().min(1),
+  pattern: z.string().default(''),
+});
+export type UserPermissionRule = z.infer<typeof UserPermissionRuleSchema>;
 export const SettingsSchema = z.object({
+  globalOptimizerOverride: z.boolean().default(false),
+  providerEndpoints: z
+    .record(
+      ProviderIdSchema,
+      z.url().refine((value) => {
+        const url = new URL(value);
+        return (
+          ['http:', 'https:'].includes(url.protocol) &&
+          !url.username &&
+          !url.password &&
+          !url.search &&
+          !url.hash
+        );
+      }, 'Use an HTTP(S) base URL without credentials, query or fragment.'),
+    )
+    .default({}),
+  permissionRules: z.array(UserPermissionRuleSchema).default([]),
+  logRetentionDays: z.number().int().min(1).max(3650).nullable().default(30),
+  browserPreferencesMigrated: z.boolean().default(false),
   storageMode: z.enum(['local', 'cloud']).default('local'),
   cloudOnboardingChoice: z.enum(['local', 'cloud']).nullable().default(null),
   captureContent: z.boolean().optional(),
@@ -99,6 +127,26 @@ export const SettingsSchema = z.object({
   activeProfileId: ProfileIdSchema,
   paidCaps: PaidCapsSchema.default({ sessionUsd: null, dailyUsd: null, monthlyUsd: null }),
   onboardingComplete: z.boolean(),
+  onboarding: z
+    .object({
+      step: z.number().int().min(0).max(5).default(0),
+      use: z.enum(['external', 'agent', 'both']).default('external'),
+      keyId: z.string().nullable().default(null),
+      keyName: z.string().trim().min(1).max(80).default('Personal API'),
+      paidBackup: z.boolean().default(false),
+      budgetUsd: z.number().positive().nullable().default(null),
+      verifiedRequestId: z.string().nullable().default(null),
+      clientId: z.enum(['opencode', 'codex', 'claude-code', 'openai']).optional(),
+    })
+    .default({
+      step: 0,
+      use: 'external',
+      keyId: null,
+      keyName: 'Personal API',
+      paidBackup: false,
+      budgetUsd: null,
+      verifiedRequestId: null,
+    }),
   optimizers: OptimizerTogglesSchema,
   routing: RoutingSettingsSchema.default(DEFAULT_ROUTING_SETTINGS),
   developer: z.object({
@@ -115,7 +163,13 @@ export function resolveCaptureContent(
   return settings.captureContent ?? settings.storageMode === 'cloud';
 }
 export const SettingsPatchSchema = SettingsSchema.partial().extend({
-  paidCaps: PaidCapsSchema.partial().optional(),
+  paidCaps: z
+    .object({
+      sessionUsd: z.number().nonnegative().nullable().optional(),
+      dailyUsd: z.number().nonnegative().nullable().optional(),
+      monthlyUsd: z.number().nonnegative().nullable().optional(),
+    })
+    .optional(),
   optimizers: OptimizerTogglesSchema.partial().optional(),
   routing: RoutingSettingsFieldsSchema.partial().optional(),
   developer: z
@@ -129,6 +183,7 @@ export const SettingsPatchSchema = SettingsSchema.partial().extend({
     .optional(),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
+export type SettingsPatch = Omit<Partial<Settings>, 'paidCaps'> & { paidCaps?: Partial<PaidCaps> };
 export const SystemInfoSchema = z.object({
   version: z.string(),
   mock: z.boolean(),
