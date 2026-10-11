@@ -32,6 +32,7 @@ import {
   Composer,
   DelegationCard,
   EmptyState,
+  ErrorState,
   ErrorPart,
   FerryMark,
   HandoffMarker,
@@ -44,7 +45,7 @@ import {
   UserMessage,
 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
-import { listAllModels } from '@ferry/client';
+import { listAllModels, RpcError } from '@ferry/client';
 import { keys, useProfiles, useSessionDetail, useSettings, useWorkspaces } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
@@ -1008,7 +1009,7 @@ export function SessionCanvas() {
   const consumeComposerFocus = useCallback(() => {
     useUI.getState().consumeComposerFocus();
   }, []);
-  const { data, isLoading, isError } = useSessionDetail(sessionId);
+  const { data, isLoading, isError, error, refetch } = useSessionDetail(sessionId);
   const { data: workspaces = [] } = useWorkspaces();
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
@@ -1417,13 +1418,22 @@ export function SessionCanvas() {
     [data?.taskRecord.plan],
   );
   if (isError || (!isLoading && !data)) {
+    const missing = !error || (error instanceof RpcError && error.kind === 'not_found');
     return (
       <section className="canvas session-canvas" data-audit-overflow="intentional">
-        <EmptyState
-          title="This session is no longer available"
-          action="Back to Home"
-          onAction={() => void navigate({ to: '/' })}
-        />
+        {missing ? (
+          <EmptyState
+            title="This session is no longer available"
+            action="Back to Home"
+            onAction={() => void navigate({ to: '/' })}
+          />
+        ) : (
+          <ErrorState
+            title="This chat couldn’t load."
+            action="Retry"
+            onAction={() => void refetch()}
+          />
+        )}
       </section>
     );
   }
@@ -1532,7 +1542,7 @@ export function SessionCanvas() {
           data-new-output-count={newOutputCount}
           data-session-status={data?.session.status ?? 'loading'}
           ref={viewport}
-          style={{ visibility: initialTailReady ? 'visible' : 'hidden' }}
+          style={{ visibility: isLoading || initialTailReady ? 'visible' : 'hidden' }}
           onWheel={(event) => {
             // Unpin only; the scroll handler decides whether the latest message left the view.
             if (event.deltaY < 0 && canScroll(event.currentTarget)) {

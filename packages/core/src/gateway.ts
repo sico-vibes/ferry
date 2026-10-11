@@ -262,22 +262,29 @@ export function createGatewayController(
       ? oauthModelCatalog
       : []),
   ];
-  const allModels = () =>
-    availableModels()
+  const allModels = (models = availableModels()) => {
+    const providerStates = new Map<string, ReturnType<typeof services.providers.get>>();
+    const credentialStates = new Map<string, boolean>();
+    const configuredById = new Map(
+      services.catalog.providers.map((entry) => [entry.provider, entry]),
+    );
+    return models
       .filter((model) => !isOpenCodeAppModel(model))
       .filter((model) => {
-        const saved = services.providers.get(model.providerId);
+        if (!providerStates.has(model.providerId))
+          providerStates.set(model.providerId, services.providers.get(model.providerId));
+        const saved = providerStates.get(model.providerId);
         const definition = providerDefinition(model.providerId);
         if (
           definition?.releaseState === 'Coming soon' ||
           (definition?.releaseState === 'Beta' && saved?.enabled !== true)
         )
           return false;
-        const configured = services.catalog.providers.find(
-          (entry) => entry.provider === model.providerId,
-        );
+        const configured = configuredById.get(model.providerId);
+        if (!credentialStates.has(model.providerId))
+          credentialStates.set(model.providerId, hasUsableProviderKey(services, model.providerId));
         const availableCredentials =
-          hasUsableProviderKey(services, model.providerId) ||
+          credentialStates.get(model.providerId) === true ||
           configured?.key_required === false ||
           (model.providerId.startsWith('oauth-') && saved?.keyStatus === 'valid');
         return (
@@ -288,6 +295,7 @@ export function createGatewayController(
         );
       })
       .map((model) => model.ref);
+  };
   const routeableCandidates = async (
     key: GatewayKey,
     profileName: string,
@@ -300,9 +308,10 @@ export function createGatewayController(
     if (profileName === 'none' && allowedConcrete.length > 0) {
       const candidates = [...availableModels()];
       const byRef = new Map(candidates.map((model) => [model.ref, model]));
+      const visible = new Set(allModels(candidates));
       return allowedConcrete.flatMap((ref) => {
         const model = byRef.get(ref as (typeof candidates)[number]['ref']);
-        return model && allModels().includes(model.ref) ? [model] : [];
+        return model && visible.has(model.ref) ? [model] : [];
       });
     }
     const allProfiles = [...BUILTIN_PROFILES];
@@ -388,11 +397,11 @@ export function createGatewayController(
           message:
             'Eligible providers are unavailable or cooling down. Review Models → Health and quota resets.',
         };
+      const models = availableModels();
+      const visible = new Set(allModels(models));
       if (
         !key.paidBackup &&
-        allModels().some((ref) =>
-          availableModels().some((model) => model.ref === ref && (model.priceInPerM ?? 0) > 0),
-        )
+        models.some((model) => visible.has(model.ref) && (model.priceInPerM ?? 0) > 0)
       )
         return {
           code: 'budget_exhausted',
@@ -1326,10 +1335,15 @@ export function createGatewayController(
       if (keyId && !key) throw new Error('Unknown or revoked Gateway key.');
       const ordered = await routeableCandidates(policy, policy.profile);
       const refs = new Set(ordered.map((model) => model.ref));
-      const excluded = availableModels()
+      const models = availableModels();
+      const visible = new Set(allModels(models));
+      const providerStates = new Map<string, ReturnType<typeof services.providers.get>>();
+      const excluded = models
         .filter((model) => !refs.has(model.ref))
         .map((model) => {
-          const saved = services.providers.get(model.providerId);
+          if (!providerStates.has(model.providerId))
+            providerStates.set(model.providerId, services.providers.get(model.providerId));
+          const saved = providerStates.get(model.providerId);
           const definition = providerDefinition(model.providerId);
           const reason = isOpenCodeAppModel(model)
             ? 'Available in the OpenCode app; standard Gateway routing unavailable.'
@@ -1339,7 +1353,7 @@ export function createGatewayController(
                 ? 'Beta provider requires explicit enablement.'
                 : saved?.enabled === false
                   ? 'Provider disabled or paused.'
-                  : !allModels().includes(model.ref)
+                  : !visible.has(model.ref)
                     ? 'Connect valid credentials, restore quota, or remove model exclusion.'
                     : policy.allowedModels.length && !policy.allowedModels.includes(model.ref)
                       ? 'Outside this key’s model restriction.'

@@ -13,7 +13,7 @@ import { modelSupportsTools } from '@ferry/router';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { hasUsableProviderKey } from '../services.js';
-import { getModelDiscovery } from './model-discovery.js';
+import { getModelDiscovery, type ModelDiscovery } from './model-discovery.js';
 import { preserveCatalogBillingMetadata } from '../model-billing-metadata.js';
 import { getGatewayController } from '../gateway.js';
 import { z } from 'zod';
@@ -48,6 +48,28 @@ const ModelListQuerySchema = z.object({
     .default({ key: 'name', ascending: true }),
 });
 
+function cachedProviderModels(
+  services: FerryServices,
+  discovery: ModelDiscovery,
+  providerId?: string,
+) {
+  return services.catalog.providers.flatMap(({ provider: id }) => {
+    if (providerId !== undefined && id !== providerId) return [];
+    const saved = services.providers.get(id);
+    if (!saved?.enabled) return [];
+    void discovery.refreshIfStale(id).catch(() => undefined);
+    const excluded = new Set(saved.excludedModelRefs ?? []);
+    return services.models
+      .list(id)
+      .filter((model) => !excluded.has(model.ref))
+      .map((model) => ({
+        ...model,
+        verified: model.verified ?? Boolean(saved.modelsVerifiedAt),
+        verifiedAt: model.verifiedAt ?? saved.modelsVerifiedAt ?? null,
+      }));
+  });
+}
+
 export function register(host: CoreHost, services: FerryServices): void {
   const modelDiscovery = getModelDiscovery(host, services);
   const failingModels = () =>
@@ -70,23 +92,8 @@ export function register(host: CoreHost, services: FerryServices): void {
     list(rawProviderId?: unknown) {
       const providerId =
         rawProviderId === undefined ? undefined : ProviderIdSchema.parse(rawProviderId);
-      const enabled = services.catalog.providers
-        .filter((provider) => providerId === undefined || provider.provider === providerId)
-        .map((provider) => provider.provider)
-        .filter((id) => services.providers.get(id)?.enabled ?? false);
-
-      for (const id of enabled) void modelDiscovery.refreshIfStale(id).catch(() => undefined);
       const failing = failingModels();
-      const cachedModels = enabled.flatMap((id) =>
-        services.models
-          .list(id)
-          .filter((model) => !services.providers.get(id)?.excludedModelRefs?.includes(model.ref))
-          .map((model) => ({
-            ...model,
-            verified: model.verified ?? Boolean(services.providers.get(id)?.modelsVerifiedAt),
-            verifiedAt: model.verifiedAt ?? services.providers.get(id)?.modelsVerifiedAt ?? null,
-          })),
-      );
+      const cachedModels = cachedProviderModels(services, modelDiscovery, providerId);
       const oauthModels = oauthModelCatalog
         .filter((model) => services.providers.get(model.providerId)?.enabled)
         .filter((model) => providerId === undefined || model.providerId === providerId)
@@ -103,23 +110,8 @@ export function register(host: CoreHost, services: FerryServices): void {
     page(rawQuery?: unknown) {
       const { offset, limit, query, filters, sort } = ModelListQuerySchema.parse(rawQuery ?? {});
       const providerId = filters.providerId;
-      const enabled = services.catalog.providers
-        .filter((provider) => providerId === undefined || provider.provider === providerId)
-        .map((provider) => provider.provider)
-        .filter((id) => services.providers.get(id)?.enabled ?? false);
-
-      for (const id of enabled) void modelDiscovery.refreshIfStale(id).catch(() => undefined);
       const failing = failingModels();
-      const cachedModels = enabled.flatMap((id) =>
-        services.models
-          .list(id)
-          .filter((model) => !services.providers.get(id)?.excludedModelRefs?.includes(model.ref))
-          .map((model) => ({
-            ...model,
-            verified: model.verified ?? Boolean(services.providers.get(id)?.modelsVerifiedAt),
-            verifiedAt: model.verifiedAt ?? services.providers.get(id)?.modelsVerifiedAt ?? null,
-          })),
-      );
+      const cachedModels = cachedProviderModels(services, modelDiscovery, providerId);
       const oauthModels = oauthModelCatalog
         .filter((model) => services.providers.get(model.providerId)?.enabled)
         .map((model) => ModelInfoSchema.parse({ ...model, verified: false, verifiedAt: null }));

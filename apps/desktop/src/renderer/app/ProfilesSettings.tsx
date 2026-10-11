@@ -2,7 +2,15 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Copy, GripVertical, Plus, Trash2, X } from 'lucide-react';
 import { listAllModels } from '@ferry/client';
-import { SkeletonRows, ProviderLogo, SegmentedControl, Select, Switch, UiV2 } from '@ferry/ui';
+import {
+  ErrorState,
+  SkeletonRows,
+  ProviderLogo,
+  SegmentedControl,
+  Select,
+  Switch,
+  UiV2,
+} from '@ferry/ui';
 import {
   DIRECT_PROFILE_ID,
   OPTIMIZATION_PRESETS,
@@ -99,13 +107,28 @@ function capValue(value: string): number | null {
 export function ProfilesSettings() {
   const client = useFerryClient();
   const cache = useQueryClient();
-  const { data: allProfiles = [], isPending: profilesPending } = useProfiles();
-  const { data: settings } = useSettings();
-  const { data: providers = [], isPending: providersPending } = useQuery({
+  const {
+    data: allProfiles = [],
+    isPending: profilesPending,
+    isError: profilesError,
+    refetch: refetchProfiles,
+  } = useProfiles();
+  const { data: settings, isError: settingsError, refetch: refetchSettings } = useSettings();
+  const {
+    data: providers = [],
+    isPending: providersPending,
+    isError: providersError,
+    refetch: refetchProviders,
+  } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
-  const { data: models = [], isPending: modelsPending } = useQuery({
+  const {
+    data: models = [],
+    isPending: modelsPending,
+    isError: modelsError,
+    refetch: refetchModels,
+  } = useQuery({
     queryKey: ['models'],
     queryFn: () => listAllModels(client),
   });
@@ -182,6 +205,19 @@ export function ProfilesSettings() {
     setFeedback(null);
     setDraft(newProfileFrom(source, name, Date.now()));
   };
+  if (profilesError || settingsError || providersError || modelsError)
+    return (
+      <ErrorState
+        title="Profiles couldn’t load. Retry to reconnect to Ferry’s local engine."
+        action="Retry"
+        onAction={() => {
+          void refetchProfiles();
+          void refetchSettings();
+          void refetchProviders();
+          void refetchModels();
+        }}
+      />
+    );
   if (!draft || providersPending || modelsPending || !settings)
     return (
       <div className="profile-settings-v3">
