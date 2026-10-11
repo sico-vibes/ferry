@@ -22,3 +22,6 @@ export * from './telemetry.js';
 export * from './security/credential-path.js';
 export * from './security/desktop-ipc.js';
 export * from './protocol.js';
+
+export * from './client-config.js';
+export * from './provider-registry.js';

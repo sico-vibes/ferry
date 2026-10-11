@@ -15,6 +15,23 @@ const logos = new Map(
 );
 
 const providerLogoFiles: Record<string, string> = {
+  cline: 'cline',
+  qoder: 'qoder',
+  radius: 'radius',
+  siliconflow: 'siliconcloud',
+  'gemini-cli': 'gemini-color',
+  antigravity: 'google-color',
+  'openai-codex': 'codex-color',
+  'github-copilot': 'githubcopilot',
+  'kimi-coding': 'kimi-color',
+  meta: 'meta-color',
+  xai: 'xai',
+  'xai-api': 'xai',
+  cohere: 'cohere-color',
+  moonshot: 'moonshot',
+  minimax: 'minimax-color',
+  inception: 'inception',
+  perplexity: 'perplexity-color',
   anthropic: 'anthropic',
   'claude-cli': 'claude-color',
   openai: 'openai',
@@ -75,7 +92,7 @@ const creatorPatterns: [RegExp, string][] = [
 ];
 
 export function providerLogoKey(providerId: string): string | null {
-  return providerLogoFiles[providerId] ?? null;
+  return providerLogoFiles[providerId.replace(/^oauth-/, '')] ?? null;
 }
 
 /** The logo of the lab that made a model, inferred from its id or name. */

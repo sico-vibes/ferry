@@ -2,6 +2,7 @@ import { lazy, Suspense, type ComponentType } from 'react';
 import { Skeleton, Toaster } from '@ferry/ui';
 import { SessionPowerControls } from './SessionPowerControls';
 import { useToasts } from '../state/toasts';
+import { OAuthFlowDialog } from './OAuthFlowDialog';
 
 const BottomPanel = lazy(() =>
   import('./BottomPanel').then((module) => ({ default: module.BottomPanel })),
@@ -36,5 +37,9 @@ function ToasterMount() {
 }
 export const appMounts = {
   main: [BottomPanelMount] as ComponentType<AppMountContext>[],
-  overlays: [SessionControlsMount, ToasterMount] as ComponentType<AppMountContext>[],
+  overlays: [
+    SessionControlsMount,
+    ToasterMount,
+    OAuthFlowDialog,
+  ] as ComponentType<AppMountContext>[],
 };

@@ -1,3 +1,4 @@
+import { reserveSpend } from '../spending.js';
 import { AgentLoop, SessionStore } from '@ferry/agent';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -160,6 +161,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       month: string;
     }
   >();
+  const spendHandles = new Map<string, ReturnType<typeof reserveSpend>>();
   let shuttingDown = false;
   const approvals = new Map<
     string,
@@ -1149,6 +1151,19 @@ export function register(host: CoreHost, services: FerryServices): void {
                 services.quota.acquireLease(model.providerId, model.ref, tokens) ?? null,
               probeHeuristicCooldowns: () => runtime.gateway.probeHeuristicCooldowns(),
               permissionRules: [
+                ...z
+                  .array(
+                    z.object({
+                      effect: z.enum(['allow', 'ask', 'deny']),
+                      tool: z.string(),
+                      pattern: z.string(),
+                    }),
+                  )
+                  .parse(
+                    (globalSettings as { permissionRules?: unknown } | undefined)
+                      ?.permissionRules ?? [],
+                  )
+                  .map((rule) => ({ ...rule, level: 'user' as const })),
                 ...(projectConfigApproved &&
                 rawProjectConfig?.parsed.success &&
                 hasOwnProperty(rawProjectConfig.source, 'permissionRules')
@@ -1472,12 +1487,41 @@ export function register(host: CoreHost, services: FerryServices): void {
                     };
                   }
                 }
+                if (reservationId && monetaryPaid) {
+                  try {
+                    spendHandles.set(
+                      reservationId,
+                      reserveSpend(services, {
+                        id: reservationId,
+                        profileId: profile.id,
+                        sessionId: session.id,
+                        amountUsd,
+                        profileCaps: {
+                          sessionUsd: profile.caps.sessionUsd ?? null,
+                          dailyUsd: profile.caps.dailyUsd,
+                          monthlyUsd: profile.caps.monthlyUsd,
+                        },
+                        globalCaps,
+                      }),
+                    );
+                  } catch (error) {
+                    paidReservations.delete(reservationId);
+                    return {
+                      allowed: false,
+                      message: error instanceof Error ? error.message : 'Spending limit reached.',
+                    };
+                  }
+                }
                 return {
                   allowed: true,
                   ...(reservationId
                     ? {
                         usageId: reservationId,
-                        release: () => paidReservations.delete(reservationId),
+                        release: () => {
+                          spendHandles.get(reservationId)?.settle();
+                          spendHandles.delete(reservationId);
+                          return paidReservations.delete(reservationId);
+                        },
                       }
                     : {}),
                 };
@@ -1538,6 +1582,8 @@ export function register(host: CoreHost, services: FerryServices): void {
                       }
                     : {}),
                 });
+                spendHandles.get(record.id)?.settle(priced.amountUsd, priced.estimated, true);
+                spendHandles.delete(record.id);
               },
               onHandoff: (reason, from, to) => {
                 runtime.gateway.recordHandoff(session.id, reason);

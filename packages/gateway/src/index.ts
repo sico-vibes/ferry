@@ -23,6 +23,8 @@ export interface GatewayKey {
   tokenLimitPerMinute: number | null;
   tokenLimitPerDay: number | null;
   concurrencyLimit: number | null;
+  paidBackup?: boolean;
+  budgetUsd?: number | null;
   compressToolResults: boolean;
   terseSystemPrompt: boolean;
   createdAt: string;
@@ -163,6 +165,7 @@ export interface GatewayHandle {
 }
 
 const aliases: Record<string, GatewayProfile> = {
+  'ferry/auto': 'auto-free',
   'ferry/auto-free': 'auto-free',
   'ferry/best': 'best',
   'ferry/fast': 'fast',
@@ -205,7 +208,9 @@ export function createGatewayKey(
     tokenLimitPerMinute: input.tokenLimitPerMinute ?? null,
     tokenLimitPerDay: input.tokenLimitPerDay ?? null,
     concurrencyLimit: input.concurrencyLimit ?? null,
-    compressToolResults: input.compressToolResults ?? true,
+    paidBackup: input.paidBackup ?? false,
+    budgetUsd: input.budgetUsd ?? null,
+    compressToolResults: input.compressToolResults ?? false,
     terseSystemPrompt: input.terseSystemPrompt ?? false,
     createdAt: now.toISOString(),
     lastUsedAt: null,
@@ -357,6 +362,23 @@ function mappedFailure(error: unknown) {
     };
   }
   const outer = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+  if (
+    typeof outer.code === 'string' &&
+    [
+      'budget_exhausted',
+      'upstream_credentials',
+      'quota_exhausted',
+      'unsupported_request',
+      'request_timeout',
+    ].includes(outer.code)
+  )
+    return {
+      status: Number(outer.statusCode ?? 502),
+      type: outer.code,
+      code: outer.code,
+      message: error instanceof Error ? error.message : outer.code,
+      retryable: false,
+    };
   const record =
     outer.name === 'AI_StreamProviderError' && outer.cause && typeof outer.cause === 'object'
       ? (outer.cause as Record<string, unknown>)
@@ -397,7 +419,7 @@ function mappedFailure(error: unknown) {
   return {
     status,
     type,
-    code: classified.family,
+    code: status === 401 || status === 403 ? 'upstream_credentials' : classified.family,
     message: mapped.message,
     retryable: classified.retryable,
   };
@@ -1522,7 +1544,16 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
     recent.push(now);
     failedAuth.set(address, recent);
     if (protocol) protocolError(res, protocol, 401, 'Invalid or revoked Ferry gateway key');
-    else json(res, 401, errorBody('Invalid or revoked Ferry gateway key', 'authentication_error'));
+    else
+      json(
+        res,
+        401,
+        errorBody(
+          'Invalid or revoked Ferry gateway key',
+          'authentication_error',
+          'gateway_authentication',
+        ),
+      );
   };
   const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const now = Date.now();

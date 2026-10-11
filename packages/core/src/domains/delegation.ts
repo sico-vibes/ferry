@@ -162,7 +162,9 @@ export function register(host: CoreHost, services: FerryServices): void {
   };
   host.registerDomain('delegation', {
     async detectAgents() {
-      return (await detectAcpAgents()).map((agent) => AcpAgentDetectionSchema.parse(agent));
+      return (await detectAcpAgents({ environment: services.env })).map((agent) =>
+        AcpAgentDetectionSchema.parse(agent),
+      );
     },
     async lanes() {
       const workspace = services.workspaces.list()[0];

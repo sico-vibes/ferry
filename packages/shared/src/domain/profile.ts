@@ -27,6 +27,7 @@ export const ProfileSchema = z.object({
   name: z.string(),
   icon: z.string(),
   description: z.string(),
+  routingObjective: z.enum(['balanced', 'latency', 'quality', 'context']).optional(),
   affinityMode: z.enum(['soft', 'strict']).default('soft'),
   builtin: z.boolean(),
   pinned: z.boolean(),

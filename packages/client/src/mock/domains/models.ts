@@ -1,4 +1,5 @@
 import { mockFailures } from '../failures.js';
+import { isOpenCodeAppModel } from '@ferry/shared';
 import { MockNotFoundError } from '../errors.js';
 import type { FerryClient } from '../../ferry-client.js';
 import type { MockDeps } from './deps.js';
@@ -73,6 +74,7 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
     async candidates(sessionId) {
       await before();
       const choices = state.models
+        .filter((model) => !isOpenCodeAppModel(model))
         .filter((m) => {
           const p = state.providers.find((x) => x.id === m.providerId);
           return p?.enabled && p.keyStatus === 'valid';
@@ -99,6 +101,9 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
     async select(sessionId, ref) {
       await before();
       const s = session(sessionId);
+      const model = state.models.find((model) => model.ref === ref);
+      if (model && isOpenCodeAppModel(model))
+        throw new Error('Available in the OpenCode app. Use ferry run opencode --native.');
       if (ref !== 'auto' && !state.models.some((m) => m.ref === ref))
         throw new MockNotFoundError('Model', ref);
       if (ref === 'auto') state.selections.delete(sessionId);

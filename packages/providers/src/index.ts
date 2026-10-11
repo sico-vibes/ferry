@@ -20,6 +20,7 @@ import { loadCatalog, reasoningEffortsForModel, advertisesReasoning } from '@fer
 export type { ModelMessage } from 'ai';
 import {
   ProviderIdSchema,
+  providerDefinition,
   ModelInfoSchema,
   isModelFreeForPlan,
   RawCallObservationSchema,
@@ -138,6 +139,15 @@ function redactSecrets(value: string, secrets: string[]): string {
 }
 
 const compatibleDefaults: Record<string, string> = {
+  ollama: 'http://127.0.0.1:11434/v1',
+  lmstudio: 'http://127.0.0.1:1234/v1',
+  'xai-api': 'https://api.x.ai/v1',
+  cohere: 'https://api.cohere.ai/compatibility/v1',
+  moonshot: 'https://api.moonshot.ai/v1',
+  minimax: 'https://api.minimax.io/v1',
+  siliconflow: 'https://api.siliconflow.com/v1',
+  inception: 'https://api.inceptionlabs.ai/v1',
+  perplexity: 'https://api.perplexity.ai',
   gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
   groq: 'https://api.groq.com/openai/v1',
   cerebras: 'https://api.cerebras.ai/v1',
@@ -181,7 +191,7 @@ function createCompatible(
   options: ModelFactoryOptions,
   baseURL: string,
   headers: Record<string, string>,
-): LanguageModel {
+) {
   const provider = createOpenAICompatible({
     name,
     baseURL,
@@ -207,6 +217,11 @@ export function createLanguageModel(ref: ModelRef, opts: ModelFactoryOptions): L
   const fetchOptions = opts.fetch ? { fetch: opts.fetch } : {};
   const headers = { ...opts.headers };
 
+  if (providerDefinition(providerId)?.releaseState === 'Coming soon')
+    throw Object.assign(new Error(`${providerId} is coming soon.`), {
+      code: 'unsupported_request',
+      statusCode: 400,
+    });
   switch (providerId) {
     case 'gateway':
       if (!opts.baseUrl) throw new Error('Gateway provider requires a local base URL');
@@ -265,7 +280,16 @@ export function createLanguageModel(ref: ModelRef, opts: ModelFactoryOptions): L
         openCodeHeaders(opts),
       );
     }
+    case 'ollama':
+    case 'lmstudio':
     case 'groq':
+    case 'xai-api':
+    case 'cohere':
+    case 'moonshot':
+    case 'minimax':
+    case 'siliconflow':
+    case 'inception':
+    case 'perplexity':
     case 'cerebras':
     case 'nvidia':
     case 'mistral':
@@ -318,15 +342,18 @@ export interface ProviderChatInput {
   baseUrl?: string;
   signal?: AbortSignal;
   onText?: (text: string) => void;
+  onProgress?: () => void;
   onToolCall?: (call: { id: string; name: string; arguments: string }) => void;
   onObservation?: (observation: RawCallObservation) => void;
   overrides?: ProviderRequestOverrides;
+  sessionId?: string;
 }
 
 /** Execute one provider chat turn and return normalized text, tools, usage, and finish state. */
 export async function streamProviderChat(input: ProviderChatInput) {
   const model = createLanguageModel(input.model, {
     apiKey: input.apiKey,
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
     fetch: createObservedFetch(
       input.onObservation ?? (() => undefined),
@@ -384,6 +411,13 @@ export async function streamProviderChat(input: ProviderChatInput) {
   let reasoning = '';
   const toolCalls: { id: string; name: string; arguments: string }[] = [];
   for await (const part of result.stream) {
+    if (
+      part.type === 'text-delta' ||
+      part.type === 'reasoning-delta' ||
+      part.type === 'tool-input-delta' ||
+      part.type === 'tool-call'
+    )
+      input.onProgress?.();
     if (part.type === 'text-delta') {
       text += part.text;
       input.onText?.(part.text);
@@ -1016,7 +1050,10 @@ export function mapProviderError(error: unknown): MappedProviderError {
   )
     kind = 'timeout';
   else if (status === 401) kind = 'auth';
-  else if (status === 403 && /freetier|free tier.*only be used from within opencode/i.test(message))
+  else if (
+    (status === 400 || status === 403) &&
+    /freetier|missingsessionid|free tier.*only be used (?:from within|in) opencode/i.test(message)
+  )
     kind = 'unsupported_free_tier';
   else if (status === 403) kind = 'forbidden';
   else if (status === 404 || status === 410) kind = 'model_not_found';
@@ -1035,9 +1072,12 @@ export function mapProviderError(error: unknown): MappedProviderError {
   else if (/content_filter|safety.{0,20}blocked|content policy/i.test(message))
     kind = 'content_filter';
   else if (status === 429 || /rate.limit|resource_exhausted/i.test(message))
-    kind = /quota|resource_exhausted|daily limit|billing|credits exhausted/i.test(message)
-      ? 'quota_exhausted'
-      : 'rate_limit';
+    kind =
+      /quota|resource_exhausted|daily limit|billing|credits exhausted|freeusagelimit|free usage limit/i.test(
+        message,
+      )
+        ? 'quota_exhausted'
+        : 'rate_limit';
   else if (/context.length|maximum context|too many tokens/i.test(message))
     kind = 'context_overflow';
   else if (status >= 500) kind = 'server';
@@ -1063,7 +1103,7 @@ function safeProviderMessage(
     '[REDACTED]',
   );
   if (kind === 'unsupported_free_tier')
-    return "Zen's free models only work inside OpenCode; Zen here needs paid balance";
+    return 'Available in the OpenCode app. Use ferry run opencode or select a standard API model with your own key.';
   return cleaned || friendlyError(kind, retryAfterMs);
 }
 
@@ -1087,7 +1127,7 @@ function friendlyError(kind: ProviderErrorKind, retryAfterMs: number | null): st
   if (kind === 'context_overflow') return 'Prompt exceeds the model context limit';
   if (kind === 'timeout') return 'Provider request timed out';
   if (kind === 'unsupported_free_tier')
-    return "Zen's free models only work inside OpenCode; Zen here needs paid balance";
+    return 'Available in the OpenCode app. Use ferry run opencode or select a standard API model with your own key.';
   if (kind === 'forbidden') return 'Provider denied access';
   if (kind === 'not_found') return 'Provider resource was not found';
   if (kind === 'gone') return 'Provider resource is no longer available';
@@ -1106,6 +1146,7 @@ export interface ProbeOptions {
   timeoutMs?: number;
   probeModels?: string[];
   overrides?: ProviderRequestOverrides;
+  tools?: ProviderChatInput['tools'];
 }
 
 function providerCatalog(): ReturnType<typeof loadCatalog> {
@@ -1160,9 +1201,10 @@ async function probeWithSignal(
       providerId === 'nvidia'
         ? preferredModels.map((id) => id.replace(/^nvidia\//i, ''))
         : preferredModels;
-    const candidates = probeOptions.modelRef
+    const allCandidates = probeOptions.modelRef
       ? [probeOptions.modelRef.slice(String(providerId).length + 1)]
       : [...new Set([...orderProbeCandidates(models, preferred), ...preferred])];
+    const candidates = allCandidates;
     if (!candidates.length) throw new Error(`No chat-capable models available for ${providerId}`);
     let openRouterSnapshot: ParsedQuotaWindow[] = [];
     if (providerId === 'openrouter') {
@@ -1197,13 +1239,14 @@ async function probeWithSignal(
           fetch: observedFetch,
           ...(probeOptions.sessionId ? { sessionId: probeOptions.sessionId } : {}),
         });
-        await generateText({
+        const generation = {
           model: languageModel,
           prompt: 'Reply with one character.',
           maxOutputTokens: 64,
           maxRetries: 0,
           ...(probeOptions.signal ? { abortSignal: probeOptions.signal } : {}),
-        });
+        };
+        await generateText(generation);
         usedModel = modelId;
         break;
       } catch (error) {
@@ -1425,7 +1468,7 @@ export async function discoverProviderModels(
   const data = (payload as Record<string, unknown>).data;
   if (!Array.isArray(data)) throw new Error('Invalid provider models response: missing data array');
   const catalog = await providerCatalog();
-  return data.flatMap((item) => {
+  const discoveredModels = data.flatMap((item) => {
     if (!item || typeof item !== 'object') return [];
     const id = (item as Record<string, unknown>).id;
     if (typeof id !== 'string') return [];
@@ -1533,6 +1576,9 @@ export async function discoverProviderModels(
     });
     return model.success ? [model.data] : [];
   });
+  return providerId === 'opencode'
+    ? discoveredModels.filter((model) => model.free)
+    : discoveredModels;
 }
 
 function isPreferredToolModel(providerId: string, modelId: string): boolean {

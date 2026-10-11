@@ -29,6 +29,7 @@ import type {
   SessionDetail,
   SessionId,
   Settings,
+  SettingsPatch,
   Skill,
   SkillId,
   SystemInfo,
@@ -77,6 +78,8 @@ export interface FerryClient {
         tokenLimitPerMinute: number | null;
         tokenLimitPerDay: number | null;
         concurrencyLimit: number | null;
+        paidBackup?: boolean;
+        budgetUsd?: number | null;
         compressToolResults: boolean;
         terseSystemPrompt: boolean;
         createdAt: string;
@@ -103,12 +106,14 @@ export interface FerryClient {
         tokenLimitPerMinute?: number | null;
         tokenLimitPerDay?: number | null;
         concurrencyLimit?: number | null;
+        paidBackup?: boolean;
+        budgetUsd?: number | null;
         compressToolResults?: boolean;
         terseSystemPrompt?: boolean;
       };
     }): Promise<unknown>;
     revokeKey(id: string): Promise<unknown>;
-    /** Recent requests routed by the Gateway, newest first (metadata only, kept in memory). */
+    /** Recent requests routed by the Gateway, newest first (metadata only, persisted locally). */
     requests(): Promise<GatewayRequestRecord[]>;
     start(): Promise<unknown>;
     stop(): Promise<unknown>;
@@ -223,6 +228,8 @@ export interface FerryClient {
   oauth: {
     list(): Promise<OAuthProvider[]>;
     login(id: OAuthProviderId, options?: { gateway?: string }): Promise<void>;
+    respond(id: OAuthProviderId, promptId: string, value: string): Promise<void>;
+    cancel(id: OAuthProviderId): Promise<void>;
     logout(id: OAuthProviderId): Promise<void>;
     status(id: OAuthProviderId): Promise<boolean>;
   };
@@ -244,7 +251,7 @@ export interface FerryClient {
     remove(id: ProfileId): Promise<void>;
     activate(id: ProfileId, sessionId?: SessionId): Promise<void>;
   };
-  settings: { get(): Promise<Settings>; update(patch: Partial<Settings>): Promise<Settings> };
+  settings: { get(): Promise<Settings>; update(patch: SettingsPatch): Promise<Settings> };
   optimizer: { stats(): Promise<OptimizerStats> };
   delegation: {
     lanes(): Promise<Lane[]>;

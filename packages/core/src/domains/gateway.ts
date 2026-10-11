@@ -17,6 +17,8 @@ const idSchema = z.string().min(1).max(64);
 const updateSchema = z.object({
   id: idSchema,
   patch: z.object({
+    paidBackup: z.boolean().optional(),
+    budgetUsd: z.number().positive().nullable().optional(),
     profile: z.string().optional(),
     allowedModels: z.array(z.string()).optional(),
     rateLimit: z.number().int().positive().nullable().optional(),
@@ -66,6 +68,8 @@ export function register(host: CoreHost, services: FerryServices): void {
     updateKey(value: unknown) {
       const parsed = updateSchema.parse(value);
       const patch = {
+        ...(parsed.patch.paidBackup === undefined ? {} : { paidBackup: parsed.patch.paidBackup }),
+        ...(parsed.patch.budgetUsd === undefined ? {} : { budgetUsd: parsed.patch.budgetUsd }),
         ...(parsed.patch.profile === undefined ? {} : { profile: parsed.patch.profile }),
         ...(parsed.patch.allowedModels === undefined
           ? {}

@@ -614,24 +614,25 @@ export interface DetectedAcpAgent extends AcpAgentDefinition {
   error?: string;
 }
 export async function detectAcpAgents(
-  options: { cwd?: string; timeoutMs?: number } = {},
+  options: { cwd?: string; timeoutMs?: number; environment?: NodeJS.ProcessEnv } = {},
 ): Promise<DetectedAcpAgent[]> {
   return await Promise.all(ACP_AGENT_REGISTRY.map((agent) => detectAcpAgent(agent.id, options)));
 }
 export async function detectAcpAgent(
   id: string,
-  options: { cwd?: string; timeoutMs?: number } = {},
+  options: { cwd?: string; timeoutMs?: number; environment?: NodeJS.ProcessEnv } = {},
 ): Promise<DetectedAcpAgent> {
   const agent = ACP_AGENT_REGISTRY.find((entry) => entry.id === id);
   if (!agent) throw new Error(`Unknown ACP agent: ${id}`);
   try {
-    const executable = await executablePath(agent.command);
+    const executable = await executablePath(agent.command, undefined, options.environment);
     const invocation = commandInvocation(executable, [...agent.detectArgs]);
     const result = await execa(invocation.file, invocation.args, {
       ...(options.cwd ? { cwd: options.cwd } : {}),
       reject: false,
       windowsHide: true,
       timeout: options.timeoutMs ?? 10_000,
+      ...(options.environment ? { env: options.environment, extendEnv: false } : {}),
       ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
     });
     return {
@@ -657,7 +658,7 @@ export function resolveAcpCommand(executable: string, args: string[]) {
 }
 export function assertSafeArguments(args: readonly string[]): void {
   for (const arg of args) {
-    const shellSyntax = /[\0\r\n%!'"`]/.test(arg) || /\$\([^)]*\)|%[^%]+%/.test(arg);
+    const shellSyntax = /[\0\r\n%!"`]/.test(arg) || /\$\([^)]*\)|%[^%]+%/.test(arg);
     if (shellSyntax) throw new Error(`Unsafe CLI argument rejected: ${arg}`);
   }
 }
@@ -1030,13 +1031,21 @@ function parseEvent(
   }
 }
 
-async function executablePath(name: string, custom?: string): Promise<string> {
+async function executablePath(
+  name: string,
+  custom?: string,
+  environment = process.env,
+): Promise<string> {
   if (custom) return custom;
   const command = name;
   if (process.platform === 'win32') {
-    for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    const searchPath =
+      environment.PATH ??
+      Object.entries(environment).find(([name]) => name.toLowerCase() === 'path')?.[1] ??
+      '';
+    for (const dir of searchPath.split(delimiter).filter(Boolean)) {
       for (const suffix of ['.cmd', '.exe', '.bat']) {
-        const candidate = join(dir, `${command}${suffix}`);
+        const candidate = join(dir.replace(/^"|"$/g, ''), `${command}${suffix}`);
         try {
           await access(candidate);
           return candidate;

@@ -50,6 +50,10 @@ aider --model ferry/auto-free
 
 Continue's OpenAI-compatible provider uses the same base URL, key, and model ID.
 
+## OpenCode Zen
+
+Use your own OpenCode key for the standard Zen API. Models restricted to the OpenCode app are launched with `ferry run opencode --native` or the delegation lane; they are not Ferry routes.
+
 ## Claude Code
 
 Claude Code uses the Anthropic-compatible `/v1/messages` route:
@@ -119,7 +123,17 @@ Before a provider call, Ferry estimates input tokens from the request body and r
 ## Security
 
 - Keep the gateway disabled until a client needs it. Bind to loopback by default.
-- Treat keys like local passwords. They are shown only at creation, hashed at rest, and can be revoked. Never share them: provider free-tier allowances belong to the provider account owner.
+- Treat keys like local passwords. Authentication metadata keeps a verification hash; the bearer secret is retained in the operating system keyring for client configuration. Keys can be revoked. Never share them: provider free-tier allowances belong to the provider account owner.
 - LAN mode opens the endpoint to devices able to reach the host. Ferry gateway keys are bearer credentials; use a trusted network and revoke keys you no longer need.
 - `GET /health` is unauthenticated and reports only whether the service is responding. Model and inference routes require an active Ferry key.
 - Prompts go from Ferry to the configured upstream provider. Ferry's provider-specific data-use notes and account terms still apply.
+
+## Spending policy and deadlines
+
+New keys are free only and preserve prompts and tool schemas by default. Paid execution needs an explicit paid-backup policy, a positive monthly key limit, and a paid-capable assigned profile. Unknown metered pricing blocks automatic paid dispatch. Profile and global limits apply even when the client requests a different model or alias.
+
+Set key policy with `ferry gateway keys update <id> --paid-backup true --budget-usd 5`. Reservations are atomic in SQLite and settle against reported usage; interrupted dispatches retain a conservative estimated charge. Global limits also cover the native agent.
+
+Gateway execution uses the routing first-token timeout, the agent step inactivity timeout, a 150-second overall deadline and at most five dispatches. Provider cooldowns and Retry-After remain authoritative. Request history is persisted locally as metadata, with Core retention settings applied at startup and hourly.
+
+OpenCode-only models use the real OpenCode app's own providers and credentials. Launch with `ferry run opencode --native --model opencode/big-pickle`; this path does not create a Gateway key, start the Gateway, or inject Ferry provider configuration.

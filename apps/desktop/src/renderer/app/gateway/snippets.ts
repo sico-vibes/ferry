@@ -1,3 +1,4 @@
+import { configuredContent, curlSnippet, openAiConfig } from '@ferry/shared';
 export interface GatewaySnippet {
   id: string;
   label: string;
@@ -12,60 +13,35 @@ const keyPlaceholder = 'YOUR_FERRY_KEY';
 /** Copy-paste setup for common OpenAI/Anthropic-compatible tools. */
 export function gatewaySnippets(baseUrl: string, model = 'ferry/auto-free'): GatewaySnippet[] {
   const openAiBase = `${baseUrl}/v1`;
+  const connection = { url: baseUrl.replace(/\/$/, ''), model, secret: keyPlaceholder };
   return [
     {
       id: 'opencode',
       label: 'OpenCode',
       where: 'opencode.json in your project (or ~/.config/opencode/opencode.json)',
       language: 'json',
-      code: JSON.stringify(
-        {
-          $schema: 'https://opencode.ai/config.json',
-          provider: {
-            ferry: {
-              npm: '@ai-sdk/openai-compatible',
-              name: 'Ferry',
-              options: { baseURL: openAiBase, apiKey: keyPlaceholder },
-              models: {
-                'ferry/auto-free': { name: 'Ferry Auto-Free' },
-                'ferry/best': { name: 'Ferry Best Available' },
-                'ferry/fast': { name: 'Ferry Fast' },
-              },
-            },
-          },
-          model: `ferry/${model}`,
-        },
-        null,
-        2,
-      ),
+      code: configuredContent('opencode', connection),
     },
     {
       id: 'claude-code',
       label: 'Claude Code',
-      where: 'PowerShell, before starting claude',
-      language: 'powershell',
-      code: [
-        `$env:ANTHROPIC_BASE_URL = '${baseUrl}'`,
-        `$env:ANTHROPIC_AUTH_TOKEN = '${keyPlaceholder}'`,
-        `$env:ANTHROPIC_MODEL = '${model}'`,
-        'claude',
-      ].join('\n'),
+      where: '~/.claude/settings.json',
+      language: 'json',
+      code: configuredContent('claude', connection),
     },
     {
       id: 'codex',
       label: 'Codex CLI',
-      where: '~/.codex/config.toml, then set FERRY_API_KEY',
+      where: '~/.codex/config.toml',
       language: 'toml',
-      code: [
-        `model = "${model}"`,
-        'model_provider = "ferry"',
-        '',
-        '[model_providers.ferry]',
-        'name = "Ferry"',
-        `base_url = "${openAiBase}"`,
-        'env_key = "FERRY_API_KEY"',
-        'wire_api = "chat"',
-      ].join('\n'),
+      code: configuredContent('codex', connection),
+    },
+    {
+      id: 'openai',
+      label: 'OpenAI compatible',
+      where: 'Client configuration',
+      language: 'json',
+      code: JSON.stringify(openAiConfig(connection), null, 2),
     },
     {
       id: 'aider',
@@ -94,15 +70,17 @@ export function gatewaySnippets(baseUrl: string, model = 'ferry/auto-free'): Gat
     },
     {
       id: 'curl',
-      label: 'curl',
-      where: 'Any terminal (use curl.exe in PowerShell)',
+      label: 'curl (Bash)',
+      where: 'Bash',
       language: 'shell',
-      code: [
-        `curl ${openAiBase}/chat/completions \\`,
-        `  -H "Authorization: Bearer ${keyPlaceholder}" \\`,
-        '  -H "Content-Type: application/json" \\',
-        `  -d '{"model":"${model}","messages":[{"role":"user","content":"Hello"}]}'`,
-      ].join('\n'),
+      code: curlSnippet(connection, 'bash'),
+    },
+    {
+      id: 'curl-powershell',
+      label: 'curl (PowerShell)',
+      where: 'PowerShell',
+      language: 'powershell',
+      code: curlSnippet(connection, 'powershell'),
     },
   ];
 }

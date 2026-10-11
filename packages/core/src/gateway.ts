@@ -1,3 +1,7 @@
+import { isOpenCodeAppModel } from '@ferry/shared';
+import { oauthModelCatalog, streamOAuthChat } from '@ferry/oauth';
+import { reserveSpend, BudgetError } from './spending.js';
+import { withGatewayDeadlines, GatewayTimeoutError } from './gateway-deadlines.js';
 import {
   ProviderKeyRotation,
   resolveProviderRequestOverrides,
@@ -9,8 +13,16 @@ import {
   BUILTIN_PROFILES,
   classifyProviderError,
   resolveLogicalModelCandidates,
+  isFreeForRouting,
+  calculateSpend,
 } from '@ferry/router';
-import { DIRECT_PROFILE_ID, RoutingSettingsSchema, type GatewayRequestRecord } from '@ferry/shared';
+import {
+  DIRECT_PROFILE_ID,
+  RoutingSettingsSchema,
+  providerDefinition,
+  redactKnownSecretText,
+  type GatewayRequestRecord,
+} from '@ferry/shared';
 import {
   type GatewayRuntime,
   startGateway,
@@ -24,7 +36,11 @@ import {
 import { randomBytes } from 'node:crypto';
 import type { FerryServices } from './services.js';
 import { recordRequestFailure, recordRequestSuccess, ledgerKind } from './request-failures.js';
-import { hasUsableProviderKey, recordProviderKeyFailure } from './services.js';
+import {
+  hasUsableProviderKey,
+  recordProviderKeyFailure,
+  permitsKeylessProvider,
+} from './services.js';
 import { getProviderHealth } from './provider-health.js';
 
 interface GatewaySettings {
@@ -40,6 +56,8 @@ function keys(services: FerryServices): GatewayKey[] {
         (key) =>
           ({
             ...key,
+            paidBackup: key.paidBackup ?? false,
+            budgetUsd: key.budgetUsd ?? null,
             tokenLimitPerMinute: key.tokenLimitPerMinute ?? null,
             tokenLimitPerDay: key.tokenLimitPerDay ?? null,
             concurrencyLimit: key.concurrencyLimit ?? null,
@@ -178,9 +196,16 @@ export function createGatewayController(
 ) {
   let handle: GatewayHandle | undefined;
   const internalTokens = new Map<string, { keyId: string; expiresAt: number }>();
-  // Recent routed requests for the live log: metadata only, never prompt or response text.
-  const requestLog: GatewayRequestRecord[] = [];
+  // Metadata survives Core restarts; prompt and response content is never stored here.
+  const requestLog: GatewayRequestRecord[] = (
+    services.db.client
+      .prepare('SELECT data_json FROM gateway_requests ORDER BY at DESC LIMIT ?')
+      .all(requestLogLimit) as { data_json: string }[]
+  ).map((row) => JSON.parse(row.data_json) as GatewayRequestRecord);
   const logRequest = (record: GatewayRequestRecord) => {
+    services.db.client
+      .prepare('INSERT OR REPLACE INTO gateway_requests(id,at,data_json) VALUES(?,?,?)')
+      .run(record.id, record.at, JSON.stringify(record));
     requestLog.unshift(record);
     requestLog.splice(requestLogLimit);
     onRequest?.(record);
@@ -196,15 +221,31 @@ export function createGatewayController(
       expiresAt: number;
     }
   >();
+  const availableModels = () => [
+    ...services.catalog.providers.flatMap(({ provider }) => services.models.list(provider)),
+    ...((services.settings.get('global') as { allowSubscriptionOAuthRouting?: boolean } | undefined)
+      ?.allowSubscriptionOAuthRouting
+      ? oauthModelCatalog
+      : []),
+  ];
   const allModels = () =>
-    [...services.catalog.providers.flatMap(({ provider }) => services.models.list(provider))]
+    availableModels()
+      .filter((model) => !isOpenCodeAppModel(model))
       .filter((model) => {
         const saved = services.providers.get(model.providerId);
+        const definition = providerDefinition(model.providerId);
+        if (
+          definition?.releaseState === 'Coming soon' ||
+          (definition?.releaseState === 'Beta' && saved?.enabled !== true)
+        )
+          return false;
         const configured = services.catalog.providers.find(
           (entry) => entry.provider === model.providerId,
         );
         const availableCredentials =
-          hasUsableProviderKey(services, model.providerId) || configured?.key_required === false;
+          hasUsableProviderKey(services, model.providerId) ||
+          configured?.key_required === false ||
+          (model.providerId.startsWith('oauth-') && saved?.keyStatus === 'valid');
         return (
           (saved?.enabled ?? availableCredentials) &&
           availableCredentials &&
@@ -217,10 +258,8 @@ export function createGatewayController(
     const allowedConcrete = key.allowedModels.filter(
       (ref) => ref.includes('/') && !ref.startsWith('ferry/'),
     );
-    if (key.profile === 'none' && allowedConcrete.length > 0) {
-      const candidates = [
-        ...services.catalog.providers.flatMap(({ provider }) => services.models.list(provider)),
-      ];
+    if (profileName === 'none' && allowedConcrete.length > 0) {
+      const candidates = [...availableModels()];
       const byRef = new Map(candidates.map((model) => [model.ref, model]));
       return allowedConcrete.flatMap((ref) => {
         const model = byRef.get(ref as (typeof candidates)[number]['ref']);
@@ -395,7 +434,15 @@ export function createGatewayController(
           inputTokens: 0,
           outputTokens: 0,
           latencyMs: latencyMs(),
-          error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+          error: redactKnownSecretText(
+            input.messages.reduce(
+              (message, item) =>
+                typeof item.content === 'string' && item.content.length > 3
+                  ? message.replaceAll(item.content, '[request content redacted]')
+                  : message,
+              error instanceof Error ? error.message : String(error),
+            ),
+          ).slice(0, 300),
         });
         throw error;
       }
@@ -405,13 +452,12 @@ export function createGatewayController(
     input: Parameters<GatewayRuntime['complete']>[0],
     ledgerRequestId: string,
   ): ReturnType<GatewayRuntime['complete']> {
+    const requestStarted = Date.now();
     const selectedProfile = input.model.startsWith('@profile:')
       ? input.model.slice('@profile:'.length)
       : input.key.profile;
     const visibleModels = new Set(allModels());
-    const candidates = [
-      ...services.catalog.providers.flatMap(({ provider }) => services.models.list(provider)),
-    ].filter((model) => visibleModels.has(model.ref));
+    const candidates = [...availableModels()].filter((model) => visibleModels.has(model.ref));
     const runtimeDeps = await import('./session-deps.js');
     const requestDeps = runtimeDeps.createSessionDependencies(services, () => undefined);
     const routed = await routeableCandidates(
@@ -419,6 +465,16 @@ export function createGatewayController(
       selectedProfile,
       Math.max(1, JSON.stringify(input.messages).length / 4),
     );
+    const keyEligible = new Set(
+      (
+        await routeableCandidates(
+          input.key,
+          input.key.profile,
+          Math.max(1, JSON.stringify(input.messages).length / 4),
+        )
+      ).map((model) => model.ref),
+    );
+    const requestedEligible = new Set(routed.map((model) => model.ref));
     const isProfile = input.model.startsWith('@profile:');
     const logicalMappings = resolveLogicalModelCandidates(
       input.model,
@@ -446,6 +502,16 @@ export function createGatewayController(
             ...routed.filter((item) => item.ref !== explicit),
           ].filter((item): item is (typeof candidates)[number] => Boolean(item))
         : routed;
+    ordered = ordered.filter(
+      (model) =>
+        keyEligible.has(model.ref) &&
+        requestedEligible.has(model.ref) &&
+        (!hasConcreteAllowlist(input.key) || input.key.allowedModels.includes(model.ref)),
+    );
+    if (input.tools?.length)
+      ordered = ordered.filter(
+        (model) => model.toolCalling && model.capability?.toolCall !== false,
+      );
     const containsImage = input.messages.some(
       (message) =>
         Array.isArray(message.content) &&
@@ -466,6 +532,12 @@ export function createGatewayController(
       ...BUILTIN_PROFILES,
       ...(Array.isArray(profileValues) ? (profileValues as typeof BUILTIN_PROFILES) : []),
     ].find((entry) => entry.id === profileId(selectedProfile));
+    const keyProfileRecord = [
+      ...BUILTIN_PROFILES,
+      ...(Array.isArray(profileValues) ? (profileValues as typeof BUILTIN_PROFILES) : []),
+    ].find((entry) => entry.id === profileId(input.key.profile));
+    const tightest = (a: number | null | undefined, b: number | null | undefined) =>
+      a == null ? (b ?? null) : b == null ? a : Math.min(a, b);
     const affinityProviderId =
       sticky?.providerId ?? sticky?.modelRef.slice(0, sticky.modelRef.indexOf('/'));
     const matchesAffinity = (item: (typeof candidates)[number]) => {
@@ -487,10 +559,17 @@ export function createGatewayController(
               ...ordered.filter((item) => !matchesAffinity(item) && item.ref !== sticky.modelRef),
             ];
     }
-    if (!ordered.length) throw new Error('No eligible provider model is configured');
+    if (!ordered.length)
+      throw Object.assign(
+        new Error(
+          'No upstream model meets this key, profile and capability policy. Connect a provider or choose a supported request.',
+        ),
+        { code: 'unsupported_request', statusCode: 400 },
+      );
     let lastError: unknown;
     const now = services.clock.now().getTime();
     const withKeyFallback = ordered.flatMap((model) => {
+      if (permitsKeylessProvider(services, model.providerId)) return [model];
       const count = services.providerKeyEntries
         .list(model.providerId)
         .filter(
@@ -506,7 +585,10 @@ export function createGatewayController(
       return Array.from({ length: Math.max(1, count) }, () => model);
     });
     const lastAttemptHistory: GatewayAttempt[] = [];
-    for (const model of withKeyFallback) {
+    for (const model of withKeyFallback.slice(0, 5)) {
+      input.signal.throwIfAborted();
+      const remainingMs = 150_000 - (Date.now() - requestStarted);
+      if (remainingMs <= 0) throw new GatewayTimeoutError('Gateway request deadline reached.');
       if (services.providers.get(model.providerId)?.enabled === false) continue;
       const providerId = model.providerId;
       if (!health.tracker.available(providerId, model.ref)) continue;
@@ -528,21 +610,91 @@ export function createGatewayController(
         'round_robin',
         preferredKeyId,
       );
+      const oauth = oauthModelCatalog.some((entry) => entry.ref === model.ref);
+      const legacyKeyRef = services.providerKeys.get(providerId)?.keyringRef;
       const key = providerKey
         ? await services.secrets.get(providerKey.keyringRef)
-        : services.providerKeyEntries.list(providerId).length === 0
-          ? await services.secrets.get(
-              services.providerKeys.get(providerId)?.keyringRef ?? providerId,
-            )
+        : services.providerKeyEntries.list(providerId).length === 0 && legacyKeyRef
+          ? await services.secrets.get(legacyKeyRef)
           : undefined;
-      if (!key) continue;
+      if (!key && !permitsKeylessProvider(services, providerId) && !oauth) {
+        lastError = Object.assign(
+          new Error(`Connect or replace the upstream credentials for ${providerId}.`),
+          { code: 'upstream_credentials', statusCode: 401 },
+        );
+        continue;
+      }
       const envName = `FERRY_PROVIDER_BASE_URL_${providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
       const outputState = { started: false };
       const attempts = lastAttemptHistory;
       attempts.push({ model: model.ref, status: 'started' });
       input.onAttempt?.({ servedModel: model.ref, attempts: [...attempts] });
       if (providerKey) requestDeps.associateObservationKey(providerId, providerKey.id);
+      let reservation: ReturnType<typeof reserveSpend> | undefined;
       try {
+        const providers = requestDeps.providers();
+        const provider = providers.find((entry) => entry.id === providerId);
+        const free =
+          provider &&
+          isFreeForRouting(provider, model, routingSettings(services).trialOptInProviders);
+        const outputTokens = Math.min(input.maxTokens ?? model.maxOutput, model.maxOutput);
+        const inputTokens = Buffer.byteLength(
+          JSON.stringify(input.messages) +
+            JSON.stringify(input.tools ?? []) +
+            (input.instructions ?? ''),
+          'utf8',
+        );
+        if (inputTokens + outputTokens > model.contextWindow)
+          throw Object.assign(
+            new Error('Conversation and requested output exceed the selected model context.'),
+            { code: 'unsupported_request', statusCode: 400 },
+          );
+        if (!free) {
+          if (!input.key.paidBackup || !input.key.budgetUsd || input.key.budgetUsd <= 0)
+            throw new BudgetError(
+              'Paid execution requires this key’s explicit paid-backup policy and a positive dollar limit.',
+            );
+          if (!oauth && (model.priceInPerM === null || model.priceOutPerM === null))
+            throw new BudgetError(
+              'Automatic paid routing is blocked because this model’s pricing is unknown. Choose a model with published pricing.',
+            );
+          const amountUsd = oauth
+            ? 0
+            : (inputTokens * (model.priceInPerM ?? 0) + outputTokens * (model.priceOutPerM ?? 0)) /
+              1_000_000;
+          const global = services.settings.get('global') as
+            | {
+                paidCaps?: {
+                  sessionUsd: number | null;
+                  dailyUsd: number | null;
+                  monthlyUsd: number | null;
+                };
+              }
+            | undefined;
+          reservation = reserveSpend(services, {
+            id: `${ledgerRequestId}:${String(attempts.length)}`,
+            keyId: input.key.id,
+            profileId: profileId(input.key.profile),
+            sessionId: input.sessionHint || input.key.id,
+            amountUsd,
+            keyCaps: { sessionUsd: null, dailyUsd: null, monthlyUsd: input.key.budgetUsd },
+            profileCaps: {
+              sessionUsd: tightest(
+                keyProfileRecord?.caps.sessionUsd,
+                selectedProfileRecord?.caps.sessionUsd,
+              ),
+              dailyUsd: tightest(
+                keyProfileRecord?.caps.dailyUsd,
+                selectedProfileRecord?.caps.dailyUsd,
+              ),
+              monthlyUsd: tightest(
+                keyProfileRecord?.caps.monthlyUsd,
+                selectedProfileRecord?.caps.monthlyUsd,
+              ),
+            },
+            globalCaps: global?.paidCaps ?? { sessionUsd: null, dailyUsd: null, monthlyUsd: null },
+          });
+        }
         const startedAt = services.clock.now().getTime();
         const routedMessages = toGatewayModelMessages(
           compressedMessages(input.messages, input.key.compressToolResults),
@@ -553,75 +705,108 @@ export function createGatewayController(
         ]
           .filter((part): part is string => Boolean(part))
           .join('\n\n');
-        const result = await streamProviderChat({
-          model: model.ref,
-          modelInfo: model,
-          ...(input.effort ? { effort: input.effort } : {}),
-          apiKey: key,
-          messages: routedMessages,
-          ...(instructions ? { system: instructions } : {}),
-          ...(input.tools
-            ? {
-                tools: input.tools.flatMap((raw) => {
-                  if (!raw || typeof raw !== 'object') return [];
-                  const item = raw as Record<string, unknown>;
-                  if (
-                    item.type !== 'function' ||
-                    !item.function ||
-                    typeof item.function !== 'object'
-                  )
-                    return [];
-                  const fn = item.function as Record<string, unknown>;
-                  return typeof fn.name === 'string'
-                    ? [
-                        {
-                          name: fn.name,
-                          ...(typeof fn.description === 'string'
-                            ? { description: fn.description }
-                            : {}),
-                          parameters:
-                            fn.parameters && typeof fn.parameters === 'object'
-                              ? (fn.parameters as Record<string, unknown>)
-                              : {},
-                        },
-                      ]
-                    : [];
-                }),
-              }
-            : {}),
-          ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}),
-          ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
-          ...(input.jsonMode ? { jsonMode: true } : {}),
-          ...(input.toolChoice === 'auto' ||
-          input.toolChoice === 'none' ||
-          input.toolChoice === 'required'
-            ? { toolChoice: input.toolChoice }
-            : input.toolChoice &&
-                typeof input.toolChoice === 'object' &&
-                'function' in input.toolChoice &&
-                input.toolChoice.function &&
-                typeof input.toolChoice.function === 'object' &&
-                'name' in input.toolChoice.function &&
-                typeof input.toolChoice.function.name === 'string'
-              ? { toolChoice: { name: input.toolChoice.function.name } }
-              : {}),
-          ...(services.env[envName] ? { baseUrl: services.env[envName] } : {}),
-          overrides: resolveProviderRequestOverrides(
-            providerId,
-            routingSettings(services).providerOverrides[providerId],
-          ),
-          fetch: requestDeps.providerFetch,
-          onObservation: requestDeps.observe,
-          signal: input.signal,
-          onText: (delta) => {
-            outputState.started = true;
-            input.onText?.(delta);
+        const result = await withGatewayDeadlines(
+          {
+            signal: input.signal,
+            firstResponseMs: routingSettings(services).firstTokenTimeoutSeconds * 1000,
+            idleMs: Number(services.env.FERRY_STEP_TIMEOUT_MS) || 120_000,
+            overallMs: remainingMs,
           },
-          onToolCall: (call) => {
-            outputState.started = true;
-            input.onToolCall?.(call);
+          async (signal, progress) => {
+            const chatInput = {
+              model: model.ref,
+              modelInfo: model,
+              ...(input.effort ? { effort: input.effort } : {}),
+              apiKey: key ?? '',
+              sessionId: input.sessionHint,
+              messages: routedMessages,
+              ...(instructions ? { system: instructions } : {}),
+              ...(input.tools
+                ? {
+                    tools: input.tools.flatMap((raw) => {
+                      if (!raw || typeof raw !== 'object') return [];
+                      const item = raw as Record<string, unknown>;
+                      if (
+                        item.type !== 'function' ||
+                        !item.function ||
+                        typeof item.function !== 'object'
+                      )
+                        return [];
+                      const fn = item.function as Record<string, unknown>;
+                      return typeof fn.name === 'string'
+                        ? [
+                            {
+                              name: fn.name,
+                              ...(typeof fn.description === 'string'
+                                ? { description: fn.description }
+                                : {}),
+                              parameters:
+                                fn.parameters && typeof fn.parameters === 'object'
+                                  ? (fn.parameters as Record<string, unknown>)
+                                  : {},
+                            },
+                          ]
+                        : [];
+                    }),
+                  }
+                : {}),
+              maxTokens: outputTokens,
+              ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+              ...(input.jsonMode ? { jsonMode: true } : {}),
+              ...(input.toolChoice === 'auto' ||
+              input.toolChoice === 'none' ||
+              input.toolChoice === 'required'
+                ? { toolChoice: input.toolChoice }
+                : input.toolChoice &&
+                    typeof input.toolChoice === 'object' &&
+                    'function' in input.toolChoice &&
+                    input.toolChoice.function &&
+                    typeof input.toolChoice.function === 'object' &&
+                    'name' in input.toolChoice.function &&
+                    typeof input.toolChoice.function.name === 'string'
+                  ? { toolChoice: { name: input.toolChoice.function.name } }
+                  : {}),
+              ...(services.env[envName] ? { baseUrl: services.env[envName] } : {}),
+              overrides: resolveProviderRequestOverrides(
+                providerId,
+                routingSettings(services).providerOverrides[providerId],
+              ),
+              fetch: requestDeps.providerFetch,
+              onObservation: requestDeps.observe,
+              signal,
+              onProgress: progress,
+              onText: (delta: string) => {
+                if (signal.aborted) return;
+                outputState.started = true;
+                input.onText?.(delta);
+              },
+              onToolCall: (call: { id: string; name: string; arguments: string }) => {
+                if (signal.aborted) return;
+                outputState.started = true;
+                input.onToolCall?.(call);
+              },
+            } satisfies Parameters<typeof streamProviderChat>[0];
+            if (oauth) {
+              if (
+                input.jsonMode ||
+                (input.toolChoice && input.toolChoice !== 'auto') ||
+                input.parallelToolCalls !== undefined
+              )
+                throw Object.assign(
+                  new Error(
+                    'This OAuth adapter does not support the requested structured-output or tool-choice controls.',
+                  ),
+                  { code: 'unsupported_request', statusCode: 400 },
+                );
+              return streamOAuthChat(services.secrets, {
+                ...chatInput,
+                model,
+                messages: input.messages,
+              });
+            }
+            return streamProviderChat(chatInput);
           },
-        });
+        );
         const timestamp = services.clock.now().toISOString();
         health.record({
           providerId,
@@ -638,8 +823,24 @@ export function createGatewayController(
             result.inputTokens,
             result.outputTokens,
           );
+        const usageMissing =
+          !free && !oauth && result.inputTokens === 0 && result.outputTokens === 0;
+        const chargedUsd =
+          free || oauth
+            ? 0
+            : usageMissing
+              ? (reservation?.estimatedUsd ?? 0)
+              : calculateSpend(
+                  {
+                    inputTokens: result.inputTokens,
+                    outputTokens: result.outputTokens,
+                    cachedTokens: result.cachedTokens ?? 0,
+                  },
+                  model,
+                );
         services.quota.recordUsage({
-          id: `gateway:${input.key.id}:${timestamp}`,
+          id: reservation?.id ?? `gateway:${input.key.id}:${timestamp}`,
+          costUsd: chargedUsd,
           providerId,
           modelRef: model.ref,
           occurredAt: timestamp,
@@ -648,6 +849,7 @@ export function createGatewayController(
           outputTokens: result.outputTokens,
           status: 'success',
         });
+        reservation?.settle(chargedUsd, usageMissing, true);
         stickyRoutes.set(input.sessionHint, {
           modelRef: model.ref,
           providerId,
@@ -665,6 +867,17 @@ export function createGatewayController(
           attempts,
         };
       } catch (error) {
+        reservation?.settle();
+        if (
+          error instanceof BudgetError ||
+          (error &&
+            typeof error === 'object' &&
+            'code' in error &&
+            error.code === 'unsupported_request')
+        ) {
+          lastError = error;
+          continue;
+        }
         const errorName =
           error && typeof error === 'object' && 'name' in error && typeof error.name === 'string'
             ? error.name
@@ -759,9 +972,22 @@ export function createGatewayController(
         stickyRoutes.delete(input.sessionHint);
         const rawMessage =
           typed.message || (error instanceof Error ? error.message : 'Provider request failed');
-        lastError = new Error(rawMessage.replaceAll(key, '[REDACTED]'));
+        lastError =
+          error instanceof GatewayTimeoutError
+            ? error
+            : Object.assign(
+                new Error(key ? rawMessage.replaceAll(key, '[REDACTED]') : rawMessage),
+                {
+                  statusCode: providerStatus >= 400 ? providerStatus : 502,
+                  ...(providerStatus === 401 || providerStatus === 403
+                    ? { code: 'upstream_credentials' }
+                    : providerStatus === 429
+                      ? { code: 'quota_exhausted' }
+                      : {}),
+                },
+              );
         const canFallback = typed.scope !== 'none' || typed.retryable;
-        if (outputState.started || !canFallback) throw error;
+        if (input.signal.aborted || outputState.started || !canFallback) throw error;
       }
     }
     throw lastError instanceof Error
@@ -770,7 +996,11 @@ export function createGatewayController(
   }
   const controller = {
     requests() {
-      return requestLog.map((record) => ({ ...record }));
+      return (
+        services.db.client
+          .prepare('SELECT data_json FROM gateway_requests ORDER BY at DESC LIMIT ?')
+          .all(requestLogLimit) as { data_json: string }[]
+      ).map((row) => JSON.parse(row.data_json) as GatewayRequestRecord);
     },
     get status() {
       return handle
@@ -826,6 +1056,8 @@ export function createGatewayController(
       patch: Partial<
         Pick<
           GatewayKey,
+          | 'paidBackup'
+          | 'budgetUsd'
           | 'profile'
           | 'allowedModels'
           | 'rateLimit'
@@ -839,7 +1071,13 @@ export function createGatewayController(
     ) {
       const current = keys(services).find((entry) => entry.id === id);
       if (!current) throw new Error(`Gateway key not found: ${id}`);
-      runtime.store.put({ ...current, ...patch });
+      const updated = { ...current, ...patch };
+      if (
+        updated.paidBackup &&
+        (!updated.budgetUsd || !Number.isFinite(updated.budgetUsd) || updated.budgetUsd <= 0)
+      )
+        throw new BudgetError('Paid backup requires an explicit positive dollar limit.');
+      runtime.store.put(updated);
       return this.listKeys().find((entry) => entry.id === id);
     },
     listKeys() {

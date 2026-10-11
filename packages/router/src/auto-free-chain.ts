@@ -1,5 +1,12 @@
 import { ProviderIdSchema } from '@ferry/shared';
-import type { FallbackChainEntry, ModelInfo, Profile, Provider, StepKind } from '@ferry/shared';
+import type {
+  FallbackChainEntry,
+  ModelInfo,
+  Profile,
+  Provider,
+  RoutingSettings,
+  StepKind,
+} from '@ferry/shared';
 import type { CapacityView } from './index.js';
 import { explainModelRouting, scoreModels } from './index.js';
 import { mayUsePromptsForTraining } from './data-use.js';
@@ -126,6 +133,7 @@ export function resolveFallbackChain(input: {
   avoidTrainingProviders?: boolean;
   trialOptInProviders?: readonly string[];
   textToolFallbackEnabled?: boolean;
+  routing?: RoutingSettings;
   now?: number;
 }): ResolvedFallbackChain {
   const now = input.now ?? Date.parse(input.capacity.now ?? new Date().toISOString());
@@ -223,6 +231,7 @@ export function resolveFallbackChain(input: {
           estimate: { inputTokens: input.inputTokens, requiresTools: true },
           verifiedModelRefs: verified,
           textToolFallbackEnabled: input.textToolFallbackEnabled ?? false,
+          ...(input.routing ? { routing: input.routing } : {}),
           ...(input.trialOptInProviders ? { trialOptInProviders: input.trialOptInProviders } : {}),
         } as const;
         if (!scoreModels(scoreInput).length) {

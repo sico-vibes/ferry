@@ -9,7 +9,7 @@ describe('subscription OAuth routing', () => {
     try {
       harness.services.providers.put(
         ProviderSchema.parse({
-          id: 'anthropic',
+          id: 'oauth-anthropic',
           name: 'Anthropic Claude Pro/Max',
           tag: 'subscription_oauth',
           kind: 'api',
@@ -34,10 +34,10 @@ describe('subscription OAuth routing', () => {
       if (!best) throw new Error('Best Available profile is missing');
       const gateway = createSessionDependencies(harness.services, () => undefined).gateway;
       const before = gateway.resolveCandidates(best, 'search');
-      expect(before.some((model) => model.providerId === 'anthropic')).toBe(false);
+      expect(before.some((model) => model.providerId === 'oauth-anthropic')).toBe(false);
       await harness.rpc.settings.update({ allowSubscriptionOAuthRouting: true });
       const after = gateway.resolveCandidates(best, 'search');
-      expect(after.some((model) => model.providerId === 'anthropic')).toBe(true);
+      expect(after.some((model) => model.providerId === 'oauth-anthropic')).toBe(true);
     } finally {
       await harness.close();
     }

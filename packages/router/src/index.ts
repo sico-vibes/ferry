@@ -9,7 +9,7 @@ import type {
   Message,
   RoutingSettings,
 } from '@ferry/shared';
-import { DIRECT_PROFILE_ID, isModelFreeForPlan } from '@ferry/shared';
+import { DIRECT_PROFILE_ID, isModelFreeForPlan, isOpenCodeAppModel } from '@ferry/shared';
 import type { Catalog } from '@ferry/catalog';
 import {
   DEFAULT_AUTO_FREE_CHAIN,
@@ -175,6 +175,14 @@ function builtinProfile(
           })),
         }
       : {}),
+    routingObjective:
+      name === 'Fast'
+        ? 'latency'
+        : name === 'Long Context'
+          ? 'context'
+          : name === 'Best Available'
+            ? 'quality'
+            : 'balanced',
     roles: {
       enabled: name === 'Auto-Free' || name === 'Best Available',
       plannerModelRef: null,
@@ -466,7 +474,7 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       (input.textToolFallbackEnabled ?? input.routing?.textToolFallbackEnabled) === true,
     );
     if ((input.estimate.requiresTools ?? true) && !toolsSupported) continue;
-    if (!providerAllowed(input.profile, provider, model, trialOptIns)) continue;
+    if (!providerAllowed(input.profile, provider, model, trialOptIns, input.routing)) continue;
     if (!input.profile.tierByStep[input.step].includes(model.tier)) continue;
     const cost = isFreeForRouting(provider, model, trialOptIns)
       ? 0
@@ -502,7 +510,18 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       : prior && prior.toolCalls > 0
         ? (prior.toolCalls - prior.toolCallValidationFailures + 2 * 0.8) / (prior.toolCalls + 2)
         : 0.8;
-    const tierFit = tierFitScore(input.step, model.tier);
+    const tierFit =
+      tierFitScore(input.step, model.tier) +
+      (input.profile.routingObjective === 'context'
+        ? Math.min(
+            1,
+            Math.max(
+              0,
+              model.contextWindow - input.estimate.inputTokens - (input.estimate.outputTokens ?? 0),
+            ) / 262_144,
+          )
+        : 0);
+    const latencyWeight = input.profile.routingObjective === 'latency' ? 40 : 10;
     const headroom =
       remaining === null
         ? 0.5
@@ -515,7 +534,8 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
     const qualityConfidence = model.qualityConfidence ?? (model.quality === undefined ? 0.1 : 1);
     const qualityPenalty = model.qualityPenalty ?? 0;
     const qualityScore =
-      ((quality - 0.35) * qualityConfidence - qualityPenalty) * (input.routing?.qualityWeight ?? 4);
+      ((quality - 0.35) * qualityConfidence - qualityPenalty) *
+      (input.routing?.qualityWeight ?? (input.profile.routingObjective === 'quality' ? 20 : 4));
     const coding = codingRank === 0 ? 8 : codingRank === 2 ? -8 : 0;
     const preference = preferredModelRefs.has(model.ref) ? 4 : 0;
     const affinity =
@@ -538,7 +558,7 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       (40 * tierFit +
         20 * headroom +
         20 * success +
-        10 * latencyScore +
+        latencyWeight * latencyScore +
         6 * costScore +
         4 * affinity +
         coding +
@@ -550,7 +570,7 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       tierFit: 40 * tierFit,
       headroom: 20 * headroom,
       success: 20 * success,
-      latency: 10 * latencyScore,
+      latency: latencyWeight * latencyScore,
       cost: 6 * costScore,
       affinity: 4 * affinity,
       coding,
@@ -754,6 +774,7 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
           provider,
           model,
           input.trialOptInProviders ?? input.routing?.trialOptInProviders ?? [],
+          input.routing,
         ) &&
         !reasons.includes('model not marked free')
       )
@@ -768,10 +789,12 @@ function providerAllowed(
   provider: Provider,
   model: ModelInfo,
   trialOptInProviders: readonly string[],
+  _routing?: RoutingSettings,
 ): boolean {
   if (provider.tag === 'trial' && !trialOptInProviders.includes(provider.id)) return false;
+  if (isOpenCodeAppModel(model)) return false;
   if (!profile.paidAllowed) {
-    if (provider.freeTierUnsupported || provider.id === 'opencode') return false;
+    if (provider.freeTierUnsupported) return false;
     if (['paid', 'credits'].includes(provider.tag) && provider.id !== 'openrouter') return false;
     if (!isFreeForRouting(provider, model, trialOptInProviders)) return false;
   }

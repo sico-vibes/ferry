@@ -21,6 +21,8 @@ import {
   rememberSecret,
   reasoningTokensFromUsage,
   type Effort,
+  oauthConnectionId,
+  oauthProviderId,
 } from '@ferry/shared';
 import type { Message, ModelInfo } from '@ferry/shared';
 import { z } from 'zod';
@@ -66,6 +68,10 @@ export interface LoginOptions {
   onProgress?(event: OAuthLoginEvent): void;
   signal?: AbortSignal;
   gateway?: string;
+  onPrompt?(
+    prompt: { kind: 'text' | 'secret' | 'manual_code'; message: string; placeholder?: string },
+    signal: AbortSignal,
+  ): Promise<string>;
 }
 
 const RISK_TEXT =
@@ -456,8 +462,8 @@ export const oauthModelCatalog = [
   ].map((model) => ({ ...model, reasoning: true })),
 ].map((model) =>
   ModelInfoSchema.parse({
-    ref: ModelRefSchema.parse(`${model.providerId}/${model.id}`),
-    providerId: ProviderIdSchema.parse(model.providerId),
+    ref: ModelRefSchema.parse(`${oauthConnectionId(model.providerId)}/${model.id}`),
+    providerId: ProviderIdSchema.parse(oauthConnectionId(model.providerId)),
     name: model.name,
     tier: model.reasoning ? 'T1' : 'T2',
     contextWindow: model.contextWindow,
@@ -494,8 +500,19 @@ export async function startLoginWithAuth(
           ? Promise.resolve(defaultOption.id)
           : Promise.reject(new Error('OAuth provider did not offer a login method'));
       }
+      if (options.onPrompt)
+        return options.onPrompt(
+          {
+            kind: prompt.type,
+            message: prompt.message,
+            ...('placeholder' in prompt && prompt.placeholder
+              ? { placeholder: prompt.placeholder }
+              : {}),
+          },
+          'signal' in prompt ? prompt.signal : signal,
+        );
       if (prompt.type === 'text') return Promise.resolve('');
-      return Promise.reject(new Error('This OAuth provider requested an unsupported login prompt'));
+      return Promise.reject(new Error('Complete this login through Ferry’s sign-in dialog'));
     },
     notify: (event: AuthEvent) => {
       if (event.type === 'auth_url') {
@@ -525,6 +542,7 @@ export async function startLoginWithAuth(
   };
   try {
     const credential = await auth.login(interaction);
+    if (signal.aborted) throw new Error('OAuth login cancelled');
     await secrets.set(
       secretKey(key),
       key === 'openrouter' ? credential.access : JSON.stringify({ ...credential, type: 'oauth' }),
@@ -623,15 +641,21 @@ export interface OAuthStepRequest {
   onReasoning?(text: string): void;
   onToolDelta?(): void;
   onProgress?(): void;
+  context?: Context;
+  maxTokens?: number;
+  temperature?: number;
 }
 
 /** Adapts Ferry agent steps to pi-ai's native OAuth-aware streaming and tool-call API. */
 export async function streamOAuthStep(secrets: SecretStore, request: OAuthStepRequest) {
   const gateway = await createOAuthModelGateway(secrets);
-  const [providerId, modelId] = request.model.ref.split('/', 2);
+  const separator = request.model.ref.indexOf('/');
+  const providerId = request.model.ref.slice(0, separator);
+  const modelId = request.model.ref.slice(separator + 1);
   if (!providerId || !modelId)
     throw new Error(`Invalid OAuth model reference: ${request.model.ref}`);
-  const model = gateway.getModel(providerId, modelId);
+  const nativeProviderId = oauthProviderId(providerId);
+  const model = gateway.getModel(nativeProviderId, modelId);
   if (!model) throw new Error(`pi-ai model not found: ${request.model.ref}`);
   const messages: PiMessage[] = [];
   const timestamp = Date.now();
@@ -663,7 +687,7 @@ export async function streamOAuthStep(secrets: SecretStore, request: OAuthStepRe
         role: 'assistant',
         content,
         api: model.api,
-        provider: providerId,
+        provider: nativeProviderId,
         model: modelId,
         usage: {
           input: 0,
@@ -687,7 +711,7 @@ export async function streamOAuthStep(secrets: SecretStore, request: OAuthStepRe
           timestamp,
         });
   }
-  const context: Context = {
+  const context: Context = request.context ?? {
     systemPrompt: request.system,
     messages,
     tools: request.tools.map((item) => ({
@@ -704,6 +728,8 @@ export async function streamOAuthStep(secrets: SecretStore, request: OAuthStepRe
       : undefined;
   const stream = gateway.streamSimple(model, context, {
     signal: request.signal,
+    ...(request.maxTokens ? { maxTokens: request.maxTokens } : {}),
+    ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(effort ? { reasoning: effort } : {}),
   });
   let text = '';
@@ -745,7 +771,140 @@ export async function streamOAuthStep(secrets: SecretStore, request: OAuthStepRe
     ...(thinkingDurationMs === undefined ? {} : { thinkingDurationMs }),
     toolCalls,
     inputTokens: result.usage.input,
+    cachedTokens: result.usage.cacheRead,
     outputTokens: result.usage.output,
     finishReason: result.stopReason,
+  };
+}
+
+export interface OAuthChatRequest {
+  model: ModelInfo;
+  messages: {
+    role: string;
+    content: unknown;
+    name?: string;
+    tool_call_id?: string;
+    tool_calls?: { id: string; function: { name: string; arguments: string } }[];
+  }[];
+  system?: string;
+  tools?: { name: string; description?: string; parameters: Record<string, unknown> }[];
+  effort?: Effort;
+  maxTokens?: number;
+  temperature?: number;
+  signal: AbortSignal;
+  onText?: (text: string) => void;
+  onProgress?: () => void;
+  onToolCall?: (call: { id: string; name: string; arguments: string }) => void;
+}
+
+/** Gateway and native-agent OAuth use the same credential store, refresh and stream adapter. */
+export async function streamOAuthChat(secrets: SecretStore, request: OAuthChatRequest) {
+  const timestamp = Date.now();
+  const messages: PiMessage[] = [];
+  const modelId = request.model.ref.slice(request.model.providerId.length + 1);
+  for (const item of request.messages) {
+    if (item.role === 'user') {
+      const content: Extract<PiMessage, { role: 'user' }>['content'] =
+        typeof item.content === 'string' ? item.content : [];
+      if (Array.isArray(content) && Array.isArray(item.content)) {
+        for (const raw of item.content) {
+          if (!raw || typeof raw !== 'object') throw new Error('Unsupported OAuth input');
+          const part = raw as Record<string, unknown>;
+          if (typeof part.text === 'string') content.push({ type: 'text', text: part.text });
+          else {
+            const image = part.image_url as { url?: string } | undefined;
+            const url = typeof part.image === 'string' ? part.image : image?.url;
+            const match = url && /^data:([^;]+);base64,(.*)$/s.exec(url);
+            if (!match?.[1] || !match[2])
+              throw Object.assign(new Error('OAuth image input requires an inline base64 image.'), {
+                code: 'unsupported_request',
+                statusCode: 400,
+              });
+            content.push({ type: 'image', mimeType: match[1], data: match[2] });
+          }
+        }
+      }
+      messages.push({ role: 'user', content, timestamp });
+    } else if (item.role === 'tool' && item.tool_call_id) {
+      const call = request.messages
+        .flatMap((message) => message.tool_calls ?? [])
+        .find((call) => call.id === item.tool_call_id);
+      messages.push({
+        role: 'toolResult',
+        toolCallId: item.tool_call_id,
+        toolName: item.name ?? call?.function.name ?? '',
+        content: [
+          {
+            type: 'text',
+            text: typeof item.content === 'string' ? item.content : JSON.stringify(item.content),
+          },
+        ],
+        isError: false,
+        timestamp,
+      });
+    } else if (item.role === 'assistant') {
+      const content: PiAssistantMessage['content'] =
+        typeof item.content === 'string' && item.content
+          ? [{ type: 'text', text: item.content }]
+          : [];
+      for (const call of item.tool_calls ?? [])
+        content.push({
+          type: 'toolCall',
+          id: call.id,
+          name: call.function.name,
+          arguments: JSON.parse(call.function.arguments) as JsonObject,
+        });
+      messages.push({
+        role: 'assistant',
+        content,
+        api:
+          piModels.get(`${oauthProviderId(request.model.providerId)}/${modelId}`)?.api ??
+          'openai-completions',
+        provider: oauthProviderId(request.model.providerId),
+        model: modelId,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'stop',
+        timestamp,
+      });
+    }
+  }
+  const result = await streamOAuthStep(secrets, {
+    model: request.model,
+    system: request.system ?? '',
+    messages: [],
+    tools: [],
+    signal: request.signal,
+    context: {
+      systemPrompt: request.system ?? '',
+      messages,
+      tools: (request.tools ?? []).map((tool) => ({
+        name: tool.name,
+        description: tool.description ?? '',
+        parameters: tool.parameters,
+      })),
+    },
+    ...(request.effort ? { effort: request.effort } : {}),
+    ...(request.maxTokens ? { maxTokens: request.maxTokens } : {}),
+    ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+    onDelta: (text) => request.onText?.(text),
+    onProgress: () => request.onProgress?.(),
+  });
+  const toolCalls = result.toolCalls.map((call) => ({
+    id: call.id,
+    name: call.name,
+    arguments: JSON.stringify(call.input),
+  }));
+  for (const call of toolCalls) request.onToolCall?.(call);
+  return {
+    ...result,
+    toolCalls,
+    finishReason: toolCalls.length ? 'tool_calls' : result.finishReason,
   };
 }

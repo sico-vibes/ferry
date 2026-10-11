@@ -1,5 +1,7 @@
 import {
   ProbeResultSchema,
+  canonicalProviderId,
+  providerDefinition,
   ProviderKeySchema,
   ProviderIdSchema,
   ProviderSchema,
@@ -19,9 +21,11 @@ import { invalidateSessionProviderKeyCache } from '../session-deps.js';
 import { getModelDiscovery } from './model-discovery.js';
 import { getProviderHealth } from '../provider-health.js';
 import { isCoreWindowActive, onCoreWindowActiveChange } from '../runtime-activity.js';
-import { hasUsableProviderKey } from '../services.js';
+import { hasUsableProviderKey, permitsKeylessProvider } from '../services.js';
 
-const ProviderIdInput = ProviderIdSchema;
+const ProviderIdInput = ProviderIdSchema.transform((id) =>
+  ProviderIdSchema.parse(canonicalProviderId(id)),
+);
 const KeyInput = z.string().trim().min(1).max(4096);
 const EnabledInput = z.boolean();
 
@@ -91,7 +95,10 @@ function providerRecord(services: FerryServices, id: string): Provider {
     autoPauseAfterFailedRequests: saved?.autoPauseAfterFailedRequests,
     kind: limits.tag === 'subscription_cli' ? 'cli' : 'api',
     brand: null,
-    keyStatus,
+    keyStatus:
+      permitsKeylessProvider(services, id) && !keyRef && keys.length === 0
+        ? 'not_applicable'
+        : keyStatus,
     keyCount: keys.length || (keyRef ? 1 : 0),
     autoDisableEnabled: saved?.autoDisableEnabled ?? true,
     autoDisableFailureCount: saved?.autoDisableFailureCount ?? 3,
@@ -429,9 +436,17 @@ export function register(host: CoreHost, services: FerryServices): void {
     },
     async addKey(rawId: unknown, rawLabel: unknown, rawKey: unknown) {
       const id = ProviderIdInput.parse(rawId);
+      if (providerDefinition(id)?.releaseState === 'Coming soon')
+        throw new Error(`${id} is coming soon.`);
       const label = z.string().trim().min(1).max(80).parse(rawLabel);
       const key = KeyInput.parse(rawKey);
       const entries = ensureLegacyKeyEntry(services, id);
+      if (id === 'opencode' && entries.length > 0)
+        throw rpcDomainError(
+          -32045,
+          'conflict',
+          'Zen uses one account key. Replace the existing key instead of stacking keys.',
+        );
       const keyId = String(Math.max(0, ...entries.map((entry) => Number(entry.keyId) || 0)) + 1);
       const keyringRef = `${id}:${keyId}`;
       const now = services.clock.now().toISOString();
@@ -475,6 +490,8 @@ export function register(host: CoreHost, services: FerryServices): void {
     },
     async setKey(rawId: unknown, rawKey: unknown) {
       const id = ProviderIdInput.parse(rawId);
+      if (providerDefinition(id)?.releaseState === 'Coming soon')
+        throw new Error(`${id} is coming soon.`);
       const key = KeyInput.parse(rawKey);
       const current = providerRecord(services, id);
       const entries = services.providerKeyEntries.list(id);
@@ -578,7 +595,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const provider = saveProvider(services, {
         ...current,
         keyStatus: remaining.length ? current.keyStatus : 'missing',
-        enabled: remaining.length > 0 && current.enabled,
+        enabled: (permitsKeylessProvider(services, id) || remaining.length > 0) && current.enabled,
       });
       host.emit('provider.updated', provider);
     },
@@ -653,9 +670,12 @@ export function register(host: CoreHost, services: FerryServices): void {
           ? keyEntries.find((entry) => entry.keyId === requestedKeyId)
           : (keyEntries.find((entry) => entry.enabled && entry.status !== 'invalid') ??
             keyEntries[0]);
+        const legacyKeyRef = services.providerKeys.get(id)?.keyringRef;
         const key = keyEntry
           ? await services.secrets.get(keyEntry.keyringRef)
-          : await services.secrets.get(services.providerKeys.get(id)?.keyringRef ?? id);
+          : legacyKeyRef
+            ? await services.secrets.get(legacyKeyRef)
+            : undefined;
         const backoff = providerProbeBackoff.get(id);
         const nowMs = services.clock.now().getTime();
         if (backoff && backoff.retryAt > nowMs) {
@@ -669,7 +689,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             errorKind: 'offline',
           });
         }
-        if (!key) {
+        if (!key && !permitsKeylessProvider(services, id)) {
           const result = ProbeResultSchema.parse({
             ok: false,
             keyValid: false,
@@ -690,7 +710,7 @@ export function register(host: CoreHost, services: FerryServices): void {
             : undefined;
         const overrides = RoutingSettingsSchema.parse(routing ?? {}).providerOverrides[id];
         const result = ProbeResultSchema.parse(
-          await probe(id, key, {
+          await probe(id, key ?? '', {
             ...(baseUrl ? { baseUrl } : {}),
             overrides: resolveProviderRequestOverrides(id, overrides),
           }),
@@ -727,7 +747,9 @@ export function register(host: CoreHost, services: FerryServices): void {
         let discoverySucceeded = false;
         if (result.ok) {
           try {
-            discovered = await discoverProviderModels(id, key, { ...(baseUrl ? { baseUrl } : {}) });
+            discovered = await discoverProviderModels(id, key ?? '', {
+              ...(baseUrl ? { baseUrl } : {}),
+            });
             discovered = discovered.map((model) => ({
               ...model,
               verified: true,
@@ -752,7 +774,13 @@ export function register(host: CoreHost, services: FerryServices): void {
             : current.discoveryUnsupported
               ? knownProbeModels.map((model) => ({ ...model, verified: false, verifiedAt: null }))
               : services.models.list(id)
-        ).filter((model) => !unavailableIds.has(model.ref.slice(id.length + 1)));
+        )
+          .filter((model) => !unavailableIds.has(model.ref.slice(id.length + 1)))
+          .map((model) =>
+            result.ok && result.usedModel === model.ref.slice(id.length + 1)
+              ? { ...model, apiAccessVerified: true }
+              : model,
+          );
         const persistedModels = result.ok
           ? availableModels
           : (current.availableModels ?? []).filter(
@@ -812,7 +840,8 @@ export function register(host: CoreHost, services: FerryServices): void {
           services.quota.noteSuccess(id, cooldownModel, keyEntry?.keyId ?? id);
           services.cooldowns.delete(id);
         }
-        const usableKey = hasUsableProviderKey(services, id);
+        const usableKey =
+          !permitsKeylessProvider(services, id) && hasUsableProviderKey(services, id);
         const rateLimited =
           result.errorKind === 'rate_limit' || result.errorKind === 'quota_exhausted';
         const keyCooldown =

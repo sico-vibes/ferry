@@ -4,7 +4,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FolderOpen } from 'lucide-react';
 import { FerryMark, UiV2 } from '@ferry/ui';
-import type { ProviderId } from '@ferry/shared';
+import { canonicalProviderId, providerDefinition, type ProviderId } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { keys } from '../data/queries';
 import { TextPromptDialog } from './TextPromptDialog';
@@ -16,7 +16,7 @@ const recommended = [
   'cerebras',
   'groq',
   'mistral',
-  'opencode-zen',
+  'opencode',
   'sambanova',
 ];
 const moreFreeProviders = [
@@ -54,7 +54,7 @@ const providerDetails: Record<string, { limit: string; tag: string }> = {
   cerebras: { limit: 'Fast inference, low daily capacity', tag: 'Fast' },
   groq: { limit: 'Generous requests, shorter context', tag: 'Fast' },
   mistral: { limit: 'Experimental free access', tag: 'Experimental' },
-  'opencode-zen': { limit: 'Promotional free models', tag: 'Free' },
+  opencode: { limit: 'Standard API with your own key', tag: 'API' },
   sambanova: { limit: '20 requests/model/day and 200K tokens/day', tag: 'Default' },
   llm7: { limit: 'Anonymous access; email token increases limits', tag: 'Caution' },
   'cloudflare-workers-ai': { limit: '10,000 Neurons/day', tag: 'Optional' },
@@ -120,6 +120,8 @@ export function OnboardingCanvas() {
     await navigate({ to: '/' });
   };
   const saveKey = async (id: string) => {
+    id = canonicalProviderId(id);
+    if (providerDefinition(id)?.releaseState === 'Coming soon') return;
     const value = keysByProvider[id]?.trim();
     if (id === 'cloudflare-workers-ai' && !cloudflareAccountId.trim()) return;
     if (!value) return;

@@ -1,3 +1,4 @@
+import { isOpenCodeAppModel } from '@ferry/shared';
 import {
   createStepGenerator,
   type AgentEvent,
@@ -10,6 +11,8 @@ import type { TraceContext } from '@ferry/shared';
 import { ProviderKeyRotation, resolveProviderRequestOverrides } from '@ferry/providers';
 import {
   ProviderIdSchema,
+  oauthProviderId,
+  providerDefinition,
   ProviderSchema,
   RoutingSettingsSchema,
   UsageRecordSchema,
@@ -31,7 +34,12 @@ import {
   type CapacityView,
 } from '@ferry/router';
 import { oauthModelCatalog, streamOAuthStep } from '@ferry/oauth';
-import { hasUsableProviderKey, recordProviderKeyFailure, type FerryServices } from './services.js';
+import {
+  hasUsableProviderKey,
+  recordProviderKeyFailure,
+  permitsKeylessProvider,
+  type FerryServices,
+} from './services.js';
 import { z } from 'zod';
 import {
   classifyLedgerError,
@@ -52,6 +60,7 @@ export function invalidateSessionProviderKeyCache(
 }
 
 function hasProviderKey(services: FerryServices, providerId: string): boolean {
+  if (permitsKeylessProvider(services, providerId)) return true;
   let cache = providerKeyPresence.get(services);
   if (!cache) {
     cache = new Map();
@@ -128,12 +137,17 @@ export function createSessionDependencies(
         const id = ProviderIdSchema.parse(provider);
         const saved = services.providers.get(id);
         const keyPresent = hasProviderKey(services, id);
-        const enabled = saved?.enabled ?? keyPresent;
-        const keyStatus: Provider['keyStatus'] = keyPresent
-          ? (saved?.keyStatus ?? 'unchecked')
-          : key_required === false && enabled
+        const enabled = saved?.enabled ?? (keyPresent || key_required === false);
+        const keyStatus: Provider['keyStatus'] =
+          permitsKeylessProvider(services, id) &&
+          !services.providerKeys.get(id) &&
+          !services.providerKeyEntries.list(id).length
             ? 'not_applicable'
-            : 'missing';
+            : keyPresent
+              ? (saved?.keyStatus ?? 'unchecked')
+              : key_required === false && enabled
+                ? 'not_applicable'
+                : 'missing';
         const cooldown = services.cooldowns.get(id);
         const activeCooldown =
           cooldown && Date.parse(cooldown.until) > services.clock.now().getTime();
@@ -190,7 +204,7 @@ export function createSessionDependencies(
       return ProviderSchema.parse({
         id,
         name:
-          id === 'anthropic'
+          oauthProviderId(id) === 'anthropic'
             ? 'Anthropic Claude Pro/Max'
             : id === 'openai-codex'
               ? 'OpenAI ChatGPT'
@@ -411,10 +425,13 @@ export function createSessionDependencies(
       return selected?.providerId === providerId ? selected.keyId : undefined;
     },
     providerKeyIds(providerId) {
+      if (permitsKeylessProvider(services, providerId)) return [providerId];
       const entries = services.providerKeyEntries.list(providerId);
       return entries.length ? entries.map((entry) => entry.id) : [providerId];
     },
     unavailableProviderKeyIds(providerId, modelRef) {
+      if (permitsKeylessProvider(services, providerId))
+        return health.tracker.available(providerId, modelRef, providerId) ? [] : [providerId];
       const now = services.clock.now().getTime();
       const entries = services.providerKeyEntries.list(providerId);
       if (!entries.length && !health.tracker.available(providerId, modelRef, providerId))
@@ -442,11 +459,17 @@ export function createSessionDependencies(
       const configuredProviders = services.catalog.providers.filter(
         ({ provider, key_required }) => {
           const saved = services.providers.get(provider);
+          const definition = providerDefinition(provider);
+          if (
+            definition?.releaseState === 'Coming soon' ||
+            (definition?.releaseState === 'Beta' && saved?.enabled !== true)
+          )
+            return false;
           const enabled = saved?.enabled ?? hasProviderKey(services, provider);
           const entries = services.providerKeyEntries.list(provider);
           const availableKey =
             hasUsableProviderKey(services, provider) &&
-            (entries.length === 0
+            (permitsKeylessProvider(services, provider) || entries.length === 0
               ? health.tracker.available(provider, undefined, provider)
               : entries.some(
                   (entry) =>
@@ -467,6 +490,7 @@ export function createSessionDependencies(
         const saved = services.providers.get(provider);
         return services.models
           .list(provider)
+          .filter((model) => !isOpenCodeAppModel(model))
           .filter(
             (model) =>
               !saved?.excludedModelRefs?.includes(model.ref) &&
@@ -577,6 +601,7 @@ export function createSessionDependencies(
         avoidTrainingProviders: routingSettings().avoidTrainingProviders,
         trialOptInProviders: routingSettings().trialOptInProviders,
         textToolFallbackEnabled: routingSettings().textToolFallbackEnabled,
+        routing: routingSettings(),
         now: services.clock.now().getTime(),
       });
       const chainRefs = new Set(chainResult.models.map((model) => model.ref));
@@ -697,14 +722,14 @@ export function createSessionDependencies(
         preferredKeyId,
       );
       if (selectedKey) selectedProviderKeys.set(sessionId, { providerId, keyId: selectedKey.id });
+      else selectedProviderKeys.delete(sessionId);
+      const legacyKeyRef = services.providerKeys.get(providerId)?.keyringRef;
       const key = selectedKey
         ? await services.secrets.get(selectedKey.keyringRef)
-        : entries.length === 0 && hasProviderKey(services, providerId)
-          ? await services.secrets.get(
-              services.providerKeys.get(providerId)?.keyringRef ?? providerId,
-            )
+        : entries.length === 0 && legacyKeyRef
+          ? await services.secrets.get(legacyKeyRef)
           : undefined;
-      if (!key && entries.length > 0)
+      if (!key && entries.length > 0 && !permitsKeylessProvider(services, providerId))
         throw Object.assign(new Error(`All configured keys for ${providerId} are unavailable.`), {
           statusCode: 429,
         });

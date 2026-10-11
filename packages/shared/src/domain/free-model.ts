@@ -43,7 +43,9 @@ export function isModelFreeForPlan(
     (model.priceInPerM !== null && model.priceInPerM !== 0) ||
     (model.priceOutPerM !== null && model.priceOutPerM !== 0);
 
-  if (provider.freeTierUnsupported || provider.id === 'opencode') return false;
+  if (provider.freeTierUnsupported) return false;
+  if (provider.id === 'opencode')
+    return isCoveredByFreePlan(provider, model) && !individuallyPriced;
   if (provider.id === 'openrouter') return /:free(?:$|:)/i.test(model.ref) || zeroPriced;
   if (provider.billingEnabled) return false;
   if (['paid', 'credits'].includes(provider.tag)) return false;

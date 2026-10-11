@@ -42,7 +42,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const builtin = BUILTIN_PROFILES.find((item) => item.id === profile.id);
       if (builtin) {
         const { fallbackChain: _overrideChain, ...candidateSettings } = profile;
-        const { fallbackChain: _baseChain, ...builtinSettings } = builtin;
+        const { fallbackChain: _baseChain, ...builtinSettings } = ProfileSchema.parse(builtin);
         const { roles: _candidateRoles, ...candidateWithoutRoles } = candidateSettings;
         const { roles: _baseRoles, ...builtinWithoutRoles } = builtinSettings;
         if (

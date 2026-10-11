@@ -127,6 +127,8 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
       const p = state.providers.find((p) => p.id === id);
       if (!p) throw new MockNotFoundError('Provider', id);
       const items = keys.get(id) ?? [];
+      if (['opencode', 'opencode-zen'].includes(id) && items.length)
+        throw new Error('Zen uses one account key. Replace it instead of stacking keys.');
       const item: ProviderKey = {
         id: String(Math.max(0, ...items.map((entry) => Number(entry.id) || 0)) + 1),
         providerId: id,

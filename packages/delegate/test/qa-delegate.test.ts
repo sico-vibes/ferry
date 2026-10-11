@@ -56,6 +56,15 @@ describe('QA delegate: argument safety', () => {
       assertSafeArguments(['run', '--model', 'acme/model-1', 'a normal brief']);
     }).not.toThrow();
   });
+  it('preserves paths with apostrophes, spaces and Unicode as literal arguments', () => {
+    const path = "D:\\Basem's\\Coding\\模型 project\\agent.mjs";
+    const invocation = resolveAcpCommand(process.execPath, [path]);
+    expect(invocation.args).toEqual([path]);
+    if (process.platform === 'win32') {
+      const shim = resolveAcpCommand("D:\\Basem's\\tools\\agent.cmd", [path]);
+      expect(shim.args.at(-1)).toContain(`"${path}"`);
+    }
+  });
 
   it('allows shell operator characters contained within one argument', () => {
     expect(() => {

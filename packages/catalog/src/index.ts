@@ -124,7 +124,7 @@ interface SnapshotModel {
   release_date?: string;
   knowledge?: string;
   open_weights?: boolean;
-  modalities?: { input?: string[] };
+  modalities?: { input?: string[]; output?: string[] };
 }
 interface SnapshotProvider {
   name?: string;
@@ -140,8 +140,16 @@ export function normalizeModels(
   const result: ModelInfo[] = [];
   if (snapshot === null || typeof snapshot !== 'object' || Array.isArray(snapshot)) return result;
   for (const [snapshotProviderId, provider] of Object.entries(snapshot as Snapshot)) {
-    const providerId = snapshotProviderId === 'google' ? 'gemini' : snapshotProviderId;
+    const providerId =
+      snapshotProviderId === 'google'
+        ? 'gemini'
+        : snapshotProviderId === 'xai'
+          ? 'xai-api'
+          : snapshotProviderId === 'moonshotai'
+            ? 'moonshot'
+            : snapshotProviderId;
     for (const model of Object.values(provider.models ?? {})) {
+      if (model.modalities?.output && !model.modalities.output.includes('text')) continue;
       const ref = `${providerId}/${model.id}`;
       const tierInfo = tiers[ref] ?? tiers[model.id];
       const plan = providerPlans.find((providerPlan) => providerPlan.provider === providerId);

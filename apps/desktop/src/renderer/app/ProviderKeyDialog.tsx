@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Provider } from '@ferry/shared';
+import { providerDefinition, type Provider } from '@ferry/shared';
 import { ArrowDown, ArrowUp, Trash2, X } from 'lucide-react';
 import { UiV2, SkeletonRows } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
@@ -46,6 +46,8 @@ export function ProviderKeyDialog({
   const [disableMinutes, setDisableMinutes] = useState('60');
   const [statusCodes, setStatusCodes] = useState('');
   const [keywords, setKeywords] = useState('');
+  const isZen = provider?.id === 'opencode' || provider?.id === 'opencode-zen';
+  const definition = provider ? providerDefinition(provider.id) : undefined;
   useEffect(() => {
     setPriority(
       String((provider ? settings?.routing.providerPriorities[provider.id] : undefined) ?? 0),
@@ -157,7 +159,7 @@ export function ProviderKeyDialog({
       setMessage('Enter the Cloudflare account ID.');
       return;
     }
-    if (!provider || !value.trim()) {
+    if (!provider || (!value.trim() && !(isZen && providerKeys.length > 0))) {
       setMessage('Enter an API key to save.');
       return;
     }
@@ -167,6 +169,15 @@ export function ProviderKeyDialog({
         provider.id === 'cloudflare-workers-ai'
           ? JSON.stringify({ accountId: accountId.trim(), apiKey: value.trim() })
           : value.trim();
+      if (isZen && value.trim()) {
+        await client.providers.setKey(provider.id, secret);
+        await client.providers.setEnabled(provider.id, true);
+        await cache.invalidateQueries({ queryKey: ['providers'] });
+        await cache.invalidateQueries({ queryKey: ['provider-keys', provider.id] });
+        setValue('');
+        setMessage('Key saved. Test the standard API connection.');
+        return;
+      }
       if (providerKeys.length) {
         await client.providers.addKey(
           provider.id,
@@ -304,18 +315,20 @@ export function ProviderKeyDialog({
     >
       <DialogContent
         aria-describedby="provider-key-description"
-        className="h-[min(90dvh,48rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+        className="h-[min(90dvh,48rem)] sm:max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
       >
         <DialogHeader>
           <div className="flex items-start gap-3">
             <div className="mr-auto grid gap-2">
               <DialogTitle>Manage {provider?.name ?? 'provider'} key</DialogTitle>
               <DialogDescription id="provider-key-description">
-                {showRoutingControls
-                  ? `Manage ${provider?.name ?? 'provider'} keys. Ferry rotates through enabled keys in this order.`
-                  : realProviders
-                    ? 'Keys are stored securely in your operating system keyring.'
-                    : 'Keys are stored in this local demo client.'}
+                {isZen
+                  ? 'Use your own key with models served by the standard API.'
+                  : showRoutingControls
+                    ? `Manage ${provider?.name ?? 'provider'} keys. Ferry rotates through enabled keys in this order.`
+                    : realProviders
+                      ? 'Keys are stored securely in your operating system keyring.'
+                      : 'Keys are stored in this local demo client.'}
               </DialogDescription>
             </div>
             <DialogClose aria-label="Close dialog">
@@ -325,10 +338,49 @@ export function ProviderKeyDialog({
         </DialogHeader>
         <div className="min-h-0 overflow-y-auto pr-2">
           <div className="grid gap-4">
-            <p className="text-meta text-text-3">
-              Use keys you own under one provider account, such as separate project keys. Pooling
-              accounts to multiply free tiers may violate provider terms; Ferry does not support it.
-            </p>
+            {isZen ? (
+              <section className="grid gap-3" aria-label="OpenCode Zen access">
+                <h3 className="text-ui-label">OpenCode Zen API</h3>
+
+                <p className="text-ui-meta text-muted-foreground">
+                  Use your OpenCode account key. Ferry uses the standard Zen API; OpenCode Go
+                  remains a separate paid provider.
+                </p>
+                <details className="rounded-card bg-muted p-4">
+                  <summary className="cursor-pointer text-ui-label">
+                    How to get an OpenCode key
+                  </summary>
+                  <ol className="mt-3 grid list-decimal gap-2 pl-4 text-ui-secondary text-muted-foreground">
+                    <li>
+                      <a
+                        className="text-link underline"
+                        href="https://opencode.ai/auth"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open the OpenCode console
+                      </a>{' '}
+                      and sign in.
+                    </li>
+                    <li>Choose your workspace and open API keys.</li>
+                    <li>
+                      Create a key, copy it once, and paste it below. A Go subscription is not
+                      needed to create a Zen API key.
+                    </li>
+                  </ol>
+                  <p className="mt-3 text-ui-meta text-muted-foreground">
+                    An existing Go/Zen key also works. Extra keys do not multiply a shared
+                    allowance. OpenCode-only free models are available in the OpenCode app.
+                  </p>
+                </details>
+              </section>
+            ) : (
+              <p className="text-meta text-text-3">
+                Use keys you own under one provider account, such as separate project keys. Pooling
+                accounts to multiply free tiers may violate provider terms; Ferry does not support
+                it.
+              </p>
+            )}
             {keysPending ? (
               <SkeletonRows rows={3} />
             ) : (
@@ -343,23 +395,19 @@ export function ProviderKeyDialog({
                       <div className="flex min-w-0 flex-wrap items-center gap-3">
                         <div className="grid min-w-0 flex-1 gap-1">
                           <div className="flex min-w-0 flex-wrap items-center gap-2">
-                            <span className="text-ui-label">
+                            <span
+                              className="truncate text-ui-label"
+                              title={`${item.label} (ending ${item.lastFour})`}
+                            >
                               {item.label} (ending {item.lastFour})
                             </span>
-                            <ProviderStatusBadge
-                              status={item.status}
-                              cooldownUntil={item.cooldownUntil}
-                              enabled={item.enabled}
-                            />
                           </div>
-                          <p className="text-meta text-text-3">
-                            {numberFormat.format(item.usageToday.requests)} requests /{' '}
-                            {numberFormat.format(item.usageToday.tokens)} tokens today
-                          </p>
-                          {item.lastError && (
-                            <p className="text-meta text-text-3">{item.lastError}</p>
-                          )}
                         </div>
+                        <ProviderStatusBadge
+                          status={item.status}
+                          cooldownUntil={item.cooldownUntil}
+                          enabled={item.enabled}
+                        />
                         <div className="flex shrink-0 items-center gap-2">
                           <span className="text-ui-label">Enabled</span>
                           <Switch
@@ -371,38 +419,42 @@ export function ProviderKeyDialog({
                             }}
                           />
                         </div>
-                        <UiV2.TooltipProvider>
-                          <UiV2.Tooltip>
-                            <UiV2.TooltipTrigger asChild>
-                              <Button
-                                aria-label={`Move up ${item.label}`}
-                                disabled={busy || index === 0}
-                                onClick={() => void moveKeyUp(index)}
-                                size="icon"
-                                variant="ghost"
-                              >
-                                <ArrowUp aria-hidden="true" size={16} strokeWidth={1.75} />
-                              </Button>
-                            </UiV2.TooltipTrigger>
-                            <UiV2.TooltipContent>Move up</UiV2.TooltipContent>
-                          </UiV2.Tooltip>
-                        </UiV2.TooltipProvider>
-                        <UiV2.TooltipProvider>
-                          <UiV2.Tooltip>
-                            <UiV2.TooltipTrigger asChild>
-                              <Button
-                                aria-label={`Move down ${item.label}`}
-                                disabled={busy || index === providerKeys.length - 1}
-                                onClick={() => void moveKeyDown(index)}
-                                size="icon"
-                                variant="ghost"
-                              >
-                                <ArrowDown aria-hidden="true" size={16} strokeWidth={1.75} />
-                              </Button>
-                            </UiV2.TooltipTrigger>
-                            <UiV2.TooltipContent>Move down</UiV2.TooltipContent>
-                          </UiV2.Tooltip>
-                        </UiV2.TooltipProvider>
+                        {!isZen && (
+                          <>
+                            <UiV2.TooltipProvider>
+                              <UiV2.Tooltip>
+                                <UiV2.TooltipTrigger asChild>
+                                  <Button
+                                    aria-label={`Move up ${item.label}`}
+                                    disabled={busy || index === 0}
+                                    onClick={() => void moveKeyUp(index)}
+                                    size="icon"
+                                    variant="ghost"
+                                  >
+                                    <ArrowUp aria-hidden="true" size={16} strokeWidth={1.75} />
+                                  </Button>
+                                </UiV2.TooltipTrigger>
+                                <UiV2.TooltipContent>Move up</UiV2.TooltipContent>
+                              </UiV2.Tooltip>
+                            </UiV2.TooltipProvider>
+                            <UiV2.TooltipProvider>
+                              <UiV2.Tooltip>
+                                <UiV2.TooltipTrigger asChild>
+                                  <Button
+                                    aria-label={`Move down ${item.label}`}
+                                    disabled={busy || index === providerKeys.length - 1}
+                                    onClick={() => void moveKeyDown(index)}
+                                    size="icon"
+                                    variant="ghost"
+                                  >
+                                    <ArrowDown aria-hidden="true" size={16} strokeWidth={1.75} />
+                                  </Button>
+                                </UiV2.TooltipTrigger>
+                                <UiV2.TooltipContent>Move down</UiV2.TooltipContent>
+                              </UiV2.Tooltip>
+                            </UiV2.TooltipProvider>
+                          </>
+                        )}
                         <UiV2.TooltipProvider>
                           <UiV2.Tooltip>
                             <UiV2.TooltipTrigger asChild>
@@ -423,6 +475,13 @@ export function ProviderKeyDialog({
                           </UiV2.Tooltip>
                         </UiV2.TooltipProvider>
                       </div>
+                      <p className="text-ui-meta text-muted-foreground">
+                        {numberFormat.format(item.usageToday.requests)} requests /{' '}
+                        {numberFormat.format(item.usageToday.tokens)} tokens today
+                      </p>
+                      {item.lastError && (
+                        <p className="text-ui-meta text-muted-foreground">{item.lastError}</p>
+                      )}
                     </div>
                   ))}
                 </section>
@@ -471,91 +530,93 @@ export function ProviderKeyDialog({
                 </Button>
               </section>
             )}
-            <section className="grid gap-3" aria-label="Key health policy">
-              <h3 className="text-ui-label">Automatic key recovery</h3>
-              <label className="flex items-center gap-2 text-ui-label">
-                <Switch checked={autoDisableEnabled} onCheckedChange={setAutoDisableEnabled} />
-                Disable unhealthy keys automatically
-              </label>
-              <p className="text-meta text-text-3">
-                Authentication failures disable a key. Repeated failures or matching status codes
-                and messages pause it temporarily; hourly probes can restore it.
-              </p>
-              <div className="grid grid-cols-2 gap-2">
+            <details className="grid gap-3" aria-label="Key health policy">
+              <summary className="cursor-pointer text-ui-label">Automatic key recovery</summary>
+              <div className="mt-3 grid gap-3">
+                <label className="flex items-center gap-2 text-ui-label">
+                  <Switch checked={autoDisableEnabled} onCheckedChange={setAutoDisableEnabled} />
+                  Disable unhealthy keys automatically
+                </label>
+                <p className="text-meta text-text-3">
+                  Authentication failures disable a key. Repeated failures or matching status codes
+                  and messages pause it temporarily; hourly probes can restore it.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="grid gap-1 text-ui-label">
+                    Failures
+                    <Input
+                      aria-label="Failure count"
+                      min={2}
+                      max={20}
+                      onChange={(event) => {
+                        setFailureCount(event.target.value);
+                      }}
+                      type="number"
+                      value={failureCount}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-ui-label">
+                    Window (minutes)
+                    <Input
+                      aria-label="Failure window minutes"
+                      min={1}
+                      max={1440}
+                      onChange={(event) => {
+                        setFailureWindowMinutes(event.target.value);
+                      }}
+                      type="number"
+                      value={failureWindowMinutes}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-ui-label">
+                    Pause (minutes)
+                    <Input
+                      aria-label="Disable duration minutes"
+                      min={1}
+                      max={1440}
+                      onChange={(event) => {
+                        setDisableMinutes(event.target.value);
+                      }}
+                      type="number"
+                      value={disableMinutes}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-ui-label">
+                    HTTP status codes
+                    <Input
+                      aria-label="Disable status codes"
+                      onChange={(event) => {
+                        setStatusCodes(event.target.value);
+                      }}
+                      placeholder="500, 503"
+                      value={statusCodes}
+                    />
+                  </label>
+                </div>
                 <label className="grid gap-1 text-ui-label">
-                  Failures
+                  Error message keywords
                   <Input
-                    aria-label="Failure count"
-                    min={2}
-                    max={20}
+                    aria-label="Disable keywords"
                     onChange={(event) => {
-                      setFailureCount(event.target.value);
+                      setKeywords(event.target.value);
                     }}
-                    type="number"
-                    value={failureCount}
+                    placeholder="overloaded, account suspended"
+                    value={keywords}
                   />
                 </label>
-                <label className="grid gap-1 text-ui-label">
-                  Window (minutes)
-                  <Input
-                    aria-label="Failure window minutes"
-                    min={1}
-                    max={1440}
-                    onChange={(event) => {
-                      setFailureWindowMinutes(event.target.value);
-                    }}
-                    type="number"
-                    value={failureWindowMinutes}
-                  />
-                </label>
-                <label className="grid gap-1 text-ui-label">
-                  Pause (minutes)
-                  <Input
-                    aria-label="Disable duration minutes"
-                    min={1}
-                    max={1440}
-                    onChange={(event) => {
-                      setDisableMinutes(event.target.value);
-                    }}
-                    type="number"
-                    value={disableMinutes}
-                  />
-                </label>
-                <label className="grid gap-1 text-ui-label">
-                  HTTP status codes
-                  <Input
-                    aria-label="Disable status codes"
-                    onChange={(event) => {
-                      setStatusCodes(event.target.value);
-                    }}
-                    placeholder="500, 503"
-                    value={statusCodes}
-                  />
-                </label>
+                <Button
+                  disabled={busy}
+                  onClick={() => void saveAutoDisablePolicy()}
+                  variant="secondary"
+                >
+                  Save key health policy
+                </Button>
               </div>
-              <label className="grid gap-1 text-ui-label">
-                Error message keywords
-                <Input
-                  aria-label="Disable keywords"
-                  onChange={(event) => {
-                    setKeywords(event.target.value);
-                  }}
-                  placeholder="overloaded, account suspended"
-                  value={keywords}
-                />
-              </label>
-              <Button
-                disabled={busy}
-                onClick={() => void saveAutoDisablePolicy()}
-                variant="secondary"
-              >
-                Save key health policy
-              </Button>
-            </section>
-            {provider?.signupUrl && (
+            </details>
+            {(isZen || provider?.signupUrl) && (
               <a
                 className="text-label text-primary"
-                href={provider.signupUrl}
+                href={isZen ? 'https://opencode.ai/auth' : (provider.signupUrl ?? undefined)}
                 target="_blank"
                 rel="noreferrer"
               >
@@ -577,7 +638,7 @@ export function ProviderKeyDialog({
                 />
               </label>
             )}
-            {providerKeys.length > 0 && (
+            {!isZen && providerKeys.length > 0 && (
               <label className="grid gap-2 text-ui-label">
                 Key label
                 <Input
@@ -591,7 +652,11 @@ export function ProviderKeyDialog({
               </label>
             )}
             <label className="grid gap-2 text-ui-label">
-              {provider?.id === 'cloudflare-workers-ai' ? 'Cloudflare API token' : 'API key'}
+              {isZen && providerKeys.length
+                ? 'Replace account key (optional)'
+                : provider?.id === 'cloudflare-workers-ai'
+                  ? 'Cloudflare API token'
+                  : 'API key'}
               <Input
                 aria-label={
                   provider?.id === 'cloudflare-workers-ai' ? 'Cloudflare API token' : 'API key'
@@ -628,28 +693,44 @@ export function ProviderKeyDialog({
             )}
             <p className="text-meta text-text-3">
               {realProviders
-                ? 'Keys never leave your device or appear in Ferry logs.'
+                ? settings?.storageMode === 'cloud'
+                  ? 'Provider keys use your existing account Vault with local keyring fallback.'
+                  : 'Keys are stored in your operating system keyring and sent only to the selected provider.'
                 : 'Keys stay in the demo client store. Never paste a real secret into a shared demo.'}
             </p>
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-border pt-3">
-          {!keysPending && providerKeys.length === 0 && provider?.keyStatus !== 'missing' && (
-            <Button
-              disabled={busy}
-              onClick={() => {
-                setConfirmRemove(true);
-              }}
-              variant="ghost"
-            >
-              Remove key
+          {!isZen &&
+            !keysPending &&
+            providerKeys.length === 0 &&
+            provider?.keyStatus !== 'missing' && (
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  setConfirmRemove(true);
+                }}
+                variant="ghost"
+              >
+                Remove key
+              </Button>
+            )}
+          {
+            <Button disabled={busy || keysPending} onClick={() => void test()} variant="secondary">
+              {busy ? 'Testing…' : 'Test connection'}
             </Button>
-          )}
-          <Button disabled={busy || keysPending} onClick={() => void test()} variant="secondary">
-            {busy ? 'Testing…' : 'Test connection'}
-          </Button>
-          <Button disabled={busy || keysPending} onClick={() => void save()}>
-            {busy ? 'Saving…' : providerKeys.length ? 'Add key' : 'Save key'}
+          }
+          <Button
+            disabled={busy || keysPending || definition?.releaseState === 'Coming soon'}
+            onClick={() => void save()}
+          >
+            {busy
+              ? 'Saving…'
+              : isZen
+                ? 'Save connection'
+                : providerKeys.length
+                  ? 'Add key'
+                  : 'Save key'}
           </Button>
         </div>
       </DialogContent>

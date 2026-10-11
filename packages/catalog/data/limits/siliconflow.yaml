@@ -1,0 +1,13 @@
+provider: siliconflow
+name: SiliconFlow
+tag: paid
+signup_url: https://cloud.siliconflow.com/
+docs_url: https://docs.siliconflow.com/en/userguide/quickstart
+terms_note: API access requires your own provider key and paid balance or billing arrangement.
+data_use: Subject to the provider's API data policy.
+verified_at: '2026-10-10'
+source_url: https://docs.siliconflow.com/en/userguide/quickstart
+endpoints:
+  - https://api.siliconflow.com/v1/chat/completions
+windows:
+  - { scope: provider, metric: requests, kind: rolling, length: 60, limit: null }

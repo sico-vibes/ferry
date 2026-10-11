@@ -158,6 +158,12 @@ export function createOAuthDomain(_store: MockStore, deps: MockDeps): FerryClien
       await deps.before();
       connected.delete(id);
     },
+    respond() {
+      return Promise.resolve();
+    },
+    cancel() {
+      return Promise.resolve();
+    },
     async status(id) {
       await deps.before();
       return connected.has(id);

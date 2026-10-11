@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type { SessionId } from '@ferry/shared';
 import { useFerryClient } from './client';
+import { migrateBrowserPreferences } from './migrate-preferences';
 
 export const keys = {
   sessions: ['sessions'] as const,
@@ -36,7 +37,13 @@ export function useProfiles() {
 }
 export function useSettings() {
   const client = useFerryClient();
-  return useQuery({ queryKey: keys.settings, queryFn: () => client.settings.get() });
+  return useQuery({
+    queryKey: keys.settings,
+    queryFn: async () => {
+      const settings = await client.settings.get();
+      return migrateBrowserPreferences(client, settings).catch(() => settings);
+    },
+  });
 }
 export function useSystemInfo() {
   const client = useFerryClient();

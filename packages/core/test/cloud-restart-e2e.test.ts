@@ -141,7 +141,7 @@ async function startHost(dataDir: string, services: FerryServices) {
 }
 
 describe('cloud mode restart E2E with fake Supabase', () => {
-  it('signs in after restart, syncs chat, uses a Vault key, and keeps local data on sign-out', async () => {
+  it('recovers an existing cloud install after restart and preserves its data on sign-out', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ferry-cloud-restart-e2e-'));
     dirs.push(root);
     const dataDir = join(root, 'data');
@@ -162,6 +162,16 @@ describe('cloud mode restart E2E with fake Supabase', () => {
     try {
       const localServices = await createServices({ dataDir, env });
       first = await startHost(dataDir, localServices);
+      await expect(first.rpc.cloud.setStorageMode({ mode: 'cloud' })).rejects.toThrow(
+        'coming soon',
+      );
+      await expect(first.rpc.settings.update({ storageMode: 'cloud' })).rejects.toThrow(
+        'coming soon',
+      );
+      localServices.settings.put('global', {
+        ...(await first.rpc.settings.get()),
+        storageMode: 'cloud',
+      });
       await first.rpc.cloud.setStorageMode({ mode: 'cloud' });
       await first.rpc.cloud.setCaptureContent({ value: true });
       expect(await first.rpc.cloud.status()).toMatchObject({

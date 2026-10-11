@@ -4,11 +4,12 @@ import { SkeletonRows, SkeletonChart, SkeletonStat, ProviderLogo, UiV2 } from '@
 import { useFerryClient } from '../data/client';
 import { activityLevel, summarizeUsage } from './usageSummary';
 import { formatTokens } from './modelFacts';
+import { ZenSetupPrompt } from './ZenSetupPrompt';
 
 const count = new Intl.NumberFormat('en');
 
 /** Usage at a glance under the Home composer (reference 06): activity, this month, top providers. */
-export function HomeStats() {
+function UsageStats() {
   const client = useFerryClient();
   const { data: history } = useQuery({
     queryKey: ['quota-history', 30],
@@ -118,5 +119,36 @@ export function HomeStats() {
         </div>
       </section>
     </UiV2.TooltipProvider>
+  );
+}
+
+export function HomeStats() {
+  const client = useFerryClient();
+  const { data: providers = [] } = useQuery({
+    queryKey: ['providers'],
+    queryFn: () => client.providers.list(),
+  });
+  const ready = providers.some(
+    (p) =>
+      ['opencode', 'opencode-zen'].includes(p.id) &&
+      p.enabled &&
+      p.keyStatus === 'valid' &&
+      p.health !== 'down' &&
+      !p.freeTierUnsupported,
+  );
+  if (ready) return <UsageStats />;
+  return (
+    <UiV2.Tabs defaultValue="overview" className="grid gap-3">
+      <UiV2.TabsList aria-label="New chat overview">
+        <UiV2.TabsTrigger value="overview">Overview</UiV2.TabsTrigger>
+        <UiV2.TabsTrigger value="zen">OpenCode Zen</UiV2.TabsTrigger>
+      </UiV2.TabsList>
+      <UiV2.TabsContent value="overview">
+        <UsageStats />
+      </UiV2.TabsContent>
+      <UiV2.TabsContent value="zen">
+        <ZenSetupPrompt />
+      </UiV2.TabsContent>
+    </UiV2.Tabs>
   );
 }

@@ -38,6 +38,19 @@ describe('catalog data', () => {
     expect(catalog.models.length).toBeGreaterThan(100);
     expect(catalog.models.every((model) => ModelInfoSchema.safeParse(model).success)).toBe(true);
     expect(catalog.providers.some((provider) => provider.provider === 'openrouter')).toBe(true);
+    for (const id of [
+      'xai-api',
+      'cohere',
+      'moonshot',
+      'minimax',
+      'siliconflow',
+      'inception',
+      'perplexity',
+    ]) {
+      expect(catalog.providers.find((provider) => provider.provider === id)?.tag).toBe('paid');
+      expect(catalog.models.some((model) => model.providerId === id && !model.free)).toBe(true);
+    }
+    expect(catalog.models.some((model) => model.ref.includes('grok-imagine'))).toBe(false);
     expect(catalog.logicalModels).toContainEqual({
       logicalName: 'gpt-oss-120b',
       providerId: 'groq',

@@ -1,3 +1,4 @@
+import { isOpenCodeAppModel } from '@ferry/shared';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
@@ -744,6 +745,7 @@ export function ComposerModelChip({
   const connectedModels = models.filter(
     (model) =>
       configuredProviderIds.has(model.providerId) &&
+      !isOpenCodeAppModel(model) &&
       !providerExclusions.get(model.providerId)?.has(model.ref),
   );
   const availableModels = freeOnly

@@ -49,6 +49,32 @@ runFerryClientContract('HybridClient all-mock', () => {
 });
 
 describe('RPC client', () => {
+  it('allows time for browser OAuth while keeping the normal request timeout', async () => {
+    vi.useFakeTimers();
+    const fake = fakeTransport();
+    const client = createRpcFerryClient(fake.transport);
+    try {
+      const hello = fake.requests[0] as { id: number };
+      fake.receive({ jsonrpc: '2.0', id: hello.id, result: { implementedMethods: [] } });
+      await client.hello;
+      let settled = false;
+      const login = client.oauth.login('anthropic').then(() => {
+        settled = true;
+      });
+      const call = fake.requests.at(-1) as { id: number };
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(settled).toBe(false);
+      fake.receive({ jsonrpc: '2.0', id: call.id, result: null });
+      await login;
+      const info = client.system.info();
+      const timedOut = expect(info).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(15_001);
+      await timedOut;
+    } finally {
+      client.close();
+      vi.useRealTimers();
+    }
+  });
   it('subscribes to routing status and run reports from the real sessions domain', () => {
     const mock = createMockFerryClient({ behavior: 'test' });
     const rpc = createMockFerryClient({ behavior: 'test' });

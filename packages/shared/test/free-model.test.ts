@@ -15,6 +15,31 @@ const model = (
 });
 
 describe('isModelFreeForPlan', () => {
+  it('covers sourced Zen promotions without treating paid Zen models as free', () => {
+    const zen = {
+      id: ProviderIdSchema.parse('opencode'),
+      tag: 'promo' as const,
+      freePlan: {
+        sourceUrl: 'https://opencode.ai/docs/zen/',
+        models: ['*-free', 'big-pickle'],
+        excludedModels: ['muse-*-free', 'jev-*-free'],
+      },
+    };
+    const entry = (id: string) =>
+      model('opencode', {
+        ref: `opencode/${id}` as ModelInfo['ref'],
+        priceInPerM: null,
+        priceOutPerM: null,
+      });
+    expect(isModelFreeForPlan(zen, entry('big-pickle'))).toBe(true);
+    expect(isModelFreeForPlan(zen, { ...entry('big-pickle'), priceOutPerM: 0.01 })).toBe(false);
+    expect(isModelFreeForPlan(zen, entry('mimo-v2.6-flash-free'))).toBe(true);
+    expect(isModelFreeForPlan(zen, entry('claude-sonnet-4'))).toBe(false);
+    expect(isModelFreeForPlan(zen, entry('muse-spark-1.3-contributor-free'))).toBe(false);
+    expect(isModelFreeForPlan({ ...zen, freeTierUnsupported: true }, entry('big-pickle'))).toBe(
+      false,
+    );
+  });
   it.each([
     ['anthropic', 'paid', false],
     ['anyapi', 'caution', true],

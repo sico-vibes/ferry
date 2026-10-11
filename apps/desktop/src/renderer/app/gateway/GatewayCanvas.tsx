@@ -3,7 +3,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { GatewayRequestRecord } from '@ferry/shared';
 import { Check, Copy, KeyRound, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
-import { FerryMark, PageHeader, ProviderLogo, SegmentedControl, Select, UiV2 } from '@ferry/ui';
+import {
+  FerryMark,
+  PageHeader,
+  ProviderLogo,
+  SegmentedControl,
+  Select,
+  Switch,
+  UiV2,
+} from '@ferry/ui';
 import { listAllModels } from '@ferry/client';
 import { useFerryClient } from '../../data/client';
 import { useProfiles } from '../../data/queries';
@@ -99,7 +107,9 @@ function KeyLimitsDialog({
     tokenLimitPerMinute: '',
     tokenLimitPerDay: '',
     concurrencyLimit: '',
-    compressToolResults: true,
+    paidBackup: false,
+    budgetUsd: '',
+    compressToolResults: false,
     terseSystemPrompt: false,
   });
   const [error, setError] = useState('');
@@ -113,6 +123,8 @@ function KeyLimitsDialog({
       tokenLimitPerMinute: text(gatewayKey.tokenLimitPerMinute),
       tokenLimitPerDay: text(gatewayKey.tokenLimitPerDay),
       concurrencyLimit: text(gatewayKey.concurrencyLimit),
+      paidBackup: gatewayKey.paidBackup ?? false,
+      budgetUsd: text(gatewayKey.budgetUsd ?? null),
       compressToolResults: gatewayKey.compressToolResults,
       terseSystemPrompt: gatewayKey.terseSystemPrompt,
     });
@@ -153,18 +165,29 @@ function KeyLimitsDialog({
       setError('Limits must be whole numbers of at least 1, or empty for unlimited.');
       return;
     }
-    await client.gateway.updateKey({
-      id: gatewayKey.id,
-      patch: {
-        ...limits,
-        profile: draft.profile,
-        allowedModels: draft.allowedModels,
-        compressToolResults: draft.compressToolResults,
-        terseSystemPrompt: draft.terseSystemPrompt,
-      },
-    });
-    await cache.invalidateQueries({ queryKey: ['gateway-keys'] });
-    onClose();
+    const budgetUsd = numberOrNull(draft.budgetUsd);
+    if (draft.paidBackup && (budgetUsd === null || !Number.isFinite(budgetUsd) || budgetUsd <= 0)) {
+      setError('Paid backup requires a positive monthly spending limit.');
+      return;
+    }
+    try {
+      await client.gateway.updateKey({
+        id: gatewayKey.id,
+        patch: {
+          ...limits,
+          paidBackup: draft.paidBackup,
+          budgetUsd,
+          profile: draft.profile,
+          allowedModels: draft.allowedModels,
+          compressToolResults: draft.compressToolResults,
+          terseSystemPrompt: draft.terseSystemPrompt,
+        },
+      });
+      await cache.invalidateQueries({ queryKey: ['gateway-keys'] });
+      onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not save this key. Try again.');
+    }
   };
   return (
     <UiV2.Dialog
@@ -236,6 +259,30 @@ function KeyLimitsDialog({
             {limit('concurrencyLimit', 'Concurrent requests')}
             {limit('tokenLimitPerMinute', 'Tokens per minute')}
             {limit('tokenLimitPerDay', 'Tokens per day')}
+            <label className="v2-gateway-field">
+              <span>Monthly spending limit (USD)</span>
+              <UiV2.Input
+                inputMode="decimal"
+                value={draft.budgetUsd}
+                placeholder="Required for paid backup"
+                onChange={(event) => {
+                  setDraft((current) => ({ ...current, budgetUsd: event.target.value }));
+                }}
+              />
+            </label>
+            <label className="v2-gateway-field">
+              <span>Allow paid backup</span>
+              <Switch
+                checked={draft.paidBackup}
+                onCheckedChange={(paidBackup) => {
+                  setDraft((current) => ({ ...current, paidBackup }));
+                }}
+              />
+            </label>
+            <p className="text-ui-meta text-muted-foreground">
+              Free only by default. Paid calls need a paid-capable profile and this key’s positive
+              limit. Profile and global limits also apply.
+            </p>
           </div>
           <label className="v2-gateway-toggle">
             <span>
@@ -304,7 +351,10 @@ function RequestLog({
             <span aria-hidden="true" className="v2-live-dot" />
             Live requests
           </h2>
-          <p>Every request routed through Ferry. Metadata only; prompts are never stored.</p>
+          <p>
+            Recent Gateway requests stored on this device. Metadata only; prompt and response
+            contents are excluded.
+          </p>
         </div>
         <div className="v2-gateway-filters">
           <Select
@@ -805,7 +855,8 @@ export function GatewayCanvas() {
           <UiV2.DialogHeader>
             <UiV2.DialogTitle>Copy your key now</UiV2.DialogTitle>
             <UiV2.DialogDescription>
-              Ferry shows this key once and keeps only its hash.
+              Ferry stores a verification hash and keeps the key in your operating system keyring
+              for client setup.
             </UiV2.DialogDescription>
           </UiV2.DialogHeader>
           <div className="v2-gateway-secret">

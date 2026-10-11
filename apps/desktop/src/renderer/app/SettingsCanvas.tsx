@@ -201,19 +201,6 @@ const routingRows: {
   },
 ];
 
-function isPermissionRule(
-  value: unknown,
-): value is { effect: string; pattern: string; tool: string } {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const rule = value as Record<string, unknown>;
-  return (
-    typeof rule.effect === 'string' &&
-    ['allow', 'ask', 'deny'].includes(rule.effect) &&
-    typeof rule.pattern === 'string' &&
-    typeof rule.tool === 'string'
-  );
-}
-
 function SettingsInput({
   label,
   value,
@@ -301,9 +288,6 @@ export function SettingsCanvas() {
   const [mcpAddress, setMcpAddress] = useState('');
   const [benchmarkMode, setBenchmarkMode] = useState(
     () => localStorage.getItem('ferry.benchmarkMode') === 'true',
-  );
-  const [logRetention, setLogRetention] = useState(
-    () => localStorage.getItem('ferry.logRetention') ?? '30',
   );
   const [updateState, setUpdateState] = useState<UpdateSnapshot>({
     status: 'idle',
@@ -744,8 +728,9 @@ export function SettingsCanvas() {
         <>
           <Group title="Provider access">
             <p className="muted">
-              Keys are stored locally. Use keys you own under one account; pooling accounts to
-              multiply free tiers may violate provider terms.
+              Keys use your operating system keyring in local mode or your account Vault in existing
+              cloud mode. Use keys you own under one account; pooling accounts to multiply free
+              tiers may violate provider terms.
             </p>
             <ProvidersTable
               loading={providersPending}
@@ -1515,6 +1500,8 @@ export function SettingsCanvas() {
     if (section === 'Permissions')
       return (
         <PermissionsContent
+          rules={settings?.permissionRules ?? []}
+          onRules={(permissionRules) => void update({ permissionRules })}
           mode={settings?.permissionMode ?? 'ask'}
           onMode={(value) =>
             void update({ permissionMode: value as NonNullable<typeof settings>['permissionMode'] })
@@ -1563,10 +1550,13 @@ export function SettingsCanvas() {
             >
               <Select
                 label="Log retention"
-                value={logRetention}
+                value={
+                  settings?.logRetentionDays === null
+                    ? 'forever'
+                    : String(settings?.logRetentionDays ?? 30)
+                }
                 onValueChange={(value) => {
-                  setLogRetention(value);
-                  localStorage.setItem('ferry.logRetention', value);
+                  void update({ logRetentionDays: value === 'forever' ? null : Number(value) });
                 }}
                 options={[
                   { value: '7', label: '7 days' },
@@ -2271,26 +2261,23 @@ function SettingRow({
     </div>
   );
 }
-function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: string) => void }) {
-  const [rules, setRules] = useState(() => {
-    try {
-      const parsed: unknown = JSON.parse(
-        localStorage.getItem('ferry.permissionRules') ??
-          '[{"effect":"ask","pattern":"npm test*","tool":"run_command"}]',
-      );
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter(isPermissionRule);
-    } catch {
-      return [];
-    }
-  });
-  const persist = (next: typeof rules) => {
-    setRules(next);
-    localStorage.setItem('ferry.permissionRules', JSON.stringify(next));
-  };
+function PermissionsContent({
+  mode,
+  onMode,
+  rules,
+  onRules: persist,
+}: {
+  mode: string;
+  onMode: (value: string) => void;
+  rules: import('@ferry/shared').UserPermissionRule[];
+  onRules: (rules: import('@ferry/shared').UserPermissionRule[]) => void;
+}) {
   return (
     <Group title="Permissions">
-      <SettingRow title="Default mode" helper="Rules apply in order for matching tools.">
+      <SettingRow
+        title="Default mode"
+        helper="Deny takes precedence, then Ask, then user Allow. Project rules can tighten permissions."
+      >
         <SegmentedControl
           label="Permission mode"
           value={mode}
@@ -2322,7 +2309,11 @@ function PermissionsContent({ mode, onMode }: { mode: string; onMode: (value: st
             label="Rule effect"
             value={rule.effect}
             onValueChange={(value) => {
-              persist(rules.map((item, i) => (i === index ? { ...item, effect: value } : item)));
+              persist(
+                rules.map((item, i) =>
+                  i === index ? { ...item, effect: value as typeof item.effect } : item,
+                ),
+              );
             }}
             options={['ask', 'allow', 'deny'].map((value) => ({
               value,

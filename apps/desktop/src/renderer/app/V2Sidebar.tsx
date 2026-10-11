@@ -22,6 +22,7 @@ import {
   X,
 } from 'lucide-react';
 import { FerryMark, UiV2 } from '@ferry/ui';
+import { ZenSetupPrompt } from './ZenSetupPrompt';
 import { useFerryClient } from '../data/client';
 import { keys, useLimits, useSettings } from '../data/queries';
 import { describeReset, describeWindow, tightestDailyWindow } from '../data/limits';
@@ -169,6 +170,7 @@ export function V2Sidebar({
         {!collapsed && <SidebarProjects onNewChat={onNewChat} />}
         {collapsed && <div className="v2-rail-spacer" />}
         <div className="v2-sidebar-bottom">
+          {!collapsed && <ZenSetupPrompt compact />}
           {!collapsed && !pathname.startsWith('/models') && (
             <button
               aria-label={

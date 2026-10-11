@@ -71,11 +71,16 @@ export function register(host: CoreHost, services: FerryServices): void {
       return Promise.resolve().then(() => {
         const patch = PatchSchema.parse(raw);
         const current = get();
+        if (patch.storageMode === 'cloud' && current.storageMode !== 'cloud')
+          throw new Error(
+            'Ferry Cloud is coming soon. Existing cloud installs retain recovery access.',
+          );
         if (patch.activeProfileId && !profileIds().has(patch.activeProfileId))
           throw rpcDomainError(-32044, 'not_found', `Profile not found: ${patch.activeProfileId}`);
         const settings = SettingsSchema.parse({
           ...current,
           ...patch,
+          paidCaps: { ...current.paidCaps, ...patch.paidCaps },
           optimizers: { ...current.optimizers, ...patch.optimizers },
           developer: { ...current.developer, ...patch.developer },
           routing: { ...current.routing, ...patch.routing },
@@ -83,7 +88,6 @@ export function register(host: CoreHost, services: FerryServices): void {
         services.settings.put('global', settings);
         services.emitAppEvent('settings.changed', {
           keys: Object.keys(patch),
-          values: patch,
         });
         if (patch.storageMode && patch.storageMode !== current.storageMode)
           services.emitAppEvent('storage.mode_changed', {

@@ -82,7 +82,16 @@ export const PaidCapsSchema = z.object({
   monthlyUsd: z.number().nonnegative().nullable().default(null),
 });
 export type PaidCaps = z.infer<typeof PaidCapsSchema>;
+export const UserPermissionRuleSchema = z.object({
+  effect: z.enum(['allow', 'ask', 'deny']),
+  tool: z.string().min(1),
+  pattern: z.string().default(''),
+});
+export type UserPermissionRule = z.infer<typeof UserPermissionRuleSchema>;
 export const SettingsSchema = z.object({
+  permissionRules: z.array(UserPermissionRuleSchema).default([]),
+  logRetentionDays: z.number().int().min(1).max(3650).nullable().default(30),
+  browserPreferencesMigrated: z.boolean().default(false),
   storageMode: z.enum(['local', 'cloud']).default('local'),
   cloudOnboardingChoice: z.enum(['local', 'cloud']).nullable().default(null),
   captureContent: z.boolean().optional(),
@@ -115,7 +124,13 @@ export function resolveCaptureContent(
   return settings.captureContent ?? settings.storageMode === 'cloud';
 }
 export const SettingsPatchSchema = SettingsSchema.partial().extend({
-  paidCaps: PaidCapsSchema.partial().optional(),
+  paidCaps: z
+    .object({
+      sessionUsd: z.number().nonnegative().nullable().optional(),
+      dailyUsd: z.number().nonnegative().nullable().optional(),
+      monthlyUsd: z.number().nonnegative().nullable().optional(),
+    })
+    .optional(),
   optimizers: OptimizerTogglesSchema.partial().optional(),
   routing: RoutingSettingsFieldsSchema.partial().optional(),
   developer: z
@@ -129,6 +144,7 @@ export const SettingsPatchSchema = SettingsSchema.partial().extend({
     .optional(),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
+export type SettingsPatch = Omit<Partial<Settings>, 'paidCaps'> & { paidCaps?: Partial<PaidCaps> };
 export const SystemInfoSchema = z.object({
   version: z.string(),
   mock: z.boolean(),

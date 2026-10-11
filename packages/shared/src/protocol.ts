@@ -65,6 +65,8 @@ export const FERRY_METHODS = [
   'providers.setBillingEnabled',
   'oauth.list',
   'oauth.login',
+  'oauth.respond',
+  'oauth.cancel',
   'oauth.logout',
   'oauth.status',
   'quota.capacity',

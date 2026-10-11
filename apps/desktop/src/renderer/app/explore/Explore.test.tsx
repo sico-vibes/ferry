@@ -8,6 +8,7 @@ import { DEFAULT_ROUTING_SETTINGS } from '@ferry/shared';
 import type { ModelInfo, Provider, ProviderKey } from '@ferry/shared';
 import { FerryProvider } from '../../data/client';
 import { ModelsCanvas } from './Explore';
+import { useUI } from '../../state/ui';
 
 const pushToast = vi.fn();
 const navigate = vi.fn();
@@ -21,6 +22,7 @@ let removeKeyEntrySpy: ReturnType<typeof vi.fn>;
 let probeSpy: ReturnType<typeof vi.fn>;
 let modelListSpy: ReturnType<typeof vi.fn>;
 let oauthLoginSpy: ReturnType<typeof vi.fn>;
+let settingsUpdateSpy: ReturnType<typeof vi.fn>;
 vi.mock('../../state/toasts', () => ({
   useToasts: (selector: (state: { push: typeof pushToast }) => unknown) =>
     selector({ push: pushToast }),
@@ -80,6 +82,7 @@ function setup() {
 }
 
 beforeEach(() => {
+  useUI.getState().setExploreFilter('All');
   pushToast.mockReset();
   navigate.mockReset();
   providerListSpy = vi.fn().mockResolvedValue([
@@ -157,6 +160,11 @@ beforeEach(() => {
     return { items: filtered.slice(offset, offset + limit), total: filtered.length };
   });
   oauthLoginSpy = vi.fn().mockResolvedValue(undefined);
+  settingsUpdateSpy = vi.fn().mockResolvedValue({
+    routing: DEFAULT_ROUTING_SETTINGS,
+    subscriptionOAuthAcknowledged: ['anthropic'],
+    allowSubscriptionOAuthRouting: false,
+  });
   client = {
     providers: {
       list: providerListSpy,
@@ -194,15 +202,14 @@ beforeEach(() => {
     },
     settings: {
       get: vi.fn().mockResolvedValue({
+        browserPreferencesMigrated: true,
+        permissionRules: [],
+        logRetentionDays: 30,
         routing: DEFAULT_ROUTING_SETTINGS,
         subscriptionOAuthAcknowledged: [],
         allowSubscriptionOAuthRouting: false,
       }),
-      update: vi.fn().mockResolvedValue({
-        routing: DEFAULT_ROUTING_SETTINGS,
-        subscriptionOAuthAcknowledged: ['anthropic'],
-        allowSubscriptionOAuthRouting: false,
-      }),
+      update: settingsUpdateSpy,
     },
     on: vi.fn(() => () => undefined),
   } as unknown as FerryClient;
@@ -210,6 +217,42 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Models providers and catalog', () => {
+  it('filters paid API providers separately from free providers', async () => {
+    const user = userEvent.setup();
+    setup();
+    await screen.findByRole('button', { name: 'Test Mistral' });
+    await user.click(
+      within(screen.getByRole('navigation', { name: 'Provider filters' })).getByRole('button', {
+        name: 'Paid',
+      }),
+    );
+    expect(screen.getByText('OpenAI')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Test Mistral' })).toBeNull();
+  });
+  it('saves a Zen account key through the standard API without identity overrides', async () => {
+    providerListSpy.mockResolvedValue([
+      provider({
+        id: 'opencode' as Provider['id'],
+        name: 'OpenCode Zen',
+        tag: 'promo',
+        keyStatus: 'missing',
+        enabled: false,
+      }),
+    ]);
+    const user = userEvent.setup();
+    setup();
+    const setupButton = (await screen.findAllByRole('button', { name: 'Set up Zen' }))[0];
+    if (!setupButton) throw new Error('Missing Zen setup');
+    await user.click(setupButton);
+    const dialog = await screen.findByRole('dialog', { name: 'Manage OpenCode Zen key' });
+    expect(within(dialog).queryByRole('switch', { name: 'Use anonymous Zen access' })).toBeNull();
+    await user.type(within(dialog).getByLabelText('API key'), 'fixture-standard-api-key');
+    await user.click(within(dialog).getByRole('button', { name: 'Save connection' }));
+    await waitFor(() => {
+      expect(setKeySpy).toHaveBeenCalledWith('opencode', 'fixture-standard-api-key');
+    });
+    expect(settingsUpdateSpy).not.toHaveBeenCalled();
+  });
   it('requires explicit suspension risk acknowledgement before login', async () => {
     const user = userEvent.setup();
     setup();
@@ -261,6 +304,26 @@ describe('Models providers and catalog', () => {
         body: 'Invalid API key',
       });
     });
+
+    const accessError = "OpenCode's free tier can only be used from within OpenCode";
+    probeSpy.mockResolvedValueOnce({
+      ok: false,
+      keyValid: true,
+      latencyMs: null,
+      message: accessError,
+      windows: [],
+      models: [],
+      errorKind: 'unsupported_free_tier',
+    });
+    await user.click(screen.getByRole('button', { name: 'Test Mistral' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toBe(accessError);
+      expect(pushToast).toHaveBeenCalledWith({
+        kind: 'error',
+        title: 'Provider test failed',
+        body: accessError,
+      });
+    });
   }, 20_000);
 
   it('lists providers needing attention first in the providers table', async () => {
@@ -307,7 +370,7 @@ describe('Models providers and catalog', () => {
     const keyDialog = await screen.findByRole('dialog', { name: 'Manage Mistral key' });
     const routingSection = within(keyDialog).getByRole('region', { name: 'Provider routing' });
     expect(within(keyDialog).getByLabelText('API key')).toBeTruthy();
-    expect(within(keyDialog).getByRole('region', { name: 'Key health policy' })).toBeTruthy();
+    expect(within(keyDialog).getByRole('group', { name: 'Key health policy' })).toBeTruthy();
     expect(routingSection).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Save key' }));
     expect((await screen.findByRole('alert')).textContent).toContain('Enter an API key');

@@ -28,7 +28,7 @@ import { oauthModelCatalog, streamOAuthStep } from '../src/index.js';
 
 describe('OAuth reasoning effort and usage', () => {
   it('derives effort availability from pi-ai model thinking maps', () => {
-    const models = oauthModelCatalog.filter((model) => model.providerId === 'openai-codex');
+    const models = oauthModelCatalog.filter((model) => model.providerId === 'oauth-openai-codex');
     expect(models.some((model) => model.reasoningEfforts?.includes('high'))).toBe(true);
     expect(models.every((model) => model.reasoningEfforts !== undefined)).toBe(true);
   });

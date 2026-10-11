@@ -43,6 +43,8 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
     tokenLimitPerMinute: number | null;
     tokenLimitPerDay: number | null;
     concurrencyLimit: number | null;
+    paidBackup: boolean;
+    budgetUsd: number | null;
     compressToolResults: boolean;
     terseSystemPrompt: boolean;
     createdAt: string;
@@ -113,7 +115,9 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
           tokenLimitPerMinute: null,
           tokenLimitPerDay: null,
           concurrencyLimit: null,
-          compressToolResults: true,
+          paidBackup: false,
+          budgetUsd: null,
+          compressToolResults: false,
           terseSystemPrompt: false,
           createdAt: new Date().toISOString(),
           lastUsedAt: null,

@@ -1,5 +1,13 @@
 import { execFile } from 'node:child_process';
-import { OAuthLoginProgressSchema, OAuthProviderIdSchema, ProviderSchema } from '@ferry/shared';
+import {
+  OAuthLoginProgressSchema,
+  OAuthProviderIdSchema,
+  ProviderSchema,
+  rememberSecret,
+  oauthConnectionId,
+  providerDefinition,
+  PROVIDER_REGISTRY,
+} from '@ferry/shared';
 import {
   isSupportedOAuthProvider,
   listOAuthProviders,
@@ -28,6 +36,11 @@ function openUrl(url: string): Promise<void> {
 }
 
 export function register(host: CoreHost, services: FerryServices): void {
+  const logins = new Map<string, AbortController>();
+  const prompts = new Map<string, { provider: string; resolve(value: string): void }>();
+  host.onShutdown(() => {
+    for (const login of logins.values()) login.abort();
+  });
   const connection = async (id: string) => {
     const providerId = OAuthProviderIdSchema.parse(id);
     const value = await services.secrets.get(
@@ -59,42 +72,20 @@ export function register(host: CoreHost, services: FerryServices): void {
     async list() {
       const providers = [
         ...(await listOAuthProviders()),
-        {
-          id: 'kilo' as const,
+        ...PROVIDER_REGISTRY.filter(
+          (entry) => entry.auth === 'oauth' && entry.releaseState === 'Coming soon',
+        ).map((entry) => ({
+          id: entry.oauthProviderId ?? entry.id,
+          name: entry.name,
           tag: 'legit' as const,
-          name: 'Kilo Gateway',
           subscriptionRequired: false,
           models: [],
           riskLevel: 'low' as const,
-          riskText: 'Account OAuth and API-key setup are coming soon.',
+          riskText: 'Account sign-in is coming soon.',
           group: 'coming_soon' as const,
-          actionAvailable: false as const,
-          signupUrl: 'https://kilo.ai/',
-        },
-        {
-          id: 'qoder' as const,
-          tag: 'legit' as const,
-          name: 'Qoder',
-          subscriptionRequired: false,
-          models: [],
-          riskLevel: 'low' as const,
-          riskText: 'PAT and browser OAuth support are coming soon.',
-          group: 'coming_soon' as const,
-          actionAvailable: false as const,
-          signupUrl: 'https://qoder.com/',
-        },
-        {
-          id: 'cline' as const,
-          tag: 'legit' as const,
-          name: 'Cline',
-          subscriptionRequired: false,
-          models: [],
-          riskLevel: 'low' as const,
-          riskText: 'Account login is coming soon.',
-          group: 'coming_soon' as const,
-          actionAvailable: false as const,
-          signupUrl: 'https://cline.bot/',
-        },
+          actionAvailable: false,
+          signupUrl: entry.docsSource,
+        })),
         {
           id: 'gemini-cli' as const,
           tag: 'subscription_oauth' as const,
@@ -152,27 +143,77 @@ export function register(host: CoreHost, services: FerryServices): void {
           ? (rawInput as { id: unknown; gateway?: string })
           : { id: rawInput, ...options };
       const id = OAuthProviderIdSchema.parse(input.id);
+      if (providerDefinition(`oauth-${id}`)?.releaseState === 'Coming soon')
+        throw new Error(`${id} login is coming soon.`);
       if (!isSupportedOAuthProvider(id))
         throw new Error(`OAuth login is unavailable for ${String(id)}`);
       if (id === 'radius' && !input.gateway) throw new Error('Radius requires a gateway URL');
+      if (logins.size)
+        throw new Error('Finish or cancel the current sign-in before starting another');
+      const controller = new AbortController();
+      const timeout = setTimeout(() => {
+        controller.abort(new Error('Sign-in timed out. Start again.'));
+      }, 10 * 60_000);
+      timeout.unref();
+      logins.set(id, controller);
       const emit = (event: OAuthLoginEvent) => {
-        if (event.type === 'open_url')
-          host.emit('oauth.progress', OAuthLoginProgressSchema.parse({ ...event, id }));
-        else if (event.type === 'device_code')
-          host.emit('oauth.progress', OAuthLoginProgressSchema.parse({ ...event, id }));
-        else if (event.type === 'success' || event.type === 'error')
-          host.emit('oauth.progress', OAuthLoginProgressSchema.parse({ ...event, id }));
+        host.emit('oauth.progress', OAuthLoginProgressSchema.parse({ ...event, id }));
       };
-      await startLogin(
-        id,
-        {
-          openUrl,
-          onDeviceCode: () => undefined,
-          onProgress: emit,
-          ...(input.gateway ? { gateway: input.gateway } : {}),
-        },
-        services.secrets,
-      );
+      host.emit('oauth.progress', { type: 'progress', id, message: 'Preparing sign-in…' });
+      try {
+        await startLogin(
+          id,
+          {
+            openUrl,
+            signal: controller.signal,
+            onPrompt: (prompt, signal) =>
+              new Promise<string>((resolve, reject) => {
+                const promptId = globalThis.crypto.randomUUID();
+                const cleanup = () => {
+                  prompts.delete(promptId);
+                  signal.removeEventListener('abort', aborted);
+                  controller.signal.removeEventListener('abort', aborted);
+                };
+                const aborted = () => {
+                  cleanup();
+                  reject(
+                    controller.signal.reason instanceof Error
+                      ? controller.signal.reason
+                      : new Error('Sign-in cancelled'),
+                  );
+                };
+                if (signal.aborted || controller.signal.aborted) {
+                  aborted();
+                  return;
+                }
+                prompts.set(promptId, {
+                  provider: id,
+                  resolve: (value) => {
+                    cleanup();
+                    resolve(value);
+                  },
+                });
+                signal.addEventListener('abort', aborted, { once: true });
+                controller.signal.addEventListener('abort', aborted, { once: true });
+                host.emit(
+                  'oauth.progress',
+                  OAuthLoginProgressSchema.parse({ ...prompt, type: 'prompt', promptId, id }),
+                );
+              }),
+            onDeviceCode: () => undefined,
+            onProgress: emit,
+            ...(input.gateway ? { gateway: input.gateway } : {}),
+          },
+          services.secrets,
+        );
+      } catch (error) {
+        emit({ type: 'error', message: error instanceof Error ? error.message : 'Sign-in failed' });
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+        controller.abort();
+        logins.delete(id);
+      }
       const metadata = (await listOAuthProviders()).find((item) => item.id === id);
       if (id === 'openrouter') {
         services.providerKeys.put({
@@ -187,7 +228,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       } else if (metadata)
         services.providers.put(
           ProviderSchema.parse({
-            id,
+            id: oauthConnectionId(id),
             name: metadata.name,
             tag: metadata.tag,
             kind: 'api',
@@ -201,17 +242,38 @@ export function register(host: CoreHost, services: FerryServices): void {
             signupUrl: null,
             docsUrl: null,
             verifiedAt: services.clock.now().toISOString().slice(0, 10),
-            modelCount: oauthModelCatalog.filter((model) => model.providerId === id).length,
+            modelCount: oauthModelCatalog.filter(
+              (model) => model.providerId === oauthConnectionId(id),
+            ).length,
             windows: [],
             stepsLeftToday: null,
           }),
         );
     },
+    respond(rawId: unknown, rawPromptId: unknown, rawValue: unknown) {
+      const id = OAuthProviderIdSchema.parse(rawId);
+      if (
+        typeof rawPromptId !== 'string' ||
+        typeof rawValue !== 'string' ||
+        rawValue.length > 16384
+      )
+        throw new Error('Invalid sign-in response');
+      const prompt = prompts.get(rawPromptId);
+      if (prompt?.provider !== id) throw new Error('This sign-in prompt is no longer active');
+      if (rawValue) rememberSecret(rawValue);
+      prompt.resolve(rawValue);
+      return Promise.resolve();
+    },
+    cancel(rawId: unknown) {
+      const id = OAuthProviderIdSchema.parse(rawId);
+      logins.get(id)?.abort(new Error('Sign-in cancelled'));
+      return Promise.resolve();
+    },
     async logout(rawId: unknown) {
       const id = OAuthProviderIdSchema.parse(rawId);
       await logout(id, services.secrets);
       if (id === 'openrouter') services.providerKeys.delete(id);
-      const saved = services.providers.get(id);
+      const saved = services.providers.get(oauthConnectionId(id));
       if (saved)
         services.providers.put({
           ...saved,

@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -121,6 +121,7 @@ async function makeRealDomainsHarness() {
       ...process.env,
       NODE_ENV: 'test',
       FERRY_TEST_KEYRING_NAMESPACE: 'ferry-real-domain-contract',
+      PATH: dirname(process.execPath),
       FERRY_PROVIDER_BASE_URL_OPENAI: `${stream.baseUrl}/v1`,
     },
   });
@@ -195,11 +196,8 @@ describe('core host dispatcher and lifecycle', () => {
         true,
       );
       expect((await rpc.cloud.status()).storageMode).toBe('local');
-      await expect(rpc.cloud.setStorageMode({ mode: 'cloud' })).resolves.toMatchObject({
-        mode: 'cloud',
-        restartRequired: true,
-      });
-      expect((await rpc.cloud.status()).storageMode).toBe('cloud');
+      await expect(rpc.cloud.setStorageMode({ mode: 'cloud' })).rejects.toThrow('coming soon');
+      expect((await rpc.cloud.status()).storageMode).toBe('local');
       await rpc.cloud.setStorageMode({ mode: 'local' });
       expect(hello.realDomains).toEqual([
         'settings',

@@ -1,0 +1,17 @@
+provider: lmstudio
+name: LM Studio
+tag: legit
+optional: true
+signup_url: https://lmstudio.ai/
+docs_url: https://lmstudio.ai/docs/developer/openai-compat
+terms_note: Local inference uses your own server and installed models.
+data_use: Requests go to your configured local server.
+verified_at: '2026-10-10'
+source_url: https://lmstudio.ai/docs/developer/openai-compat
+endpoints: [http://127.0.0.1:1234/v1]
+models_endpoint: /models
+key_required: false
+free_plan:
+  source_url: https://lmstudio.ai/docs/developer/openai-compat
+  models: ['*']
+windows: []

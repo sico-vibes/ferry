@@ -27,6 +27,9 @@ const screens = [
   { name: 'settings-general', path: '/settings', section: 'General' },
   { name: 'settings-routing', path: '/settings', section: 'Routing' },
   { name: 'settings-providers', path: '/settings', section: 'Providers & keys' },
+  { name: 'settings-permissions', path: '/settings', section: 'Permissions' },
+  { name: 'settings-data', path: '/settings', section: 'Data & privacy' },
+  { name: 'settings-cloud', path: '/settings', section: 'Storage & Cloud' },
 ];
 const viewports = [
   { width: 1024, height: 680 },

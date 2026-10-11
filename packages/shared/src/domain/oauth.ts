@@ -44,6 +44,15 @@ export const OAuthProviderSchema = z.object({
 });
 export type OAuthProvider = z.infer<typeof OAuthProviderSchema>;
 export const OAuthLoginProgressSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('progress'), id: OAuthProviderIdSchema, message: z.string() }),
+  z.object({
+    type: z.literal('prompt'),
+    id: OAuthProviderIdSchema,
+    promptId: z.string(),
+    message: z.string(),
+    kind: z.enum(['text', 'secret', 'manual_code']),
+    placeholder: z.string().optional(),
+  }),
   z.object({
     type: z.literal('open_url'),
     id: OAuthProviderIdSchema,

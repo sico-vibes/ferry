@@ -237,6 +237,7 @@ export const sampleOptimizerToggles: OptimizerToggles = {
   rtk: false,
 };
 export const sampleProfile: Profile = {
+  routingObjective: 'balanced',
   id: profileId,
   name: 'Balanced',
   icon: 'Layers',
@@ -314,6 +315,9 @@ export const sampleOptimizerStats: OptimizerStats = {
   byOptimizer: [{ id: 'terse', name: 'Terse', enabled: true, savedTokens: 100, percent: 5 }],
 };
 export const sampleSettings: Settings = {
+  permissionRules: [],
+  logRetentionDays: 30,
+  browserPreferencesMigrated: false,
   storageMode: 'local',
   cloudOnboardingChoice: 'local',
   theme: 'dark',

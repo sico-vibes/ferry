@@ -1,0 +1,17 @@
+provider: ollama
+name: Ollama
+tag: legit
+optional: true
+signup_url: https://ollama.com/
+docs_url: https://docs.ollama.com/openai
+terms_note: Local inference uses your own server and installed models.
+data_use: Requests go to your configured local server.
+verified_at: '2026-10-10'
+source_url: https://docs.ollama.com/openai
+endpoints: [http://127.0.0.1:11434/v1]
+models_endpoint: /models
+key_required: false
+free_plan:
+  source_url: https://docs.ollama.com/openai
+  models: ['*']
+windows: []

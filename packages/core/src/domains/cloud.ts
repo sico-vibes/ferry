@@ -41,6 +41,10 @@ export function register(host: CoreHost, services: FerryServices): void {
       if (mode !== 'local' && mode !== 'cloud')
         throw new Error('Storage mode must be local or cloud.');
       const oldSettings = services.settings.get('global') as Record<string, unknown> | undefined;
+      if (mode === 'cloud' && oldSettings?.storageMode !== 'cloud')
+        throw new Error(
+          'Ferry Cloud is coming soon. Existing cloud installs can sign in to recover their data.',
+        );
       const settings = SettingsSchema.parse({
         ...DEFAULT_SETTINGS,
         ...(oldSettings ?? {}),

@@ -119,6 +119,8 @@ export type ProbeResult = z.infer<typeof ProbeResultSchema>;
 export const EffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 export type Effort = z.infer<typeof EffortSchema>;
 export const ModelInfoSchema = z.object({
+  /** Successful standard API generation on the saved connection; discovery alone is insufficient. */
+  apiAccessVerified: z.boolean().optional(),
   failing: z.boolean().optional(),
   verified: z.boolean().optional(),
   verifiedAt: z.iso.datetime().nullable().optional(),
@@ -167,6 +169,11 @@ export const ModelInfoSchema = z.object({
   gateway: z.object({ keyId: z.string(), keyName: z.string(), modelName: z.string() }).optional(),
 });
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;
+export function isOpenCodeAppModel(
+  model: Pick<ModelInfo, 'providerId' | 'free' | 'apiAccessVerified'>,
+): boolean {
+  return model.providerId === 'opencode' && model.free && model.apiAccessVerified !== true;
+}
 export function modelAcceptsImages(model: ModelInfo | undefined): boolean {
   return (
     model?.capability?.vision === true ||

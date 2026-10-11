@@ -15,6 +15,7 @@ export function createSettingsDomain(_store: MockStore, deps: MockDeps): FerryCl
       state.settings = SettingsSchema.parse({
         ...state.settings,
         ...patch,
+        paidCaps: { ...state.settings.paidCaps, ...patch.paidCaps },
         optimizers: { ...state.settings.optimizers, ...patch.optimizers },
         developer: { ...state.settings.developer, ...patch.developer },
         routing: { ...state.settings.routing, ...patch.routing },

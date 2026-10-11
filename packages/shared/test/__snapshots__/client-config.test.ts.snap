@@ -1,0 +1,119 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`shared client configuration > generates bash curl with literal-safe quoting 1`] = `
+"curl 'http://127.0.0.1:11435/v1/chat/completions' \\
+  -H 'Authorization: Bearer YOUR_FERRY_KEY' \\
+  -H 'Content-Type: application/json' \\
+  --data-raw '{"model":"ferry/auto","messages":[{"role":"user","content":"Hello"}]}'"
+`;
+
+exports[`shared client configuration > generates claude configuration and launch settings 1`] = `
+"{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:11435",
+    "ANTHROPIC_AUTH_TOKEN": "YOUR_FERRY_KEY",
+    "ANTHROPIC_MODEL": "ferry/auto"
+  }
+}
+"
+`;
+
+exports[`shared client configuration > generates claude configuration and launch settings 2`] = `
+{
+  "args": [],
+  "command": "claude",
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "YOUR_FERRY_KEY",
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:11435",
+    "ANTHROPIC_MODEL": "ferry/auto",
+  },
+}
+`;
+
+exports[`shared client configuration > generates codex configuration and launch settings 1`] = `
+"model = "ferry/auto"
+model_provider = "ferry"
+
+
+
+
+[model_providers.ferry]
+name = "Ferry"
+base_url = "http://127.0.0.1:11435/v1"
+wire_api = "responses"
+requires_openai_auth = false
+http_headers = { Authorization = "Bearer YOUR_FERRY_KEY" }
+"
+`;
+
+exports[`shared client configuration > generates codex configuration and launch settings 2`] = `
+{
+  "args": [
+    "-c",
+    "model_provider="ferry"",
+    "-c",
+    "model="ferry/auto"",
+    "-c",
+    "model_providers.ferry.name="Ferry"",
+    "-c",
+    "model_providers.ferry.base_url="http://127.0.0.1:11435/v1"",
+    "-c",
+    "model_providers.ferry.env_key="FERRY_GATEWAY_API_KEY"",
+    "-c",
+    "model_providers.ferry.wire_api="responses"",
+    "-c",
+    "model_providers.ferry.requires_openai_auth=false",
+  ],
+  "command": "codex",
+  "env": {
+    "FERRY_GATEWAY_API_KEY": "YOUR_FERRY_KEY",
+  },
+}
+`;
+
+exports[`shared client configuration > generates generic OpenAI configuration 1`] = `
+{
+  "apiKey": "YOUR_FERRY_KEY",
+  "baseURL": "http://127.0.0.1:11435/v1",
+  "model": "ferry/auto",
+}
+`;
+
+exports[`shared client configuration > generates opencode configuration and launch settings 1`] = `
+"{
+  "model": "ferry/ferry/auto",
+  "provider": {
+    "ferry": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ferry",
+      "options": {
+        "baseURL": "http://127.0.0.1:11435/v1",
+        "apiKey": "YOUR_FERRY_KEY"
+      },
+      "models": {
+        "ferry/auto": {
+          "name": "ferry/auto"
+        }
+      }
+    }
+  }
+}
+"
+`;
+
+exports[`shared client configuration > generates opencode configuration and launch settings 2`] = `
+{
+  "args": [],
+  "command": "opencode",
+  "env": {
+    "OPENCODE_CONFIG_CONTENT": "{"model":"ferry/ferry/auto","provider":{"ferry":{"npm":"@ai-sdk/openai-compatible","name":"Ferry","options":{"baseURL":"http://127.0.0.1:11435/v1","apiKey":"YOUR_FERRY_KEY"},"models":{"ferry/auto":{"name":"ferry/auto"}}}}}",
+  },
+}
+`;
+
+exports[`shared client configuration > generates powershell curl with literal-safe quoting 1`] = `
+"curl.exe 'http://127.0.0.1:11435/v1/chat/completions' \`
+  -H 'Authorization: Bearer YOUR_FERRY_KEY' \`
+  -H 'Content-Type: application/json' \`
+  --data-raw '{"model":"ferry/auto","messages":[{"role":"user","content":"Hello"}]}'"
+`;
