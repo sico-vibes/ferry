@@ -480,6 +480,12 @@ export async function createServices({
     catalog,
     eligibleModelRefs: () => {
       const { profile, routing } = quotaProfile();
+      // Provider rows contain the discovered catalog. Decode each row once per
+      // snapshot, rather than once for every model in the catalog.
+      const providerStates = new Map<string, ReturnType<typeof providers.get>>();
+      const limitsById = new Map(
+        catalog.providers.map((provider) => [provider.provider, provider]),
+      );
       return catalog.models
         .filter((model) => {
           if (!profile) return true;
@@ -491,27 +497,28 @@ export async function createServices({
           )
             return false;
           if (profile.paidAllowed && profile.allowedProviders !== 'all_free') return true;
-          const provider = catalog.providers.find((entry) => entry.provider === model.providerId);
-          const saved = providers.get(model.providerId);
-          return provider
-            ? isModelFreeForPlan(
-                {
-                  id: model.providerId,
-                  tag: provider.tag,
-                  billingEnabled: saved?.billingEnabled,
-                  freeTierUnsupported: saved?.freeTierUnsupported,
-                  freePlan: provider.free_plan
-                    ? {
-                        sourceUrl: provider.free_plan.source_url,
-                        models: provider.free_plan.models,
-                        excludedModels: provider.free_plan.excluded_models,
-                      }
-                    : undefined,
-                },
-                model,
-                routing.trialOptInProviders,
-              )
-            : false;
+          const provider = limitsById.get(model.providerId);
+          if (!provider) return false;
+          if (!providerStates.has(model.providerId))
+            providerStates.set(model.providerId, providers.get(model.providerId));
+          const saved = providerStates.get(model.providerId);
+          return isModelFreeForPlan(
+            {
+              id: model.providerId,
+              tag: provider.tag,
+              billingEnabled: saved?.billingEnabled,
+              freeTierUnsupported: saved?.freeTierUnsupported,
+              freePlan: provider.free_plan
+                ? {
+                    sourceUrl: provider.free_plan.source_url,
+                    models: provider.free_plan.models,
+                    excludedModels: provider.free_plan.excluded_models,
+                  }
+                : undefined,
+            },
+            model,
+            routing.trialOptInProviders,
+          );
         })
         .map((model) => model.ref);
     },

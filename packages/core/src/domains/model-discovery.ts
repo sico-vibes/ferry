@@ -103,11 +103,10 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
         });
         const fetchedAt = services.clock.now().toISOString();
         if (aborted()) return;
+        const previousModels = new Map(services.models.list(id).map((model) => [model.ref, model]));
         const models = discovered.map((model) => ({
           ...model,
-          apiAccessVerified:
-            services.models.list(id).find((saved) => saved.ref === model.ref)?.apiAccessVerified ??
-            false,
+          apiAccessVerified: previousModels.get(model.ref)?.apiAccessVerified ?? false,
           verified: true,
           verifiedAt: fetchedAt,
         }));

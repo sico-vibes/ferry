@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fc from 'fast-check';
 import type { UsageRecord } from '@ferry/shared';
 import { nextReset, remaining, usageIn, windowStart } from '../src/windows.js';
@@ -15,6 +15,20 @@ const record = (id: string, occurredAt: string): UsageRecord => ({
 });
 
 describe('quota window math', () => {
+  it('reuses timezone formatters across repeated quota snapshots without changing reset times', () => {
+    const constructors = vi.spyOn(Intl, 'DateTimeFormat');
+    const spec = { kind: 'fixed_daily' as const, tz: 'Asia/Kathmandu', time: '00:00' };
+    try {
+      for (let index = 0; index < 200; index++) {
+        const now = new Date(Date.parse('2026-10-11T10:00:00Z') + index * 1000);
+        expect(windowStart(now, spec).toISOString()).toBe('2026-10-10T18:15:00.000Z');
+        expect(nextReset(now, spec).toISOString()).toBe('2026-10-11T18:15:00.000Z');
+      }
+      expect(constructors.mock.calls.length).toBeLessThanOrEqual(1);
+    } finally {
+      constructors.mockRestore();
+    }
+  });
   it('keeps rolling-window starts exactly one length behind now', () => {
     fc.assert(
       fc.property(

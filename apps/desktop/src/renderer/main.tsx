@@ -17,9 +17,16 @@ import { AppRouter } from './router';
 import { isExpectedCorePortOrigin } from '../shared/core-port-origin';
 import './styles.css';
 import './polish.css';
+import { shouldRetryLocalQuery } from './data/queryRetry';
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 20_000, refetchOnWindowFocus: false } },
+  defaultOptions: {
+    queries: {
+      staleTime: 20_000,
+      refetchOnWindowFocus: false,
+      retry: shouldRetryLocalQuery,
+    },
+  },
 });
 const refreshSessionQueries = () => {
   void queryClient.invalidateQueries({ queryKey: ['sessions'] });

@@ -17,18 +17,30 @@ export interface UsageAmounts {
 
 const hour = 60 * 60 * 1000;
 const day = 24 * hour;
+// ICU formatters own native memory. Quota snapshots reuse a small set of zones;
+// constructing a formatter for every model/window drives CPU and native memory up.
+const zoneFormatters = new Map<string, Intl.DateTimeFormat>();
 const parts = (date: Date, tz: string) => {
-  const entries = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-    weekday: 'short',
-  }).formatToParts(date);
+  let formatter = zoneFormatters.get(tz);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+      weekday: 'short',
+    });
+    if (zoneFormatters.size >= 32) {
+      const oldest = zoneFormatters.keys().next().value;
+      if (oldest !== undefined) zoneFormatters.delete(oldest);
+    }
+    zoneFormatters.set(tz, formatter);
+  }
+  const entries = formatter.formatToParts(date);
   return Object.fromEntries(entries.map(({ type, value }) => [type, value]));
 };
 const localStamp = (year: number, month: number, date: number, hourValue: number, minute: number) =>
