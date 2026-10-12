@@ -17,12 +17,12 @@
   white-space: nowrap;
 }
 .v2-nav-button[data-status='success'] .v2-nav-status {
-  color: var(--success);
-  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--foreground);
+  background: var(--muted);
 }
 .v2-nav-button[data-status='error'] .v2-nav-status {
-  color: var(--destructive);
-  background: color-mix(in srgb, var(--destructive) 12%, transparent);
+  color: var(--foreground);
+  background: var(--muted);
 }
 .v2-nav-button[data-collapsed='true'][data-status='success'] {
   color: var(--success);
