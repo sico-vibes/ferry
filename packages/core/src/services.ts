@@ -489,6 +489,8 @@ export async function createServices({
       return catalog.models
         .filter((model) => {
           if (!profile) return true;
+          if (profile.allowedModelRefs && !profile.allowedModelRefs.includes(model.ref))
+            return false;
           if (!Object.values(profile.tierByStep).some((tiers) => tiers.includes(model.tier)))
             return false;
           if (
@@ -507,7 +509,12 @@ export async function createServices({
               id: model.providerId,
               tag: provider.tag,
               billingEnabled: saved?.billingEnabled,
-              freeTierUnsupported: saved?.freeTierUnsupported,
+              freeTierUnsupported:
+                model.providerId === 'opencode' &&
+                SettingsSchema.safeParse(settings.get('global')).data?.opencodeZenTransport ===
+                  'cli'
+                  ? false
+                  : saved?.freeTierUnsupported,
               freePlan: provider.free_plan
                 ? {
                     sourceUrl: provider.free_plan.source_url,
@@ -550,7 +557,12 @@ export async function createServices({
                       }
                     : undefined,
                   billingEnabled: savedPlan?.billingEnabled,
-                  freeTierUnsupported: savedPlan?.freeTierUnsupported,
+                  freeTierUnsupported:
+                    provider === 'opencode' &&
+                    SettingsSchema.safeParse(settings.get('global')).data?.opencodeZenTransport ===
+                      'cli'
+                      ? false
+                      : savedPlan?.freeTierUnsupported,
                 },
                 model,
                 routing.trialOptInProviders,
@@ -558,6 +570,10 @@ export async function createServices({
           )
         )
           return [];
+        const cliConnected =
+          provider === 'opencode' &&
+          SettingsSchema.safeParse(settings.get('global')).data?.opencodeZenTransport === 'cli' &&
+          models.list(provider).some((model) => model.free && model.cliAccessVerified);
         const entries = providerKeyEntries.list(provider);
         const hasKey = entries.length
           ? entries.some(
@@ -578,7 +594,9 @@ export async function createServices({
           : Boolean(providerKeys.get(provider));
         const saved = providers.get(provider);
         const enabled = saved?.enabled ?? (hasKey || key_required === false);
-        return enabled && !saved?.freeTierUnsupported && (hasKey || key_required === false)
+        return enabled &&
+          (!saved?.freeTierUnsupported || cliConnected) &&
+          (hasKey || cliConnected || key_required === false)
           ? [provider]
           : [];
       });
@@ -773,6 +791,13 @@ export function hasUsableProviderKey(services: FerryServices, providerId: string
 }
 
 export function permitsKeylessProvider(services: FerryServices, providerId: string): boolean {
+  if (
+    providerId === 'opencode' &&
+    (services.settings.get('global') as { opencodeZenTransport?: unknown } | undefined)
+      ?.opencodeZenTransport === 'cli' &&
+    services.models.list('opencode').some((model) => model.free && model.cliAccessVerified === true)
+  )
+    return true;
   const auth = providerDefinition(providerId)?.auth;
   return (
     auth === 'anonymous' ||

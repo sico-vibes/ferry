@@ -32,6 +32,8 @@ it('previews results before Apply, preserves custom profiles and restores the pr
     expect((await client.settings.get()).activeProfileId).not.toBe(active);
   });
   const saved = await client.profiles.list();
+  expect(await screen.findByText('Optimized profile is active')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Edit profile' })).toBeTruthy();
   expect(saved.filter((profile) => initial.some((original) => original.id === profile.id))).toEqual(
     initial,
   );

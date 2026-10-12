@@ -18,11 +18,19 @@ export const ProviderCheckResultSchema = z.object({
   ),
 });
 export type ProviderCheckResult = z.infer<typeof ProviderCheckResultSchema>;
+export const ProviderCheckEntrySchema = z.object({
+  providerId: z.string(),
+  name: z.string(),
+  modelRef: z.string().nullable(),
+  state: z.enum(['queued', 'checking', 'complete', 'skipped', 'cancelled']),
+  reason: z.string().optional(),
+});
 export const ProviderCheckProgressSchema = z.object({
   id: z.string(),
   running: z.boolean(),
   cancelled: z.boolean(),
   results: z.array(ProviderCheckResultSchema),
+  entries: z.array(ProviderCheckEntrySchema).optional(),
   error: z.string().nullable(),
 });
 export type ProviderCheckProgress = z.infer<typeof ProviderCheckProgressSchema>;

@@ -156,7 +156,11 @@ export function createRpcFerryClient(
           ? Math.max(timeoutMs, 10 * 60_000 + 5_000)
           : method === 'gateway.testConnection'
             ? Math.max(timeoutMs, 155_000)
-            : timeoutMs,
+            : method === 'providers.verifyZenCli'
+              ? Math.max(timeoutMs, 40_000)
+              : method === 'providers.zenCliStatus'
+                ? Math.max(timeoutMs, 20_000)
+                : timeoutMs,
       );
       pending.set(id, { resolve, reject, timer });
       transport.send({ jsonrpc: '2.0', id, method, params });

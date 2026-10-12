@@ -43,5 +43,5 @@ it('offers standard API models and labels existing app-only choices without offe
   );
   expect(screen.queryByRole('checkbox', { name: 'App only (Zen)' })).toBeNull();
   expect(screen.getByRole('checkbox', { name: 'Standard API (Zen)' })).toBeTruthy();
-  expect(screen.getByText('Available in the OpenCode app')).toBeTruthy();
+  expect(screen.getByText('Verify Zen API or CLI access')).toBeTruthy();
 });

@@ -4,8 +4,8 @@ import {
   ProviderRequestOverridesSchema,
   FailureOptionsSchema,
   ProviderHealthSnapshotSchema,
-  isModelFreeForPlan,
   ProviderCheckOptionsSchema,
+  providerDefinition,
   type ProbeResult,
 } from '@ferry/shared';
 import type { ProviderKey } from '@ferry/shared';
@@ -16,6 +16,10 @@ import type { MockStore } from '../types.js';
 export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryClient['providers'] {
   const { state, rng, before, persist, emit } = deps;
   const keys = state.providerKeys;
+  const keyless = (provider: import('@ferry/shared').Provider) => {
+    const auth = providerDefinition(provider.id)?.auth;
+    return provider.keyRequired === false || auth === 'local' || auth === 'anonymous';
+  };
   let check: import('@ferry/shared').ProviderCheckProgress = {
     id: 'previous',
     running: false,
@@ -37,6 +41,43 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
     return structuredClone(provider);
   };
   return {
+    async zenCliStatus() {
+      await before();
+      return {
+        available: true,
+        version: 'Preview',
+        executable: 'opencode',
+        credentialSource: 'opencode',
+        freeModels: state.models
+          .filter((model) => model.providerId === 'opencode' && model.free)
+          .map((model) => ({ ref: model.ref, name: model.name })),
+        verifiedModels:
+          state.providers
+            .find((provider) => provider.id === 'opencode')
+            ?.availableModels?.filter((model) => model.cliAccessVerified)
+            .map((model) => model.ref) ?? [],
+      };
+    },
+    async verifyZenCli(ref) {
+      await before();
+      const provider = state.providers.find((provider) => provider.id === 'opencode');
+      const model = state.models.find(
+        (model) =>
+          model.providerId === 'opencode' && model.free && (ref === undefined || model.ref === ref),
+      );
+      if (!provider || !model) throw new Error('No free Zen model available in this preview');
+      model.cliAccessVerified = true;
+      model.transport = state.settings.opencodeZenTransport === 'cli' ? 'opencode_cli' : 'api';
+      provider.enabled = true;
+      provider.availableModels = state.models.filter((model) => model.providerId === provider.id);
+      persist();
+      emit('provider.updated', provider);
+      return {
+        ok: true,
+        modelRef: model.ref,
+        message: 'Preview: free generation verified through OpenCode CLI.',
+      };
+    },
     startChecks: (rawOptions) => {
       const options = ProviderCheckOptionsSchema.parse(rawOptions ?? {});
       check = {
@@ -46,15 +87,22 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
         results: state.providers
           .filter(
             (provider) =>
-              provider.enabled && ['valid', 'not_applicable'].includes(provider.keyStatus),
+              provider.enabled &&
+              provider.kind === 'api' &&
+              (keyless(provider) ||
+                ['valid', 'not_applicable', 'unchecked'].includes(provider.keyStatus)) &&
+              (!provider.cooldownUntil ||
+                Date.parse(provider.cooldownUntil) <= deps.clock.now().getTime()),
           )
           .flatMap((provider) => {
             const model = state.models.find(
               (model) =>
                 model.providerId === provider.id &&
                 (options.approvedCostUsd === undefined
-                  ? isModelFreeForPlan(provider, model)
-                  : !isModelFreeForPlan(provider, model)),
+                  ? // Mock fixtures already classify their models' free access;
+                    // they do not carry the full production free-plan catalog.
+                    model.free && !provider.billingEnabled
+                  : !model.free || provider.billingEnabled === true),
             );
             return model
               ? [
@@ -78,6 +126,31 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
           }),
         error: null,
       };
+      check.entries = state.providers
+        .filter((provider) => provider.enabled || provider.keyStatus === 'valid')
+        .map((provider) => {
+          const result = check.results.find((result) => result.providerId === provider.id);
+          return {
+            providerId: provider.id,
+            name: provider.name,
+            modelRef: result?.modelRef ?? null,
+            state: result ? ('complete' as const) : ('skipped' as const),
+            ...(!result
+              ? {
+                  reason: !provider.enabled
+                    ? 'Disabled or paused. Enable this provider before checking.'
+                    : provider.kind !== 'api'
+                      ? 'This connection uses its account or CLI verification flow.'
+                      : provider.cooldownUntil &&
+                          Date.parse(provider.cooldownUntil) > deps.clock.now().getTime()
+                        ? 'Provider is cooling down. Check again after its limit resets.'
+                        : !keyless(provider) && ['missing', 'invalid'].includes(provider.keyStatus)
+                          ? 'Connect usable credentials first.'
+                          : 'No eligible connected free model available in this preview fixture.',
+                }
+              : {}),
+          };
+        });
       emit('providers.check', check);
       return Promise.resolve({ id: check.id });
     },

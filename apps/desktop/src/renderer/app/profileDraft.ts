@@ -1,4 +1,11 @@
-import type { Profile, Provider, ProviderId, StepKind, Tier } from '@ferry/shared';
+import {
+  OPTIMIZATION_PRESETS,
+  type Profile,
+  type Provider,
+  type ProviderId,
+  type StepKind,
+  type Tier,
+} from '@ferry/shared';
 
 export type AllowedProvidersMode = 'all_free' | 'all' | 'pick';
 
@@ -53,6 +60,25 @@ export function newProfileFrom(source: Profile, name: string, now: number): Prof
     builtin: false,
     pinned: true,
   };
+}
+
+/** The guided creation path always starts free, even when the active profile is paid. */
+export function newGuidedProfile(profiles: readonly Profile[], now: number): Profile | null {
+  const base =
+    profiles.find((profile) => profile.builtin && profile.name === 'Auto-Free') ?? profiles[0];
+  if (!base) return null;
+  const profile = newProfileFrom(base, 'New profile', now);
+  profile.allowedProviders = 'all_free';
+  profile.paidAllowed = false;
+  profile.paidConfirmation = {
+    preauthorize: false,
+    confirmSubscriptions: false,
+    confirmTrials: false,
+  };
+  profile.roles = { ...profile.roles, enabled: false };
+  profile.optimizers = { ...OPTIMIZATION_PRESETS.fidelity };
+  delete profile.allowedModelRefs;
+  return profile;
 }
 
 export function isProfileDirty(draft: Profile | null, saved: Profile | undefined): boolean {

@@ -105,16 +105,26 @@ export function V2Sidebar({
   const go = (path: '/' | '/models' | '/gateway') => {
     void navigate({ to: path });
   };
-  const { data: providers = [] } = useQuery({
+  const { data: providers = [], isError: providersUnavailable } = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
-  const { data: gatewayState } = useQuery({
+  const {
+    data: gatewayState,
+    isPending: gatewayPending,
+    isError: gatewayUnavailable,
+  } = useQuery({
     queryKey: ['gateway-settings'],
     queryFn: () => client.gateway.settings(),
     refetchInterval: 5000,
   });
   const pausedCount = providers.filter((provider) => provider.pausedReason).length;
+  const keyIssueCount = providers.filter(
+    (provider) => provider.enabled && ['invalid', 'missing'].includes(provider.keyStatus),
+  ).length;
+  const accessIssueCount = providers.filter(
+    (provider) => provider.enabled && provider.freeTierUnsupported,
+  ).length;
   const tightest = tightestDailyWindow(limits);
   return (
     <TooltipProvider>
@@ -153,7 +163,17 @@ export function V2Sidebar({
           />
           <NavButton
             label="Models"
-            indicator={pausedCount > 0 ? `${String(pausedCount)} paused providers` : undefined}
+            indicator={
+              providersUnavailable
+                ? 'Offline'
+                : pausedCount > 0
+                  ? `${String(pausedCount)} paused`
+                  : keyIssueCount > 0
+                    ? 'Check keys'
+                    : accessIssueCount > 0
+                      ? 'Check access'
+                      : undefined
+            }
             icon={<Boxes />}
             active={pathname.startsWith('/models') || pathname.startsWith('/explore')}
             collapsed={collapsed}
@@ -163,7 +183,15 @@ export function V2Sidebar({
           />
           <NavButton
             label="Gateway"
-            indicator={gatewayState?.status.running ? 'Running' : 'Stopped'}
+            indicator={
+              gatewayUnavailable
+                ? 'Offline'
+                : gatewayPending
+                  ? 'Checking'
+                  : gatewayState.status.running
+                    ? 'Running'
+                    : 'Stopped'
+            }
             icon={<Network />}
             active={pathname.startsWith('/gateway')}
             collapsed={collapsed}
@@ -439,25 +467,31 @@ function NavButton({
     <button
       aria-label={label}
       className="v2-nav-button"
+      data-status={
+        indicator === 'Running'
+          ? 'success'
+          : indicator === 'Stopped' || indicator === 'Checking'
+            ? 'neutral'
+            : indicator
+              ? 'error'
+              : undefined
+      }
+      data-collapsed={collapsed || undefined}
       aria-current={active ? 'page' : undefined}
       onClick={onClick}
     >
-      {icon}
-      {!collapsed && <span>{label}</span>}
+      <span className="v2-nav-icon" aria-hidden="true">
+        {icon}
+      </span>
+      {!collapsed && <span className="v2-nav-label">{label}</span>}
       {indicator && (
         <span
           aria-label={indicator}
-          className="v2-paused-dot size-2 shrink-0 rounded-full"
-          style={{
-            background:
-              indicator === 'Running'
-                ? 'var(--success)'
-                : indicator === 'Stopped'
-                  ? 'var(--muted-foreground)'
-                  : 'var(--destructive)',
-          }}
+          className={collapsed ? 'sr-only' : 'v2-nav-status'}
           role="status"
-        />
+        >
+          {indicator}
+        </span>
       )}
     </button>
   );

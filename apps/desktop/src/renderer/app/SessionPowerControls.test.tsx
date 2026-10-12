@@ -12,6 +12,7 @@ import { keys } from '../data/queries';
 import { useUI } from '../state/ui';
 import { CommandPalette, ComposerModelChip } from './SessionPowerControls';
 import { Composer } from '@ferry/ui';
+import { ModelInfoSchema } from '@ferry/shared';
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 
@@ -37,6 +38,53 @@ function renderChip(client: ReturnType<typeof createMockFerryClient>, chip: Reac
 }
 
 describe('ComposerModelChip', () => {
+  it('shows unverified Zen free models with an access explanation and permits API-verified ones', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const store = client.__store();
+    const base = store.models[0];
+    const provider = store.providers.find((provider) => provider.id === 'opencode');
+    if (!base || !provider) throw new Error('Missing Zen fixture');
+    provider.enabled = true;
+    provider.keyStatus = 'valid';
+    const blocked = ModelInfoSchema.parse({
+      ...base,
+      providerId: 'opencode',
+      ref: 'opencode/zen-unverified-free',
+      name: 'Unverified Zen',
+      free: true,
+      apiAccessVerified: false,
+    });
+    const verified = ModelInfoSchema.parse({
+      ...blocked,
+      ref: 'opencode/zen-verified-free',
+      name: 'Verified Zen',
+      apiAccessVerified: true,
+    });
+    store.models.push(blocked, verified);
+    const select = vi.fn();
+    renderChip(
+      client,
+      <ComposerModelChip
+        sessionId={null}
+        modelName={base.name}
+        modelRef={base.ref}
+        mode="manual"
+        onModelSelect={select}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: base.name }));
+    const blockedOption = await screen.findByRole('option', {
+      name: /Unverified Zen.*Verify access/,
+    });
+    expect(blockedOption.getAttribute('aria-disabled')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Check Zen access' })).toBeTruthy();
+    const accepted = screen.getByRole('option', { name: /Verified Zen/ });
+    expect(accepted.getAttribute('aria-disabled')).not.toBe('true');
+    fireEvent.click(accepted);
+    await waitFor(() => {
+      expect(select).toHaveBeenCalledWith(verified.ref);
+    });
+  });
   it('opens above the composer chip with a viewport-clamped picker', async () => {
     const client = createMockFerryClient({ behavior: 'test' });
     const session = (await client.sessions.list())[0];

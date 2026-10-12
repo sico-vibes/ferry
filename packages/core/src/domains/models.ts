@@ -9,6 +9,7 @@ import {
   isOpenCodeAppModel,
 } from '@ferry/shared';
 import { oauthModelCatalog } from '@ferry/oauth';
+import { zenModel, zenProvider, hasZenCliAccess } from '../zen-cli.js';
 import { modelSupportsTools } from '@ferry/router';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
@@ -66,11 +67,16 @@ function cachedProviderModels(
         ...model,
         verified: model.verified ?? Boolean(saved.modelsVerifiedAt),
         verifiedAt: model.verifiedAt ?? saved.modelsVerifiedAt ?? null,
-      }));
+      }))
+      .map((model) => zenModel(services, model));
   });
 }
 
 export function register(host: CoreHost, services: FerryServices): void {
+  const providerForModel = (id: string) => {
+    const saved = services.providers.get(id);
+    return saved ? zenProvider(services, saved) : undefined;
+  };
   const modelDiscovery = getModelDiscovery(host, services);
   const failingModels = () =>
     new Set(
@@ -103,7 +109,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }),
         ),
         services.catalog.models,
-        (id) => services.providers.get(id),
+        providerForModel,
         (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
       );
     },
@@ -122,7 +128,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }),
         ),
         services.catalog.models,
-        (id) => services.providers.get(id),
+        providerForModel,
         (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
       );
       const filtered = listedModels
@@ -156,14 +162,16 @@ export function register(host: CoreHost, services: FerryServices): void {
         const saved = services.providers.get(provider);
         const hasKey = hasUsableProviderKey(services, provider);
         const enabled = saved?.enabled ?? (hasKey || key_required === false);
-        return enabled && !saved?.freeTierUnsupported && (hasKey || key_required === false)
-          ? services.models.list(provider)
+        return enabled &&
+          (!saved?.freeTierUnsupported || (provider === 'opencode' && hasZenCliAccess(services))) &&
+          (hasKey || key_required === false)
+          ? services.models.list(provider).map((model) => zenModel(services, model))
           : [];
       });
       const models = preserveCatalogBillingMetadata(
         cachedModels,
         services.catalog.models,
-        (id) => services.providers.get(id),
+        providerForModel,
         (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
       );
       const enabled = models.filter(
@@ -229,7 +237,7 @@ export function register(host: CoreHost, services: FerryServices): void {
               .flatMap(({ provider }) => services.models.list(provider))
               .find((model) => model.ref === modelRef) ??
             services.catalog.models.find((model) => model.ref === modelRef);
-          if (known && isOpenCodeAppModel(known))
+          if (known && isOpenCodeAppModel(zenModel(services, known)))
             throw new Error('Available in the OpenCode app. Use ferry run opencode --native.');
           const available =
             services.catalog.models.some((model) => model.ref === modelRef) ||

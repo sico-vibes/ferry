@@ -112,7 +112,7 @@ describe('provider failure visibility', () => {
       else Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
     }
   });
-  it('shows a sidebar dot and count while a provider is auto-paused', async () => {
+  it('shows a sidebar status badge and count while a provider is auto-paused', async () => {
     const { client } = fixture();
     const root = createRootRoute({ component: () => <V2Sidebar onNewChat={() => undefined} /> });
     const router = createRouter({
@@ -121,6 +121,6 @@ describe('provider failure visibility', () => {
     });
     await router.load();
     mount(<RouterProvider router={router} />, client);
-    expect(await screen.findByRole('status', { name: '1 paused providers' })).toBeTruthy();
+    expect(await screen.findByRole('status', { name: '1 paused' })).toBeTruthy();
   });
 });

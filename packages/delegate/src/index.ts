@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+export { detectZenCli, runZenAcp, type ZenAcpInput, type ZenAcpResult } from './zen-acp.js';
 import { isProtectedWorkspacePath, summarizeAgentEvent } from '@ferry/shared';
 import { access, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -1536,7 +1537,7 @@ function quoteCmdArgument(argument: string): string {
   return `"${argument.replaceAll('"', '""')}"`;
 }
 
-function commandInvocation(
+export function commandInvocation(
   executable: string,
   args: string[],
 ): {

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Profile, ProviderId } from '@ferry/shared';
+import { createMockFerryClient } from '@ferry/client';
 import {
   allowedProvidersMode,
   isProfileDirty,
   newProfileFrom,
+  newGuidedProfile,
   providerAllowed,
   toggleProvider,
   toggleTier,
@@ -52,6 +54,26 @@ describe('toggleTier', () => {
 });
 
 describe('profile drafts', () => {
+  it('starts guided profiles free with safe defaults even when the first preset is paid', async () => {
+    const profiles = await createMockFerryClient({ behavior: 'test' }).profiles.list();
+    const paid = profiles.find((profile) => profile.paidAllowed),
+      free = profiles.find((profile) => profile.name === 'Auto-Free');
+    if (!paid || !free) throw new Error('Missing presets');
+    const guided = newGuidedProfile(
+      [paid, { ...free, id: 'profile_fixture_auto' as Profile['id'] }],
+      44,
+    );
+    expect(guided).toMatchObject({
+      builtin: false,
+      paidAllowed: false,
+      allowedProviders: 'all_free',
+      roles: { enabled: false },
+      paidConfirmation: { preauthorize: false },
+      optimizers: { terse: 'off', cavemanInput: 'off' },
+    });
+    expect(guided?.tierByStep).toEqual(free.tierByStep);
+    expect(newGuidedProfile([], 1)).toBeNull();
+  });
   const base = { id: 'profile_builtin_auto_free', name: 'Auto-Free', builtin: true } as Profile;
 
   it('creates an unsaved custom copy', () => {

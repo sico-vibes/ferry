@@ -244,7 +244,7 @@ describe('Models providers and catalog', () => {
     const setupButton = (await screen.findAllByRole('button', { name: 'Set up Zen' }))[0];
     if (!setupButton) throw new Error('Missing Zen setup');
     await user.click(setupButton);
-    const dialog = await screen.findByRole('dialog', { name: 'Manage OpenCode Zen key' });
+    const dialog = await screen.findByRole('dialog', { name: 'Manage OpenCode Zen connection' });
     expect(within(dialog).queryByRole('switch', { name: 'Use anonymous Zen access' })).toBeNull();
     await user.type(within(dialog).getByLabelText('API key'), 'fixture-standard-api-key');
     await user.click(within(dialog).getByRole('button', { name: 'Save connection' }));

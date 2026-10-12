@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional installed OpenCode CLI transport for Zen free models in Ferry chat and Gateway,
+  with CLI detection, credential-source selection and a real free-generation check.
+- Guided six-step profile setup with searchable models, ordered selections and enforced
+  model restrictions; provider checks show individual progress, outcomes and skip reasons.
 - Ferry 1.0 local Gateway dashboard: Overview, Requests, Routing, Keys, Usage & costs and
   Connect, with durable request metadata, named client keys, rotation and revocation.
 - Resumable provider → Auto → key → client onboarding, shared desktop/CLI client configuration,
@@ -32,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Sidebar connection states use compact badges and clear collapsed icons. Applying provider
+  recommendations confirms the active profile and offers Edit and Undo.
 - Auto is free-first; paid backup requires explicit authorization, known prices and a positive
   spending limit. Gateway requests preserve fidelity by default; free native profiles retain Lite.
 - Provider readiness distinguishes connection health, routing eligibility and verification evidence.
@@ -42,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Zen API and CLI verification stay separate, and CLI requests preserve existing API-key health.
+  Zen setup stays open after verification so its result remains visible until dismissed.
 - Gateway enforces intersected key/profile/global budgets, atomic reservations, bounded queues,
   dispatch deadlines, cancellation and safe partial-stream handling across client protocols.
 - Permission rules and telemetry retention persist in Core; diagnostics exclude credentials and

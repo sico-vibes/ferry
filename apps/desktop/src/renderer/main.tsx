@@ -17,6 +17,7 @@ import { AppRouter } from './router';
 import { isExpectedCorePortOrigin } from '../shared/core-port-origin';
 import './styles.css';
 import './polish.css';
+import './provider-workflows.css';
 import { shouldRetryLocalQuery } from './data/queryRetry';
 
 const queryClient = new QueryClient({

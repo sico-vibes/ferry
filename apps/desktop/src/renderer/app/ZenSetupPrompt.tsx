@@ -14,7 +14,11 @@ export function ZenSetupPrompt({ compact = false }: { compact?: boolean }) {
   const [open, setOpen] = useState(false);
   if (
     !zen ||
-    (zen.enabled && zen.keyStatus === 'valid' && zen.health !== 'down' && !zen.freeTierUnsupported)
+    (!open &&
+      zen.enabled &&
+      ['valid', 'not_applicable'].includes(zen.keyStatus) &&
+      zen.health !== 'down' &&
+      !zen.freeTierUnsupported)
   )
     return null;
   return (
@@ -31,8 +35,8 @@ export function ZenSetupPrompt({ compact = false }: { compact?: boolean }) {
         <div className="min-w-0 flex-1">
           <h3 className="text-ui-label">Try OpenCode Zen</h3>
           <p className="text-ui-meta text-muted-foreground">
-            Connect your own key for the standard Zen API. OpenCode-only free models are available
-            in the OpenCode app.
+            Use the installed OpenCode CLI for free models in Ferry, or connect your own key for the
+            standard Zen API.
           </p>
         </div>
         <UiV2.Button

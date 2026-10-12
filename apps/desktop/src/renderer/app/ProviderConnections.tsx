@@ -179,7 +179,7 @@ export function ProviderConnections() {
         </p>
       )}
       <p className="v2-gateway-help">
-        Zen’s OpenCode-only free models are available in the OpenCode app. Use your own key for its
+        Zen’s OpenCode-only free models can use the installed CLI in Ferry. Use your own key for its
         standard API, or <code>ferry run opencode --native</code> for the real app.
       </p>
       {error && (

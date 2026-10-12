@@ -121,6 +121,9 @@ export type Effort = z.infer<typeof EffortSchema>;
 export const ModelInfoSchema = z.object({
   /** Successful standard API generation on the saved connection; discovery alone is insufficient. */
   apiAccessVerified: z.boolean().optional(),
+  /** Verified through the installed OpenCode client; never substitutes for API verification. */
+  cliAccessVerified: z.boolean().optional(),
+  transport: z.enum(['api', 'opencode_cli']).optional(),
   failing: z.boolean().optional(),
   verified: z.boolean().optional(),
   verifiedAt: z.iso.datetime().nullable().optional(),
@@ -170,9 +173,18 @@ export const ModelInfoSchema = z.object({
 });
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 export function isOpenCodeAppModel(
-  model: Pick<ModelInfo, 'providerId' | 'free' | 'apiAccessVerified'>,
+  model: Pick<
+    ModelInfo,
+    'providerId' | 'free' | 'apiAccessVerified' | 'cliAccessVerified' | 'transport'
+  >,
 ): boolean {
-  return model.providerId === 'opencode' && model.free && model.apiAccessVerified !== true;
+  return (
+    model.providerId === 'opencode' &&
+    model.free &&
+    (model.transport === 'opencode_cli'
+      ? model.cliAccessVerified !== true
+      : model.apiAccessVerified !== true)
+  );
 }
 export function modelAcceptsImages(model: ModelInfo | undefined): boolean {
   return (
