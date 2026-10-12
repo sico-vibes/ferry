@@ -94,6 +94,23 @@ export function register(host: CoreHost, services: FerryServices): void {
           routing: { ...current.routing, ...patch.routing },
         });
         services.settings.put('global', settings);
+        if (
+          patch.opencodeZenCliUseFerryKey !== undefined &&
+          patch.opencodeZenCliUseFerryKey !== current.opencodeZenCliUseFerryKey
+        ) {
+          services.models.replace(
+            'opencode',
+            services.models
+              .list('opencode')
+              .map((model) => ({ ...model, cliAccessVerified: false })),
+          );
+          const provider = services.providers.get('opencode');
+          if (provider) {
+            const updated = { ...provider, availableModels: services.models.list('opencode') };
+            services.providers.put(updated);
+            host.emit('provider.updated', updated);
+          }
+        }
         if (patch.providerEndpoints) {
           for (const rawId of new Set([
             ...Object.keys(current.providerEndpoints),

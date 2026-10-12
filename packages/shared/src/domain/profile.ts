@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { DelegationModeSchema, StepKindSchema, TierSchema } from './common.js';
-import { ProviderIdSchema, ProfileIdSchema } from './ids.js';
+import { ProviderIdSchema, ProfileIdSchema, ModelRefSchema } from './ids.js';
 export const FallbackChainEntrySchema = z.object({
   provider: ProviderIdSchema,
   patterns: z.array(z.string().min(1)),
@@ -40,6 +40,7 @@ export const ProfileSchema = z.object({
   builtin: z.boolean(),
   pinned: z.boolean(),
   allowedProviders: z.union([z.enum(['all_free', 'all']), z.array(ProviderIdSchema)]),
+  allowedModelRefs: z.array(ModelRefSchema).optional(),
   tierByStep: z.record(StepKindSchema, z.array(TierSchema)),
   paidAllowed: z.boolean(),
   paidConfirmation: z

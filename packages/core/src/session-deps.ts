@@ -1,4 +1,12 @@
 import { providerBaseUrl } from './provider-endpoints.js';
+import {
+  zenCliFetch,
+  zenModel,
+  zenProvider,
+  zenCliMode,
+  zenFerryKey,
+  ZEN_CLI_BASE_URL,
+} from './zen-cli.js';
 import { isOpenCodeAppModel } from '@ferry/shared';
 import {
   createStepGenerator,
@@ -105,6 +113,7 @@ export function createSessionDependencies(
   providers: () => Provider[];
   apiKeys: Record<string, string>;
   providerFetch: typeof globalThis.fetch;
+  setProviderProgress: (progress: () => void) => void;
   providerHeaders: Record<string, Record<string, string>>;
   gatewayServedModel: () => string | null;
   revokeGatewayTokens: () => void;
@@ -112,6 +121,7 @@ export function createSessionDependencies(
   associateObservationKey: (providerId: string, keyId: string) => void;
 } {
   const apiKeys: Record<string, string> = {};
+  let providerProgress: (() => void) | undefined;
   const health = getProviderHealth(services);
   const providerHeaders: Record<string, Record<string, string>> = {};
   let lastGatewayServedModel: string | null = null;
@@ -126,84 +136,86 @@ export function createSessionDependencies(
     }),
   );
   const providers = (): Provider[] => [
-    ...services.catalog.providers.map(
-      ({
-        provider,
-        name,
-        tag,
-        data_use,
-        terms_note,
-        signup_url,
-        docs_url,
-        verified_at,
-        key_required,
-        free_plan,
-      }) => {
-        const id = ProviderIdSchema.parse(provider);
-        const saved = services.providers.get(id);
-        const keyPresent = hasProviderKey(services, id);
-        const enabled = saved?.enabled ?? (keyPresent || key_required === false);
-        const keyStatus: Provider['keyStatus'] =
-          permitsKeylessProvider(services, id) &&
-          !services.providerKeys.get(id) &&
-          !services.providerKeyEntries.list(id).length
-            ? 'not_applicable'
-            : keyPresent
-              ? (saved?.keyStatus ?? 'unchecked')
-              : key_required === false && enabled
-                ? 'not_applicable'
-                : 'missing';
-        const cooldown = services.cooldowns.get(id);
-        const activeCooldown =
-          cooldown && Date.parse(cooldown.until) > services.clock.now().getTime();
-        return ProviderSchema.parse({
-          id,
+    ...services.catalog.providers
+      .map(
+        ({
+          provider,
           name,
           tag,
-          ...(free_plan === undefined
-            ? {}
-            : {
-                freePlan: {
-                  sourceUrl: free_plan.source_url,
-                  models: free_plan.models,
-                  ...(free_plan.excluded_models === undefined
-                    ? {}
-                    : { excludedModels: free_plan.excluded_models }),
-                },
-              }),
-          billingEnabled: saved?.billingEnabled ?? false,
-          kind: tag === 'subscription_cli' ? 'cli' : 'api',
-          brand: null,
-          keyStatus,
-          enabled,
-          health: activeCooldown
-            ? 'cooldown'
-            : saved?.health === 'cooldown'
-              ? 'ok'
-              : (saved?.health ?? 'unknown'),
-          cooldownUntil: activeCooldown ? cooldown.until : null,
-          cooldownProvenance:
-            activeCooldown && routingSettings().cooldownReasons
-              ? (cooldown.provenance ?? null)
-              : null,
-          dataUse: data_use,
-          dataUseTraining:
-            services.catalog.providers.find((item) => item.provider === provider)
-              ?.data_use_training ?? null,
-          termsNote: terms_note,
-          signupUrl: signup_url,
-          docsUrl: docs_url,
-          verifiedAt: verified_at,
-          modelCount: saved?.availableModels?.length ?? 0,
-          ...(saved?.availableModels
-            ? { availableModels: saved.availableModels, modelCount: saved.availableModels.length }
-            : {}),
-          modelsVerifiedAt: saved?.modelsVerifiedAt ?? null,
-          windows: services.quota.getWindows(id),
-          stepsLeftToday: services.quota.stepsLeft(id),
-        });
-      },
-    ),
+          data_use,
+          terms_note,
+          signup_url,
+          docs_url,
+          verified_at,
+          key_required,
+          free_plan,
+        }) => {
+          const id = ProviderIdSchema.parse(provider);
+          const saved = services.providers.get(id);
+          const keyPresent = hasProviderKey(services, id);
+          const enabled = saved?.enabled ?? (keyPresent || key_required === false);
+          const keyStatus: Provider['keyStatus'] =
+            permitsKeylessProvider(services, id) &&
+            !services.providerKeys.get(id) &&
+            !services.providerKeyEntries.list(id).length
+              ? 'not_applicable'
+              : keyPresent
+                ? (saved?.keyStatus ?? 'unchecked')
+                : key_required === false && enabled
+                  ? 'not_applicable'
+                  : 'missing';
+          const cooldown = services.cooldowns.get(id);
+          const activeCooldown =
+            cooldown && Date.parse(cooldown.until) > services.clock.now().getTime();
+          return ProviderSchema.parse({
+            id,
+            name,
+            tag,
+            ...(free_plan === undefined
+              ? {}
+              : {
+                  freePlan: {
+                    sourceUrl: free_plan.source_url,
+                    models: free_plan.models,
+                    ...(free_plan.excluded_models === undefined
+                      ? {}
+                      : { excludedModels: free_plan.excluded_models }),
+                  },
+                }),
+            billingEnabled: saved?.billingEnabled ?? false,
+            kind: tag === 'subscription_cli' ? 'cli' : 'api',
+            brand: null,
+            keyStatus,
+            enabled,
+            health: activeCooldown
+              ? 'cooldown'
+              : saved?.health === 'cooldown'
+                ? 'ok'
+                : (saved?.health ?? 'unknown'),
+            cooldownUntil: activeCooldown ? cooldown.until : null,
+            cooldownProvenance:
+              activeCooldown && routingSettings().cooldownReasons
+                ? (cooldown.provenance ?? null)
+                : null,
+            dataUse: data_use,
+            dataUseTraining:
+              services.catalog.providers.find((item) => item.provider === provider)
+                ?.data_use_training ?? null,
+            termsNote: terms_note,
+            signupUrl: signup_url,
+            docsUrl: docs_url,
+            verifiedAt: verified_at,
+            modelCount: saved?.availableModels?.length ?? 0,
+            ...(saved?.availableModels
+              ? { availableModels: saved.availableModels, modelCount: saved.availableModels.length }
+              : {}),
+            modelsVerifiedAt: saved?.modelsVerifiedAt ?? null,
+            windows: services.quota.getWindows(id),
+            stepsLeftToday: services.quota.stepsLeft(id),
+          });
+        },
+      )
+      .map((provider) => zenProvider(services, provider)),
     ...[...new Set(oauthModelCatalog.map((model) => model.providerId))].map((id) => {
       const saved = services.providers.get(id);
       return ProviderSchema.parse({
@@ -264,14 +276,21 @@ export function createSessionDependencies(
       // QuotaEngine subscribers publish the authoritative quota.update summary.
     },
   };
-  const providerFetch: typeof globalThis.fetch = async (input, init) => {
-    const response = await globalThis.fetch(input, init);
-    const requestUrl =
-      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    if (requestUrl.includes('/v1/chat/completions'))
-      lastGatewayServedModel = response.headers.get('x-ferry-served-model');
-    return response;
-  };
+  const providerFetch: typeof globalThis.fetch = zenCliFetch(
+    services,
+    async (input, init) => {
+      const response = await globalThis.fetch(input, init);
+      const requestUrl =
+        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (requestUrl.includes('/v1/chat/completions'))
+        lastGatewayServedModel = response.headers.get('x-ferry-served-model');
+      return response;
+    },
+    undefined,
+    () => {
+      providerProgress?.();
+    },
+  );
   const observe = (observation: RawCallObservation) => {
     const turnId = traceContext?.turnId;
     if (turnId) {
@@ -495,6 +514,7 @@ export function createSessionDependencies(
         const saved = services.providers.get(provider);
         return services.models
           .list(provider)
+          .map((model) => zenModel(services, model))
           .filter((model) => !isOpenCodeAppModel(model))
           .filter(
             (model) =>
@@ -720,7 +740,8 @@ export function createSessionDependencies(
           new Error(`Provider or model is temporarily unavailable: ${req.model.ref}`),
           { statusCode: 503 },
         );
-      const entries = services.providerKeyEntries.list(providerId);
+      const cliTransport = providerId === 'opencode' && req.model.free && zenCliMode(services);
+      const entries = cliTransport ? [] : services.providerKeyEntries.list(providerId);
       const stickyRoutes = z
         .record(
           z.string(),
@@ -761,17 +782,27 @@ export function createSessionDependencies(
       if (selectedKey) selectedProviderKeys.set(sessionId, { providerId, keyId: selectedKey.id });
       else selectedProviderKeys.delete(sessionId);
       const legacyKeyRef = services.providerKeys.get(providerId)?.keyringRef;
-      const key = selectedKey
-        ? await services.secrets.get(selectedKey.keyringRef)
-        : entries.length === 0 && legacyKeyRef
-          ? await services.secrets.get(legacyKeyRef)
-          : undefined;
+      const key = cliTransport
+        ? await zenFerryKey(services)
+        : selectedKey
+          ? await services.secrets.get(selectedKey.keyringRef)
+          : entries.length === 0 && legacyKeyRef
+            ? await services.secrets.get(legacyKeyRef)
+            : undefined;
       if (!key && entries.length > 0 && !permitsKeylessProvider(services, providerId))
         throw Object.assign(new Error(`All configured keys for ${providerId} are unavailable.`), {
           statusCode: 429,
         });
       if (key) apiKeys[providerId] = key;
       else Reflect.deleteProperty(apiKeys, providerId);
+      if (providerId === 'opencode') {
+        const base =
+          zenCliMode(services) && req.model.free
+            ? ZEN_CLI_BASE_URL
+            : providerBaseUrl(services, providerId);
+        if (base) providerBaseUrls[providerId] = base;
+        else Reflect.deleteProperty(providerBaseUrls, providerId);
+      }
       const outputState = { started: false };
       const emitStep = (event: AgentEvent) => {
         if (event.type === 'session.delta' && event.text) outputState.started = true;
@@ -980,6 +1011,9 @@ export function createSessionDependencies(
     },
   };
   return {
+    setProviderProgress(progress) {
+      providerProgress = progress;
+    },
     gateway,
     usage,
     capacity,

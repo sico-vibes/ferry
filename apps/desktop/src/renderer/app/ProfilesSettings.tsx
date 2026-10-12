@@ -23,10 +23,12 @@ import {
 import { useFerryClient } from '../data/client';
 import { keys, useProfiles, useSettings } from '../data/queries';
 import { ConfirmDialog } from './ConfirmDialog';
+import { ProfileSetupWizard } from './ProfileSetupWizard';
 import {
   allowedProvidersMode,
   isProfileDirty,
   newProfileFrom,
+  newGuidedProfile,
   providerAllowed,
   toggleProvider,
   toggleTier,
@@ -144,6 +146,7 @@ export function ProfilesSettings() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [profileAdvanced, setProfileAdvanced] = useState(false);
+  const [wizard, setWizard] = useState<Profile | null>(null);
   const operation = useRef(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const saved = draft ? profiles.find((profile) => profile.id === draft.id) : undefined;
@@ -265,10 +268,7 @@ export function ProfilesSettings() {
         <UiV2.Button
           variant="secondary"
           onClick={() => {
-            createFrom(
-              profiles.find((profile) => profile.id === 'profile_builtin_auto_free') ?? profiles[0],
-              'New profile',
-            );
+            setWizard(newGuidedProfile(profiles, Date.now()));
           }}
         >
           <Plus aria-hidden="true" size={16} />
@@ -298,6 +298,34 @@ export function ProfilesSettings() {
           <Trash2 aria-hidden="true" size={16} />
         </UiV2.Button>
       </div>
+      <UiV2.Button
+        variant="secondary"
+        onClick={() => {
+          setWizard(
+            draft.builtin
+              ? newProfileFrom(draft, `${draft.name} copy`, Date.now())
+              : structuredClone(draft),
+          );
+        }}
+      >
+        Guided setup
+      </UiV2.Button>
+      {wizard && (
+        <ProfileSetupWizard
+          initial={wizard}
+          providers={providers}
+          models={models}
+          onCancel={() => {
+            setWizard(null);
+          }}
+          onSave={async (profile) => {
+            const result = await client.profiles.save(profile);
+            await cache.invalidateQueries({ queryKey: keys.profiles });
+            setDraft(structuredClone(result));
+            setFeedback({ kind: 'saved' });
+          }}
+        />
+      )}
       {locked ? (
         <div className="profile-locked-note" role="note">
           <span>
@@ -325,6 +353,17 @@ export function ProfilesSettings() {
               : draft.name}
         </h3>
         <p>{draft.description}</p>
+        {draft.allowedModelRefs && (
+          <p className="v2-gateway-help">
+            Selected models: {draft.allowedModelRefs.length}.{' '}
+            {draft.allowedModelRefs
+              .slice(0, 3)
+              .map((ref) => models.find((model) => model.ref === ref)?.name ?? ref)
+              .join(', ')}
+            {draft.allowedModelRefs.length > 3 ? ', and more' : ''}. Use guided setup to change this
+            selection or its fallback order.
+          </p>
+        )}
         <p className="v2-gateway-help">
           Objective: {draft.routingObjective ?? 'balanced'}.{' '}
           {draft.paidAllowed

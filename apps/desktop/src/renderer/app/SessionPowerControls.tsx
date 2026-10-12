@@ -635,6 +635,7 @@ export function ComposerModelChip({
   onOpenChange?: (open: boolean) => void;
 }) {
   const dialogId = useId();
+  const navigate = useNavigate();
   const client = useFerryClient();
   const cache = useQueryClient();
   const pushToast = useToasts((state) => state.push);
@@ -752,6 +753,19 @@ export function ComposerModelChip({
     ? connectedModels.filter((model) => model.free)
     : connectedModels;
   const hiddenPaidCount = connectedModels.length - availableModels.length;
+  const zenProvider = providers.find((provider) => provider.id === 'opencode');
+  const zenNeedsVerification = [
+    ...new Map(
+      [...models, ...(zenProvider?.availableModels ?? [])]
+        .filter(
+          (model) =>
+            model.providerId === 'opencode' &&
+            isOpenCodeAppModel(model) &&
+            zenProvider?.keyStatus !== 'missing',
+        )
+        .map((model) => [model.ref, model]),
+    ).values(),
+  ];
   const candidateByRef = new Map(visibleCandidates.map((candidate) => [candidate.ref, candidate]));
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const grouped = useMemo(
@@ -1083,8 +1097,50 @@ export function ComposerModelChip({
                     </ModelCommand.Group>
                   );
                 })}
+                {zenNeedsVerification.length > 0 && (
+                  <ModelCommand.Group heading="OpenCode Zen — connection unverified">
+                    {zenNeedsVerification.map((model) => (
+                      <ModelCommand.Item
+                        key={`zen-unverified-${model.ref}`}
+                        value={`${model.name} OpenCode Zen ${model.ref}`}
+                        disabled
+                        className="model-candidate model-picker-unavailable"
+                      >
+                        <ProviderLogo providerId="opencode" name={model.name} size={16} />
+                        <strong>{model.name}</strong>
+                        <span className="model-risk-pill">Verify access</span>
+                      </ModelCommand.Item>
+                    ))}
+                  </ModelCommand.Group>
+                )}
               </ModelCommand.List>
             </ModelCommand>
+            {zenNeedsVerification.length > 0 && (
+              <section className="model-picker-zen-note" aria-label="OpenCode Zen availability">
+                <strong>OpenCode Zen</strong>
+                <p>
+                  {zenNeedsVerification
+                    .slice(0, 3)
+                    .map((model) => model.name)
+                    .join(', ')}
+                  {zenNeedsVerification.length > 3 ? ' and more' : ''}
+                </p>
+                <p>
+                  {zenNeedsVerification.length} free models need generation verification. Manage Zen
+                  to use the installed OpenCode CLI, or check the standard API connection.
+                </p>
+                <UiV2.Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setOpen(false);
+                    void navigate({ to: '/models' });
+                  }}
+                >
+                  Check Zen access
+                </UiV2.Button>
+              </section>
+            )}
             {highlightedModel ? (
               <ModelDetailsCard
                 auto={

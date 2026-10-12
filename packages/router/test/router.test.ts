@@ -160,6 +160,26 @@ const task: TaskRecord = {
 };
 
 describe('step classification and routing', () => {
+  it('enforces profile model selections while leaving unrestricted profiles unchanged', () => {
+    const other: ModelInfo = { ...model, ref: 'groq/alternate-selection' as ModelInfo['ref'] };
+    const input = {
+      models: [model, other],
+      providers: [provider],
+      capacity,
+      profile: { ...profile, name: 'Custom selection', fallbackChain: [] },
+      step: 'plan' as const,
+      estimate: { inputTokens: 1, requiresTools: true },
+    };
+    expect(scoreModels(input)).toHaveLength(2);
+    expect(
+      scoreModels({ ...input, profile: { ...input.profile, allowedModelRefs: [model.ref] } }).map(
+        (candidate) => candidate.ref,
+      ),
+    ).toEqual([model.ref]);
+    expect(
+      scoreModels({ ...input, profile: { ...input.profile, allowedModelRefs: [] } }),
+    ).toHaveLength(0);
+  });
   it('excludes OpenCode-only free models even with custom headers', () => {
     const zen: Provider = {
       ...provider,

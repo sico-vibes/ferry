@@ -75,7 +75,7 @@ export function ModelMultiPicker({
                   <small className="v2-model-multi-warning">Not connected</small>
                 ) : null}
                 {model && isOpenCodeAppModel(model) ? (
-                  <small className="v2-model-multi-warning">Available in the OpenCode app</small>
+                  <small className="v2-model-multi-warning">Verify Zen API or CLI access</small>
                 ) : null}
                 <UiV2.Button
                   aria-label={`Move ${model?.name ?? ref} up`}

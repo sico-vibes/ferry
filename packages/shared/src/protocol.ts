@@ -47,6 +47,8 @@ export const FERRY_METHODS = [
   'checkpoints.diff',
   'checkpoints.restore',
   'providers.list',
+  'providers.zenCliStatus',
+  'providers.verifyZenCli',
   'providers.startChecks',
   'providers.checkProgress',
   'providers.cancelChecks',

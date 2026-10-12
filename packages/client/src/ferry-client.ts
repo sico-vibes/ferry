@@ -215,6 +215,15 @@ export interface FerryClient {
     restore(id: CheckpointId, paths?: string[]): Promise<void>;
   };
   providers: {
+    zenCliStatus(): Promise<{
+      available: boolean;
+      version: string | null;
+      executable: string | null;
+      credentialSource: 'opencode' | 'ferry' | 'anonymous';
+      verifiedModels: string[];
+      freeModels: { ref: string; name: string }[];
+    }>;
+    verifyZenCli(modelRef?: string): Promise<{ ok: boolean; modelRef: string; message: string }>;
     startChecks(options?: import('@ferry/shared').ProviderCheckOptions): Promise<{ id: string }>;
     checkProgress(id?: string): Promise<import('@ferry/shared').ProviderCheckProgress>;
     cancelChecks(id: string): Promise<import('@ferry/shared').ProviderCheckProgress>;

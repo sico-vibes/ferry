@@ -1,4 +1,5 @@
 import { providerBaseUrl } from '../provider-endpoints.js';
+import { zenCliMode } from '../zen-cli.js';
 import { discoverProviderModels } from '@ferry/providers';
 import { ProviderIdSchema, redactKnownSecretText } from '@ferry/shared';
 import type { CoreHost } from '../host.js';
@@ -52,6 +53,7 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
   const queue = createBackgroundQueue();
 
   const refresh = (id: string): Promise<void> => {
+    if (id === 'opencode' && zenCliMode(services)) return Promise.resolve();
     const active = inFlight.get(id);
     if (active) return active;
 
@@ -107,6 +109,7 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
         const models = discovered.map((model) => ({
           ...model,
           apiAccessVerified: previousModels.get(model.ref)?.apiAccessVerified ?? false,
+          cliAccessVerified: previousModels.get(model.ref)?.cliAccessVerified ?? false,
           verified: true,
           verifiedAt: fetchedAt,
         }));

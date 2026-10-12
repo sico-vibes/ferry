@@ -658,7 +658,7 @@ export function ModelsCanvas() {
                         <td className="px-3 text-muted-foreground">
                           {isOpenCodeAppModel(model) ? (
                             <span className="grid gap-1">
-                              <span>Available in the OpenCode app</span>
+                              <span>Verify Zen API or CLI access</span>
                               <a
                                 className="text-link underline"
                                 href="https://opencode.ai/docs/"

@@ -9,6 +9,7 @@ import { ProviderStatusBadge } from './ProviderStatusBadge';
 import { ConfirmDialog } from './ConfirmDialog';
 import { usesRealDomain } from '../data/realDomains';
 import { ProviderEndpoint } from './ProviderEndpoint';
+import { ZenCliConnection } from './ZenCliConnection';
 
 const numberFormat = new Intl.NumberFormat();
 
@@ -48,6 +49,7 @@ export function ProviderKeyDialog({
   const [statusCodes, setStatusCodes] = useState('');
   const [keywords, setKeywords] = useState('');
   const isZen = provider?.id === 'opencode' || provider?.id === 'opencode-zen';
+  const cliMode = isZen && settings?.opencodeZenTransport === 'cli';
   const definition = provider ? providerDefinition(provider.id) : undefined;
   const keyless =
     definition?.auth === 'local' ||
@@ -336,10 +338,12 @@ export function ProviderKeyDialog({
         <DialogHeader>
           <div className="flex items-start gap-3">
             <div className="mr-auto grid gap-2">
-              <DialogTitle>Manage {provider?.name ?? 'provider'} key</DialogTitle>
+              <DialogTitle>
+                Manage {provider?.name ?? 'provider'} {isZen ? 'connection' : 'key'}
+              </DialogTitle>
               <DialogDescription id="provider-key-description">
                 {isZen
-                  ? 'Use your own key with models served by the standard API.'
+                  ? 'Choose the standard API or installed OpenCode CLI for Ferry chat and Gateway.'
                   : showRoutingControls
                     ? `Manage ${provider?.name ?? 'provider'} keys. Ferry rotates through enabled keys in this order.`
                     : realProviders
@@ -365,15 +369,18 @@ export function ProviderKeyDialog({
                       : 'API key'}
                 . {definition.releaseState}. Integration:{' '}
                 {definition.verification === 'adapter_tested' ? 'adapter tested' : 'catalogued'}.{' '}
-                {provider?.availableModels?.some((model) => model.apiAccessVerified)
-                  ? 'Generation verified on this account.'
-                  : 'Generation not verified on this account.'}{' '}
+                {provider?.availableModels?.some((model) =>
+                  cliMode ? model.cliAccessVerified : model.apiAccessVerified,
+                )
+                  ? 'Generation verified through this connection.'
+                  : 'Generation not verified through this connection.'}{' '}
                 {provider?.modelsVerifiedAt
                   ? `Last discovery/check: ${new Date(provider.modelsVerifiedAt).toLocaleString()}.`
                   : 'No recent model discovery.'}
               </p>
             )}
-            {provider && definition?.transport === 'openai_chat' && (
+            {isZen && <ZenCliConnection />}
+            {provider && definition?.transport === 'openai_chat' && !cliMode && (
               <ProviderEndpoint key={provider.id} provider={provider} />
             )}
             {isZen ? (
@@ -408,7 +415,8 @@ export function ProviderKeyDialog({
                   </ol>
                   <p className="mt-3 text-ui-meta text-muted-foreground">
                     An existing Go/Zen key also works. Extra keys do not multiply a shared
-                    allowance. OpenCode-only free models are available in the OpenCode app.
+                    allowance. Use the installed CLI option above to check OpenCode-only free models
+                    in Ferry.
                   </p>
                 </details>
               </section>
@@ -755,27 +763,43 @@ export function ProviderKeyDialog({
                 Remove key
               </Button>
             )}
-          {
-            <Button disabled={busy || keysPending} onClick={() => void test()} variant="secondary">
-              {busy ? 'Testing…' : 'Test connection'}
+          {cliMode ? (
+            <Button
+              onClick={() => {
+                onOpenChange(false);
+              }}
+            >
+              Done
             </Button>
-          }
-          <Button
-            disabled={busy || keysPending || definition?.releaseState === 'Coming soon'}
-            onClick={() => void save()}
-          >
-            {busy
-              ? 'Saving…'
-              : keyless && !value.trim()
-                ? providerKeys.length
-                  ? 'Enable connection'
-                  : 'Connect without a key'
-                : isZen
-                  ? 'Save connection'
-                  : providerKeys.length
-                    ? 'Add key'
-                    : 'Save key'}
-          </Button>
+          ) : (
+            <>
+              {
+                <Button
+                  disabled={busy || keysPending}
+                  onClick={() => void test()}
+                  variant="secondary"
+                >
+                  {busy ? 'Testing…' : 'Test connection'}
+                </Button>
+              }
+              <Button
+                disabled={busy || keysPending || definition?.releaseState === 'Coming soon'}
+                onClick={() => void save()}
+              >
+                {busy
+                  ? 'Saving…'
+                  : keyless && !value.trim()
+                    ? providerKeys.length
+                      ? 'Enable connection'
+                      : 'Connect without a key'
+                    : isZen
+                      ? 'Save connection'
+                      : providerKeys.length
+                        ? 'Add key'
+                        : 'Save key'}
+              </Button>
+            </>
+          )}
         </div>
       </DialogContent>
       <ConfirmDialog

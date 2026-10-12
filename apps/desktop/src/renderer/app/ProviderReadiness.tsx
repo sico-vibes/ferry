@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ProfileIdSchema, type Profile, type ProfileId } from '@ferry/shared';
 import { UiV2 } from '@ferry/ui';
+import { CheckCircle2 } from 'lucide-react';
+import { ProviderCheckResults } from './ProviderCheckResults';
+import { useUI } from '../state/ui';
 import { useFerryClient } from '../data/client';
 
 /** Core selects and executes free representative models, with shared bounded cancellation. */
@@ -25,7 +28,6 @@ export function ProviderReadiness() {
     refetchInterval: (query) => (query.state.data?.running ? 500 : false),
   });
   const profiles = useQuery({ queryKey: ['profiles'], queryFn: () => client.profiles.list() });
-  const results = checks.data?.results ?? [];
   const checkId = checks.data?.id;
   const busy = starting || applying || !!checks.data?.running;
   useEffect(
@@ -33,6 +35,11 @@ export function ProviderReadiness() {
       client.on('providers.check', (progress) => {
         cache.setQueryData(['provider-check', progress.id], progress);
         cache.setQueryData(['provider-check', 'latest'], progress);
+        if (!progress.running) {
+          void cache.invalidateQueries({ queryKey: ['models'] });
+          void cache.invalidateQueries({ queryKey: ['providers'] });
+          void cache.invalidateQueries({ queryKey: ['model-candidates'] });
+        }
       }),
     [client, cache],
   );
@@ -99,11 +106,11 @@ export function ProviderReadiness() {
     }
   };
   return (
-    <section className="grid gap-3" aria-label="Provider readiness checks">
+    <section className="provider-readiness grid gap-3" aria-label="Provider readiness checks">
       <h3>Check and optimize my providers</h3>
       <p className="v2-gateway-help">
-        One small free generation per eligible connection, at most two at once. Paid providers are
-        skipped. A response-time sample does not measure coding quality.
+        One small generation per eligible free provider, at most two at once. Other connections show
+        why they are skipped. A response-time sample does not measure coding quality.
       </p>
       <div className="button-row">
         <UiV2.Button variant="secondary" disabled={busy} onClick={() => void start()}>
@@ -180,36 +187,7 @@ export function ProviderReadiness() {
           </UiV2.Button>
         </p>
       )}
-      {results.length > 0 && (
-        <ul className="grid gap-3">
-          {results.map((result) => (
-            <li key={result.providerId}>
-              <strong>
-                {result.providerId}: {result.ok ? 'Reachable' : 'Needs attention'}
-              </strong>
-              <p className="v2-gateway-help">
-                {result.firstResponseMs === null
-                  ? 'First response not measured'
-                  : `${String(result.firstResponseMs)}ms first response`}
-                ;{' '}
-                {result.completionMs === null
-                  ? 'Completion not measured'
-                  : `${String(result.completionMs)}ms completion`}
-                . {result.sampleCount} sample. Checked {result.at}. {result.message}{' '}
-                {result.features}
-                {result.authentication && <> Authentication: {result.authentication}.</>}
-                {result.costUsd !== undefined && result.costUsd !== null && (
-                  <>
-                    {' '}
-                    {result.estimatedCost ? 'Estimated' : 'Recorded'} cost: $
-                    {result.costUsd.toFixed(6)}.
-                  </>
-                )}
-              </p>
-            </li>
-          ))}
-        </ul>
-      )}
+      {checks.data && <ProviderCheckResults progress={checks.data} />}
       {checks.data?.cancelled && (
         <p role="status">Checks cancelled. No recommendations will be applied.</p>
       )}
@@ -220,6 +198,26 @@ export function ProviderReadiness() {
             {preview.provenance?.note} {String(preview.provenance?.sampleCount)} samples. Fallback
             order: {preview.fallbackChain?.map((entry) => entry.provider).join(', ')}.
           </p>
+          {applied && (
+            <div className="provider-recommendation-applied" role="status">
+              <CheckCircle2 size={20} aria-hidden="true" />
+              <div>
+                <strong>Optimized profile is active</strong>
+                <p>
+                  Your default Ferry agent profile now uses the checked providers in this order.
+                  Existing Gateway keys keep their assigned profile.
+                </p>
+                <UiV2.Button
+                  variant="ghost"
+                  onClick={() => {
+                    useUI.getState().openSettings('Profiles');
+                  }}
+                >
+                  Edit profile
+                </UiV2.Button>
+              </div>
+            </div>
+          )}
           <div className="button-row">
             <UiV2.Button
               variant="secondary"

@@ -444,6 +444,8 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
     weight: number;
   })[] = [];
   for (const model of input.models) {
+    if (input.profile.allowedModelRefs && !input.profile.allowedModelRefs.includes(model.ref))
+      continue;
     const provider = providerById.get(model.providerId);
     if (
       !provider ||
@@ -713,6 +715,8 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
   return input.models.flatMap((model) => {
     const provider = providerById.get(model.providerId);
     const reasons: string[] = [];
+    if (input.profile.allowedModelRefs && !input.profile.allowedModelRefs.includes(model.ref))
+      reasons.push('model excluded by profile selection');
     if (!provider) reasons.push('provider missing');
     else {
       if (!provider.enabled) reasons.push('provider disabled');

@@ -1,4 +1,5 @@
 import { providerBaseUrl } from '../provider-endpoints.js';
+import { zenProvider, zenCliStatus, verifyZenCli } from '../zen-cli.js';
 import {
   ProbeResultSchema,
   ProviderCheckOptionsSchema,
@@ -73,66 +74,69 @@ function providerRecord(services: FerryServices, id: string): Provider {
         .map((key) => key.cooldownUntil)
         .sort()[0]
     : undefined;
-  return ProviderSchema.parse({
-    id,
-    name: limits.name,
-    tag: limits.tag,
-    keyRequired: limits.key_required ?? true,
-    ...(limits.free_plan === undefined
-      ? {}
-      : {
-          freePlan: {
-            sourceUrl: limits.free_plan.source_url,
-            models: limits.free_plan.models,
-            ...(limits.free_plan.excluded_models === undefined
-              ? {}
-              : { excludedModels: limits.free_plan.excluded_models }),
-          },
-        }),
-    billingEnabled: saved?.billingEnabled ?? false,
-    pausedReason: saved?.pausedReason ?? null,
-    autoPauseAfterFailedRequests: saved?.autoPauseAfterFailedRequests,
-    kind: limits.tag === 'subscription_cli' ? 'cli' : 'api',
-    brand: null,
-    keyStatus:
-      permitsKeylessProvider(services, id) && !keyRef && keys.length === 0
-        ? 'not_applicable'
-        : keyStatus,
-    keyCount: keys.length || (keyRef ? 1 : 0),
-    autoDisableEnabled: saved?.autoDisableEnabled ?? true,
-    autoDisableFailureCount: saved?.autoDisableFailureCount ?? 3,
-    autoDisableFailureWindowMinutes: saved?.autoDisableFailureWindowMinutes ?? 10,
-    autoDisableStatusCodes: saved?.autoDisableStatusCodes ?? [],
-    autoDisableKeywords: saved?.autoDisableKeywords ?? [],
-    autoDisableMinutes: saved?.autoDisableMinutes ?? 60,
-    enabled:
-      saved?.enabled ?? (hasUsableProviderKey(services, id) || limits.key_required === false),
-    health:
-      activeCooldown || keyCooldown
-        ? 'cooldown'
-        : saved?.health === 'cooldown'
-          ? 'ok'
-          : (saved?.health ?? (keyStatus === 'invalid' ? 'auth_invalid' : 'unknown')),
-    cooldownUntil: activeCooldown ? cooldown.until : (keyCooldown ?? null),
-    cooldownProvenance:
-      activeCooldown && cooldownReasonsEnabled(services) ? (cooldown.provenance ?? null) : null,
-    dataUse: limits.data_use,
-    termsNote: limits.terms_note,
-    signupUrl: limits.signup_url,
-    docsUrl: limits.docs_url,
-    verifiedAt: limits.verified_at,
-    modelCount,
-    ...(availableModels ? { availableModels } : {}),
-    modelsVerifiedAt: saved?.modelsVerifiedAt ?? null,
-    discoveryFailedAt: saved?.discoveryFailedAt ?? null,
-    discoveryFailures: saved?.discoveryFailures ?? 0,
-    discoveryErrorClass: saved?.discoveryErrorClass ?? null,
-    discoveryUnsupported: saved?.discoveryUnsupported ?? false,
-    freeTierUnsupported: saved?.freeTierUnsupported ?? false,
-    excludedModelRefs: saved?.excludedModelRefs ?? [],
-    windows: services.quota.getWindows(id),
-    stepsLeftToday: services.quota.stepsLeft(id),
-  });
+  return zenProvider(
+    services,
+    ProviderSchema.parse({
+      id,
+      name: limits.name,
+      tag: limits.tag,
+      keyRequired: limits.key_required ?? true,
+      ...(limits.free_plan === undefined
+        ? {}
+        : {
+            freePlan: {
+              sourceUrl: limits.free_plan.source_url,
+              models: limits.free_plan.models,
+              ...(limits.free_plan.excluded_models === undefined
+                ? {}
+                : { excludedModels: limits.free_plan.excluded_models }),
+            },
+          }),
+      billingEnabled: saved?.billingEnabled ?? false,
+      pausedReason: saved?.pausedReason ?? null,
+      autoPauseAfterFailedRequests: saved?.autoPauseAfterFailedRequests,
+      kind: limits.tag === 'subscription_cli' ? 'cli' : 'api',
+      brand: null,
+      keyStatus:
+        permitsKeylessProvider(services, id) && !keyRef && keys.length === 0
+          ? 'not_applicable'
+          : keyStatus,
+      keyCount: keys.length || (keyRef ? 1 : 0),
+      autoDisableEnabled: saved?.autoDisableEnabled ?? true,
+      autoDisableFailureCount: saved?.autoDisableFailureCount ?? 3,
+      autoDisableFailureWindowMinutes: saved?.autoDisableFailureWindowMinutes ?? 10,
+      autoDisableStatusCodes: saved?.autoDisableStatusCodes ?? [],
+      autoDisableKeywords: saved?.autoDisableKeywords ?? [],
+      autoDisableMinutes: saved?.autoDisableMinutes ?? 60,
+      enabled:
+        saved?.enabled ?? (hasUsableProviderKey(services, id) || limits.key_required === false),
+      health:
+        activeCooldown || keyCooldown
+          ? 'cooldown'
+          : saved?.health === 'cooldown'
+            ? 'ok'
+            : (saved?.health ?? (keyStatus === 'invalid' ? 'auth_invalid' : 'unknown')),
+      cooldownUntil: activeCooldown ? cooldown.until : (keyCooldown ?? null),
+      cooldownProvenance:
+        activeCooldown && cooldownReasonsEnabled(services) ? (cooldown.provenance ?? null) : null,
+      dataUse: limits.data_use,
+      termsNote: limits.terms_note,
+      signupUrl: limits.signup_url,
+      docsUrl: limits.docs_url,
+      verifiedAt: limits.verified_at,
+      modelCount,
+      ...(availableModels ? { availableModels } : {}),
+      modelsVerifiedAt: saved?.modelsVerifiedAt ?? null,
+      discoveryFailedAt: saved?.discoveryFailedAt ?? null,
+      discoveryFailures: saved?.discoveryFailures ?? 0,
+      discoveryErrorClass: saved?.discoveryErrorClass ?? null,
+      discoveryUnsupported: saved?.discoveryUnsupported ?? false,
+      freeTierUnsupported: saved?.freeTierUnsupported ?? false,
+      excludedModelRefs: saved?.excludedModelRefs ?? [],
+      windows: services.quota.getWindows(id),
+      stepsLeftToday: services.quota.stepsLeft(id),
+    }),
+  );
 }
 
 function allProviders(services: FerryServices): Provider[] {
@@ -385,6 +389,20 @@ export function register(host: CoreHost, services: FerryServices): void {
     return provider;
   };
   host.registerDomain('providers', {
+    zenCliStatus() {
+      return zenCliStatus(services);
+    },
+    async verifyZenCli(rawModel?: unknown) {
+      if (!services.providers.get('opencode'))
+        services.providers.put(providerRecord(services, 'opencode'));
+      const result = await verifyZenCli(
+        services,
+        rawModel === undefined ? undefined : z.string().min(1).parse(rawModel),
+      );
+      host.emit('provider.updated', providerRecord(services, 'opencode'));
+      invalidateSessionProviderKeyCache(services, 'opencode');
+      return result;
+    },
     startChecks: (options: unknown) =>
       checks.start(ProviderCheckOptionsSchema.parse(options ?? {})),
     checkProgress: (id: unknown) => checks.progress(z.string().max(64).optional().parse(id)),
@@ -504,9 +522,35 @@ export function register(host: CoreHost, services: FerryServices): void {
       const entries = services.providerKeyEntries.list(id);
       const primary = entries[0];
       const legacyKey = services.providerKeys.get(id);
+      const previousKey = await services.secrets.get(
+        primary?.keyringRef ?? legacyKey?.keyringRef ?? id,
+      );
+      const resetApiVerification = id === 'opencode' && previousKey !== key;
+      const resetCliVerification =
+        resetApiVerification &&
+        (services.settings.get('global') as { opencodeZenCliUseFerryKey?: boolean } | undefined)
+          ?.opencodeZenCliUseFerryKey === true;
+      const availableModels = (current.availableModels ?? []).map((model) =>
+        resetApiVerification
+          ? {
+              ...model,
+              apiAccessVerified: false,
+              ...(resetCliVerification ? { cliAccessVerified: false } : {}),
+            }
+          : model,
+      );
       const keyId = primary?.keyId ?? '1';
       const now = services.clock.now().toISOString();
       await services.secrets.set(id, key);
+      if (resetApiVerification)
+        services.models.replace(
+          id,
+          services.models.list(id).map((model) => ({
+            ...model,
+            apiAccessVerified: false,
+            ...(resetCliVerification ? { cliAccessVerified: false } : {}),
+          })),
+        );
       services.providerKeys.put({
         id,
         providerId: id,
@@ -540,7 +584,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         enabled: !providerRecord(services, id).pausedReason,
         health: 'unknown',
         cooldownUntil: null,
-        availableModels: current.availableModels ?? [],
+        availableModels,
         modelsVerifiedAt: current.modelsVerifiedAt ?? null,
         discoveryFailedAt: null,
         discoveryFailures: 0,
@@ -769,6 +813,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         } else if (result.ok) providerProbeBackoff.delete(id);
         scheduleOfflineRecovery();
         let discovered: Awaited<ReturnType<typeof discoverProviderModels>> = [];
+        const previousModels = new Map(services.models.list(id).map((model) => [model.ref, model]));
         let discoverySucceeded = false;
         if (result.ok) {
           try {
@@ -777,6 +822,8 @@ export function register(host: CoreHost, services: FerryServices): void {
             });
             discovered = discovered.map((model) => ({
               ...model,
+              apiAccessVerified: previousModels.get(model.ref)?.apiAccessVerified ?? false,
+              cliAccessVerified: previousModels.get(model.ref)?.cliAccessVerified ?? false,
               verified: true,
               verifiedAt: services.clock.now().toISOString(),
             }));

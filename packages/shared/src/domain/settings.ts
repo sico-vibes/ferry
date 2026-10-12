@@ -92,6 +92,8 @@ export const UserPermissionRuleSchema = z.object({
 });
 export type UserPermissionRule = z.infer<typeof UserPermissionRuleSchema>;
 export const SettingsSchema = z.object({
+  opencodeZenTransport: z.enum(['api', 'cli']).default('api'),
+  opencodeZenCliUseFerryKey: z.boolean().default(false),
   globalOptimizerOverride: z.boolean().default(false),
   providerEndpoints: z
     .record(

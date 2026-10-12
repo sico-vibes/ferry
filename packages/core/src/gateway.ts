@@ -1,5 +1,6 @@
 import { providerBaseUrl } from './provider-endpoints.js';
 import { isOpenCodeAppModel } from '@ferry/shared';
+import { zenModel, zenCliMode, zenFerryKey, ZEN_CLI_BASE_URL } from './zen-cli.js';
 import { oauthModelCatalog, streamOAuthChat } from '@ferry/oauth';
 import { reserveSpend, BudgetError } from './spending.js';
 import { withGatewayDeadlines, GatewayTimeoutError } from './gateway-deadlines.js';
@@ -256,7 +257,9 @@ export function createGatewayController(
     }
   >();
   const availableModels = () => [
-    ...services.catalog.providers.flatMap(({ provider }) => services.models.list(provider)),
+    ...services.catalog.providers.flatMap(({ provider }) =>
+      services.models.list(provider).map((model) => zenModel(services, model)),
+    ),
     ...((services.settings.get('global') as { allowSubscriptionOAuthRouting?: boolean } | undefined)
       ?.allowSubscriptionOAuthRouting
       ? oauthModelCatalog
@@ -878,7 +881,8 @@ export function createGatewayController(
         });
         continue;
       }
-      const entries = services.providerKeyEntries.list(providerId);
+      const cliTransport = providerId === 'opencode' && model.free && zenCliMode(services);
+      const entries = cliTransport ? [] : services.providerKeyEntries.list(providerId);
       if (!entries.length && !health.tracker.available(providerId, model.ref, providerId)) continue;
       const stickyKeyId = stickyRoutes.get(input.sessionHint)?.providerKeyId;
       const preferredKeyId =
@@ -898,11 +902,13 @@ export function createGatewayController(
       );
       const oauth = oauthModelCatalog.some((entry) => entry.ref === model.ref);
       const legacyKeyRef = services.providerKeys.get(providerId)?.keyringRef;
-      const key = providerKey
-        ? await services.secrets.get(providerKey.keyringRef)
-        : services.providerKeyEntries.list(providerId).length === 0 && legacyKeyRef
-          ? await services.secrets.get(legacyKeyRef)
-          : undefined;
+      const key = cliTransport
+        ? await zenFerryKey(services)
+        : providerKey
+          ? await services.secrets.get(providerKey.keyringRef)
+          : services.providerKeyEntries.list(providerId).length === 0 && legacyKeyRef
+            ? await services.secrets.get(legacyKeyRef)
+            : undefined;
       input.signal.throwIfAborted();
       if (!key && !permitsKeylessProvider(services, providerId) && !oauth) {
         lastError = Object.assign(
@@ -911,7 +917,10 @@ export function createGatewayController(
         );
         continue;
       }
-      const baseUrl = providerBaseUrl(services, providerId);
+      const baseUrl =
+        providerId === 'opencode' && model.free && zenCliMode(services)
+          ? ZEN_CLI_BASE_URL
+          : providerBaseUrl(services, providerId);
       const attemptStarted = Date.now();
       const attempts = lastAttemptHistory;
       attempts.push({ model: model.ref, status: 'started' });
@@ -1015,6 +1024,7 @@ export function createGatewayController(
             overallMs: remainingMs,
           },
           async (signal, progress) => {
+            requestDeps.setProviderProgress(progress);
             const chatInput = {
               model: model.ref,
               modelInfo: model,
