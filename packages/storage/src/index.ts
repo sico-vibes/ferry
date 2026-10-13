@@ -17,10 +17,21 @@ import type {
   Workspace,
 } from '@ferry/shared';
 import * as schema from './schema.js';
+import {
+  SessionModelUsageRepository,
+  backfillSessionModelUsage,
+  recordUsageEvent,
+} from './session-model-usage.js';
 import { newId, redactForTelemetry, type TelemetrySink } from '@ferry/shared';
 
 export { schema };
 export { RequestFailureRepository } from './request-failures.js';
+export { SessionModelUsageRepository, backfillSessionModelUsage } from './session-model-usage.js';
+export type {
+  SessionModelUsageRow,
+  SessionModelUsageSummary,
+  SessionModelUsageTotals,
+} from './session-model-usage.js';
 const storageMigrationFiles = [
   '0001_initial.sql',
   '0002_interrupted_sessions.sql',
@@ -31,6 +42,7 @@ const storageMigrationFiles = [
   '0007_request_failures.sql',
   '0008_gateway_safety.sql',
   '0009_gateway_history.sql',
+  '0010_session_model_usage.sql',
 ];
 export const STORAGE_SCHEMA_VERSION = storageMigrationFiles.length;
 /** Observes successful local writes so cloud mode can persist them for later sync. */
@@ -85,11 +97,21 @@ export async function openDatabase(path: string): Promise<DatabaseConnection> {
             client.exec('ALTER TABLE cloud_outbox ADD COLUMN claimed_generation INTEGER');
           if (!columns.has('claimed_at'))
             client.exec('ALTER TABLE cloud_outbox ADD COLUMN claimed_at TEXT');
+        } else if (targetVersion === 10) {
+          client.exec(sql);
+          const columns = new Set(
+            (client.pragma('table_info(requests)') as { name: string }[]).map(({ name }) => name),
+          );
+          if (!columns.has('connection_id'))
+            client.exec('ALTER TABLE requests ADD COLUMN connection_id TEXT');
+          if (!columns.has('account_key'))
+            client.exec('ALTER TABLE requests ADD COLUMN account_key TEXT');
         } else client.exec(sql);
         client.pragma(`user_version = ${String(targetVersion)}`);
       });
       migrate();
     }
+    backfillSessionModelUsage(client);
   } catch (error) {
     client.close();
     throw error;
@@ -121,6 +143,8 @@ const salvageTables = [
   'settings_kv',
   'requests',
   'usage_daily',
+  'session_model_usage',
+  'usage_event_keys',
   'request_failures',
   'request_failure_state',
 ] as const;
@@ -752,6 +776,18 @@ export class WorkspaceRepository extends JsonRepository<Workspace> {
 export class SessionRepository extends JsonRepository<Session> {
   constructor(client: Database.Database, mirror?: StorageMirror) {
     super(client, 'sessions', mirror);
+    this.db = client;
+  }
+  private readonly db: Database.Database;
+  /** Deleting a session removes its usage aggregate/ledger and detaches retained requests. */
+  override delete(id: string): boolean {
+    return this.db.transaction(() => {
+      const removed = super.delete(id);
+      this.db.prepare('UPDATE requests SET session_id=NULL WHERE session_id=?').run(id);
+      this.db.prepare('DELETE FROM session_model_usage WHERE session_id=?').run(id);
+      this.db.prepare('DELETE FROM usage_event_keys WHERE session_id=?').run(id);
+      return removed;
+    })();
   }
 }
 export class MessageRepository extends JsonRepository<Message> {
@@ -1129,6 +1165,7 @@ export function createStorageAdapter(options: {
     providerKeyEntries: new ProviderKeyEntryRepository(options.client, mirror),
     providerKeyUsage: new ProviderKeyUsageDailyRepository(options.client),
     requests: new RequestRepository(options.client, mirror),
+    sessionModelUsage: new SessionModelUsageRepository(options.client),
     outbox: new OutboxRepository(options.client),
     turnLogs: new TurnLogRepository(options.client),
     eventLogs: new EventLogRepository(options.client),
@@ -1155,6 +1192,8 @@ export interface RequestRecord {
   error_kind?: string | null;
   latency_ms?: number | null;
   headers?: unknown;
+  connection_id?: string | null;
+  account_key?: string | null;
 }
 export function redactHeaders(headers: unknown): string | null {
   if (headers === undefined || headers === null) return null;
@@ -1170,26 +1209,44 @@ export class RequestRepository {
     return this.client.prepare('SELECT * FROM requests ORDER BY ts').all() as RequestRecord[];
   }
   put(record: RequestRecord): void {
-    this.client
-      .prepare(
-        `INSERT OR REPLACE INTO requests (id,ts,provider,model,session_id,task_id,step_id,step_kind,input_tokens,output_tokens,cached_tokens,reasoning_tokens,cost_usd,plan_units,status,error_kind,latency_ms,headers_json) VALUES (@id,@ts,@provider,@model,@session_id,@task_id,@step_id,@step_kind,@input_tokens,@output_tokens,@cached_tokens,@reasoning_tokens,@cost_usd,@plan_units,@status,@error_kind,@latency_ms,@headers_json)`,
-      )
-      .run({
-        ...record,
-        session_id: record.session_id ?? null,
-        task_id: record.task_id ?? null,
-        step_id: record.step_id ?? null,
-        step_kind: record.step_kind ?? null,
-        input_tokens: record.input_tokens ?? null,
-        output_tokens: record.output_tokens ?? null,
-        cached_tokens: record.cached_tokens ?? null,
-        reasoning_tokens: record.reasoning_tokens ?? null,
-        cost_usd: record.cost_usd ?? null,
-        plan_units: record.plan_units ?? null,
-        error_kind: record.error_kind ?? null,
-        latency_ms: record.latency_ms ?? null,
-        headers_json: redactHeaders(record.headers),
+    const write = this.client.transaction(() => {
+      this.client
+        .prepare(
+          `INSERT OR REPLACE INTO requests (id,ts,provider,model,session_id,task_id,step_id,step_kind,input_tokens,output_tokens,cached_tokens,reasoning_tokens,cost_usd,plan_units,status,error_kind,latency_ms,headers_json,connection_id,account_key) VALUES (@id,@ts,@provider,@model,@session_id,@task_id,@step_id,@step_kind,@input_tokens,@output_tokens,@cached_tokens,@reasoning_tokens,@cost_usd,@plan_units,@status,@error_kind,@latency_ms,@headers_json,@connection_id,@account_key)`,
+        )
+        .run({
+          ...record,
+          session_id: record.session_id ?? null,
+          task_id: record.task_id ?? null,
+          step_id: record.step_id ?? null,
+          step_kind: record.step_kind ?? null,
+          input_tokens: record.input_tokens ?? null,
+          output_tokens: record.output_tokens ?? null,
+          cached_tokens: record.cached_tokens ?? null,
+          reasoning_tokens: record.reasoning_tokens ?? null,
+          cost_usd: record.cost_usd ?? null,
+          plan_units: record.plan_units ?? null,
+          error_kind: record.error_kind ?? null,
+          latency_ms: record.latency_ms ?? null,
+          headers_json: redactHeaders(record.headers),
+          connection_id: record.connection_id ?? null,
+          account_key: record.account_key ?? null,
+        });
+      recordUsageEvent(this.client, {
+        eventId: record.id,
+        sessionId: record.session_id ?? null,
+        modelRef: record.model,
+        providerId: record.provider,
+        connectionId: record.connection_id ?? null,
+        accountKey: record.account_key ?? null,
+        inputTokens: record.input_tokens ?? null,
+        outputTokens: record.output_tokens ?? null,
+        cachedTokens: record.cached_tokens ?? null,
+        reasoningTokens: record.reasoning_tokens ?? null,
+        timestamp: record.ts,
       });
+    });
+    write();
     this.mirror.onPut('requests', record);
   }
 }
