@@ -1,9 +1,13 @@
 import {
+  isCliModelVerified,
+  resolveCliOption as resolveSharedCliOption,
   type CliConnection,
   type CliConnectionKind,
   type CliConnectionVerifyResult,
   type CliModelCapabilities,
+  type CliModelReceipt,
   type CliOption,
+  type CliOptionLayer,
   type CliOptionPatch,
   type Effort,
   type ModelInfo,
@@ -168,43 +172,38 @@ export function mergeCliOption(current: CliOption | undefined, patch: CliOptionP
 }
 
 /**
- * Lower bound for a controlled manual admission when the CLI never reported a real context window:
- * a small chat always fits, so the beta admits it explicitly rather than fabricating a 128K limit.
+ * Transport-owned controlled admission bound for a manual generation when the CLI never reported a
+ * real context window. It is an explicit ferry policy bound (not native capacity): realistic ordinary
+ * Ferry text/tool prompts fit, an oversized request is rejected clearly, and the caller context is
+ * never silently dropped. `capacityKnown` stays false for these models.
  */
-export const MANUAL_UNKNOWN_CAPACITY_INPUT_BOUND = 8_000;
+export const MANUAL_UNKNOWN_CAPACITY_INPUT_BOUND = 64_000;
 
 export interface CliOptionLayers {
   /** Profile `cliDefaults[ref]` (lower priority than an explicit conversation override). */
-  profileDefault?: CliOption | undefined;
+  profileDefault?: CliOptionLayer | undefined;
   /** Connection per-model default (`cliConnections[kind].modelDefaults[ref]`). */
-  connectionModelDefault?: CliOption | undefined;
+  connectionModelDefault?: CliOptionLayer | undefined;
   /** Connection default options (`cliConnections[kind].defaultOptions`). */
-  connectionDefault?: CliOption | undefined;
+  connectionDefault?: CliOptionLayer | undefined;
   /** Explicit conversation/session override; highest priority. */
-  conversation?: CliOption | undefined;
+  conversation?: CliOptionLayer | undefined;
 }
 
 /**
- * Resolve the effective CLI option for one model. Priority, highest first: conversation override,
- * profile `cliDefaults`, the connection's per-model default, the connection default, then the
- * discovered actual model default (`standard` speed is always the fallback).
+ * Resolve the effective CLI option for one model by delegating to the single shared pure resolver
+ * (`@ferry/shared`), so Core, the Ferry CLI and the GUI cannot disagree. Highest defined layer field
+ * wins; an explicit `effort: null` selects the reported CLI default and stops fall-through; an absent
+ * field inherits. `fast` is never defaulted on.
  */
 export function resolveCliOption(model: CliModelCapabilities, layers: CliOptionLayers): CliOption {
-  return {
-    effort:
-      layers.conversation?.effort ??
-      layers.profileDefault?.effort ??
-      layers.connectionModelDefault?.effort ??
-      layers.connectionDefault?.effort ??
-      model.defaultEffort ??
-      null,
-    speed:
-      layers.conversation?.speed ??
-      layers.profileDefault?.speed ??
-      layers.connectionModelDefault?.speed ??
-      layers.connectionDefault?.speed ??
-      model.defaultSpeed,
-  };
+  return resolveSharedCliOption({
+    model,
+    ...(layers.conversation ? { conversation: layers.conversation } : {}),
+    ...(layers.profileDefault ? { profile: layers.profileDefault } : {}),
+    ...(layers.connectionModelDefault ? { connectionModel: layers.connectionModelDefault } : {}),
+    ...(layers.connectionDefault ? { connection: layers.connectionDefault } : {}),
+  });
 }
 
 export interface CliDispatchAdmission {
@@ -234,7 +233,7 @@ export function cliManualAdmission(
       statusCode: 400,
       message: `${connection.kind} is not opted in for the ${surface} surface. Enable it in Providers & keys first.`,
     };
-  if (connection.verify.state !== 'verified' || connection.verify.modelRef !== model.ref)
+  if (!isCliModelVerified(connection, model.ref))
     return {
       ok: false,
       statusCode: 400,
@@ -255,7 +254,7 @@ export function cliManualAdmission(
     return {
       ok: false,
       statusCode: 400,
-      message: `${model.name} did not report a context window, so only a small bounded request is admitted (this one is larger). Use a model with a known context or split the request.`,
+      message: `${model.name} did not report a context window, so only a bounded request (policy limit ${MANUAL_UNKNOWN_CAPACITY_INPUT_BOUND.toLocaleString('en-US')} input tokens) is admitted; this one is larger. Use a model with a known context, or split the request. The transport never silently drops caller context.`,
     };
   if (!isNonSpendingBilling(model.billing)) {
     if (!options.authorizeSpend?.(connection, model))
@@ -410,8 +409,10 @@ async function runOpenCode(request: CliBrokerRequest): Promise<CliTurnResult> {
 
 /** Build one CLI `ModelInfo` row from a discovered capability record. */
 export function cliModelInfo(connection: CliConnection, model: CliModelCapabilities): ModelInfo {
-  const verified =
-    connection.verify.state === 'verified' && connection.verify.modelRef === model.ref;
+  // Access truth is per model: any model with its own accumulated receipt is verified, independent of
+  // whichever model was verified most recently.
+  const verified = isCliModelVerified(connection, model.ref);
+  const receipt = connection.verify.modelReceipts?.[model.ref];
   // Never fabricate native capacity: use discovered evidence or an explicit unknown admission state.
   const capacityKnown = model.contextWindow != null && model.maxOutput != null;
   return {
@@ -434,7 +435,7 @@ export function cliModelInfo(connection: CliConnection, model: CliModelCapabilit
     // Preserve the raw discovered tokens and add the explicit unavailable-control reasons.
     cliCapabilities: { ...model, unsupportedEfforts: unsupportedEffortsFor(model) },
     verified,
-    verifiedAt: verified ? connection.verify.checkedAt : null,
+    verifiedAt: verified ? (receipt?.checkedAt ?? connection.verify.checkedAt) : null,
   };
 }
 
@@ -691,7 +692,7 @@ export class CliBroker {
         message:
           'Ferry credential verification needs a selected saved key; no generation was dispatched and no other credential was substituted.',
       };
-    const receiptKey = this.#receiptKey(connection);
+    const receiptKey = this.#modelReceiptKey(connection, model);
     const credentialProvider = this.#credentialProvider(connection.kind);
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -714,18 +715,25 @@ export class CliBroker {
         throw new CliTransportError('provider_error', 'The CLI returned no text for verification');
       // A credential/account change during the run invalidates the receipt it would have set.
       const current = this.connections().find((entry) => entry.kind === kind);
-      if (!current || this.#receiptKey(current) !== receiptKey)
+      if (!current || this.#modelReceiptKey(current, model) !== receiptKey)
         return {
           ok: false,
           modelRef: model.ref,
           message: 'The CLI credential or account changed during verification. Check it again.',
         };
+      const checkedAt = new Date().toISOString();
+      // Accumulate: a successful check of a new model never forgets earlier verified models.
+      const modelReceipts: Record<ModelRef, CliModelReceipt> = {
+        ...(current.verify.modelReceipts ?? {}),
+        [model.ref]: { checkedAt, receiptKey },
+      };
       this.#connectionService.applyVerification(kind, {
         state: 'verified',
         modelRef: model.ref,
-        checkedAt: new Date().toISOString(),
+        checkedAt,
         message: `Verified with a real generation on ${model.name}.`,
         receiptKey,
+        modelReceipts,
       });
       return {
         ok: true,
@@ -737,13 +745,30 @@ export class CliBroker {
         error instanceof CliTransportError
           ? error.message
           : redactKnownSecretText(error instanceof Error ? error.message : 'Verification failed');
-      this.#connectionService.applyVerification(kind, {
-        state: 'failed',
-        modelRef: model.ref,
-        checkedAt: new Date().toISOString(),
-        message,
-        receiptKey: null,
-      });
+      // A failed check of a new model must not disable already-verified models: keep their receipts
+      // and the verified summary, only reporting the failure through the result message.
+      const current = this.connections().find((entry) => entry.kind === kind) ?? connection;
+      const priorReceipts = current.verify.modelReceipts ?? {};
+      const hasPrior = Object.keys(priorReceipts).length > 0;
+      this.#connectionService.applyVerification(
+        kind,
+        hasPrior
+          ? {
+              state: 'verified',
+              modelRef: current.verify.modelRef,
+              checkedAt: current.verify.checkedAt,
+              message,
+              receiptKey: current.verify.receiptKey ?? null,
+              modelReceipts: priorReceipts,
+            }
+          : {
+              state: 'failed',
+              modelRef: model.ref,
+              checkedAt: new Date().toISOString(),
+              message,
+              receiptKey: null,
+            },
+      );
       return { ok: false, modelRef: model.ref, message };
     } finally {
       clearTimeout(timer);
@@ -768,11 +793,32 @@ export class CliBroker {
   }
 
   /**
-   * Nonsecret fingerprint of everything a verification receipt is bound to: account identity,
-   * installed version, effective model capabilities and the selected credential source/provider.
-   * Never includes key material, so it is safe to persist alongside the receipt.
+   * Nonsecret fingerprint of the account identity, installed version, credential selection and one
+   * model's effective capabilities. A per-model receipt is invalidated only by evidence that
+   * actually bears on that model, so verifying another model never stales it. Never includes key
+   * material.
    */
-  #receiptKey(connection: CliConnection): string {
+  #modelReceiptKey(connection: CliConnection, model: CliModelCapabilities): string {
+    return createHash('sha256')
+      .update(
+        JSON.stringify([
+          connection.account.key,
+          connection.install.version,
+          model.ref,
+          model.efforts,
+          model.speeds,
+          model.contextWindow,
+          model.maxOutput,
+          model.billing,
+          this.#credentialMode(connection.kind),
+          this.#credentialProvider(connection.kind),
+        ]),
+      )
+      .digest('hex');
+  }
+
+  /** Legacy whole-connection fingerprint used only to revalidate receipts written before per-model evidence. */
+  #legacyReceiptKey(connection: CliConnection): string {
     return createHash('sha256')
       .update(
         JSON.stringify([
@@ -793,23 +839,39 @@ export class CliBroker {
   }
 
   /**
-   * Downgrade a persisted receipt to stale when its bound evidence is missing or no longer matches.
-   * A receipt with no fingerprint (e.g. written before this binding existed) is invalidated
-   * conservatively rather than trusted.
+   * Revalidate persisted receipts against the current evidence. Accumulated per-model receipts whose
+   * bound fingerprint still matches are retained (so a connection with several verified models keeps
+   * them all); receipts whose evidence changed, and legacy receipts with a mismatched whole-connection
+   * fingerprint, are dropped. If nothing survives, the summary is downgraded to stale conservatively.
    */
   #revalidate(connection: CliConnection): CliConnection {
     if (connection.verify.state !== 'verified') return connection;
-    if (
+    if (connection.verify.modelReceipts) {
+      const kept: Record<ModelRef, CliModelReceipt> = {};
+      for (const [ref, receipt] of Object.entries(connection.verify.modelReceipts)) {
+        const model = connection.models.find((candidate) => candidate.ref === ref);
+        if (
+          model &&
+          receipt.receiptKey != null &&
+          receipt.receiptKey === this.#modelReceiptKey(connection, model)
+        )
+          kept[ref as ModelRef] = receipt;
+      }
+      if (Object.keys(kept).length > 0) {
+        return { ...connection, verify: { ...connection.verify, modelReceipts: kept } };
+      }
+    } else if (
       connection.verify.receiptKey != null &&
-      connection.verify.receiptKey === this.#receiptKey(connection)
-    )
+      connection.verify.receiptKey === this.#legacyReceiptKey(connection)
+    ) {
       return connection;
+    }
     const verify: CliConnection['verify'] = {
       state: 'stale',
       modelRef: connection.verify.modelRef,
       checkedAt: connection.verify.checkedAt,
       message:
-        connection.verify.receiptKey == null
+        connection.verify.receiptKey == null && connection.verify.modelReceipts == null
           ? 'This verification has no bound evidence; verify again.'
           : 'The CLI account, version, capabilities or credential changed since this was verified.',
       receiptKey: null,
@@ -825,15 +887,14 @@ export class CliBroker {
     return stored?.cliConnections?.[kind]?.defaultOptions;
   }
 
-  #connectionModelDefault(kind: CliConnectionKind, ref: ModelRef): CliOption | undefined {
+  #connectionModelDefault(kind: CliConnectionKind, ref: ModelRef): CliOptionLayer | undefined {
     const stored = this.#services.settings.get('global') as
       | {
-          cliConnections?: Record<string, { modelDefaults?: Record<string, Partial<CliOption>> }>;
+          cliConnections?: Record<string, { modelDefaults?: Record<string, CliOptionLayer> }>;
         }
       | undefined;
-    const partial = stored?.cliConnections?.[kind]?.modelDefaults?.[ref];
-    if (!partial) return undefined;
-    return { effort: partial.effort ?? null, speed: partial.speed ?? 'standard' };
+    // Return the raw partial so an absent field inherits instead of materializing a null/standard.
+    return stored?.cliConnections?.[kind]?.modelDefaults?.[ref];
   }
 
   #transportKindForStatus(status: number): CliTransportErrorKind {

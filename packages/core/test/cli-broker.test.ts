@@ -13,11 +13,14 @@ import { CliConnectionService } from '../src/cli-connections.js';
 import {
   CliBroker,
   CLI_QUEUE_LIMIT,
+  MANUAL_UNKNOWN_CAPACITY_INPUT_BOUND,
   cliInventorySnapshot,
+  cliManualAdmission,
   cliModelInfo,
   cliOptionError,
   encodeOpenCodePrompt,
   mergeCliOption,
+  resolveCliOption,
   unsupportedEffortsFor,
   type CliBrokerRequest,
 } from '../src/cli-broker.js';
@@ -467,4 +470,108 @@ it('stales a persisted verified receipt whose bound evidence is missing or chang
   });
   const connection = broker.connections().find((entry) => entry.kind === 'codex-cli');
   expect(connection?.verify.state).toBe('stale');
+});
+
+it('accumulates per-model verification receipts without forgetting earlier verified models', async () => {
+  const runner = vi.fn((request: CliBrokerRequest) => Promise.resolve(readyResult(request)));
+  const models = [model('codex-cli', 'model-a'), model('codex-cli', 'model-b')];
+  const h = harness(runner, { scan: () => Promise.resolve(connection('codex-cli', models)) });
+  await h.service.refresh('codex-cli');
+  expect((await h.broker.verify('codex-cli', 'codex-cli/model-a' as ModelRef)).ok).toBe(true);
+  expect((await h.broker.verify('codex-cli', 'codex-cli/model-b' as ModelRef)).ok).toBe(true);
+  const connectionNow = h.broker.connections().find((entry) => entry.kind === 'codex-cli');
+  expect(Object.keys(connectionNow?.verify.modelReceipts ?? {}).sort()).toEqual([
+    'codex-cli/model-a',
+    'codex-cli/model-b',
+  ]);
+  // Per-model access truth is exposed on each ModelInfo row, not just a single global receipt.
+  const snapshot = cliInventorySnapshot(h.broker.connections());
+  expect(snapshot.models.find((entry) => entry.ref === 'codex-cli/model-a')?.verified).toBe(true);
+  expect(snapshot.models.find((entry) => entry.ref === 'codex-cli/model-b')?.verified).toBe(true);
+});
+
+it('a failed check of a new model does not disable already-verified models', async () => {
+  const runner = vi.fn((request: CliBrokerRequest) =>
+    request.model.ref === 'codex-cli/model-a'
+      ? Promise.reject(new CliTransportError('authentication', 'no access for model-a'))
+      : Promise.resolve(readyResult(request)),
+  );
+  const models = [model('codex-cli', 'model-a'), model('codex-cli', 'model-b')];
+  const h = harness(runner, { scan: () => Promise.resolve(connection('codex-cli', models)) });
+  await h.service.refresh('codex-cli');
+  expect((await h.broker.verify('codex-cli', 'codex-cli/model-b' as ModelRef)).ok).toBe(true);
+  const failed = await h.broker.verify('codex-cli', 'codex-cli/model-a' as ModelRef);
+  expect(failed.ok).toBe(false);
+  const connectionNow = h.broker.connections().find((entry) => entry.kind === 'codex-cli');
+  expect(connectionNow?.verify.state).toBe('verified');
+  expect(connectionNow?.verify.modelReceipts?.['codex-cli/model-b' as ModelRef]).toBeTruthy();
+  expect(
+    cliInventorySnapshot(h.broker.connections()).models.find((m) => m.ref === 'codex-cli/model-b')
+      ?.verified,
+  ).toBe(true);
+});
+
+it('admits a realistic full unknown-capacity prompt and rejects an oversized one', () => {
+  const verified: CliConnection = {
+    ...connection('codex-cli', []),
+    surfaces: { native: true, gateway: true },
+    verify: {
+      state: 'verified',
+      modelRef: 'codex-cli/m' as ModelRef,
+      checkedAt: new Date().toISOString(),
+      message: null,
+      receiptKey: 'k',
+      modelReceipts: {
+        ['codex-cli/m' as ModelRef]: { checkedAt: new Date().toISOString(), receiptKey: 'k' },
+      },
+    },
+  };
+  // No discovered context window / max output -> capacityKnown is false, but a realistic full Ferry
+  // tool schema + system context must still dispatch under the transport policy bound.
+  const unknown = model('codex-cli', 'm', { billing: 'included_subscription' });
+  expect(unknown.contextWindow).toBeUndefined();
+  expect(
+    cliManualAdmission(verified, unknown, 'native', {
+      inputTokens: MANUAL_UNKNOWN_CAPACITY_INPUT_BOUND - 1,
+    }).ok,
+  ).toBe(true);
+  const oversized = cliManualAdmission(verified, unknown, 'native', {
+    inputTokens: MANUAL_UNKNOWN_CAPACITY_INPUT_BOUND + 1,
+  });
+  expect(oversized.ok).toBe(false);
+  expect(oversized.statusCode).toBe(400);
+  expect(oversized.message).toMatch(/did not report a context window/);
+  // A model with a known context window is not bounded by the unknown-capacity policy.
+  const known = model('codex-cli', 'm', {
+    contextWindow: 400_000,
+    maxOutput: 64_000,
+    billing: 'included_subscription',
+  });
+  expect(cliManualAdmission(verified, known, 'native', { inputTokens: 300_000 }).ok).toBe(true);
+});
+
+it('delegates option resolution to the shared explicit-null-stops resolver', () => {
+  const cap = model('codex-cli', 'model-a', { efforts: ['low', 'high'], defaultEffort: 'low' });
+  // conversation null stops fall-through instead of picking the lower profile High.
+  expect(
+    resolveCliOption(cap, {
+      conversation: { effort: null, speed: 'standard' },
+      profileDefault: { effort: 'high' },
+    }),
+  ).toEqual({ effort: 'low', speed: 'standard' });
+  // a per-model explicit null stops before a connection default High.
+  expect(
+    resolveCliOption(cap, {
+      connectionModelDefault: { effort: null },
+      connectionDefault: { effort: 'high', speed: 'standard' },
+    }),
+  ).toEqual({ effort: 'low', speed: 'standard' });
+  // absent partial effort inherits while an explicit speed wins.
+  expect(
+    resolveCliOption(cap, {
+      conversation: { speed: 'fast' },
+      profileDefault: { effort: 'high' },
+      connectionDefault: { effort: null, speed: 'standard' },
+    }),
+  ).toEqual({ effort: 'high', speed: 'fast' });
 });

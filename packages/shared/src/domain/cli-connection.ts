@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ModelRefSchema, SessionIdSchema } from './ids.js';
+import { ModelRefSchema, SessionIdSchema, type ModelRef } from './ids.js';
 
 /**
  * Installed CLI connection contracts.
@@ -74,19 +74,52 @@ export const CliAccountSchema = z.object({
 });
 export type CliAccount = z.infer<typeof CliAccountSchema>;
 
+/**
+ * One successful per-model verification receipt. The fingerprint is bound to the account, installed
+ * version, credential selection and that model's effective capabilities, so a later verification of
+ * another model never invalidates it. Never contains credentials or key material.
+ */
+export const CliModelReceiptSchema = z.object({
+  checkedAt: z.iso.datetime(),
+  receiptKey: z.string().min(1).max(128).nullable(),
+});
+export type CliModelReceipt = z.infer<typeof CliModelReceiptSchema>;
+
 export const CliVerificationSchema = z.object({
   state: CliVerifyStateSchema,
+  /**
+   * Connection summary: the most recently proven model ref, kept for the picker/summary even though
+   * access truth for a specific model lives in `modelReceipts`.
+   */
   modelRef: ModelRefSchema.nullable(),
   checkedAt: z.iso.datetime().nullable(),
   message: z.string().nullable(),
   /**
-   * Nonsecret fingerprint of the account/version/capabilities/credential selection this receipt was
-   * proven against. A persisted receipt whose fingerprint is missing or no longer matches is stale.
-   * Never contains credentials or key material.
+   * Nonsecret fingerprint of the account/version/capabilities/credential selection the summary
+   * receipt was proven against. A persisted receipt whose fingerprint is missing or no longer
+   * matches is stale. Never contains credentials or key material.
    */
   receiptKey: z.string().min(1).max(128).nullable().optional(),
+  /**
+   * Accumulated SUCCESSFUL per-model receipts. Verifying a new model adds to this map without
+   * forgetting older models; a failed check of a new model leaves existing receipts intact.
+   * Optional for backwards compatibility with receipts written before per-model evidence existed.
+   */
+  modelReceipts: z.record(ModelRefSchema, CliModelReceiptSchema).optional(),
 });
 export type CliVerification = z.infer<typeof CliVerificationSchema>;
+
+/** True when `model` has its own successful verification receipt for this connection. */
+export function isCliModelVerified(
+  connection: Pick<CliConnection, 'verify'>,
+  modelRef: ModelRef,
+): boolean {
+  if (connection.verify.state !== 'verified') return false;
+  if (connection.verify.modelReceipts)
+    return connection.verify.modelReceipts[modelRef] !== undefined;
+  // Legacy receipt (pre-per-model evidence): only the summary model ref counts.
+  return connection.verify.modelRef === modelRef;
+}
 
 export const CliSurfacesSchema = z.object({
   native: z.boolean().default(false),
@@ -147,6 +180,83 @@ export const CliModelCapabilitiesSchema = z.object({
   hidden: z.boolean().default(false),
 });
 export type CliModelCapabilities = z.infer<typeof CliModelCapabilitiesSchema>;
+
+/* ------------------------------------------------------------------ effective option resolution */
+
+/**
+ * One optional CLI option layer. An absent key (or `undefined`) inherits from the next lower layer;
+ * an explicit `effort: null` selects the CLI-reported default and stops fall-through. `speed` is a
+ * capability gate, never defaulted to `fast`.
+ */
+export interface CliOptionLayer {
+  effort?: CliEffort | null;
+  speed?: CliSpeed;
+}
+
+export interface CliOptionResolverInput {
+  /** Capability evidence for the target model. Only efforts the CLI actually reports are used. */
+  model: Pick<CliModelCapabilities, 'efforts' | 'defaultEffort' | 'speeds' | 'unsupportedEfforts'>;
+  /** Explicit conversation/session override; highest priority. */
+  conversation?: CliOptionLayer | undefined;
+  /** Profile `cliDefaults[ref]`. */
+  profile?: CliOptionLayer | undefined;
+  /** Connection per-model default (`cliConnections[kind].modelDefaults[ref]`). */
+  connectionModel?: CliOptionLayer | undefined;
+  /** Connection default options (`cliConnections[kind].defaultOptions`). */
+  connection?: CliOptionLayer | undefined;
+}
+
+function isUsableReportedEffort(
+  model: CliOptionResolverInput['model'],
+  token: string | null,
+): token is CliEffort {
+  return (
+    typeof token === 'string' &&
+    model.efforts.includes(token) &&
+    model.unsupportedEfforts?.[token] === undefined
+  );
+}
+
+/**
+ * The single shared, pure CLI option resolver used by Core dispatch, the Ferry CLI and the GUI.
+ *
+ * Precedence for each field, highest first: conversation, profile, connection per-model default,
+ * connection default, then the reported CLI default. `Object.hasOwn` distinguishes an explicit
+ * `null`/value (which wins and stops fall-through) from an absent field (which inherits). An explicit
+ * `effort: null` selects the reported CLI default; when no layer reports an effort, the model's
+ * reported default is used, or `null` when that default is disabled/unsupported — an implicit
+ * default is never silently substituted. `fast` is never defaulted on: an absent speed resolves to
+ * `standard`, and an unsupported explicit `fast` resolves to `standard`.
+ */
+export function resolveCliOption(input: CliOptionResolverInput): CliOption {
+  const reported: CliEffort | null = isUsableReportedEffort(input.model, input.model.defaultEffort)
+    ? input.model.defaultEffort
+    : null;
+  const ordered: (CliOptionLayer | undefined)[] = [
+    input.conversation,
+    input.profile,
+    input.connectionModel,
+    input.connection,
+  ];
+  let effort: CliEffort | null = reported;
+  for (const layer of ordered) {
+    if (!layer || !Object.hasOwn(layer, 'effort')) continue;
+    const value = layer.effort;
+    if (value === undefined) continue;
+    // An explicit `null` selects the reported default and stops fall-through.
+    effort = value ?? reported;
+    break;
+  }
+  let speed: CliSpeed = 'standard';
+  for (const layer of ordered) {
+    if (!layer || !Object.hasOwn(layer, 'speed')) continue;
+    const value = layer.speed;
+    if (value === undefined) continue;
+    speed = value === 'fast' && !input.model.speeds.includes('fast') ? 'standard' : value;
+    break;
+  }
+  return { effort, speed };
+}
 
 export const CliUsageWindowSchema = z.object({
   id: z.string(),

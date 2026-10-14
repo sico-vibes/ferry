@@ -504,9 +504,16 @@ export class CliConnectionService {
       previous.install.executable !== discovered.install.executable ||
       previous.install.version !== discovered.install.version;
     const capabilitiesChanged = capabilitySignature(previous) !== capabilitySignature(discovered);
-    const verifiedModelLost =
-      previous.verify.modelRef !== null &&
-      !discovered.models.some((model) => model.ref === previous.verify.modelRef);
+    // A summary ref or any accumulated per-model receipt whose model vanished invalidates the receipt.
+    const verifiedRefs =
+      previous.verify.modelReceipts !== undefined
+        ? Object.keys(previous.verify.modelReceipts)
+        : previous.verify.modelRef !== null
+          ? [previous.verify.modelRef]
+          : [];
+    const verifiedModelLost = verifiedRefs.some(
+      (ref) => !discovered.models.some((model) => model.ref === ref),
+    );
     const invalidated =
       accountChanged || installChanged || capabilitiesChanged || verifiedModelLost;
     const usage =

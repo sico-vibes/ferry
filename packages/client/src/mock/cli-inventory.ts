@@ -1,5 +1,6 @@
 import {
   ProviderIdSchema,
+  isCliModelVerified,
   type CliConnection,
   type CliConnectionKind,
   type CliModelCapabilities,
@@ -142,6 +143,10 @@ export function buildMockCliConnection(state: MockState, kind: CliConnectionKind
         modelRef: verifiedRef,
         checkedAt: '2026-10-05T10:00:00.000Z',
         message: 'Verified with a scripted mock generation.',
+        receiptKey: 'mock-receipt',
+        modelReceipts: {
+          [verifiedRef]: { checkedAt: '2026-10-05T10:00:00.000Z', receiptKey: 'mock-receipt' },
+        },
       }
     : { state: 'unverified', modelRef: null, checkedAt: null, message: null };
   const base: CliConnection = {
@@ -252,8 +257,7 @@ function surfaced(connection: CliConnection): boolean {
 }
 
 function toModelInfo(connection: CliConnection, model: CliModelCapabilities): ModelInfo {
-  const verified =
-    connection.verify.state === 'verified' && connection.verify.modelRef === model.ref;
+  const verified = isCliModelVerified(connection, model.ref);
   const capacityKnown = model.contextWindow != null && model.maxOutput != null;
   return {
     ref: model.ref,
