@@ -6890,8 +6890,8 @@ button:not(:disabled):active,
 }
 .model-picker-popover .model-command {
   display: flex;
-  width: 340px;
-  height: min(480px, var(--radix-popover-content-available-height));
+  width: min(440px, calc(100vw - 32px));
+  height: min(560px, var(--radix-popover-content-available-height));
   min-height: 0;
   flex: none;
   flex-direction: column;
@@ -7049,7 +7049,7 @@ button:not(:disabled):active,
 .model-risk-pill {
   margin-left: 6px;
   background: color-mix(in srgb, var(--warning) 12%, transparent);
-  color: var(--warning);
+  color: var(--foreground);
 }
 .model-row-check {
   flex: none;
@@ -7057,21 +7057,6 @@ button:not(:disabled):active,
 }
 .model-candidate.model-profile strong {
   font-weight: 500;
-}
-/* The details card is a hover tooltip beside the list; it never resizes the popover. */
-.model-picker-popover > .v2-model-details {
-  position: absolute;
-  top: 0;
-  left: calc(100% + 8px);
-  max-height: 100%;
-  overflow: hidden;
-  pointer-events: none;
-  animation: ferry-fade-in 90ms ease-out;
-}
-@media (prefers-reduced-motion: reduce) {
-  .model-picker-popover > .v2-model-details {
-    animation: none;
-  }
 }
 
 .v2-model-details {

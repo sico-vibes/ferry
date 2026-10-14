@@ -69,12 +69,12 @@ it('serializes Apply so duplicate clicks cannot replace the profile captured for
   const client = createMockFerryClient({ behavior: 'test' });
   const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const active = (await client.settings.get()).activeProfileId;
-  const original = client.profiles.save.bind(client.profiles);
+  const original = client.profiles.applyOptimized.bind(client.profiles);
   let release: (() => void) | undefined;
   const pending = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const save = vi.spyOn(client.profiles, 'save').mockImplementation(async (profile) => {
+  const apply = vi.spyOn(client.profiles, 'applyOptimized').mockImplementation(async (profile) => {
     await pending;
     return original(profile);
   });
@@ -89,7 +89,7 @@ it('serializes Apply so duplicate clicks cannot replace the profile captured for
   await screen.findByRole('heading', { name: 'Preview: Optimized for this device' });
   await userEvent.dblClick(screen.getByRole('button', { name: 'Apply recommendations' }));
   await waitFor(() => {
-    expect(save).toHaveBeenCalledTimes(1);
+    expect(apply).toHaveBeenCalledTimes(1);
   });
   expect(screen.getByRole('button', { name: 'Applying…' }).hasAttribute('disabled')).toBe(true);
   release?.();

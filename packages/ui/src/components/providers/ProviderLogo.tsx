@@ -34,6 +34,7 @@ const providerLogoFiles: Record<string, string> = {
   perplexity: 'perplexity-color',
   anthropic: 'anthropic',
   'claude-cli': 'claude-color',
+  'claude-code-cli': 'claude-color',
   openai: 'openai',
   'codex-cli': 'codex-color',
   gemini: 'gemini-color',

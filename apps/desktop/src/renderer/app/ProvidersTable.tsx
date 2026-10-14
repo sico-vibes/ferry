@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useFerryClient } from '../data/client';
+import { ProviderIntegrationStatus } from './ProviderIntegrationStatus';
 import { useMemo, useState } from 'react';
 import { providerDefinition, type Provider, type QuotaWindow } from '@ferry/shared';
 import {
@@ -246,9 +247,7 @@ export function ProvidersTable({
                       <span className="v2-provider-name" title={provider.name}>
                         {provider.name}
                       </span>
-                      {definition && (
-                        <UiV2.Badge variant="secondary">{definition.releaseState}</UiV2.Badge>
-                      )}
+                      {definition && <ProviderIntegrationStatus state={definition.releaseState} />}
                       <TagBadge kind={tagKind(provider)} />
                       {(failures?.providers.find((row) => row.providerId === provider.id)
                         ?.failed24h ?? 0) > 0 && (

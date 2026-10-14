@@ -5,6 +5,7 @@ import { useFerryClient } from '../data/client';
 import { keys, useSettings } from '../data/queries';
 import { useToasts } from '../state/toasts';
 import { settingsSectionGroups, settingsSections, useUI } from '../state/ui';
+import { InstalledCliConnections } from './InstalledCliConnections';
 import {
   Dialog,
   FerryMark,
@@ -362,12 +363,6 @@ export function SettingsCanvas() {
   const { data: lanes = [], isPending: lanesPending } = useQuery({
     queryKey: ['lanes'],
     queryFn: () => client.delegation.lanes(),
-  });
-  const [inspectClientAuth, setInspectClientAuth] = useState(false);
-  const delegationClients = useQuery({
-    queryKey: ['delegation-clients', inspectClientAuth],
-    queryFn: () => client.delegation.clients(inspectClientAuth),
-    enabled: section === 'Delegation',
   });
   const { data: acpAgents = [], isPending: acpAgentsPending } = useQuery({
     queryKey: ['delegation', 'detected-agents'],
@@ -808,7 +803,9 @@ export function SettingsCanvas() {
                   .setEnabled(provider.id, enabled)
                   .then(() => cache.invalidateQueries({ queryKey: ['providers'] }))
               }
-              providers={providers.filter((provider) => provider.tag !== 'subscription_oauth')}
+              providers={providers.filter(
+                (provider) => provider.tag !== 'subscription_oauth' && provider.kind !== 'cli',
+              )}
               testing={testingProvider}
             />
           </Group>
@@ -826,6 +823,7 @@ export function SettingsCanvas() {
               }
             />
           </Group>
+          <InstalledCliConnections />
           <Group title="Routing access">
             {providers.some((provider) => provider.tag === 'trial') && (
               <>
@@ -1527,63 +1525,19 @@ export function SettingsCanvas() {
               </p>
             )}
           </Group>
-          <Group title="Coding CLIs">
+          <Group title="Coding CLI connections">
             <p className="muted">
-              Installed, signed-in and verified are separate states. Sign-in checks read the
-              client’s local authentication status; verified means a completed run reported usage.
-              Suggest remains the default delegation mode.
+              Manage installed clients, signed-in accounts and model routing in Providers &amp;
+              keys. Delegation uses the same connections.
             </p>
             <UiV2.Button
               variant="secondary"
-              disabled={delegationClients.isFetching}
               onClick={() => {
-                if (inspectClientAuth) void delegationClients.refetch();
-                else setInspectClientAuth(true);
+                useUI.getState().openSettings('Providers & keys');
               }}
             >
-              {delegationClients.isFetching ? 'Checking…' : 'Check client sign-ins'}
+              Manage CLI connections
             </UiV2.Button>
-            {delegationClients.isPending ? (
-              <SkeletonRows rows={3} />
-            ) : delegationClients.isError ? (
-              <p role="alert">
-                Could not inspect installed clients.{' '}
-                <UiV2.Button variant="secondary" onClick={() => void delegationClients.refetch()}>
-                  Retry
-                </UiV2.Button>
-              </p>
-            ) : (
-              <ul className="v2-list" aria-label="Coding CLIs">
-                {delegationClients.data.map((row) => (
-                  <li className="v2-list-row" key={row.id}>
-                    <span className="v2-list-main">
-                      <strong>
-                        {row.id === 'claude'
-                          ? 'Claude Code'
-                          : row.id === 'codex'
-                            ? 'Codex'
-                            : 'OpenCode'}
-                      </strong>
-                      <small>
-                        {row.installed
-                          ? row.signedIn === null
-                            ? 'Installed; sign-in not checked'
-                            : row.signedIn
-                              ? 'Installed and signed in'
-                              : 'Installed; sign in through the client CLI'
-                          : 'Not detected; install the client or check its version command'}
-                        {row.version ? ` · ${row.version}` : ''}
-                      </small>
-                    </span>
-                    <span className="v2-list-meta">
-                      {row.verifiedAt
-                        ? `Verified by run ${new Date(row.verifiedAt).toLocaleDateString()}`
-                        : 'Generation not verified'}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
           </Group>
           <Group title="ACP agent detection">
             <p className="muted">

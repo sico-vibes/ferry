@@ -1,6 +1,6 @@
 import { isOpenCodeAppModel } from '@ferry/shared';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import {
   Bell,
@@ -19,7 +19,16 @@ import {
 import { Popover as PopoverPrimitive } from 'radix-ui';
 import { Dialog, FerryMark, ProviderLogo, ShowMoreList, Skeleton, TagBadge, UiV2 } from '@ferry/ui';
 import { DIRECT_PROFILE_ID } from '@ferry/shared';
-import type { ModelInfo, ModelRef, PartId, ProfileId, SessionId } from '@ferry/shared';
+import type {
+  CliOption,
+  ModelInfo,
+  ModelRef,
+  PartId,
+  Profile,
+  ProfileId,
+  SessionDetail,
+  SessionId,
+} from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { listAllModels } from '@ferry/client';
 import { keys, useSessions, useWorkspaces } from '../data/queries';
@@ -29,6 +38,8 @@ import { settingsSections } from '../state/ui.types';
 import { openProjectFolder } from '../data/projects';
 import { insertIntoComposer } from '../data/composerInsert';
 import { ModelDetailsCard } from './ModelDetailsCard';
+import { PickerDetails } from './PickerDetails';
+import { CliOptionsChip } from './CliOptionsChip';
 import { formatTokens } from './modelFacts';
 import { matchesKeybinding } from '@ferry/config/keybindings';
 import { useKeybindings } from '../state/keybindings';
@@ -57,14 +68,27 @@ export function ApprovalsTray({ activeSessionId }: { activeSessionId?: string | 
   const client = useFerryClient();
   const navigate = useNavigate();
   const cache = useQueryClient();
-  const { data: sessions = [] } = useSessions();
   const [open, setOpen] = useState(false);
-  const details = useQueries({
-    queries: sessions.map((session) => ({
-      queryKey: keys.session(session.id),
-      queryFn: () => client.sessions.get(session.id),
-    })),
+  const { data: snapshot } = useQuery({
+    queryKey: ['pending-approvals'],
+    queryFn: () => client.approvals.pending(),
+    retry: false,
   });
+  useEffect(() => {
+    const refresh = () => {
+      void cache.invalidateQueries({ queryKey: ['pending-approvals'] });
+    };
+    const offRequest = client.on('approval.request', refresh);
+    const offPart = client.on('session.part', ({ part }) => {
+      if (part.type === 'approval_request') refresh();
+    });
+    const offRemove = client.on('session.removed', refresh);
+    return () => {
+      offRequest();
+      offPart();
+      offRemove();
+    };
+  }, [client, cache]);
   useEffect(() => {
     if (!open) return;
     const escape = (event: KeyboardEvent) => {
@@ -75,19 +99,13 @@ export function ApprovalsTray({ activeSessionId }: { activeSessionId?: string | 
       window.removeEventListener('keydown', escape);
     };
   }, [open]);
-  const pending = details.flatMap((query) => {
-    const detail = query.data;
-    if (!detail) return [];
-    return detail.messages.flatMap((message) =>
-      message.parts
-        .filter((part) => part.type === 'approval_request' && part.state === 'pending')
-        .filter(() => detail.session.id !== activeSessionId)
-        .map((part) => ({ session: detail.session, part })),
-    );
-  });
+  const pending = (snapshot?.entries ?? []).filter((entry) => entry.sessionId !== activeSessionId);
   const respond = async (sessionId: SessionId, partId: string, decision: 'allow_once' | 'deny') => {
     await client.approvals.respond(sessionId, partId as PartId, decision);
-    await cache.invalidateQueries({ queryKey: keys.session(sessionId) });
+    await Promise.all([
+      cache.invalidateQueries({ queryKey: keys.session(sessionId) }),
+      cache.invalidateQueries({ queryKey: ['pending-approvals'] }),
+    ]);
   };
   return pending.length ? (
     <div className="relative v2-approvals-anchor">
@@ -120,44 +138,42 @@ export function ApprovalsTray({ activeSessionId }: { activeSessionId?: string | 
             </button>
           </header>
           {!pending.length && <p className="text-label text-text-3">No pending approvals</p>}
-          {pending.map(({ session, part }) =>
-            part.type === 'approval_request' ? (
-              <article key={`${session.id}-${part.id}`}>
-                <strong>{session.title}</strong>
-                <p>{part.summary}</p>
-                <small>{part.risk} risk</small>
-                <div>
-                  <UiV2.Button
-                    size="sm"
-                    variant="default"
-                    onClick={() => {
-                      void respond(session.id, part.id, 'allow_once');
-                    }}
-                  >
-                    Allow once
-                  </UiV2.Button>
-                  <UiV2.Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      void respond(session.id, part.id, 'deny');
-                    }}
-                  >
-                    Deny
-                  </UiV2.Button>
-                  <button
-                    className="text-primary text-meta"
-                    onClick={() => {
-                      void navigate({ to: '/s/$sessionId', params: { sessionId: session.id } });
-                      setOpen(false);
-                    }}
-                  >
-                    Open session
-                  </button>
-                </div>
-              </article>
-            ) : null,
-          )}
+          {pending.map((entry) => (
+            <article key={`${entry.sessionId}-${entry.partId}`}>
+              <strong>{entry.title}</strong>
+              <p>{entry.summary}</p>
+              <small>{entry.risk} risk</small>
+              <div>
+                <UiV2.Button
+                  size="sm"
+                  variant="default"
+                  onClick={() => {
+                    void respond(entry.sessionId, entry.partId, 'allow_once');
+                  }}
+                >
+                  Allow once
+                </UiV2.Button>
+                <UiV2.Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    void respond(entry.sessionId, entry.partId, 'deny');
+                  }}
+                >
+                  Deny
+                </UiV2.Button>
+                <button
+                  className="text-primary text-meta"
+                  onClick={() => {
+                    void navigate({ to: '/s/$sessionId', params: { sessionId: entry.sessionId } });
+                    setOpen(false);
+                  }}
+                >
+                  Open session
+                </button>
+              </div>
+            </article>
+          ))}
         </div>
       )}
     </div>
@@ -587,21 +603,22 @@ export function CommandPalette({ onNewChat }: { onNewChat: () => Promise<void> }
 }
 
 const noProfileValue = 'profile none no profile';
-const freeOnlyStorageKey = 'ferry.modelPicker.freeOnly';
-
-function readFreeOnly(): boolean {
+type ModelAccessFilter = 'free' | 'subscription' | 'all';
+const modelAccessStorageKey = 'ferry.modelPicker.accessFilter';
+function readModelAccess(): ModelAccessFilter {
   try {
-    return localStorage.getItem(freeOnlyStorageKey) === 'true';
+    const stored = localStorage.getItem(modelAccessStorageKey);
+    if (stored === 'free' || stored === 'subscription' || stored === 'all') return stored;
+    return localStorage.getItem('ferry.modelPicker.freeOnly') === 'true' ? 'free' : 'all';
   } catch {
-    return false;
+    return 'all';
   }
 }
-
-function saveFreeOnly(value: boolean): void {
+function saveModelAccess(value: ModelAccessFilter): void {
   try {
-    localStorage.setItem(freeOnlyStorageKey, String(value));
+    localStorage.setItem(modelAccessStorageKey, value);
   } catch {
-    // Preference only; the picker still works without storage.
+    /* Preference only; selection still works without storage. */
   }
 }
 
@@ -619,6 +636,8 @@ export function ComposerModelChip({
   profiles = [],
   onProfileSelect,
   onModelSelect,
+  cliOptions,
+  onCliOptionsChange,
 }: {
   sessionId: SessionId | null;
   profileName?: string;
@@ -628,9 +647,18 @@ export function ComposerModelChip({
   servedModelRef?: ModelRef | null;
   pinnedUnavailable?: boolean;
   mode: 'auto' | 'manual';
-  profiles?: { id: ProfileId; name: string; pinned: boolean; description?: string }[];
+  profiles?: {
+    id: ProfileId;
+    name: string;
+    pinned: boolean;
+    description?: string;
+    cliDefaults?: Profile['cliDefaults'];
+    provenance?: Profile['provenance'];
+  }[];
   onProfileSelect?: (profileId: ProfileId) => void;
   onModelSelect?: (ref: ModelRef | 'auto') => void;
+  cliOptions?: CliOption | null;
+  onCliOptionsChange?: (options: CliOption) => void;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
@@ -639,6 +667,11 @@ export function ComposerModelChip({
   const client = useFerryClient();
   const cache = useQueryClient();
   const pushToast = useToasts((state) => state.push);
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const pendingOptionsFocus = useRef(false);
+  const [optionsBusy, setOptionsBusy] = useState(false);
+  const [optionsError, setOptionsError] = useState('');
+  const [optionsModelRef, setOptionsModelRef] = useState<ModelRef | null>(null);
   const [localOpen, setLocalOpen] = useState(false);
   const [modelQuery, setModelQuery] = useState('');
   const [commandValue, setCommandValue] = useState('');
@@ -647,7 +680,13 @@ export function ComposerModelChip({
   const [pointerInList, setPointerInList] = useState(false);
   const [keyboardNav, setKeyboardNav] = useState(false);
   const open = controlledOpen ?? localOpen;
-  const routingProfiles = profiles.filter((profile) => profile.id !== DIRECT_PROFILE_ID);
+  const profileValue = (profile: { id: ProfileId; name: string }) =>
+    `profile ${profile.id} ${profile.name}`;
+  const routingProfiles = profiles.filter(
+    (profile) =>
+      profile.id !== DIRECT_PROFILE_ID &&
+      (!profile.provenance?.supersededBy || profile.id === activeProfileId),
+  );
   const noProfile = activeProfileId === DIRECT_PROFILE_ID;
   const setOpen = onOpenChange ?? setLocalOpen;
   const candidateQueryKey = useMemo(() => ['model-candidates', sessionId] as const, [sessionId]);
@@ -666,6 +705,26 @@ export function ComposerModelChip({
     queryKey: ['providers'],
     queryFn: () => client.providers.list(),
   });
+  const { data: cliConnections = [] } = useQuery({
+    queryKey: ['cli-connections'],
+    queryFn: () => client.cliConnections.list(),
+    enabled: open,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const { data: transportSettings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => client.settings.get(),
+    enabled: open,
+  });
+  const cliNativeReady = (model: ModelInfo) => {
+    if (!model.cliConnectionId) return true;
+    if (model.providerId === 'opencode' && transportSettings?.opencodeZenTransport === 'cli')
+      return model.cliAccessVerified === true;
+    const connection = cliConnections.find((item) => item.id === model.cliConnectionId);
+    return !!connection?.surfaces.native && connection.verify.state === 'verified';
+  };
+
   const { data: gatewayKeys = [] } = useQuery({
     queryKey: ['gateway-keys'],
     queryFn: () => client.gateway.listKeys(),
@@ -705,7 +764,7 @@ export function ComposerModelChip({
         activeProfileId === DIRECT_PROFILE_ID
           ? noProfileValue
           : activeProfile
-            ? `profile ${activeProfile.name}`
+            ? profileValue(activeProfile)
             : '',
       );
     } else {
@@ -719,6 +778,44 @@ export function ComposerModelChip({
   const autoModel = autoInfo?.name ?? (modelName || 'picks per message');
   const pinnedModel = models.find((model) => model.ref === modelRef);
   const servedModel = models.find((model) => model.ref === servedModelRef);
+  useEffect(() => {
+    setOptionsModelRef(null);
+  }, [modelRef]);
+  const optionsModel = models.find((model) => model.ref === (optionsModelRef ?? modelRef));
+  const sessionOptions = useQuery({
+    queryKey: sessionId ? keys.session(sessionId) : ['cli-options-draft'],
+    queryFn: () => (sessionId ? client.sessions.get(sessionId) : Promise.resolve(null)),
+    enabled: !!sessionId && !!optionsModel?.cliCapabilities,
+    staleTime: 10_000,
+  });
+  const effectiveOptions = optionsModel
+    ? (cliOptions ??
+      sessionOptions.data?.session.cliOptions?.[optionsModel.ref] ??
+      profiles.find((profile) => profile.id === activeProfileId)?.cliDefaults?.[
+        optionsModel.ref
+      ] ?? { effort: null, speed: 'standard' as const })
+    : { effort: null, speed: 'standard' as const };
+  const changeCliOptions = async (options: CliOption) => {
+    setOptionsBusy(true);
+    setOptionsError('');
+    try {
+      if (onCliOptionsChange) onCliOptionsChange(options);
+      else if (sessionId && optionsModel) {
+        const session = await client.sessions.updateCliOptions(sessionId, {
+          modelRef: optionsModel.ref,
+          options,
+        });
+        cache.setQueryData<SessionDetail>(keys.session(sessionId), (previous) =>
+          previous ? { ...previous, session } : previous,
+        );
+      }
+    } catch (cause) {
+      setOptionsError(cause instanceof Error ? cause.message : 'Could not change CLI options.');
+    } finally {
+      setOptionsBusy(false);
+    }
+  };
+
   const chipModel = pinnedUnavailable ? servedModel : mode === 'auto' ? autoInfo : pinnedModel;
   // The chip always names the model you picked, never the last model that happened to answer.
   const pinnedRefTail = modelRef?.split('/').at(-1);
@@ -739,20 +836,25 @@ export function ComposerModelChip({
       )
       .map((provider) => provider.id),
   );
-  const [freeOnly, setFreeOnly] = useState(readFreeOnly);
+  const [accessFilter, setAccessFilter] = useState(readModelAccess);
   const providerExclusions = new Map(
     providers.map((provider) => [provider.id, new Set(provider.excludedModelRefs ?? [])]),
   );
   const connectedModels = models.filter(
     (model) =>
       configuredProviderIds.has(model.providerId) &&
+      cliNativeReady(model) &&
       !isOpenCodeAppModel(model) &&
       !providerExclusions.get(model.providerId)?.has(model.ref),
   );
-  const availableModels = freeOnly
-    ? connectedModels.filter((model) => model.free)
-    : connectedModels;
-  const hiddenPaidCount = connectedModels.length - availableModels.length;
+  const availableModels =
+    accessFilter === 'free'
+      ? connectedModels.filter((model) => model.free)
+      : accessFilter === 'subscription'
+        ? connectedModels.filter(
+            (model) => model.cliCapabilities?.billing === 'included_subscription',
+          )
+        : connectedModels;
   const zenProvider = providers.find((provider) => provider.id === 'opencode');
   const zenNeedsVerification = [
     ...new Map(
@@ -766,6 +868,15 @@ export function ComposerModelChip({
         .map((model) => [model.ref, model]),
     ).values(),
   ];
+  const cliSetupModels = models.filter(
+    (model) =>
+      model.cliConnectionId &&
+      !cliNativeReady(model) &&
+      (accessFilter === 'all' ||
+        (accessFilter === 'free'
+          ? model.free
+          : model.cliCapabilities?.billing === 'included_subscription')),
+  );
   const candidateByRef = new Map(visibleCandidates.map((candidate) => [candidate.ref, candidate]));
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const grouped = useMemo(
@@ -782,12 +893,17 @@ export function ComposerModelChip({
       ? autoInfo
       : availableModels.find((model) => modelValue(model).toLocaleLowerCase() === highlighted);
   const highlightedProfile = highlighted.startsWith('profile ')
-    ? profiles.find((profile) => `profile ${profile.name}`.toLocaleLowerCase() === highlighted)
+    ? profiles.find((profile) => profileValue(profile).toLocaleLowerCase() === highlighted)
     : undefined;
   const selectionInFlight = useRef<ModelRef | 'auto' | null>(null);
   const select = async (ref: ModelRef | 'auto') => {
     if (selectionInFlight.current === ref) return;
     selectionInFlight.current = ref;
+    const chosen = models.find((model) => model.ref === ref);
+    setOptionsModelRef(chosen?.cliCapabilities ? chosen.ref : null);
+    pendingOptionsFocus.current = !!chosen?.cliCapabilities;
+    setOptionsOpen(false);
+    setOptionsError('');
     setOpen(false);
     try {
       if (onModelSelect) onModelSelect(ref);
@@ -797,6 +913,9 @@ export function ComposerModelChip({
         await cache.invalidateQueries({ queryKey: ['model-candidates', sessionId] });
       }
     } catch (error) {
+      setOptionsModelRef(null);
+      setOptionsOpen(false);
+      pendingOptionsFocus.current = false;
       pushToast({
         kind: 'error',
         title: 'Model selection failed',
@@ -808,374 +927,446 @@ export function ComposerModelChip({
     }
   };
   return (
-    <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
-      <PopoverPrimitive.Trigger asChild>
-        <button
-          aria-controls={dialogId}
-          aria-label={chipLabel}
-          className="v2-composer-chip inline-flex items-center gap-2 rounded-pill px-2 py-1 text-body font-medium text-text-1 hover:bg-icon-circle"
-          type="button"
-        >
-          {noProfile ? null : (
-            <>
-              <FerryMark className="v2-chip-ferry" decorative size={14} variant="brand" />
-              <span className="v2-chip-profile">{profileName}</span>
-              <span aria-hidden="true" className="v2-chip-divider" />
-            </>
-          )}
-          {chipModel ? (
-            <ProviderLogo
-              model={`${chipModel.ref} ${chipModel.name}`}
-              name={chipModel.name}
-              providerId={chipModel.providerId}
-              size={14}
-            />
-          ) : null}
-          <span className="v2-chip-model">
-            {pinnedUnavailable ? (
-              chipLabel
-            ) : mode === 'auto' ? (
-              <>
-                <span className="v2-chip-auto">Auto</span>
-                {autoModel}
-              </>
-            ) : selectedGatewayKey ? (
-              chipLabel
-            ) : (
-              pinnedName
-            )}
-          </span>
-          <ChevronDown aria-hidden="true" size={14} />
-        </button>
-      </PopoverPrimitive.Trigger>
-      {open && ModelCommand ? (
-        <PopoverPrimitive.Portal>
-          <PopoverPrimitive.Content
-            align="start"
-            aria-label="Choose model"
-            className="ferry-ui model-picker-popover"
-            // Keep clear of the 44px window title bar; symmetric so the preferred side never flips.
-            collisionPadding={{ top: 56, right: 12, bottom: 56, left: 12 }}
-            id={dialogId}
-            role="dialog"
-            side="top"
-            sideOffset={8}
-            style={{
-              maxHeight: 'min(560px, var(--radix-popover-content-available-height))',
-            }}
+    <>
+      <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
+        <PopoverPrimitive.Trigger asChild>
+          <button
+            aria-controls={dialogId}
+            aria-label={chipLabel}
+            className="v2-composer-chip inline-flex items-center gap-2 rounded-pill px-2 py-1 text-body font-medium text-text-1 hover:bg-icon-circle"
+            type="button"
           >
-            <ModelCommand
-              label="Choose model"
-              className="model-command"
-              value={commandValue}
-              onValueChange={setCommandValue}
-              onKeyDown={(event) => {
-                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') setKeyboardNav(true);
+            {noProfile ? null : (
+              <>
+                <FerryMark className="v2-chip-ferry" decorative size={14} variant="brand" />
+                <span className="v2-chip-profile">{profileName}</span>
+                <span aria-hidden="true" className="v2-chip-divider" />
+              </>
+            )}
+            {chipModel ? (
+              <ProviderLogo
+                model={`${chipModel.ref} ${chipModel.name}`}
+                name={chipModel.name}
+                providerId={chipModel.providerId}
+                size={14}
+              />
+            ) : null}
+            <span className="v2-chip-model">
+              {pinnedUnavailable ? (
+                chipLabel
+              ) : mode === 'auto' ? (
+                <>
+                  <span className="v2-chip-auto">Auto</span>
+                  {autoModel}
+                </>
+              ) : selectedGatewayKey ? (
+                chipLabel
+              ) : (
+                pinnedName
+              )}
+            </span>
+            <ChevronDown aria-hidden="true" size={14} />
+          </button>
+        </PopoverPrimitive.Trigger>
+        {open && ModelCommand ? (
+          <PopoverPrimitive.Portal>
+            <PopoverPrimitive.Content
+              align="start"
+              aria-label="Choose model"
+              className="ferry-ui model-picker-popover"
+              // Keep clear of the 44px window title bar; symmetric so the preferred side never flips.
+              collisionPadding={{ top: 56, right: 12, bottom: 56, left: 12 }}
+              id={dialogId}
+              role="dialog"
+              onCloseAutoFocus={(event) => {
+                // Open options after the model list releases focus, so its cleanup cannot dismiss them.
+                if (pendingOptionsFocus.current) {
+                  event.preventDefault();
+                  pendingOptionsFocus.current = false;
+                  setOptionsOpen(true);
+                }
+              }}
+              onPointerLeave={() => {
+                setPointerInList(false);
+                setKeyboardNav(false);
+              }}
+              side="top"
+              sideOffset={8}
+              style={{
+                maxHeight: 'min(560px, var(--radix-popover-content-available-height))',
               }}
             >
-              <div className="model-picker-search">
-                <Search aria-hidden="true" size={14} />
-                <ModelCommand.Input
-                  aria-label="Search models"
-                  onValueChange={setModelQuery}
-                  placeholder="Search models…"
-                  value={modelQuery}
-                />
-                <button
-                  aria-pressed={freeOnly}
-                  className="model-picker-filter"
-                  title={
-                    freeOnly && hiddenPaidCount > 0
-                      ? `${String(hiddenPaidCount)} paid models hidden; display filter only. Spending policy is unchanged.`
-                      : 'Display filter only. Spending policy is unchanged.'
-                  }
-                  type="button"
-                  onClick={() => {
-                    setFreeOnly((current) => {
-                      saveFreeOnly(!current);
-                      return !current;
-                    });
-                  }}
-                >
-                  Free only
-                </button>
-              </div>
-              <ModelCommand.List
-                onPointerEnter={() => {
-                  setPointerInList(true);
-                }}
-                onPointerLeave={() => {
-                  setPointerInList(false);
-                  setKeyboardNav(false);
+              <ModelCommand
+                label="Choose model"
+                className="model-command"
+                value={commandValue}
+                onValueChange={setCommandValue}
+                onKeyDown={(event) => {
+                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') setKeyboardNav(true);
                 }}
               >
-                <ModelCommand.Empty className="model-picker-empty">
-                  No models match.
-                </ModelCommand.Empty>
-                <ModelCommand.Group heading="Route">
-                  <ModelCommand.Item
-                    className="model-candidate auto"
-                    value={autoValue}
-                    onSelect={() => void select('auto')}
-                    onClick={() => void select('auto')}
+                <div className="model-picker-search">
+                  <Search aria-hidden="true" size={14} />
+                  <ModelCommand.Input
+                    aria-label="Search models"
+                    onValueChange={setModelQuery}
+                    placeholder="Search models…"
+                    value={modelQuery}
+                  />
+                  <select
+                    className="model-picker-access-filter"
+                    aria-label="Model access"
+                    value={accessFilter}
+                    onChange={(event) => {
+                      const value = event.target.value as ModelAccessFilter;
+                      setAccessFilter(value);
+                      saveModelAccess(value);
+                    }}
                   >
-                    <FerryMark className="model-row-logo" decorative size={16} variant="brand" />
-                    <strong>Auto (recommended)</strong>
-                    <span className="model-row-meta">{autoModel}</span>
-                    {mode === 'auto' ? (
-                      <Check aria-hidden="true" className="model-row-check" size={14} />
-                    ) : null}
-                  </ModelCommand.Item>
-                </ModelCommand.Group>
-                {onProfileSelect ? (
-                  <ModelCommand.Group heading="Profile">
+                    <option value="free">Free</option>
+                    <option value="subscription">Included subscriptions</option>
+                    <option value="all">All connected</option>
+                  </select>
+                </div>
+                <ModelCommand.List
+                  onPointerEnter={() => {
+                    setPointerInList(true);
+                  }}
+                >
+                  <ModelCommand.Empty className="model-picker-empty">
+                    No models match.
+                  </ModelCommand.Empty>
+                  <ModelCommand.Group heading="Route">
                     <ModelCommand.Item
-                      className="model-candidate model-profile"
-                      value={noProfileValue}
-                      onSelect={() => {
-                        onProfileSelect(DIRECT_PROFILE_ID);
-                        setOpen(false);
-                      }}
+                      className="model-candidate auto"
+                      value={autoValue}
+                      onSelect={() => void select('auto')}
+                      onClick={() => void select('auto')}
                     >
-                      <strong>No profile</strong>
-                      <span className="model-row-meta">Pick the model yourself</span>
-                      {noProfile ? (
+                      <FerryMark className="model-row-logo" decorative size={16} variant="brand" />
+                      <strong>Auto (recommended)</strong>
+                      <span className="model-row-meta">{autoModel}</span>
+                      {mode === 'auto' ? (
                         <Check aria-hidden="true" className="model-row-check" size={14} />
                       ) : null}
                     </ModelCommand.Item>
-                    {routingProfiles.map((profile) => (
+                  </ModelCommand.Group>
+                  {onProfileSelect ? (
+                    <ModelCommand.Group heading="Profile">
                       <ModelCommand.Item
                         className="model-candidate model-profile"
-                        key={profile.id}
-                        value={`profile ${profile.name}`}
+                        value={noProfileValue}
                         onSelect={() => {
-                          onProfileSelect(profile.id);
+                          onProfileSelect(DIRECT_PROFILE_ID);
                           setOpen(false);
                         }}
                       >
-                        <strong>{profile.name}</strong>
-                        {profile.id === activeProfileId ? (
+                        <strong>No profile</strong>
+                        <span className="model-row-meta">Pick the model yourself</span>
+                        {noProfile ? (
                           <Check aria-hidden="true" className="model-row-check" size={14} />
                         ) : null}
                       </ModelCommand.Item>
-                    ))}
-                  </ModelCommand.Group>
-                ) : null}
+                      {routingProfiles.map((profile) => (
+                        <ModelCommand.Item
+                          className="model-candidate model-profile"
+                          key={profile.id}
+                          value={profileValue(profile)}
+                          onSelect={() => {
+                            onProfileSelect(profile.id);
+                            setOpen(false);
+                          }}
+                        >
+                          <strong>{profile.name}</strong>
+                          {profile.provenance?.supersededBy && (
+                            <span className="model-row-meta">Previous check</span>
+                          )}
+                          {profile.id === activeProfileId ? (
+                            <Check aria-hidden="true" className="model-row-check" size={14} />
+                          ) : null}
+                        </ModelCommand.Item>
+                      ))}
+                    </ModelCommand.Group>
+                  ) : null}
 
-                {usableGatewayKeys.length ? (
-                  <ModelCommand.Group
-                    heading={
-                      <span className="model-group-heading">
-                        <Network aria-hidden="true" size={14} />
-                        Gateway keys
-                        {gatewaySettings && !gatewayRunning ? (
-                          <button
-                            className="model-picker-filter ml-auto"
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void client.gateway
-                                .setSettings({
-                                  enabled: true,
-                                  port: gatewaySettings.port,
-                                  allowLan: gatewaySettings.allowLan,
-                                })
-                                .then(() =>
-                                  cache.invalidateQueries({ queryKey: ['gateway-settings'] }),
-                                );
-                            }}
-                          >
-                            Gateway off · Start
-                          </button>
-                        ) : null}
-                      </span>
-                    }
-                  >
-                    {usableGatewayKeys.map((key) => (
-                      <ModelCommand.Item
-                        className="model-candidate"
-                        key={key.id}
-                        value={`gateway ${key.name} ${key.id}`}
-                        onSelect={() => void select(`gateway/${key.id}` as ModelRef)}
-                        onClick={() => void select(`gateway/${key.id}` as ModelRef)}
-                      >
-                        <Network aria-hidden="true" className="model-row-logo" size={16} />
-                        <strong>{key.name}</strong>
-                        <span className="model-row-meta">
-                          {key.profile === 'none'
-                            ? `${String(key.allowedModels.length)} picked models`
-                            : `profile ${key.profile}`}
-                        </span>
-                        {modelRef === `gateway/${key.id}` ? (
-                          <Check aria-hidden="true" className="model-row-check" size={14} />
-                        ) : null}
-                      </ModelCommand.Item>
-                    ))}
-                  </ModelCommand.Group>
-                ) : null}
-                {grouped.map((providerId) => {
-                  const provider = providerById.get(providerId);
-                  const providerName = provider?.name ?? providerId;
-                  return (
+                  {usableGatewayKeys.length ? (
                     <ModelCommand.Group
-                      key={providerId}
                       heading={
                         <span className="model-group-heading">
-                          <ProviderLogo name={providerName} providerId={providerId} size={14} />
-                          {providerName}
+                          <Network aria-hidden="true" size={14} />
+                          Gateway keys
+                          {gatewaySettings && !gatewayRunning ? (
+                            <button
+                              className="model-picker-filter ml-auto"
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void client.gateway
+                                  .setSettings({
+                                    enabled: true,
+                                    port: gatewaySettings.port,
+                                    allowLan: gatewaySettings.allowLan,
+                                  })
+                                  .then(() =>
+                                    cache.invalidateQueries({ queryKey: ['gateway-settings'] }),
+                                  );
+                              }}
+                            >
+                              Gateway off · Start
+                            </button>
+                          ) : null}
                         </span>
                       }
                     >
-                      <ShowMoreList
-                        items={availableModels
-                          .filter((model) => model.providerId === providerId)
-                          .filter((model) => {
-                            const needle = modelQuery.trim().toLocaleLowerCase();
-                            return (
-                              !needle ||
-                              `${model.name} ${model.ref} ${model.tier} ${providerName}`
-                                .toLocaleLowerCase()
-                                .includes(needle)
-                            );
-                          })}
-                        groupKey={`model-picker:${providerId}`}
-                        label="models"
-                        forceExpand={modelQuery.trim().length > 0}
-                        renderList={(children) => <>{children}</>}
-                        renderItem={(model) => {
-                          const candidate = candidateByRef.get(model.ref);
-                          const selected = mode === 'manual' && model.ref === modelRef;
-                          return (
-                            <ModelCommand.Item
-                              className="model-candidate"
-                              key={model.ref}
-                              value={modelValue(model)}
-                              onSelect={() => void select(model.ref)}
-                              onClick={() => void select(model.ref)}
-                            >
-                              <ProviderLogo
-                                className="model-row-logo"
-                                model={`${model.ref} ${model.name}`}
-                                name={model.name}
-                                providerId={model.providerId}
-                                size={16}
-                              />
-                              <strong>
-                                {model.name}
-                                {provider?.tag === 'promo' ? (
-                                  <TagBadge className="ml-1.5" kind="promo" />
-                                ) : null}
-                                {provider?.tag === 'trial' ? (
-                                  <TagBadge className="ml-1.5" kind="trial" />
-                                ) : null}
-                                {['anthropic', 'openai-codex', 'github-copilot'].includes(
-                                  model.providerId,
-                                ) && provider?.tag === 'subscription_oauth' ? (
-                                  <span
-                                    className="model-risk-pill"
-                                    aria-label="Unofficial subscription OAuth; account suspension risk"
-                                  >
-                                    Risk
-                                  </span>
-                                ) : null}
-                              </strong>
-                              <span className="model-row-meta">
-                                {formatTokens(model.contextWindow)}
-                                {model.free ? (
-                                  <span className="model-free-pill">Free</span>
-                                ) : (
-                                  <span className="model-paid-pill">Paid</span>
-                                )}
-                              </span>
-                              {selected || (mode === 'auto' && candidate?.selected) ? (
-                                <Check aria-hidden="true" className="model-row-check" size={14} />
-                              ) : null}
-                            </ModelCommand.Item>
-                          );
-                        }}
-                      />
+                      {usableGatewayKeys.map((key) => (
+                        <ModelCommand.Item
+                          className="model-candidate"
+                          key={key.id}
+                          value={`gateway ${key.name} ${key.id}`}
+                          onSelect={() => void select(`gateway/${key.id}` as ModelRef)}
+                          onClick={() => void select(`gateway/${key.id}` as ModelRef)}
+                        >
+                          <Network aria-hidden="true" className="model-row-logo" size={16} />
+                          <strong>{key.name}</strong>
+                          <span className="model-row-meta">
+                            {key.profile === 'none'
+                              ? `${String(key.allowedModels.length)} picked models`
+                              : `profile ${key.profile}`}
+                          </span>
+                          {modelRef === `gateway/${key.id}` ? (
+                            <Check aria-hidden="true" className="model-row-check" size={14} />
+                          ) : null}
+                        </ModelCommand.Item>
+                      ))}
                     </ModelCommand.Group>
-                  );
-                })}
-                {zenNeedsVerification.length > 0 && (
-                  <ModelCommand.Group heading="OpenCode Zen — connection unverified">
-                    {zenNeedsVerification.map((model) => (
-                      <ModelCommand.Item
-                        key={`zen-unverified-${model.ref}`}
-                        value={`${model.name} OpenCode Zen ${model.ref}`}
-                        disabled
-                        className="model-candidate model-picker-unavailable"
+                  ) : null}
+                  {grouped.map((providerId) => {
+                    const provider = providerById.get(providerId);
+                    const providerName = provider?.name ?? providerId;
+                    return (
+                      <ModelCommand.Group
+                        key={providerId}
+                        heading={
+                          <span className="model-group-heading">
+                            <ProviderLogo name={providerName} providerId={providerId} size={14} />
+                            {providerName}
+                          </span>
+                        }
                       >
-                        <ProviderLogo providerId="opencode" name={model.name} size={16} />
-                        <strong>{model.name}</strong>
-                        <span className="model-risk-pill">Verify access</span>
-                      </ModelCommand.Item>
-                    ))}
-                  </ModelCommand.Group>
+                        <ShowMoreList
+                          items={availableModels
+                            .filter((model) => model.providerId === providerId)
+                            .filter((model) => {
+                              const needle = modelQuery.trim().toLocaleLowerCase();
+                              return (
+                                !needle ||
+                                `${model.name} ${model.ref} ${model.tier} ${providerName}`
+                                  .toLocaleLowerCase()
+                                  .includes(needle)
+                              );
+                            })}
+                          groupKey={`model-picker:${providerId}`}
+                          label="models"
+                          forceExpand={modelQuery.trim().length > 0}
+                          renderList={(children) => <>{children}</>}
+                          renderItem={(model) => {
+                            const candidate = candidateByRef.get(model.ref);
+                            const selected = mode === 'manual' && model.ref === modelRef;
+                            return (
+                              <ModelCommand.Item
+                                className="model-candidate"
+                                key={model.ref}
+                                value={modelValue(model)}
+                                onSelect={() => void select(model.ref)}
+                                onClick={() => void select(model.ref)}
+                              >
+                                <ProviderLogo
+                                  className="model-row-logo"
+                                  model={`${model.ref} ${model.name}`}
+                                  name={model.name}
+                                  providerId={model.providerId}
+                                  size={16}
+                                />
+                                <strong>
+                                  {model.name}
+                                  {model.cliCapabilities?.upstreamProvider && (
+                                    <small className="model-picker-upstream">
+                                      {model.cliCapabilities.upstreamProvider}
+                                    </small>
+                                  )}
+                                  {provider?.tag === 'promo' ? (
+                                    <TagBadge className="ml-1.5" kind="promo" />
+                                  ) : null}
+                                  {provider?.tag === 'trial' ? (
+                                    <TagBadge className="ml-1.5" kind="trial" />
+                                  ) : null}
+                                  {['anthropic', 'openai-codex', 'github-copilot'].includes(
+                                    model.providerId,
+                                  ) && provider?.tag === 'subscription_oauth' ? (
+                                    <span
+                                      className="model-risk-pill"
+                                      aria-label="Unofficial subscription OAuth; account suspension risk"
+                                    >
+                                      Risk
+                                    </span>
+                                  ) : null}
+                                </strong>
+                                <span className="model-row-meta">
+                                  {formatTokens(model.contextWindow)}
+                                  {model.free ? (
+                                    <span className="model-free-pill">Free</span>
+                                  ) : (
+                                    <span className="model-paid-pill">
+                                      {model.cliCapabilities?.billing === 'included_subscription'
+                                        ? 'Included'
+                                        : model.cliCapabilities?.billing === 'metered'
+                                          ? 'Metered'
+                                          : model.cliCapabilities?.billing === 'unknown'
+                                            ? 'Unknown'
+                                            : 'Paid'}
+                                    </span>
+                                  )}
+                                </span>
+                                {selected || (mode === 'auto' && candidate?.selected) ? (
+                                  <Check aria-hidden="true" className="model-row-check" size={14} />
+                                ) : null}
+                              </ModelCommand.Item>
+                            );
+                          }}
+                        />
+                      </ModelCommand.Group>
+                    );
+                  })}
+                  {cliSetupModels.length > 0 && (
+                    <ModelCommand.Group heading="Installed CLIs — setup needed">
+                      {cliSetupModels.map((model) => (
+                        <ModelCommand.Item
+                          key={`cli-setup-${model.ref}`}
+                          value={`${model.name} ${model.ref}`}
+                          disabled
+                          className="model-candidate model-picker-unavailable"
+                        >
+                          <ProviderLogo
+                            name={model.name}
+                            model={`${model.ref} ${model.name}`}
+                            size={16}
+                          />
+                          <strong>{model.name}</strong>
+                          <span className="model-row-meta">
+                            {cliConnections.find(
+                              (connection) => connection.id === model.cliConnectionId,
+                            )?.surfaces.native
+                              ? 'Verify access'
+                              : 'Enable in Ferry'}
+                          </span>
+                        </ModelCommand.Item>
+                      ))}
+                    </ModelCommand.Group>
+                  )}
+                  {zenNeedsVerification.length > 0 && (
+                    <ModelCommand.Group heading="OpenCode Zen — connection unverified">
+                      {zenNeedsVerification.map((model) => (
+                        <ModelCommand.Item
+                          key={`zen-unverified-${model.ref}`}
+                          value={`${model.name} OpenCode Zen ${model.ref}`}
+                          disabled
+                          className="model-candidate model-picker-unavailable"
+                        >
+                          <ProviderLogo providerId="opencode" name={model.name} size={16} />
+                          <strong>{model.name}</strong>
+                          <span className="model-risk-pill">Verify access</span>
+                        </ModelCommand.Item>
+                      ))}
+                    </ModelCommand.Group>
+                  )}
+                </ModelCommand.List>
+                {cliSetupModels.length > 0 && (
+                  <div className="model-picker-zen-note">
+                    <span>CLI connections need an opt-in and generation check.</span>
+                    <UiV2.Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setOpen(false);
+                        useUI.getState().openSettings('Providers & keys');
+                      }}
+                    >
+                      Manage CLIs
+                    </UiV2.Button>
+                  </div>
                 )}
-              </ModelCommand.List>
-            </ModelCommand>
-            {zenNeedsVerification.length > 0 && (
-              <section className="model-picker-zen-note" aria-label="OpenCode Zen availability">
-                <strong>OpenCode Zen</strong>
-                <p>
-                  {zenNeedsVerification
-                    .slice(0, 3)
-                    .map((model) => model.name)
-                    .join(', ')}
-                  {zenNeedsVerification.length > 3 ? ' and more' : ''}
-                </p>
-                <p>
-                  {zenNeedsVerification.length} free models need generation verification. Manage Zen
-                  to use the installed OpenCode CLI, or check the standard API connection.
-                </p>
-                <UiV2.Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setOpen(false);
-                    void navigate({ to: '/models' });
-                  }}
-                >
-                  Check Zen access
-                </UiV2.Button>
-              </section>
-            )}
-            {highlightedModel ? (
-              <ModelDetailsCard
-                auto={
-                  highlightedModel === autoInfo && highlighted === autoValue.toLocaleLowerCase()
-                }
-                candidate={candidateByRef.get(highlightedModel.ref)}
-                model={highlightedModel}
-                provider={providerById.get(highlightedModel.providerId)}
-              />
-            ) : highlighted === noProfileValue.toLocaleLowerCase() ? (
-              <aside aria-label="No profile" className="v2-model-details">
-                <header>
-                  <strong>No profile</strong>
-                  <span className="v2-model-details-provider">Direct model</span>
-                </header>
-                <p className="v2-model-details-description">
-                  Talk to the model you pick, with no routing rules. Auto picks from every connected
-                  model. Your global paid confirmation and spend caps still apply.
-                </p>
-              </aside>
-            ) : highlightedProfile ? (
-              <aside aria-label={`${highlightedProfile.name} profile`} className="v2-model-details">
-                <header>
-                  <strong>{highlightedProfile.name}</strong>
-                  <span className="v2-model-details-provider">Routing profile</span>
-                </header>
-                <p className="v2-model-details-description">
-                  {highlightedProfile.description ??
-                    'Ferry picks a model for each step using this profile’s rules.'}
-                </p>
-              </aside>
-            ) : null}
-          </PopoverPrimitive.Content>
-        </PopoverPrimitive.Portal>
-      ) : null}
-    </PopoverPrimitive.Root>
+
+                {zenNeedsVerification.length > 0 && (
+                  <div className="model-picker-zen-note" aria-label="OpenCode Zen availability">
+                    <span>{zenNeedsVerification.length} Zen free models need verification.</span>
+                    <UiV2.Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setOpen(false);
+                        void navigate({ to: '/models' });
+                      }}
+                    >
+                      Check Zen access
+                    </UiV2.Button>
+                  </div>
+                )}
+              </ModelCommand>
+              <PickerDetails>
+                {highlightedModel ? (
+                  <ModelDetailsCard
+                    auto={
+                      highlightedModel === autoInfo && highlighted === autoValue.toLocaleLowerCase()
+                    }
+                    candidate={candidateByRef.get(highlightedModel.ref)}
+                    model={highlightedModel}
+                    provider={providerById.get(highlightedModel.providerId)}
+                  />
+                ) : highlighted === noProfileValue.toLocaleLowerCase() ? (
+                  <aside aria-label="No profile" className="v2-model-details">
+                    <header>
+                      <strong>No profile</strong>
+                      <span className="v2-model-details-provider">Direct model</span>
+                    </header>
+                    <p className="v2-model-details-description">
+                      Talk to the model you pick, with no routing rules. Auto picks from every
+                      connected model. Your global paid confirmation and spend caps still apply.
+                    </p>
+                  </aside>
+                ) : highlightedProfile ? (
+                  <aside
+                    aria-label={`${highlightedProfile.name} profile`}
+                    className="v2-model-details"
+                  >
+                    <header>
+                      <strong>{highlightedProfile.name}</strong>
+                      <span className="v2-model-details-provider">Routing profile</span>
+                    </header>
+                    <p className="v2-model-details-description">
+                      {highlightedProfile.description ??
+                        'Ferry picks a model for each step using this profile’s rules.'}
+                    </p>
+                  </aside>
+                ) : null}
+              </PickerDetails>
+            </PopoverPrimitive.Content>
+          </PopoverPrimitive.Portal>
+        ) : null}
+      </PopoverPrimitive.Root>
+      {optionsModel?.cliCapabilities && (
+        <CliOptionsChip
+          model={optionsModel}
+          value={{
+            effort: effectiveOptions.effort ?? null,
+            speed: effectiveOptions.speed,
+          }}
+          open={optionsOpen}
+          onOpenChange={setOptionsOpen}
+          onChange={(options) => void changeCliOptions(options)}
+          busy={optionsBusy}
+          error={optionsError}
+        />
+      )}
+    </>
   );
 }

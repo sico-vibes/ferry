@@ -5,16 +5,21 @@ import type { FerryEvents } from '@ferry/client';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useEffect, useState, type ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FerryProvider } from '../data/client';
 import { useFerryEvents } from '../data/events';
 import { keys } from '../data/queries';
 import { useUI } from '../state/ui';
 import { CommandPalette, ComposerModelChip } from './SessionPowerControls';
 import { Composer } from '@ferry/ui';
-import { ModelInfoSchema } from '@ferry/shared';
+import { ModelInfoSchema, ProviderSchema } from '@ferry/shared';
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
+
+afterEach(() => {
+  localStorage.removeItem('ferry.modelPicker.freeOnly');
+  localStorage.removeItem('ferry.modelPicker.accessFilter');
+});
 
 function ChipProviders({
   client,
@@ -38,6 +43,130 @@ function renderChip(client: ReturnType<typeof createMockFerryClient>, chip: Reac
 }
 
 describe('ComposerModelChip', () => {
+  it('keeps a bound previous optimized profile identifiable and selects the managed profile by ID', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const base = (await client.profiles.list())[0];
+    if (!base) throw new Error('Missing profile fixture');
+    const latest = {
+      ...base,
+      id: 'profile_optimized_latest' as typeof base.id,
+      name: 'Optimized for this device',
+      builtin: false,
+      provenance: {
+        kind: 'provider-check' as const,
+        generatedAt: '2026-10-14T00:00:00.000Z',
+        sampleCount: 3,
+        note: 'Measured responsiveness',
+        managedSlot: 'device-optimized',
+      },
+    };
+    const previous = {
+      ...latest,
+      id: 'profile_optimized_previous' as typeof base.id,
+      provenance: { ...latest.provenance, supersededBy: latest.id },
+    };
+    const hidden = { ...previous, id: 'profile_optimized_older' as typeof base.id };
+    const select = vi.fn();
+    const { container } = renderChip(
+      client,
+      <ComposerModelChip
+        sessionId={null}
+        modelName="Auto"
+        modelRef={null}
+        mode="auto"
+        activeProfileId={previous.id}
+        profiles={[latest, previous, hidden]}
+        onProfileSelect={select}
+      />,
+    );
+    const trigger = container.querySelector('.v2-composer-chip[aria-controls]');
+    if (!trigger) throw new Error('Missing picker trigger');
+    fireEvent.click(trigger);
+    const group = await screen.findByRole('group', { name: 'Profile' });
+    const versions = within(group).getAllByRole('option', { name: /^Optimized for this device/ });
+    expect(versions).toHaveLength(2);
+    expect(new Set(versions.map((item) => item.getAttribute('data-value'))).size).toBe(2);
+    expect(within(group).getByRole('option', { name: /Previous check/ })).toBeTruthy();
+    fireEvent.click(within(group).getByRole('option', { name: /^Optimized for this device$/ }));
+    expect(select).toHaveBeenCalledWith(latest.id);
+  });
+
+  it('opens advertised CLI options after selection without presenting included capacity as free', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const store = client.__store();
+    const base = store.models[0];
+    const provider = store.providers[0];
+    const connection = (await client.cliConnections.list()).find((row) => row.id === 'codex-cli');
+    const capabilities = connection?.models[0];
+    if (!base || !provider || !connection || !capabilities) throw new Error('Missing CLI fixtures');
+    const model = ModelInfoSchema.parse({
+      ...base,
+      ref: capabilities.ref,
+      providerId: 'codex-cli',
+      name: capabilities.name,
+      free: false,
+      transport: 'codex_cli',
+      cliConnectionId: 'codex-cli',
+      cliCapabilities: capabilities,
+    });
+    store.models.push(model);
+    store.providers.push(
+      ProviderSchema.parse({
+        ...provider,
+        id: 'codex-cli',
+        name: 'Codex CLI',
+        kind: 'cli',
+        tag: 'subscription_cli',
+        keyStatus: 'not_applicable',
+        enabled: true,
+      }),
+    );
+    vi.spyOn(client.cliConnections, 'list').mockResolvedValue([
+      {
+        ...connection,
+        surfaces: { native: true, gateway: false },
+        verify: {
+          state: 'verified',
+          modelRef: model.ref,
+          checkedAt: '2026-10-13T10:00:00.000Z',
+          message: null,
+        },
+      },
+    ]);
+    const select = vi.fn();
+    const options = vi.fn();
+    renderChip(
+      client,
+      <ComposerModelChip
+        sessionId={null}
+        modelName={base.name}
+        modelRef={base.ref}
+        mode="manual"
+        onModelSelect={select}
+        onCliOptionsChange={options}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: base.name }));
+    const access = await screen.findByRole('combobox', { name: 'Model access' });
+    fireEvent.change(access, { target: { value: 'subscription' } });
+    const cliOption = await screen.findByRole('option', { name: new RegExp(model.name) });
+    expect(cliOption.textContent).toContain('Included');
+    fireEvent.click(cliOption);
+    await waitFor(() => {
+      expect(select).toHaveBeenCalledWith(model.ref);
+    });
+    await screen.findByRole('combobox', { name: 'CLI reasoning effort' });
+    expect(screen.queryByRole('dialog', { name: 'Choose model' })).toBeNull();
+    const fast = screen.queryByRole('switch', { name: 'CLI fast mode' });
+    if (capabilities.speeds.includes('fast'))
+      expect(fast?.getAttribute('aria-checked')).toBe('false');
+    else expect(fast).toBeNull();
+    fireEvent.change(screen.getByRole('combobox', { name: 'CLI reasoning effort' }), {
+      target: { value: 'high' },
+    });
+    expect(options).toHaveBeenCalledWith({ effort: 'high', speed: 'standard' });
+  });
+
   it('shows unverified Zen free models with an access explanation and permits API-verified ones', async () => {
     const client = createMockFerryClient({ behavior: 'test' });
     const store = client.__store();
@@ -167,6 +296,7 @@ describe('ComposerModelChip', () => {
 
   it('filters the picker to free models and remembers the choice', async () => {
     localStorage.removeItem('ferry.modelPicker.freeOnly');
+    localStorage.removeItem('ferry.modelPicker.accessFilter');
     const client = createMockFerryClient({ behavior: 'test' });
     const model = (await client.models.list())[0];
     if (!model) throw new Error('Expected a fixture model');
@@ -180,7 +310,7 @@ describe('ComposerModelChip', () => {
       />,
     );
     fireEvent.click(await screen.findByRole('button', { name: model.name }));
-    const toggle = await screen.findByRole('button', { name: 'Free only' });
+    const toggle = await screen.findByRole('combobox', { name: 'Model access' });
     const picker = screen.getByRole('dialog', { name: 'Choose model' });
     await waitFor(() => {
       expect(
@@ -190,16 +320,17 @@ describe('ComposerModelChip', () => {
     const before = picker.querySelectorAll(
       '.model-candidate:not(.auto):not(.model-profile)',
     ).length;
-    fireEvent.click(toggle);
-    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.change(toggle, { target: { value: 'free' } });
+    expect((toggle as HTMLSelectElement).value).toBe('free');
     await waitFor(() => {
       expect(within(picker).queryAllByText('Paid')).toHaveLength(0);
     });
     expect(
       picker.querySelectorAll('.model-candidate:not(.auto):not(.model-profile)').length,
     ).toBeLessThanOrEqual(before);
-    expect(localStorage.getItem('ferry.modelPicker.freeOnly')).toBe('true');
+    expect(localStorage.getItem('ferry.modelPicker.accessFilter')).toBe('free');
     localStorage.removeItem('ferry.modelPicker.freeOnly');
+    localStorage.removeItem('ferry.modelPicker.accessFilter');
   });
 
   it('lists gateway keys in the picker and routes the chat through the chosen key', async () => {

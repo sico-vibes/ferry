@@ -24,6 +24,10 @@ const screens = [
   { name: 'home', path: '/' },
   { name: 'models', path: '/models' },
   { name: 'model-catalog', path: '/models/catalog' },
+  { name: 'model-details', path: '/models/catalog', modelDetails: true },
+  { name: 'provider-verification', path: '/models', integrationTooltip: true },
+  { name: 'installed-cli-connections', path: '/models', inspectCliConnections: true },
+  { name: 'cli-sign-in-instructions', path: '/models', cliSignIn: true },
   { name: 'provider-endpoint', path: '/models', endpoint: true },
   { name: 'model-picker', path: '/', modelPicker: true },
   { name: 'command-palette', path: '/', palette: true },
@@ -47,6 +51,12 @@ const screens = [
   { name: 'onboarding-paid-backup', path: '/onboarding', step: 2, paidBackup: true },
   { name: 'onboarding-paid-verification', path: '/onboarding', step: 5, paidBackup: true },
   { name: 'chat', path: '/?speed=0', openFirstChat: true },
+  {
+    name: 'conversation-model-usage',
+    path: '/?speed=0',
+    openFirstChat: true,
+    conversationUsage: true,
+  },
   ...['Plan', 'Changes', 'Terminal'].map((drawer) => ({
     name: `drawer-${drawer.toLowerCase()}`,
     path: '/?speed=0',
@@ -78,10 +88,10 @@ const screens = [
   },
   { name: 'providers-paid-checks', path: '/models', paidChecks: true },
   {
-    name: 'settings-delegation-clients',
+    name: 'settings-delegation-connections',
     path: '/settings',
     section: 'Delegation',
-    inspectClients: true,
+    openConnectionManager: true,
   },
   ...['About', 'Data & privacy'].map((section) => ({
     name: `settings-${section === 'About' ? 'about' : 'data'}-diagnostics`,
@@ -212,6 +222,26 @@ async function checkScreen({ theme, viewport, deviceScaleFactor, screen }) {
     await page.getByRole('textbox', { name: 'Provider base URL' }).fill('http://localhost:8080/v1');
   }
   if (screen.modelPicker) await page.locator('.v2-composer-chip[aria-controls]').click();
+  if (screen.modelDetails) {
+    await page.locator('.model-table-name-button').first().click();
+    await page.locator('.model-table-details').waitFor();
+  }
+  if (screen.integrationTooltip) {
+    await page
+      .getByRole('img', { name: /^Verified integration\./ })
+      .first()
+      .hover();
+    await page.getByRole('tooltip').waitFor();
+  }
+  if (screen.inspectCliConnections || screen.cliSignIn) {
+    const connections = page.getByRole('region', { name: 'Installed CLIs', exact: true });
+    await connections.getByRole('switch', { name: 'Use Codex CLI in Ferry' }).waitFor();
+    await connections.scrollIntoViewIfNeeded();
+    if (screen.cliSignIn) {
+      await connections.getByRole('button', { name: 'Sign-in instructions' }).first().click();
+      await page.getByRole('dialog', { name: 'Sign in to Codex CLI' }).waitFor();
+    }
+  }
   if (screen.palette) await page.keyboard.press('Control+k');
   if (screen.paidChecks) {
     await page.getByText('Paid checks', { exact: true }).click();
@@ -250,6 +280,16 @@ async function checkScreen({ theme, viewport, deviceScaleFactor, screen }) {
     await page.locator('.transcript-message').nth(1).waitFor({ timeout: 30_000 });
     await page.waitForTimeout(4_000);
   }
+  if (screen.conversationUsage) {
+    await page
+      .getByRole('button', { name: /^Model usage for / })
+      .first()
+      .click();
+    await page.getByRole('dialog', { name: 'Conversation usage' }).waitFor();
+    await page
+      .getByText('Loading conversation usage…', { exact: true })
+      .waitFor({ state: 'hidden' });
+  }
   if (screen.section) {
     await page.locator('.v2-settings-nav').waitFor({ timeout: 15_000 });
     await page.locator('.v2-settings-nav button', { hasText: screen.section }).first().click();
@@ -259,10 +299,11 @@ async function checkScreen({ theme, viewport, deviceScaleFactor, screen }) {
         .filter({ hasText: /^Advanced$/ })
         .first()
         .click();
-    if (screen.inspectClients) {
-      await page.getByRole('button', { name: 'Check client sign-ins' }).click();
-      await page.getByText(/Installed and signed in/).waitFor();
-      await page.getByRole('list', { name: 'Coding CLIs', exact: true }).scrollIntoViewIfNeeded();
+    if (screen.openConnectionManager) {
+      await page.getByRole('button', { name: 'Manage CLI connections', exact: true }).click();
+      await page
+        .getByRole('region', { name: 'Installed CLIs', exact: true })
+        .scrollIntoViewIfNeeded();
     }
     if (screen.diagnostics) {
       const exportButton = page.getByRole('button', {

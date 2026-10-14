@@ -65,8 +65,12 @@ export function ZenCliConnection() {
       const result = await client.providers.verifyZenCli(selected || freeModels[0]?.ref);
       setMessage(result.message);
       await invalidate();
-    } catch {
-      setMessage('OpenCode verification failed. Check the installation and retry.');
+    } catch (cause) {
+      setMessage(
+        cause instanceof Error
+          ? cause.message
+          : 'OpenCode verification failed. Check the installation and retry.',
+      );
     } finally {
       setChecking(false);
     }
@@ -104,9 +108,13 @@ export function ZenCliConnection() {
             Installed · {data.version} ·{' '}
             {data.credentialSource === 'opencode'
               ? 'OpenCode Zen credential found'
-              : data.credentialSource === 'ferry'
-                ? 'Uses saved Ferry key'
-                : 'No Zen key found; free anonymous access will be checked'}
+              : data.credentialSource === 'opencode_go'
+                ? data.verifiedModels.length
+                  ? 'OpenCode Go credential found; free-model verification is shown below'
+                  : 'OpenCode Go credential found; Zen access not checked'
+                : data.credentialSource === 'ferry'
+                  ? 'Uses saved Ferry key'
+                  : 'Anonymous access available to check; no OpenCode credential detected'}
           </>
         ) : (
           'OpenCode CLI not installed.'

@@ -38,9 +38,17 @@ export function contextSegments(contextWindow: number): number {
 }
 
 export function priceLabel(
-  model: Pick<ModelInfo, 'free' | 'priceInPerM' | 'priceOutPerM'>,
+  model: Pick<ModelInfo, 'free' | 'priceInPerM' | 'priceOutPerM' | 'cliCapabilities'>,
 ): string {
   if (model.free) return 'Free';
+  if (model.cliCapabilities?.billing === 'included_subscription')
+    return 'Included subscription · account limits apply';
+  if (model.cliCapabilities?.billing === 'unknown') return 'Billing not reported by the CLI';
+  if (
+    model.cliCapabilities?.billing === 'metered' &&
+    (model.priceInPerM === null || model.priceOutPerM === null)
+  )
+    return 'Metered · price not reported by the CLI';
   if (model.priceInPerM === null || model.priceOutPerM === null) return 'Paid, price unknown';
   const money = (value: number) => `$${value < 1 ? value.toFixed(2) : String(value)}`;
   return `${money(model.priceInPerM)} in, ${money(model.priceOutPerM)} out per 1M`;
