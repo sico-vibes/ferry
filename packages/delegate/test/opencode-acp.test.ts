@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -248,4 +248,70 @@ it('deletes only its own native session in installed mode and not in anonymous m
   } finally {
     rmSync(marker, { force: true });
   }
+});
+
+it('pins PWD to the private cwd and never imports the parent project config, rules or plugins', async () => {
+  const parent = mkdtempSync(join(tmpdir(), 'ferry-oc-parent-'));
+  try {
+    // A hostile orchestrator checkout: project config, rules and a plugin that would run on load.
+    const sentinel = join(parent, 'plugin-ran.txt');
+    mkdirSync(join(parent, '.opencode', 'plugin'), { recursive: true });
+    writeFileSync(
+      join(parent, 'opencode.json'),
+      JSON.stringify({ plugin: ['./.opencode/plugin/evil.mjs'], mcp: { evil: { type: 'local' } } }),
+      'utf8',
+    );
+    writeFileSync(join(parent, 'AGENTS.md'), 'MALICIOUS_RULE', 'utf8');
+    writeFileSync(
+      join(parent, '.opencode', 'plugin', 'evil.mjs'),
+      `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(sentinel)}, 'ran');\n`,
+      'utf8',
+    );
+    const opencodeJson = readFileSync(join(parent, 'opencode.json'), 'utf8');
+
+    const result = await runOpenCodeAcp({
+      ...base,
+      environment: {
+        ...environment,
+        PWD: parent,
+        OPENCODE_CONFIG: join(parent, 'opencode.json'),
+        OPENCODE_CONFIG_DIR: join(parent, '.opencode'),
+      },
+      prompt: 'go',
+      signal: signal(),
+    });
+
+    // The transport rewrote the leaky variables: PWD is the private cwd, project config discovery
+    // is off, and the inherited config-file pointers are gone. The plugin never executed.
+    expect(result.text).toContain('pwd-private');
+    expect(result.text).toContain('proj-off');
+    expect(result.text).toContain('config-env-off');
+    expect(existsSync(sentinel)).toBe(false);
+    // Nothing on disk in the parent checkout is mutated.
+    expect(readFileSync(join(parent, 'opencode.json'), 'utf8')).toBe(opencodeJson);
+    expect(existsSync(join(parent, 'AGENTS.md'))).toBe(true);
+  } finally {
+    rmSync(parent, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }
+});
+
+it('keeps text-only output and separate reasoning without folding or inventing totals', async () => {
+  // Mirrors the live Go HIGH probe: text-only output counter (9/12) plus a separate reasoning
+  // counter (307/41); the CLI reports no cache dimensions, so cache stays null.
+  const high = await runOpenCodeAcp({ ...base, prompt: 'GO_HIGH', signal: signal() });
+  expect(high.text).toBe('NATIVE_TOOLS_UNAVAILABLE');
+  expect(high.usage).toEqual({
+    inputTokens: 12776,
+    outputTokens: 9,
+    cachedTokens: null,
+    reasoningTokens: 307,
+  });
+
+  const continued = await runOpenCodeAcp({ ...base, prompt: 'GO_HIGH_CONTINUE', signal: signal() });
+  expect(continued.usage).toEqual({
+    inputTokens: 12953,
+    outputTokens: 12,
+    cachedTokens: null,
+    reasoningTokens: 41,
+  });
 });

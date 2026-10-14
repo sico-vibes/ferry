@@ -41,6 +41,8 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 interface ClaudeRecord {
   argv: string[];
+  cwd?: string;
+  pwd?: string | null;
   mcp: Record<string, unknown> | null;
   settings: Record<string, unknown> | null;
   systemPrompt: string | null;
@@ -115,6 +117,8 @@ interface ClaudeRunOptions extends Partial<CliTransportInput> {
   cwdFile?: string;
   stageFile?: string;
   authStatus?: string;
+  /** Inherited PWD that the transport must not forward to the child. */
+  pwd?: string;
 }
 
 function makeInput(options: ClaudeRunOptions): CliTransportInput {
@@ -129,6 +133,7 @@ function makeInput(options: ClaudeRunOptions): CliTransportInput {
     signal: options.signal ?? new AbortController().signal,
     environment: {
       ...process.env,
+      ...(options.pwd ? { PWD: options.pwd } : {}),
       FERRY_CLAUDE_SCENARIO: options.scenario,
       FERRY_CLAUDE_RECORD: options.record,
       FERRY_CLAUDE_MODEL: model.upstreamId,
@@ -589,4 +594,18 @@ describe('runClaudeCodeCli', () => {
     const recordBRecord = await readRecord(recordB);
     expect(recordARecord.argv.join(' ')).not.toBe(recordBRecord.argv.join(' '));
   });
+
+  it(
+    'pins the private PWD so an inherited project PWD cannot leak',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'pwd.json');
+      const leaked = join(dir, 'orchestrator-repo');
+      await runClaudeCodeCli(makeInput({ scenario: 'text', record: recordPath, pwd: leaked }));
+      const record = await readRecord(recordPath);
+      expect(record.pwd).toBe(record.cwd);
+      expect(record.pwd).not.toBe(leaked);
+    },
+  );
 });

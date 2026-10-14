@@ -4,6 +4,8 @@ import { isRecord, asArray, str, num } from './coerce.js';
 import {
   commandInvocation,
   createPrivateWorkingDir,
+  isUnsafeArgument,
+  privateChildEnvironment,
   removePrivateWorkingDir,
   resolveExecutable,
   spawnCliProcess,
@@ -11,6 +13,17 @@ import {
 } from './process.js';
 import { JsonRpcRequestError, NdjsonJsonRpcPeer } from './rpc.js';
 import { redactText } from './redact.js';
+import {
+  checkPluginList,
+  configuredMcpNames,
+  configuredPlugins,
+  disabledPluginOverrides,
+  disabledServerOverrides,
+  managedHooksConfigured,
+  notifyStillConfigured,
+  tomlKeySegment,
+  type ConfiguredPlugins,
+} from './codex-config.js';
 import {
   assertCodexCompatible,
   accountKeyOf,
@@ -375,6 +388,182 @@ function buildUsageSnapshot(connection: CliConnection, snapshot: unknown): CliUs
   };
 }
 
+interface McpDiscoveryOptions {
+  executable: string;
+  baseArgs: readonly string[];
+  environment: NodeJS.ProcessEnv;
+  signal: AbortSignal;
+  timeoutMs: number;
+  accountKey: string | null;
+}
+
+interface CodexIsolationConfig {
+  /** Configured top-level MCP server names. */
+  mcpNames: string[];
+  /** Configured plugin ids and any declared plugin MCP server names. */
+  plugins: ConfiguredPlugins;
+}
+
+function invalidCodexConfig(accountKey: string | null): CliTransportError {
+  return new CliTransportError(
+    'unsupported_capability',
+    'Codex app-server did not return a usable effective config; cannot prove inherited MCP/plugin isolation. Update the Codex CLI',
+    { accountKey },
+  );
+}
+
+/**
+ * Discover the native MCP/plugin isolation config via a dedicated, bounded app-server probe that
+ * ONLY calls `initialize` + `config/read`. `config/read` is non-activating metadata: it never starts
+ * an MCP process (verified against the installed 0.162.1 app-server with a sentinel command). The
+ * probe runs in a private temp cwd and is torn down before the generation process starts, so no
+ * inherited MCP/plugin command can run during account/version/config discovery. Failure rejects the
+ * turn closed.
+ *
+ * Cancellation: an already-aborted signal throws before any temp dir or process is created; a
+ * signal that aborts during the awaited temp-dir creation is re-checked before spawn; and a single
+ * shared abort promise (one listener) races every request. The caller's remaining deadline is passed
+ * in, so the probe shares the turn's overall budget instead of adding a new one.
+ */
+async function readNativeIsolationConfig(
+  options: McpDiscoveryOptions,
+): Promise<CodexIsolationConfig> {
+  const cancelError = (reason: unknown): CliTransportError =>
+    reason instanceof CliTransportError
+      ? reason
+      : new CliTransportError('cancelled', 'Codex isolation discovery cancelled', {
+          accountKey: options.accountKey,
+        });
+  if (options.signal.aborted) throw cancelError(options.signal.reason);
+  const controller = new AbortController();
+  const relay = (): void => {
+    controller.abort(options.signal.reason);
+  };
+  options.signal.addEventListener('abort', relay, { once: true });
+  const timer = setTimeout(() => {
+    controller.abort(
+      new CliTransportError('timeout', 'Codex isolation discovery timed out', {
+        accountKey: options.accountKey,
+      }),
+    );
+  }, options.timeoutMs);
+  // One abort promise / one controller listener, shared by every request (never re-registered).
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const rejectAbort = (): void => {
+      reject(cancelError(controller.signal.reason));
+    };
+    if (controller.signal.aborted) rejectAbort();
+    else controller.signal.addEventListener('abort', rejectAbort, { once: true });
+  });
+  let cwd: string | undefined;
+  let proc: CliProcess | undefined;
+  let peer: NdjsonJsonRpcPeer | undefined;
+  try {
+    cwd = await createPrivateWorkingDir();
+    // A signal that aborted while the temp dir was being created must not spawn the probe.
+    controller.signal.throwIfAborted();
+    const invocation = commandInvocation(options.executable, [
+      ...options.baseArgs,
+      'app-server',
+      ...blanketIsolationCliArgs(),
+    ]);
+    const probeEnvironment = privateChildEnvironment(options.environment, cwd);
+    // Marks this short-lived child as the non-activating config probe (ignored by the real CLI).
+    probeEnvironment.FERRY_CODEX_MCP_PROBE = '1';
+    proc = spawnCliProcess({
+      file: invocation.file,
+      args: invocation.args,
+      cwd,
+      environment: probeEnvironment,
+      verbatim: invocation.verbatim,
+    });
+    const activeProcess: CliProcess = proc;
+    const activePeer = new NdjsonJsonRpcPeer({
+      write: (line) => {
+        activeProcess.stdin.write(line);
+      },
+      onProtocolError: () => {
+        controller.abort(
+          new CliTransportError('provider_error', 'Codex isolation discovery protocol error', {
+            accountKey: options.accountKey,
+          }),
+        );
+      },
+    });
+    peer = activePeer;
+    activeProcess.stdout.setEncoding('utf8');
+    activeProcess.stdout.on('data', (chunk: string) => {
+      activePeer.handleChunk(chunk);
+    });
+    const request = (method: string, params: unknown): Promise<unknown> =>
+      Promise.race([activePeer.request(method, params), aborted]);
+    await request('initialize', {
+      clientInfo: { name: FERRY_CLIENT_NAME, version: FERRY_CLIENT_VERSION },
+      capabilities: { experimentalApi: true },
+    });
+    activePeer.notify('initialized', {});
+    const effective = await request('config/read', {});
+    if (!isRecord(effective) || !isRecord(effective.config))
+      throw invalidCodexConfig(options.accountKey);
+    const mcp = effective.config.mcp_servers;
+    if (mcp !== undefined && mcp !== null && !isRecord(mcp))
+      throw invalidCodexConfig(options.accountKey);
+    const plugins = effective.config.plugins;
+    if (plugins !== undefined && plugins !== null && !isRecord(plugins))
+      throw invalidCodexConfig(options.accountKey);
+    return { mcpNames: configuredMcpNames(effective), plugins: configuredPlugins(effective) };
+  } catch (error) {
+    if (error instanceof CliTransportError) throw error;
+    throw new CliTransportError(
+      'unsupported_capability',
+      'Could not read the Codex app-server config to disable inherited MCP/plugin sources; update the Codex CLI',
+      { accountKey: options.accountKey },
+    );
+  } finally {
+    clearTimeout(timer);
+    options.signal.removeEventListener('abort', relay);
+    peer?.close();
+    await proc?.killTree();
+    if (cwd) await removePrivateWorkingDir(cwd);
+  }
+}
+
+/**
+ * Blanket startup `-c` overrides that need no prior enumeration. `features.plugins=false` disables
+ * every plugin source (verified: it blanks `plugin/list` and stops plugin MCP startup).
+ * `features.hooks=false` (with the documented `features.codex_hooks` alias) disables native global
+ * lifecycle hooks loaded from `hooks.json` or inline `[hooks]`, and `notify=[]` clears the native
+ * notification command — so no native hook/notify command can run in this private process, including
+ * during the non-activating config probe. None of these keys require quoting.
+ */
+function blanketIsolationCliArgs(): string[] {
+  return [
+    '-c',
+    'features.plugins=false',
+    '-c',
+    'features.hooks=false',
+    '-c',
+    'features.codex_hooks=false',
+    '-c',
+    'notify=[]',
+  ];
+}
+
+/**
+ * Startup `-c` overrides for the generation process: the blankets plus per-name MCP server disables
+ * using the correct (possibly quoted) TOML key when the argument is safe for the Windows `.cmd`
+ * shim. Names whose quoted key cannot pass the shim's argument guard are still disabled at the
+ * thread level (JSON keys carry the exact name).
+ */
+function startupIsolationCliArgs(mcpNames: readonly string[]): string[] {
+  const args = blanketIsolationCliArgs();
+  for (const name of mcpNames) {
+    const override = `mcp_servers.${tomlKeySegment(name)}.enabled=false`;
+    if (!isUnsafeArgument(override)) args.push('-c', override);
+  }
+  return args;
+}
+
 /**
  * Run exactly one text/caller-tool turn against a private ephemeral Codex app-server thread.
  * Native host access, tools, hooks and approvals are disabled; the only tools exposed are the
@@ -386,6 +575,14 @@ export async function runCodexCli(input: CliTransportInput): Promise<CliTurnResu
   const accountKey: CliAccountKey | null = accountKeyOf(input.connection);
   const environment = input.environment ?? process.env;
   input.signal.throwIfAborted();
+  // One overall deadline covers the discovery probe AND the generation turn; no phase gets a fresh
+  // timeout budget. Each phase is given whatever time remains on this deadline.
+  const overallTimeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = Date.now() + overallTimeoutMs;
+  if (overallTimeoutMs <= 0)
+    throw new CliTransportError('timeout', 'Codex request deadline already elapsed', {
+      accountKey,
+    });
 
   const cwd = await createPrivateWorkingDir();
   let proc: CliProcess | undefined;
@@ -397,15 +594,38 @@ export async function runCodexCli(input: CliTransportInput): Promise<CliTurnResu
 
   try {
     const executable = await resolveExecutable('codex', input.executable, environment);
+    const baseArgs = input.executableArgs ?? [];
+    // Discover the native MCP/plugin sources with a non-activating probe, then launch the
+    // generation process with the plugin-availability switch and per-name MCP disables already
+    // applied at startup, so no inherited MCP/plugin command can run during this turn.
+    const isolation = await readNativeIsolationConfig({
+      executable,
+      baseArgs,
+      environment,
+      signal: input.signal,
+      timeoutMs: deadline - Date.now(),
+      accountKey,
+    });
+    input.signal.throwIfAborted();
+    // The single deadline must not be extended: if the probe consumed it, reject before spawning.
+    if (Date.now() >= deadline)
+      throw new CliTransportError(
+        'timeout',
+        `Codex request deadline elapsed before generation (${String(overallTimeoutMs)}ms)`,
+        { accountKey },
+      );
+    const inheritedMcpServers = disabledServerOverrides(isolation.mcpNames);
+    const inheritedPlugins = disabledPluginOverrides(isolation.plugins);
     const invocation = commandInvocation(executable, [
-      ...(input.executableArgs ?? []),
+      ...baseArgs,
       'app-server',
+      ...startupIsolationCliArgs(isolation.mcpNames),
     ]);
     proc = spawnCliProcess({
       file: invocation.file,
       args: invocation.args,
       cwd,
-      environment,
+      environment: privateChildEnvironment(environment, cwd),
       verbatim: invocation.verbatim,
     });
     const activeProcess: CliProcess = proc;
@@ -486,11 +706,13 @@ export async function runCodexCli(input: CliTransportInput): Promise<CliTurnResu
             } else if (item.type === 'dynamicToolCall') {
               const id = str(item.id);
               const alias = str(item.tool);
-              if (id && alias && !toolCalls.some((call) => call.id === id)) {
-                const tool = byAlias.get(alias);
+              const tool = alias ? byAlias.get(alias) : undefined;
+              // Only Ferry-advertised caller aliases are handed back; a native/unknown tool name is
+              // never surfaced to Core as if it were a caller tool.
+              if (tool && id && !toolCalls.some((call) => call.id === id)) {
                 handoff({
                   id,
-                  name: tool?.name ?? alias,
+                  name: tool.name,
                   arguments: parseToolArguments(item.arguments),
                 });
               }
@@ -566,10 +788,19 @@ export async function runCodexCli(input: CliTransportInput): Promise<CliTurnResu
           const params = isRecord(request.params) ? request.params : {};
           const id = str(params.callId) ?? `call_${String(request.id)}`;
           const alias = str(params.tool) ?? '';
-          const tool = byAlias.get(alias);
+          const tool = alias ? byAlias.get(alias) : undefined;
+          if (!tool) {
+            // A native/unknown tool id is not a caller tool; deny it rather than hand it to Core.
+            peer?.respondError(
+              request.id,
+              -32000,
+              'Ferry denies native CLI tool calls that are not caller-provided',
+            );
+            return;
+          }
           handoff({
             id,
-            name: tool?.name ?? alias,
+            name: tool.name,
             arguments: parseToolArguments(params.arguments),
           });
           return;
@@ -610,7 +841,8 @@ export async function runCodexCli(input: CliTransportInput): Promise<CliTurnResu
       else input.signal.addEventListener('abort', onAbort, { once: true });
     });
 
-    const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    // The generation phase shares the turn's overall deadline (probe time already elapsed).
+    const timeoutMs = Math.max(0, deadline - Date.now());
     const timeoutPromise = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         void proc?.killTree();
@@ -666,6 +898,43 @@ export async function runCodexCli(input: CliTransportInput): Promise<CliTurnResu
       assertCodexVersion(initRecord.userAgent, accountKey);
       peer.notify('initialized', {});
 
+      // Fail closed: confirm the startup blanket switches were actually enforced. A malformed
+      // effective config, admin-managed hooks (which Ferry cannot suppress), a surviving notify
+      // command, a malformed `plugin/list`, or any plugin still enabled means a native hook/notify/
+      // plugin MCP command could run, so reject the turn rather than run without isolation.
+      const effective = await request('config/read', {});
+      if (!isRecord(effective) || !isRecord(effective.config))
+        throw new CliTransportError(
+          'unsupported_capability',
+          'Codex app-server did not return an effective config; cannot prove native hook/notify isolation. Update the Codex CLI',
+          { accountKey },
+        );
+      if (managedHooksConfigured(effective))
+        throw new CliTransportError(
+          'unsupported_capability',
+          'Codex has admin-managed lifecycle hooks Ferry cannot disable; refusing to run native host commands outside caller permissions. Update the Codex CLI',
+          { accountKey },
+        );
+      if (notifyStillConfigured(effective))
+        throw new CliTransportError(
+          'unsupported_capability',
+          'Codex still has a native notify command configured; cannot disable it for this private run. Update the Codex CLI',
+          { accountKey },
+        );
+      const pluginCheck = checkPluginList(await request('plugin/list', {}));
+      if (!pluginCheck.ok)
+        throw new CliTransportError(
+          'unsupported_capability',
+          'Codex app-server returned an unusable plugin/list payload; cannot prove plugin MCP isolation. Update the Codex CLI',
+          { accountKey },
+        );
+      if (pluginCheck.enabledIds.length > 0)
+        throw new CliTransportError(
+          'unsupported_capability',
+          `Codex still exposes enabled plugins (${pluginCheck.enabledIds.join(', ')}); cannot guarantee plugin MCP isolation. Update the Codex CLI`,
+          { accountKey },
+        );
+
       const account = await request('account/read', { refreshToken: false });
       assertCodexAccount(account, input.connection, input.model.billing, accountKey);
 
@@ -713,6 +982,9 @@ export async function runCodexCli(input: CliTransportInput): Promise<CliTurnResu
         sandbox: 'read-only',
         approvalPolicy: 'never',
         allowProviderModelFallback: false,
+        // Pin the thread's service tier explicitly: 'default' (standard) or the advertised fast
+        // tier. Leaving it unset inherits the user's global configured priority/Fast.
+        serviceTier: serviceTierForTurn,
         // Replace the native coding/host base prompt with truthful caller-owned instructions, and
         // carry caller system/developer semantics at thread level.
         baseInstructions: buildCodexBaseInstructions(input.messages),
@@ -722,10 +994,25 @@ export async function runCodexCli(input: CliTransportInput): Promise<CliTurnResu
           features: {
             shell_tool: false,
             unified_exec: false,
+            unified_exec_tty: false,
+            shell_snapshot: false,
+            view_image: false,
+            sleep_tool: false,
             multi_agent: false,
+            code_mode: false,
             code_mode_host: false,
+            // Belt-and-suspenders with the startup `-c features.*=false` blankets.
+            plugins: false,
+            hooks: false,
+            codex_hooks: false,
           },
-          mcp_servers: {},
+          // Hard-disable native web search for this thread regardless of the user's global mode.
+          web_search: 'disabled',
+          // Clear the native notification command and native lifecycle hooks for this thread.
+          notify: [],
+          mcp_servers: inheritedMcpServers,
+          // Disable every configured plugin (and any declared plugin MCP server) for this thread too.
+          plugins: inheritedPlugins,
           // Do not import unrelated native instruction sources (project AGENTS.md, apps,
           // collaboration modes, permissions/environment sections).
           project_doc_max_bytes: 0,

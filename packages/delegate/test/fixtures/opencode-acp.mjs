@@ -153,6 +153,23 @@ for await (const line of lines) {
           });
           break;
         }
+        if (prompt.includes('GO_HIGH_CONTINUE')) {
+          text('TOOL_RESULT::CLI_SAFE_VALUE');
+          reply(message.id, {
+            stopReason: 'end_turn',
+            usage: { inputTokens: 12953, outputTokens: 12, thoughtTokens: 41 },
+          });
+          break;
+        }
+        if (prompt.includes('GO_HIGH')) {
+          text('NATIVE_TOOLS_UNAVAILABLE');
+          reply(message.id, {
+            stopReason: 'end_turn',
+            // Text-only output counter plus a separate reasoning counter; no cache fields reported.
+            usage: { inputTokens: 12776, outputTokens: 9, thoughtTokens: 307 },
+          });
+          break;
+        }
         if (prompt.includes('OMIT_USAGE')) {
           text('NO_USAGE');
           reply(message.id, { stopReason: 'end_turn' });
@@ -187,6 +204,18 @@ for await (const line of lines) {
         const dataState = (process.env.XDG_DATA_HOME ?? '').includes('ferry-opencode')
           ? 'private'
           : 'native';
+        // Isolation probe: the child must run with PWD pinned to its private cwd, project-local
+        // config discovery disabled, and no inherited OPENCODE_CONFIG/CONFIG_DIR pointers.
+        const pwdState =
+          process.env.PWD === process.cwd()
+            ? 'pwd-private'
+            : `pwd-leaked:${process.env.PWD ?? 'none'}`;
+        const projState =
+          process.env.OPENCODE_DISABLE_PROJECT_CONFIG === '1' ? 'proj-off' : 'proj-on';
+        const configEnvState =
+          process.env.OPENCODE_CONFIG || process.env.OPENCODE_CONFIG_DIR
+            ? 'config-env-on'
+            : 'config-env-off';
         const enabled = (() => {
           try {
             return (
@@ -199,7 +228,7 @@ for await (const line of lines) {
         text(
           `CONFIG|${currentModel}|${currentVariant}|${fast ? 'fast' : 'standard'}|${keyState}|${dataState}|${enabled}|${
             prompt.includes('TOOL_RESULT') ? 'TOOL_RESULT' : ''
-          }`,
+          }|${pwdState}|${projState}|${configEnvState}`,
         );
         reply(message.id, { stopReason: 'end_turn', usage: { inputTokens: 12, outputTokens: 2 } });
         break;

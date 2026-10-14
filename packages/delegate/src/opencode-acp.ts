@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { rememberSecret } from '@ferry/shared';
 import { commandInvocation, detectCli } from './index.js';
+import { privateChildEnvironment } from './cli-transport/process.js';
 import { parseOpencodeAuthStore } from './cli-connection/parse.js';
 import { openZenToolBridge, type ZenTool, type ZenToolCall } from './zen-tools.js';
 
@@ -263,15 +264,19 @@ function buildChildEnvironment(
   credential: ResolvedCredential,
   config: unknown,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...base,
-    OPENCODE_CONFIG: undefined,
-    OPENCODE_CONFIG_DIR: undefined,
-    OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
-    XDG_CONFIG_HOME: join(root, 'config'),
-    XDG_CACHE_HOME: join(root, 'cache'),
-    XDG_STATE_HOME: join(root, 'state'),
-  };
+  // Pin PWD/cwd to the private root and drop any inherited OpenCode config-file pointers so the
+  // parent's `PWD`, project `opencode.json`, plugins, rules, hooks and external MCP servers can
+  // never be discovered. `OPENCODE_DISABLE_PROJECT_CONFIG` is the installed CLI's documented switch
+  // for skipping project-local config discovery (verified in the 1.18.35 binary); it is defense in
+  // depth on top of the private PWD, not a replacement for it.
+  const env: NodeJS.ProcessEnv = privateChildEnvironment(base, root, {
+    remove: ['OPENCODE_CONFIG', 'OPENCODE_CONFIG_DIR'],
+  });
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
+  env.OPENCODE_DISABLE_PROJECT_CONFIG = '1';
+  env.XDG_CONFIG_HOME = join(root, 'config');
+  env.XDG_CACHE_HOME = join(root, 'cache');
+  env.XDG_STATE_HOME = join(root, 'state');
   if (credential.mode === 'installed') {
     // Keep the native data root so native-owned auth/session data stays authoritative.
     if (credential.apiKey !== undefined) env.OPENCODE_API_KEY = credential.apiKey;

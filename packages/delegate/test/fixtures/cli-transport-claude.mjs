@@ -46,6 +46,8 @@ if (argv.includes('auth') && argv.includes('status')) {
   const systemPromptPath = argValue('--system-prompt-file');
   const record = {
     argv,
+    cwd: process.cwd(),
+    pwd: process.env.PWD ?? null,
     mcp: null,
     settings: null,
     systemPrompt: null,

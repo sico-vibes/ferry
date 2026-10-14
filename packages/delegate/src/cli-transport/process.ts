@@ -6,6 +6,11 @@ import { execa } from 'execa';
 
 const UNSAFE_ARG = /[\0\r\n%!"`]|\$\([^)]*\)|%[^%]+%/;
 
+/** True when an argument cannot be passed safely through a generated shell shim (`.cmd`/`.bat`). */
+export function isUnsafeArgument(arg: string): boolean {
+  return UNSAFE_ARG.test(arg);
+}
+
 /** Reject arguments that would let a CLI argument escape shell quoting on generated shims. */
 export function assertSafeArguments(args: readonly string[]): void {
   for (const arg of args) {
@@ -178,6 +183,27 @@ const delay = (ms: number): Promise<void> =>
 
 function isTaskkillNotFound(exitCode: number | undefined, output: string): boolean {
   return exitCode === 128 && /not found|no running instance/i.test(output);
+}
+
+/**
+ * Build a child environment with the working directory pinned to the private root.
+ *
+ * A spawned process starts in `cwd`, but several CLIs (notably OpenCode) resolve their project
+ * root from an inherited `PWD` first and only fall back to `process.cwd()`. If Ferry's own `PWD`
+ * (the orchestrator repo) leaks through, that CLI discovers and loads the orchestrator's project
+ * config, plugins, rules, hooks and external MCP servers. Deleting `PWD`/`OLDPWD` and re-deriving
+ * `PWD` from the actual private `cwd` keeps every project-scoped layer outside the private root
+ * unreachable. `remove` drops transport-specific variables (e.g. `OPENCODE_CONFIG*`) as well.
+ */
+export function privateChildEnvironment(
+  base: NodeJS.ProcessEnv,
+  cwd: string,
+  options: { remove?: readonly string[] } = {},
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const key of ['PWD', 'OLDPWD', ...(options.remove ?? [])]) Reflect.deleteProperty(env, key);
+  env.PWD = cwd;
+  return env;
 }
 
 /** Create a private per-invocation working directory. */

@@ -38,6 +38,8 @@ interface RecordFile {
   argv: string[];
   requests: { method: string; params: Record<string, unknown> }[];
   responses: { id: number; frame: Record<string, unknown> }[];
+  cwd?: string;
+  pwd?: string | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -111,6 +113,26 @@ interface CodexRunOptions extends Partial<CliTransportInput> {
   childPidFile?: string;
   cwdFile?: string;
   stageFile?: string;
+  /** Configured native MCP servers the fake `config/read` reports (non-activating metadata). */
+  mcpConfig?: Record<string, unknown>;
+  /** Configured plugins (and any plugin MCP servers) the fake `config/read` reports. */
+  pluginConfig?: Record<string, unknown>;
+  /** Effective plugin availability the fake `plugin/list` reports (verification step). */
+  pluginList?: unknown;
+  /** Native hooks state the fake `config/read` reports (verification step). */
+  hookConfig?: unknown;
+  /** Native notify command the fake `config/read` reports (verification step). */
+  notifyList?: unknown;
+  /** Probe-mode: file the fake probe writes its argv to. */
+  probeArgsFile?: string;
+  /** Probe-mode: hold `config/read` forever so tests can cancel/time out mid-probe. */
+  probeHoldConfig?: boolean;
+  /** Probe-mode: file the fake probe writes its private cwd to (temp-cleanup assertion). */
+  probeCwdFile?: string;
+  /** Probe-mode: file the fake probe writes when it receives `config/read`. */
+  probeReachedFile?: string;
+  /** Inherited PWD that the transport must not forward to the child. */
+  pwd?: string;
 }
 
 function makeInput(options: CodexRunOptions): CliTransportInput {
@@ -125,6 +147,26 @@ function makeInput(options: CodexRunOptions): CliTransportInput {
     signal: options.signal ?? new AbortController().signal,
     environment: {
       ...process.env,
+      ...(options.pwd ? { PWD: options.pwd } : {}),
+      ...(options.mcpConfig ? { FERRY_CODEX_MCP_CONFIG: JSON.stringify(options.mcpConfig) } : {}),
+      ...(options.pluginConfig
+        ? { FERRY_CODEX_PLUGIN_CONFIG: JSON.stringify(options.pluginConfig) }
+        : {}),
+      ...(options.pluginList
+        ? { FERRY_CODEX_PLUGIN_LIST: JSON.stringify(options.pluginList) }
+        : {}),
+      ...(options.hookConfig
+        ? { FERRY_CODEX_HOOK_CONFIG: JSON.stringify(options.hookConfig) }
+        : {}),
+      ...(options.notifyList
+        ? { FERRY_CODEX_NOTIFY_LIST: JSON.stringify(options.notifyList) }
+        : {}),
+      ...(options.probeArgsFile ? { FERRY_CODEX_PROBE_ARGS_FILE: options.probeArgsFile } : {}),
+      ...(options.probeHoldConfig ? { FERRY_CODEX_PROBE_HOLD: 'config' } : {}),
+      ...(options.probeCwdFile ? { FERRY_CODEX_PROBE_CWD_FILE: options.probeCwdFile } : {}),
+      ...(options.probeReachedFile
+        ? { FERRY_CODEX_PROBE_REACHED_FILE: options.probeReachedFile }
+        : {}),
       FERRY_CODEX_SCENARIO: options.scenario,
       FERRY_CODEX_RECORD: options.record,
       FERRY_CODEX_MODEL: model.upstreamId,
@@ -134,7 +176,7 @@ function makeInput(options: CodexRunOptions): CliTransportInput {
     },
     executable: process.execPath,
     executableArgs: [FIXTURE],
-    timeoutMs: 20_000,
+    timeoutMs: options.timeoutMs ?? 20_000,
   };
   if (options.onText) input.onText = options.onText;
   if (options.onProgress) input.onProgress = options.onProgress;
@@ -202,11 +244,21 @@ describe('runCodexCli', () => {
       expect(thread.approvalPolicy).toBe('never');
       expect(thread.allowProviderModelFallback).toBe(false);
       expect(asRecord(thread.config).mcp_servers).toEqual({});
+      expect(asRecord(thread.config).web_search).toBe('disabled');
+      expect(asRecord(thread.config).notify).toEqual([]);
       expect(asRecord(asRecord(thread.config).features)).toEqual({
         shell_tool: false,
         unified_exec: false,
+        unified_exec_tty: false,
+        shell_snapshot: false,
+        view_image: false,
+        sleep_tool: false,
         multi_agent: false,
+        code_mode: false,
         code_mode_host: false,
+        plugins: false,
+        hooks: false,
+        codex_hooks: false,
       });
       expect(asRecord(thread.config).project_doc_max_bytes).toBe(0);
       expect(asRecord(thread.config).include_permissions_instructions).toBe(false);
@@ -214,6 +266,8 @@ describe('runCodexCli', () => {
       expect(asRecord(thread.config).include_collaboration_mode_instructions).toBe(false);
       expect(asRecord(thread.config).include_environment_context).toBe(false);
       expect(String(thread.baseInstructions)).toContain('NO host capabilities');
+      // Standard speed is pinned explicitly so the user's global priority/Fast is never inherited.
+      expect(thread.serviceTier).toBe('default');
       const turn = requestOf(record, 'turn/start');
       expect(turn.serviceTierForTurn).toBe('default');
       expect(turn.input).toEqual([{ type: 'text', text: 'Say hello' }]);
@@ -485,6 +539,8 @@ describe('runCodexCli', () => {
       expect(result.text).toBe('Hello world');
       const record = await readRecord(recordPath);
       expect(record.requests.some((entry) => entry.method === 'model/list')).toBe(true);
+      // Fast uses the CLI-advertised tier at both thread and turn level (never an inherited default).
+      expect(requestOf(record, 'thread/start').serviceTier).toBe('priority');
       const turn = requestOf(record, 'turn/start');
       expect(turn.serviceTierForTurn).toBe('priority');
       expect(turn.effort).toBe('high');
@@ -634,4 +690,226 @@ describe('runCodexCli', () => {
     const threadB = requestOf(recordBRecord, 'thread/start');
     expect(threadA.cwd).not.toBe(threadB.cwd);
   });
+
+  it(
+    'disables native MCP servers and plugin sources at startup and in the private thread',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'mcp.json');
+      const probeArgsPath = join(dir, 'probe.args');
+      await runCodexCli(
+        makeInput({
+          scenario: 'text',
+          record: recordPath,
+          mcpConfig: { inline_server: {}, table_server: {} },
+          pluginConfig: {
+            'sentinel@local': { enabled: true, mcp_servers: { 'srv.one': { enabled: true } } },
+          },
+          probeArgsFile: probeArgsPath,
+        }),
+      );
+
+      const record = await readRecord(recordPath);
+      // The activating status call is gone; enumeration uses the non-activating config probe.
+      expect(record.requests.some((entry) => entry.method === 'mcpServerStatus/list')).toBe(false);
+      // The config probe also runs with the blanket native hook/notify/plugin disables.
+      const probeArgs = (JSON.parse(await readFile(probeArgsPath, 'utf8')) as string[]).join(' ');
+      expect(probeArgs).toContain('-c features.hooks=false');
+      expect(probeArgs).toContain('-c notify=[]');
+      expect(probeArgs).toContain('-c features.plugins=false');
+      // Generation startup flags: blankets plus bare-name MCP disables.
+      const argv = record.argv.join(' ');
+      expect(argv).toContain('-c features.plugins=false');
+      expect(argv).toContain('-c features.hooks=false');
+      expect(argv).toContain('-c features.codex_hooks=false');
+      expect(argv).toContain('-c notify=[]');
+      expect(argv).toContain('-c mcp_servers.inline_server.enabled=false');
+      expect(argv).toContain('-c mcp_servers.table_server.enabled=false');
+
+      const thread = requestOf(record, 'thread/start');
+      const config = asRecord(thread.config);
+      // Per-name/plugin disable maps at thread level (never an empty map, which the app server
+      // merge-applies without clearing inherited servers).
+      expect(config.mcp_servers).toEqual({
+        inline_server: { enabled: false },
+        table_server: { enabled: false },
+      });
+      expect(config.plugins).toEqual({
+        'sentinel@local': {
+          enabled: false,
+          mcp_servers: { 'srv.one': { enabled: false } },
+        },
+      });
+      expect(config.web_search).toBe('disabled');
+      expect(config.notify).toEqual([]);
+      const features = asRecord(config.features);
+      expect(features.plugins).toBe(false);
+      expect(features.hooks).toBe(false);
+      expect(features.codex_hooks).toBe(false);
+      expect(features.shell_tool).toBe(false);
+      expect(features.unified_exec).toBe(false);
+      expect(features.unified_exec_tty).toBe(false);
+      expect(features.view_image).toBe(false);
+      expect(features.sleep_tool).toBe(false);
+      expect(features.code_mode_host).toBe(false);
+
+      // A second invocation re-reads the effective config: a newly added name is accounted for and
+      // the previous set is not cached/stale.
+      const updatedPath = join(dir, 'mcp-updated.json');
+      await runCodexCli(
+        makeInput({
+          scenario: 'text',
+          record: updatedPath,
+          mcpConfig: { brand_new_server: {} },
+        }),
+      );
+      const updatedRecord = await readRecord(updatedPath);
+      expect(updatedRecord.argv.join(' ')).toContain(
+        '-c mcp_servers.brand_new_server.enabled=false',
+      );
+      const updatedThread = requestOf(updatedRecord, 'thread/start');
+      expect(asRecord(updatedThread.config).mcp_servers).toEqual({
+        brand_new_server: { enabled: false },
+      });
+    },
+  );
+
+  it(
+    'fails closed before the thread when an enabled plugin still advertises',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'plugin-failclosed.json');
+      const error = await runCodexCli(
+        makeInput({
+          scenario: 'text',
+          record: recordPath,
+          pluginConfig: { 'sentinel@local': { enabled: true } },
+          pluginList: {
+            marketplaces: [{ plugins: [{ id: 'sentinel@local', enabled: true }] }],
+          },
+        }),
+      ).catch((value: unknown) => value);
+      expect(error).toBeInstanceOf(CliTransportError);
+      expect((error as CliTransportError).kind).toBe('unsupported_capability');
+      expect((error as CliTransportError).message).toContain('sentinel@local');
+      const record = await readRecord(recordPath);
+      expect(record.requests.some((entry) => entry.method === 'thread/start')).toBe(false);
+    },
+  );
+
+  it.each([
+    [
+      'admin-managed hooks',
+      { hookConfig: { managed_dir: 'C:/managed-hooks' } },
+      /admin-managed lifecycle hooks/,
+    ],
+    [
+      'a surviving native notify command',
+      { notifyList: ['node', '-e', 'require("fs")'] },
+      /native notify command/,
+    ],
+  ])(
+    'fails closed before the thread when %s is present',
+    { timeout: 30_000 },
+    async (_label, overrides, message) => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'hook-failclosed.json');
+      const error = await runCodexCli(
+        makeInput({ scenario: 'text', record: recordPath, ...overrides }),
+      ).catch((value: unknown) => value);
+      expect(error).toBeInstanceOf(CliTransportError);
+      expect((error as CliTransportError).kind).toBe('unsupported_capability');
+      expect((error as CliTransportError).message).toMatch(message);
+      const record = await readRecord(recordPath);
+      expect(record.requests.some((entry) => entry.method === 'thread/start')).toBe(false);
+    },
+  );
+
+  it(
+    'pins the private PWD so an inherited project PWD cannot leak',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'pwd.json');
+      const leaked = join(dir, 'orchestrator-repo');
+      await runCodexCli(makeInput({ scenario: 'text', record: recordPath, pwd: leaked }));
+      const record = await readRecord(recordPath);
+      expect(record.pwd).toBe(record.cwd);
+      expect(record.pwd).not.toBe(leaked);
+    },
+  );
+
+  it('denies a native tool call that is not caller-provided', { timeout: 30_000 }, async () => {
+    const dir = await tempRoot();
+    const recordPath = join(dir, 'nativetool.json');
+    const result = await runCodexCli(makeInput({ scenario: 'nativetool', record: recordPath }));
+    expect(result.toolCalls).toEqual([]);
+    const record = await readRecord(recordPath);
+    const denied = record.responses.find(
+      (response) => asRecord(response.frame).error !== undefined,
+    );
+    expect(denied).toBeDefined();
+    expect(asRecord(asRecord(denied?.frame).error).message).toContain('denies native');
+  });
+
+  it(
+    'cancels during the config probe with a typed cancelled error and no temp or generation leak',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'probe-cancel.json');
+      const probeCwdFile = join(dir, 'probe.cwd');
+      const reachedFile = join(dir, 'probe.reached');
+      const controller = new AbortController();
+      const pending = runCodexCli(
+        makeInput({
+          scenario: 'text',
+          record: recordPath,
+          signal: controller.signal,
+          probeHoldConfig: true,
+          probeCwdFile,
+          probeReachedFile: reachedFile,
+        }),
+      );
+      // Wait until the probe has spawned and is blocked on config/read, then cancel.
+      await waitFor(() => existsSync(reachedFile) && existsSync(probeCwdFile));
+      const probeCwd = (await readFile(probeCwdFile, 'utf8')).trim();
+      controller.abort();
+      const error = await pending.catch((value: unknown) => value);
+      expect(error).toBeInstanceOf(CliTransportError);
+      expect((error as CliTransportError).kind).toBe('cancelled');
+      // No generation process was spawned (the record file is only written by the generation run).
+      expect(existsSync(recordPath)).toBe(false);
+      // The probe's private temp dir was removed.
+      expect(existsSync(probeCwd)).toBe(false);
+    },
+  );
+
+  it(
+    'times out during the config probe, then a later request still works',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const timedOutRecord = join(dir, 'probe-timeout.json');
+      const error = await runCodexCli(
+        makeInput({
+          scenario: 'text',
+          record: timedOutRecord,
+          timeoutMs: 500,
+          probeHoldConfig: true,
+          probeReachedFile: join(dir, 'probe.timeout.reached'),
+        }),
+      ).catch((value: unknown) => value);
+      expect(error).toBeInstanceOf(CliTransportError);
+      expect((error as CliTransportError).kind).toBe('timeout');
+      expect(existsSync(timedOutRecord)).toBe(false);
+
+      // A subsequent request is unaffected (the probe timeout did not wedge anything).
+      const okRecord = join(dir, 'after-timeout.json');
+      const result = await runCodexCli(makeInput({ scenario: 'text', record: okRecord }));
+      expect(result.text).toBe('Hello world');
+    },
+  );
 });

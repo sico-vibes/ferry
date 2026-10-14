@@ -7,16 +7,74 @@ const scenario = process.env.FERRY_CODEX_SCENARIO ?? 'text';
 const recordPath = process.env.FERRY_CODEX_RECORD;
 const requestedModel = process.env.FERRY_CODEX_MODEL ?? 'gpt-6.1-sol';
 const stageFile = process.env.FERRY_CODEX_STAGE_FILE;
+// The transport spawns a short-lived, non-activating config probe before the generation process;
+// mark it so this fixture only answers initialize/config/read with no side effects.
+const probe = process.env.FERRY_CODEX_MCP_PROBE === '1';
+// Configured native MCP servers and plugins the fake `config/read` reports (non-secret names only).
+function parseEnvObject(name) {
+  const raw = process.env[name];
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+const mcpConfig = parseEnvObject('FERRY_CODEX_MCP_CONFIG');
+const pluginConfig = parseEnvObject('FERRY_CODEX_PLUGIN_CONFIG');
+// Native hooks/notify effective state reported by `config/read` (verification step).
+const hooksConfig = (() => {
+  const raw = process.env.FERRY_CODEX_HOOK_CONFIG;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+})();
+const notifyConfig = (() => {
+  const raw = process.env.FERRY_CODEX_NOTIFY_LIST;
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+})();
+// Effective plugin availability reported by the fake `plugin/list` (verification step).
+const pluginList = (() => {
+  const raw = process.env.FERRY_CODEX_PLUGIN_LIST;
+  if (!raw) return { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] };
+  }
+})();
 function markStage(value) {
+  if (probe) return;
   if (stageFile) writeFileSync(stageFile, value, 'utf8');
 }
 
 // Readiness IPC: record the private working directory so cancellation tests can verify temp cleanup.
-if (process.env.FERRY_CODEX_CWD_FILE) {
+if (!probe && process.env.FERRY_CODEX_CWD_FILE) {
   writeFileSync(process.env.FERRY_CODEX_CWD_FILE, process.cwd(), 'utf8');
 }
+// Probe-mode diagnostics: record the probe's private cwd so tests can prove temp cleanup.
+if (probe && process.env.FERRY_CODEX_PROBE_CWD_FILE) {
+  writeFileSync(process.env.FERRY_CODEX_PROBE_CWD_FILE, process.cwd(), 'utf8');
+}
+// Probe-mode diagnostics: record the probe argv so tests can prove the blanket disables were passed.
+if (probe && process.env.FERRY_CODEX_PROBE_ARGS_FILE) {
+  writeFileSync(
+    process.env.FERRY_CODEX_PROBE_ARGS_FILE,
+    JSON.stringify(process.argv.slice(1)),
+    'utf8',
+  );
+}
 // Hold scenarios keep a stubborn grandchild alive so tests can prove the whole tree is terminated.
-if (scenario.startsWith('hold')) {
+if (!probe && scenario.startsWith('hold')) {
   const child = spawn(
     process.execPath,
     ['-e', 'process.on("SIGTERM",()=>{}); setInterval(() => {}, 1000)'],
@@ -28,9 +86,15 @@ if (scenario.startsWith('hold')) {
   if (scenario === 'holdstartup') markStage('holdstartup');
 }
 
-const record = { argv: process.argv.slice(1), requests: [], responses: [] };
+const record = {
+  argv: process.argv.slice(1),
+  requests: [],
+  responses: [],
+  cwd: process.cwd(),
+  pwd: process.env.PWD ?? null,
+};
 function flush() {
-  if (!recordPath) return;
+  if (probe || !recordPath) return;
   const temporary = `${recordPath}.tmp`;
   writeFileSync(temporary, JSON.stringify(record), 'utf8');
   renameSync(temporary, recordPath);
@@ -198,6 +262,25 @@ async function runTurn(turn, threadId) {
       });
       break;
     }
+    case 'nativetool': {
+      notify('item/agentMessage/delta', {
+        delta: 'Trying an unadvertised native tool',
+        itemId: 'i1',
+        threadId,
+        turnId,
+      });
+      // A native/unknown tool id must be denied, never handed back to Ferry as a caller tool.
+      serverRequest('item/tool/call', {
+        callId: 'native_tool_1',
+        tool: 'shell',
+        arguments: { command: 'rm -rf /' },
+        threadId,
+        turnId,
+      });
+      await awaitResponse(nextServerId - 1);
+      notify('turn/completed', { threadId, turn: { id: turnId, status: 'completed', items: [] } });
+      break;
+    }
     case 'exhausted':
       notify('turn/completed', {
         threadId,
@@ -297,7 +380,7 @@ lines.on('line', (line) => {
     record.requests.push({ method: 'initialize', params: frame.params });
     flush();
     // Cancel-during-startup: never answer initialize; the process stays alive for the abort test.
-    if (scenario === 'holdstartup') return;
+    if (!probe && scenario === 'holdstartup') return;
     const userAgent =
       scenario === 'oldversion'
         ? 'Codex Desktop/0.161.0 (Windows 10.0.26300; x86_64) dumb (ferry_readonly_probe; 0.9.0)'
@@ -338,6 +421,32 @@ lines.on('line', (line) => {
         secondary: { usedPercent: 11, windowDurationMins: 10080, resetsAt: 1792487618 },
       },
     });
+    return;
+  }
+  if (frame.method === 'config/read') {
+    // Probe-mode hold: signal readiness, then never answer so tests can cancel/time out mid-probe.
+    if (probe && process.env.FERRY_CODEX_PROBE_REACHED_FILE) {
+      writeFileSync(process.env.FERRY_CODEX_PROBE_REACHED_FILE, '1', 'utf8');
+    }
+    if (probe && process.env.FERRY_CODEX_PROBE_HOLD === 'config') return;
+    record.requests.push({ method: 'config/read', params: frame.params });
+    flush();
+    // Non-activating effective-config metadata: configured MCP server + plugin names, plus native
+    // hooks/notify state (no startup).
+    reply(frame.id, {
+      config: {
+        mcp_servers: mcpConfig,
+        plugins: pluginConfig,
+        hooks: hooksConfig,
+        notify: notifyConfig,
+      },
+    });
+    return;
+  }
+  if (frame.method === 'plugin/list') {
+    record.requests.push({ method: 'plugin/list', params: frame.params });
+    flush();
+    reply(frame.id, pluginList);
     return;
   }
   if (frame.method === 'model/list') {
@@ -404,5 +513,7 @@ lines.on('line', (line) => {
 
 lines.on('close', () => {
   flush();
+  // The config probe is answered and immediately torn down; never run a scenario for it.
+  if (probe) process.exit(0);
   if (scenario !== 'hold') setTimeout(() => process.exit(0), 10);
 });

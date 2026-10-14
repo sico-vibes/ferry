@@ -7,6 +7,7 @@ import { isRecord, asArray, str, num } from './coerce.js';
 import {
   commandInvocation,
   createPrivateWorkingDir,
+  privateChildEnvironment,
   removePrivateWorkingDir,
   resolveExecutable,
   spawnCliProcess,
@@ -357,6 +358,9 @@ export async function runClaudeCodeCli(input: CliTransportInput): Promise<CliTur
   input.signal.throwIfAborted();
 
   const cwd = await createPrivateWorkingDir();
+  // Pin PWD to the private root so an inherited orchestrator PWD cannot steer project-scoped
+  // `.claude/settings.json`, plugins, hooks or MCP discovery back into the caller's repo.
+  const childEnvironment = privateChildEnvironment(environment, cwd);
   let proc: CliProcess | undefined;
   let bridge: Awaited<ReturnType<typeof openZenToolBridge>> | undefined;
   let settled = false;
@@ -426,7 +430,7 @@ export async function runClaudeCodeCli(input: CliTransportInput): Promise<CliTur
       executable,
       input.executableArgs ?? [],
       cwd,
-      environment,
+      childEnvironment,
       input.connection,
       accountKey,
       input.signal,
@@ -436,7 +440,7 @@ export async function runClaudeCodeCli(input: CliTransportInput): Promise<CliTur
       file: invocation.file,
       args: invocation.args,
       cwd,
-      environment,
+      environment: childEnvironment,
       verbatim: invocation.verbatim,
     });
     const activeProcess: CliProcess = proc;
