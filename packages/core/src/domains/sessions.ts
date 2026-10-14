@@ -16,6 +16,7 @@ import { ProjectConfigSchema } from '@ferry/config';
 import type { AgentTool, ToolSource as AgentToolSource } from '@ferry/agent';
 import type { ToolSource as ExtensionToolSource } from '@ferry/extensions';
 import {
+  CliOptionPatchSchema,
   DIRECT_PROFILE_ID,
   EffortSchema,
   MessageSchema,
@@ -69,6 +70,7 @@ import {
 } from '../request-failures.js';
 import { canonicalPathKey } from '@ferry/shared/node-paths';
 import { getGatewayController } from '../gateway.js';
+import { cliOptionError, getCliBroker, mergeCliOption } from '../cli-broker.js';
 
 const CreateSchema = z.object({
   workspaceId: z.string().min(1).nullable().optional(),
@@ -1960,6 +1962,32 @@ export function register(host: CoreHost, services: FerryServices): void {
     setEffort(rawId: unknown, rawEffort: unknown) {
       const session = requireSession(rawId);
       return updateSession({ ...session, effort: EffortSchema.nullable().parse(rawEffort) });
+    },
+    /**
+     * Persist per-conversation CLI options for one selected model. Explicit effort/speed values are
+     * validated against the model's cached discovery and rejected when unsupported; an absent field
+     * preserves the stored override and an explicit `null` effort clears it. Raw effort tokens are
+     * preserved verbatim (e.g. `ultra` is stored, then refused at dispatch with a reason).
+     */
+    updateCliOptions(rawId: unknown, rawInput: unknown) {
+      const session = requireSession(rawId);
+      const input = z
+        .object({ modelRef: ModelRefSchema, options: CliOptionPatchSchema })
+        .parse(rawInput);
+      const discovered = getCliBroker(services, (method, payload) => {
+        host.emit(method, payload);
+      }).model(input.modelRef);
+      // CLI options only apply to a discovered CLI model; reject unknown or non-CLI refs rather than
+      // persisting arbitrary options for a model that will never consume them.
+      if (!discovered)
+        throw rpcDomainError(-32010, 'validation', `Unknown CLI model: ${input.modelRef}.`);
+      const error = cliOptionError(input.modelRef, discovered.model, input.options);
+      if (error) throw rpcDomainError(-32010, 'validation', error);
+      const merged = mergeCliOption(session.cliOptions?.[input.modelRef], input.options);
+      return updateSession({
+        ...session,
+        cliOptions: { ...(session.cliOptions ?? {}), [input.modelRef]: merged },
+      });
     },
     archive(rawId: unknown, rawArchived: unknown) {
       return updateSession({

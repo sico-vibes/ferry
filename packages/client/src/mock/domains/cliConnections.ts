@@ -46,12 +46,26 @@ export function createCliConnectionsDomain(
   deps: MockDeps,
 ): FerryClient['cliConnections'] {
   const { before, emit, state } = deps;
+  // Scripted verification receipts so the UI can accept enabled/verified inventories in the mock.
+  const verified = new Map<CliConnectionKind, ModelRef>();
   const surfacesFor = (id: CliConnectionKind) => {
     const saved = state.settings.cliConnections[id];
     return { native: saved?.native ?? false, gateway: saved?.gateway ?? false };
   };
+  const verifyFor = (id: CliConnectionKind): CliConnection['verify'] => {
+    const ref = verified.get(id);
+    return ref
+      ? {
+          state: 'verified',
+          modelRef: ref,
+          checkedAt: '2026-10-05T10:00:00.000Z',
+          message: 'Verified with a scripted mock generation.',
+        }
+      : { state: 'unverified', modelRef: null, checkedAt: null, message: null };
+  };
   const build = (id: CliConnectionKind): CliConnection => {
     const surfaces = surfacesFor(id);
+    const verify = verifyFor(id);
     if (id === 'codex-cli')
       return {
         id,
@@ -65,7 +79,7 @@ export function createCliConnectionsDomain(
           installHint: 'Install Codex CLI and sign in with codex login.',
         },
         account: { state: 'not_checked', key: null, label: null, plan: null },
-        verify: { state: 'unverified', modelRef: null, checkedAt: null, message: null },
+        verify,
         surfaces,
         models: [
           {
@@ -126,7 +140,7 @@ export function createCliConnectionsDomain(
           installHint: 'Install Claude Code and run claude auth login.',
         },
         account: { state: 'signed_in', key: null, label: 'demo@example.com', plan: 'Claude Pro' },
-        verify: { state: 'unverified', modelRef: null, checkedAt: null, message: null },
+        verify,
         surfaces,
         models: [
           {
@@ -187,7 +201,7 @@ export function createCliConnectionsDomain(
         installHint: 'Install OpenCode, then run opencode auth login for your chosen provider.',
       },
       account: { state: 'unknown', key: null, label: 'OpenCode Go', plan: null },
-      verify: { state: 'unverified', modelRef: null, checkedAt: null, message: null },
+      verify,
       surfaces,
       models: [
         {
@@ -228,10 +242,17 @@ export function createCliConnectionsDomain(
     async verify(id, modelRef) {
       await before();
       const connection = build(id);
+      const model =
+        connection.models.find((candidate) => candidate.ref === modelRef) ?? connection.models[0];
+      if (!model)
+        return { ok: false, modelRef: null, message: `No discovered ${id} model to verify.` };
+      verified.set(id, model.ref);
+      const updated = build(id);
+      emit('cliConnections.updated', updated);
       return {
-        ok: false,
-        modelRef: modelRef ?? connection.models[0]?.ref ?? null,
-        message: 'Verification requires a generation and is available in a later phase.',
+        ok: true,
+        modelRef: model.ref,
+        message: `Verified ${model.name} with a scripted mock generation.`,
       };
     },
     async update(id, patch) {
@@ -246,6 +267,11 @@ export function createCliConnectionsDomain(
       state.settings.cliConnections[id] = {
         native: patch.surfaces?.native ?? current.native ?? false,
         gateway: patch.surfaces?.gateway ?? current.gateway ?? false,
+        credentialMode: patch.credentialMode ?? current.credentialMode ?? 'installed',
+        credentialProvider:
+          'credentialProvider' in patch
+            ? (patch.credentialProvider ?? null)
+            : (current.credentialProvider ?? null),
         defaultOptions: {
           effort,
           speed: defaultOptions?.speed ?? current.defaultOptions?.speed ?? 'standard',

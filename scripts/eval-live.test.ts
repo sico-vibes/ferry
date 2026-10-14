@@ -243,8 +243,11 @@ describe('live eval harness helpers', () => {
     try {
       await client.hello;
       await client.providers.setKey(ProviderIdSchema.parse('groq'), 'fake-eval-key');
-      for (const provider of await client.providers.list())
+      for (const provider of await client.providers.list()) {
+        // Installed-CLI providers are keyless and are not part of this API-provider fixture.
+        if (provider.keyRequired === false) continue;
         await client.providers.setEnabled(provider.id, provider.id === 'groq');
+      }
       const autoFreeProfile = (await client.profiles.list()).find(
         (profile) => profile.name === 'Auto-Free',
       );

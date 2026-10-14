@@ -26,6 +26,7 @@ import { getProviderHealth } from '../provider-health.js';
 import { isCoreWindowActive, onCoreWindowActiveChange } from '../runtime-activity.js';
 import { hasUsableProviderKey, permitsKeylessProvider } from '../services.js';
 import { createProviderChecks } from '../provider-checks.js';
+import { getCliBroker } from '../cli-broker.js';
 import { isFreeForRouting } from '@ferry/router';
 
 const ProviderIdInput = ProviderIdSchema.transform((id) =>
@@ -427,7 +428,14 @@ export function register(host: CoreHost, services: FerryServices): void {
       return services.catalog.providers.map(({ provider: id }) => health.snapshot(id));
     },
     list() {
-      return allProviders(services);
+      // Installed-CLI providers are appended from cached discovery; they never enter the API catalog
+      // path (no key, no probe) and stay disabled until their surface is opted in and verified.
+      return [
+        ...allProviders(services),
+        ...getCliBroker(services, (method, payload) => {
+          host.emit(method, payload);
+        }).providers(),
+      ];
     },
     async listKeys(rawId: unknown) {
       const id = ProviderIdInput.parse(rawId);

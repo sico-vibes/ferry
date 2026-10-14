@@ -17,6 +17,7 @@ import { hasUsableProviderKey } from '../services.js';
 import { getModelDiscovery, type ModelDiscovery } from './model-discovery.js';
 import { preserveCatalogBillingMetadata } from '../model-billing-metadata.js';
 import { getGatewayController } from '../gateway.js';
+import { cliOptionError, getCliBroker } from '../cli-broker.js';
 import { z } from 'zod';
 
 const ModelListQuerySchema = z.object({
@@ -72,12 +73,24 @@ function cachedProviderModels(
   });
 }
 
+const CLI_CONNECTION_IDS = new Set(['codex-cli', 'claude-code-cli', 'opencode-cli']);
+
 export function register(host: CoreHost, services: FerryServices): void {
   const providerForModel = (id: string) => {
     const saved = services.providers.get(id);
     return saved ? zenProvider(services, saved) : undefined;
   };
   const modelDiscovery = getModelDiscovery(host, services);
+  const emit = (method: string, payload: unknown) => {
+    host.emit(method, payload);
+  };
+  // CLI inventory is cached discovery only; it never blocks on a probe from the request path.
+  const cliModels = (providerId?: string) =>
+    providerId !== undefined && !CLI_CONNECTION_IDS.has(providerId)
+      ? []
+      : getCliBroker(services, emit)
+          .models()
+          .filter((model) => providerId === undefined || model.providerId === providerId);
   const failingModels = () =>
     new Set(
       services.requestFailures
@@ -104,14 +117,20 @@ export function register(host: CoreHost, services: FerryServices): void {
         .filter((model) => services.providers.get(model.providerId)?.enabled)
         .filter((model) => providerId === undefined || model.providerId === providerId)
         .map((model) => ModelInfoSchema.parse({ ...model, verified: false, verifiedAt: null }));
-      return preserveCatalogBillingMetadata(
-        [...cachedModels, ...oauthModels].map((model) =>
+      return [
+        ...preserveCatalogBillingMetadata(
+          [...cachedModels, ...oauthModels].map((model) =>
+            ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }),
+          ),
+          services.catalog.models,
+          providerForModel,
+          (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
+        ),
+        // Installed-CLI models keep their discovered capability metadata and verification state.
+        ...cliModels(providerId).map((model) =>
           ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }),
         ),
-        services.catalog.models,
-        providerForModel,
-        (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
-      );
+      ];
     },
     page(rawQuery?: unknown) {
       const { offset, limit, query, filters, sort } = ModelListQuerySchema.parse(rawQuery ?? {});
@@ -123,14 +142,19 @@ export function register(host: CoreHost, services: FerryServices): void {
         .map((model) => ModelInfoSchema.parse({ ...model, verified: false, verifiedAt: null }));
 
       const needle = query.toLocaleLowerCase();
-      const listedModels = preserveCatalogBillingMetadata(
-        [...cachedModels, ...oauthModels].map((model) =>
+      const listedModels = [
+        ...preserveCatalogBillingMetadata(
+          [...cachedModels, ...oauthModels].map((model) =>
+            ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }),
+          ),
+          services.catalog.models,
+          providerForModel,
+          (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
+        ),
+        ...cliModels(providerId).map((model) =>
           ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }),
         ),
-        services.catalog.models,
-        providerForModel,
-        (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
-      );
+      ];
       const filtered = listedModels
         .filter((model) => providerId === undefined || model.providerId === providerId)
         .filter((model) => filters.tier === undefined || model.tier === filters.tier)
@@ -248,9 +272,26 @@ export function register(host: CoreHost, services: FerryServices): void {
           if (!available) throw new Error(`Unknown model: ${modelRef}`);
         }
       }
+      // Reset incompatible stored CLI options for the newly selected CLI model so a model change
+      // never dispatches an option the model no longer advertises.
+      let cliOptions = session.cliOptions;
+      if (modelRef !== 'auto') {
+        const discoveredModel = getCliBroker(services, emit).model(modelRef);
+        const existing = cliOptions?.[modelRef];
+        if (
+          discoveredModel &&
+          existing &&
+          cliOptionError(modelRef, discoveredModel.model, existing)
+        ) {
+          const next = { ...(cliOptions ?? {}) };
+          Reflect.deleteProperty(next, modelRef);
+          cliOptions = next;
+        }
+      }
       const updated = SessionSchema.parse({
         ...session,
         pinnedModelRef: modelRef === 'auto' ? null : modelRef,
+        ...(cliOptions === session.cliOptions ? {} : { cliOptions }),
         updatedAt: services.clock.now().toISOString(),
       });
       const previousModel = session.pinnedModelRef ?? 'auto';

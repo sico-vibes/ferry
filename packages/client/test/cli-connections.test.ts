@@ -58,11 +58,16 @@ it('mirrors real OpenCode Go and Claude control evidence', async () => {
   expect(claude?.models[0]?.efforts).toContain('max');
 });
 
-it('reports verification as not yet available', async () => {
+it('returns a scripted verification receipt and marks the model verified', async () => {
   const client = createMockFerryClient();
   const result = await client.cliConnections.verify('claude-code-cli');
-  expect(result.ok).toBe(false);
-  expect(result.message).toMatch(/later phase/i);
+  expect(result.ok).toBe(true);
+  expect(result.modelRef).toBe('claude-code-cli/claude-opus-5-5');
+  const connection = (await client.cliConnections.list()).find(
+    (entry) => entry.kind === 'claude-code-cli',
+  );
+  expect(connection?.verify.state).toBe('verified');
+  expect(connection?.verify.modelRef).toBe('claude-code-cli/claude-opus-5-5');
 });
 
 it('distinguishes an explicit null effort from an absent one in CLI patches', () => {

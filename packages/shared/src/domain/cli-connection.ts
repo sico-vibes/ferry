@@ -79,6 +79,12 @@ export const CliVerificationSchema = z.object({
   modelRef: ModelRefSchema.nullable(),
   checkedAt: z.iso.datetime().nullable(),
   message: z.string().nullable(),
+  /**
+   * Nonsecret fingerprint of the account/version/capabilities/credential selection this receipt was
+   * proven against. A persisted receipt whose fingerprint is missing or no longer matches is stale.
+   * Never contains credentials or key material.
+   */
+  receiptKey: z.string().min(1).max(128).nullable().optional(),
 });
 export type CliVerification = z.infer<typeof CliVerificationSchema>;
 
@@ -122,12 +128,21 @@ export const CliModelCapabilitiesSchema = z.object({
   /** Upstream provider/grouping reported by the CLI, when it distinguishes one. */
   upstreamProvider: z.string().nullable(),
   name: z.string(),
+  /** Raw reasoning-effort tokens reported verbatim by the CLI, including ones this beta cannot run. */
   efforts: z.array(CliEffortSchema),
   defaultEffort: CliEffortSchema.nullable(),
+  /**
+   * Advertised-but-unrunnable controls: effort token to a nonsecret explanation the UI can show
+   * while keeping the raw token in `efforts`. Empty when the bridge runs every advertised token.
+   */
+  unsupportedEfforts: z.record(CliEffortSchema, z.string().min(1).max(240)).optional(),
   speeds: z.array(CliSpeedSchema),
   defaultSpeed: CliSpeedSchema.default('standard'),
   modalities: z.array(CliModalitySchema),
   toolCalling: z.boolean(),
+  /** Context/output capacity only when the CLI actually reported it; `null`/absent means unknown. */
+  contextWindow: z.number().int().positive().nullable().optional(),
+  maxOutput: z.number().int().positive().nullable().optional(),
   billing: CliBillingSchema,
   hidden: z.boolean().default(false),
 });
@@ -179,10 +194,20 @@ export type CliConnection = z.infer<typeof CliConnectionSchema>;
 
 export const CliConnectionListSchema = z.array(CliConnectionSchema);
 
+/**
+ * Credential source for one installed CLI connection. OpenCode can use its own installed sign-in,
+ * an anonymous session, or a Ferry-stored key; the other CLIs always use their installed sign-in.
+ */
+export const CliCredentialModeSchema = z.enum(['installed', 'anonymous', 'ferry']);
+export type CliCredentialMode = z.infer<typeof CliCredentialModeSchema>;
+
 /** Persisted opt-in/default settings per installed CLI connection (settings JSON). */
 export const CliConnectionSettingsSchema = z.object({
   native: z.boolean().default(false),
   gateway: z.boolean().default(false),
+  credentialMode: CliCredentialModeSchema.default('installed'),
+  /** Explicit provider entry offered to OpenCode (e.g. `opencode-go`); never a copied secret. */
+  credentialProvider: z.string().min(1).max(64).nullable().default(null),
   defaultOptions: CliOptionSchema.default({ effort: null, speed: 'standard' }),
   modelDefaults: z.record(ModelRefSchema, CliOptionSchema.partial()).default({}),
 });
@@ -190,6 +215,8 @@ export type CliConnectionSettings = z.infer<typeof CliConnectionSettingsSchema>;
 
 export const CliConnectionSettingsPatchSchema = z.object({
   surfaces: CliSurfacesPatchSchema.optional(),
+  credentialMode: CliCredentialModeSchema.optional(),
+  credentialProvider: z.string().min(1).max(64).nullable().optional(),
   defaultOptions: CliOptionPatchSchema.optional(),
   modelDefaults: z.record(ModelRefSchema, CliOptionPatchSchema).optional(),
 });

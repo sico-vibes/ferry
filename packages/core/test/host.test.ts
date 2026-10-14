@@ -128,6 +128,8 @@ async function makeRealDomainsHarness() {
   const rpc = createRpcFerryClient(clientTransport, { timeoutMs: 60_000 });
   await rpc.hello;
   for (const provider of await rpc.providers.list()) {
+    // Installed-CLI providers have no API key; the API-key fixture only applies to keyed providers.
+    if (provider.keyRequired === false) continue;
     await rpc.providers.setKey(provider.id, 'contract-fixture-key');
     await rpc.providers.setEnabled(provider.id, provider.id === 'openai');
   }

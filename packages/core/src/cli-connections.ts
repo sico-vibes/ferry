@@ -211,6 +211,31 @@ export class CliConnectionService {
     return this.#snapshot();
   }
 
+  /** Immediate cached snapshot without scheduling any background discovery. */
+  snapshot(): CliConnection[] {
+    return this.#snapshot();
+  }
+
+  /**
+   * Apply a verification receipt produced by the broker (successful or failed). Discovery, account,
+   * usage and install state are untouched; only the verify block changes and is persisted.
+   */
+  applyVerification(kind: CliConnectionKind, verify: CliConnection['verify']): CliConnection {
+    const record = this.#records.get(kind);
+    const connection: CliConnection = {
+      ...(record?.connection ?? placeholder(kind)),
+      verify: { ...verify },
+    };
+    this.#records.set(kind, {
+      connection,
+      modelCheckedAt: record?.modelCheckedAt ?? 0,
+      usageCheckedAt: record?.usageCheckedAt ?? 0,
+    });
+    this.#persist();
+    this.#emitConnection(kind, connection);
+    return connection;
+  }
+
   /**
    * Bounded fresh full scan (install + models + account + usage) for the requested kinds, joining
    * any already-running scan for the same kind and waiting out an in-flight usage probe so the same
@@ -220,15 +245,6 @@ export class CliConnectionService {
     const kinds = id ? [id] : [...KINDS];
     await Promise.all(kinds.map((kind) => this.#runScan(kind)));
     return this.#snapshot();
-  }
-
-  /** Actual generation-based verification lands with the adapter phase; fail explicitly until then. */
-  verify(id: CliConnectionKind, modelRef?: string): never {
-    throw rpcDomainError(
-      -32004,
-      'unavailable',
-      `Verifying ${id}${modelRef ? ` (${modelRef})` : ''} requires a generation, which is not available yet.`,
-    );
   }
 
   /** Persist surface opt-ins and per-model option defaults; discovery state is untouched. */
@@ -254,9 +270,17 @@ export class CliConnectionService {
         modelRef,
       });
     }
+    const credentialMode =
+      patch.credentialMode ?? current?.credentialMode ?? ('installed' as const);
+    const credentialProvider =
+      'credentialProvider' in patch
+        ? (patch.credentialProvider ?? null)
+        : (current?.credentialProvider ?? null);
     const merged: CliConnectionSettings = {
       native: patch.surfaces?.native ?? current?.native ?? false,
       gateway: patch.surfaces?.gateway ?? current?.gateway ?? false,
+      credentialMode,
+      credentialProvider,
       defaultOptions: { effort, speed },
       modelDefaults,
     };
@@ -265,6 +289,30 @@ export class CliConnectionService {
       cliConnections: { ...parsed.data.cliConnections, [id]: merged },
     });
     this.services.settings.put('global', settings);
+    // A credential selection change invalidates any existing verification immediately, so the
+    // stale receipt and an updated event are published now rather than on a later broker read.
+    const credentialChanged =
+      (current?.credentialMode ?? 'installed') !== credentialMode ||
+      (current?.credentialProvider ?? null) !== credentialProvider;
+    if (credentialChanged) {
+      const record = this.#records.get(id);
+      const verified = record?.connection;
+      if (verified?.verify.state === 'verified') {
+        const verify: CliConnection['verify'] = {
+          state: 'stale',
+          modelRef: verified.verify.modelRef,
+          checkedAt: verified.verify.checkedAt,
+          message: 'The CLI credential selection changed; verify again.',
+          receiptKey: null,
+        };
+        this.#records.set(id, {
+          connection: { ...verified, verify },
+          modelCheckedAt: record?.modelCheckedAt ?? 0,
+          usageCheckedAt: record?.usageCheckedAt ?? 0,
+        });
+        this.#persist();
+      }
+    }
     const connection = this.#snapshot().find((entry) => entry.kind === id) ?? placeholder(id);
     this.emit('settings.updated', settings);
     this.emit('cliConnections.updated', connection);

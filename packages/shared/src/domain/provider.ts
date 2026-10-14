@@ -138,6 +138,11 @@ export const ModelInfoSchema = z.object({
   tier: TierSchema,
   contextWindow: z.number().int().positive(),
   maxOutput: z.number().int().positive(),
+  /**
+   * False when the provider never reported a real context/output capacity and the numbers above are
+   * conservative placeholders. UIs must show "Not reported" instead of trusting them.
+   */
+  capacityKnown: z.boolean().optional(),
   toolCalling: z.boolean(),
   reasoning: z.boolean(),
   reasoningEfforts: z.array(EffortSchema).optional(),
