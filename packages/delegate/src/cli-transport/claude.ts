@@ -277,74 +277,71 @@ function buildUsageSnapshot(
   };
 }
 
-interface InputFrame {
-  type: string;
-  message?: Record<string, unknown>;
-  request_id?: string;
-  request?: Record<string, unknown>;
-  /** History echoed to the model; `false`/absent marks the live prompt turn. */
-  isReplay?: boolean;
-}
+/**
+ * Truthful caller-only operating instructions. The native CLI's default system prompt advertises
+ * host tools; Ferry replaces it so the model knows it has no host access and only the caller tools.
+ */
+const FERRY_TRANSPORT_PROMPT = [
+  'You are running inside Ferry, which orchestrates coding agents on behalf of a caller.',
+  'Host isolation: you have NO native tools and NO host access — no shell, filesystem, network, editor, plugins, or MCP servers beyond the tools the caller provides. Never attempt them and never claim any host action succeeded.',
+  'Available tools: only the caller-provided tools exposed as MCP tools named `mcp__ferry_tools__<n>`. If a task needs one, call it and then stop; the caller executes it and returns the real result in a later turn.',
+  'Conversation handling: the single user message contains the caller conversation history. Only the entry marked FINAL USER (or the final tool result) is the live turn — never re-execute earlier turns. Earlier assistant tool calls and their results are already-executed history with the ids shown.',
+].join('\n');
 
-/** Translate the caller conversation into Claude stream-json input frames, preserving roles/ids. */
-function buildConversationFrames(
-  messages: readonly CliConversationMessage[],
-  claudeNameByName: Map<string, string>,
-): { frames: InputFrame[]; preamble: string } {
-  const frames: InputFrame[] = [];
-  const preambleParts: string[] = [];
+/** Caller system/developer instructions, kept verbatim in a private system-prompt file. */
+function buildSystemPrompt(messages: readonly CliConversationMessage[]): string {
+  const parts = [FERRY_TRANSPORT_PROMPT];
   for (const message of messages) {
-    const text = message.content ?? '';
-    if (message.role === 'system' || message.role === 'developer') {
-      preambleParts.push(`[${message.role}]\n${text}`);
-      continue;
-    }
-    if (message.role === 'assistant') {
-      const content: Record<string, unknown>[] = [];
-      if (text) content.push({ type: 'text', text });
-      for (const call of message.tool_calls ?? [])
-        content.push({
-          type: 'tool_use',
-          id: call.id,
-          name: claudeNameByName.get(call.function.name) ?? call.function.name,
-          input: safeJson(call.function.arguments),
-        });
-      if (content.length)
-        frames.push({ type: 'assistant', message: { role: 'assistant', content } });
-      continue;
-    }
-    if (message.role === 'tool') {
-      frames.push({
-        type: 'user',
-        message: {
-          role: 'user',
-          content: [
-            {
-              type: 'tool_result',
-              tool_use_id: message.tool_call_id ?? '',
-              content: text,
-            },
-          ],
-        },
-      });
-      continue;
-    }
-    frames.push({
-      type: 'user',
-      message: { role: 'user', content: [{ type: 'text', text }] },
-    });
+    if (message.role === 'system' || message.role === 'developer')
+      parts.push(`[${message.role}]\n${message.content ?? ''}`);
   }
-  return { frames, preamble: preambleParts.join('\n\n') };
+  return parts.join('\n\n');
 }
 
-function safeJson(value: string): Record<string, unknown> {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (isRecord(parsed)) return parsed;
-  } catch {
-    // fall through
-  }
-  return {};
+/**
+ * One structured transcript of the whole caller conversation. Sending it as a single live user
+ * frame avoids the CLI re-executing historical user turns (which happens when they are sent as
+ * separate user frames). Roles, tool-call ids and real tool outputs are preserved verbatim.
+ */
+function buildHistoryTranscript(messages: readonly CliConversationMessage[]): string {
+  const conversation = messages.filter(
+    (message) => message.role !== 'system' && message.role !== 'developer',
+  );
+  const lines: string[] = ['CALLER CONVERSATION HISTORY (verbatim, do not re-run earlier turns):'];
+  conversation.forEach((message, index) => {
+    const isLive = index === conversation.length - 1;
+    if (message.role === 'user')
+      lines.push(`${isLive ? 'FINAL USER (live turn)' : 'USER'}:\n${message.content ?? ''}`);
+    else if (message.role === 'assistant') {
+      if (message.content) lines.push(`ASSISTANT:\n${message.content}`);
+      for (const call of message.tool_calls ?? [])
+        lines.push(
+          `ASSISTANT TOOL CALL id=${call.id} name=${call.function.name} arguments=${call.function.arguments}`,
+        );
+    } else if (message.role === 'tool')
+      lines.push(
+        `${isLive ? 'FINAL TOOL RESULT (live turn)' : 'TOOL RESULT'} tool_call_id=${message.tool_call_id ?? ''}:\n${message.content ?? ''}`,
+      );
+  });
+  const last = conversation.at(-1);
+  if (last && last.role !== 'user')
+    lines.push(
+      last.role === 'tool'
+        ? 'CONTINUE: The caller already executed the tool above; use its real result and do not call it again.'
+        : 'CONTINUE: Answer the caller from the conversation above.',
+    );
+  return lines.join('\n\n');
+}
+
+/** The single live user frame Claude runs a turn for. */
+function buildLiveUserFrame(messages: readonly CliConversationMessage[]): Record<string, unknown> {
+  return {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text: buildHistoryTranscript(messages) }],
+    },
+  };
 }
 
 /**
@@ -392,8 +389,11 @@ export async function runClaudeCodeCli(input: CliTransportInput): Promise<CliTur
     };
     const mcpConfigPath = join(cwd, 'mcp-config.json');
     const settingsPath = join(cwd, 'settings.json');
+    const systemPromptPath = join(cwd, 'system-prompt.txt');
     await writeFile(mcpConfigPath, JSON.stringify(mcpConfig), 'utf8');
     await writeFile(settingsPath, JSON.stringify(settings), 'utf8');
+    // Replace the native default system prompt so it cannot advertise host tools we disable.
+    await writeFile(systemPromptPath, buildSystemPrompt(input.messages), 'utf8');
 
     const args = [
       '-p',
@@ -411,6 +411,8 @@ export async function runClaudeCodeCli(input: CliTransportInput): Promise<CliTur
       mcpConfigPath,
       '--settings',
       settingsPath,
+      '--system-prompt-file',
+      systemPromptPath,
       '--disable-slash-commands',
       '--model',
       input.model.upstreamId,
@@ -447,11 +449,6 @@ export async function runClaudeCodeCli(input: CliTransportInput): Promise<CliTur
     // wins (result over stream/assistant) and snapshots are never summed.
     let latestUsage: Record<string, unknown> | null = null;
     const toolCalls: CliTurnToolCall[] = [];
-    const claudeNameByName = new Map<string, string>();
-    input.tools.forEach((tool, index) => {
-      if (!claudeNameByName.has(tool.name))
-        claudeNameByName.set(tool.name, `mcp__${MCP_SERVER_NAME}__tool_${String(index)}`);
-    });
 
     let resolveDone!: (value: CliTurnResult) => void;
     let rejectDone!: (reason: unknown) => void;
@@ -858,24 +855,10 @@ export async function runClaudeCodeCli(input: CliTransportInput): Promise<CliTur
         }
       }
 
-      const { frames, preamble } = buildConversationFrames(input.messages, claudeNameByName);
-      if (preamble) {
-        const first = frames.find((frame) => frame.type === 'user');
-        if (first && isRecord(first.message) && Array.isArray(first.message.content)) {
-          (first.message.content as unknown[]).unshift({ type: 'text', text: preamble });
-        } else {
-          frames.unshift({
-            type: 'user',
-            message: { role: 'user', content: [{ type: 'text', text: preamble }] },
-          });
-        }
-      }
-      // History frames are replayed context; the final frame is the live prompt. Keeping stdin open
-      // lets the CLI emit control requests (e.g. tool permission) that the transport can answer.
-      frames.forEach((frame, index) => {
-        frame.isReplay = index !== frames.length - 1;
-      });
-      for (const frame of frames) writeFrame(frame as unknown as Record<string, unknown>);
+      // Exactly ONE live user frame carries the structured caller conversation; sending historical
+      // user turns as separate frames makes the native CLI re-execute them. stdin stays open so the
+      // CLI can emit control requests (e.g. tool permission) that the transport can answer.
+      writeFrame(buildLiveUserFrame(input.messages));
       input.onProgress?.();
       return await done;
     })();

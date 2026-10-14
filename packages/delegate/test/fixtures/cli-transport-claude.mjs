@@ -23,7 +23,27 @@ if (argv.includes('auth') && argv.includes('status')) {
 } else {
   const mcpPath = argValue('--mcp-config');
   const settingsPath = argValue('--settings');
-  const record = { argv, mcp: null, settings: null, frames: [], responses: [], mcpTools: null };
+  const systemPromptPath = argValue('--system-prompt-file');
+  const record = {
+    argv,
+    mcp: null,
+    settings: null,
+    systemPrompt: null,
+    frames: [],
+    responses: [],
+    mcpTools: null,
+    // Real-CLI semantics: every user frame is a turn. Track them so a regression that sends
+    // historical user frames (re-executing old turns) fails loudly instead of looking green.
+    userMessages: [],
+    assistantFrames: 0,
+    multiUser: false,
+    usedReplay: false,
+  };
+  try {
+    record.systemPrompt = systemPromptPath ? readFileSync(systemPromptPath, 'utf8') : null;
+  } catch {
+    record.systemPrompt = null;
+  }
   function flush() {
     if (!recordPath) return;
     const temporary = `${recordPath}.tmp`;
@@ -493,11 +513,24 @@ if (argv.includes('auth') && argv.includes('status')) {
       return;
     }
     if (frame.type === 'user' || frame.type === 'assistant') {
+      if (frame.isReplay === true) record.usedReplay = true;
       record.frames.push({
         type: frame.type,
         message: frame.message,
         isReplay: frame.isReplay === true,
       });
+      if (frame.type === 'user') {
+        const content = frame.message?.content;
+        const text = Array.isArray(content)
+          ? content
+              .map((block) => (block && block.type === 'text' ? String(block.text ?? '') : ''))
+              .join('')
+          : String(content ?? '');
+        record.userMessages.push(text);
+        if (record.userMessages.length > 1) record.multiUser = true;
+      } else {
+        record.assistantFrames += 1;
+      }
       flush();
       maybeStart(frame);
     }
@@ -506,8 +539,9 @@ if (argv.includes('auth') && argv.includes('status')) {
   let started = false;
   function maybeStart(frame) {
     if (started) return;
-    // The live prompt is the non-replay user frame; history frames are marked isReplay.
-    if (frame.type !== 'user' || frame.isReplay === true) return;
+    // The CLI runs a turn for the first user frame; a second user frame means an old turn was
+    // re-sent and would be re-executed, which we record as multiUser.
+    if (frame.type !== 'user') return;
     started = true;
     // An awaited promise does not keep Node alive; hold the process open until the scenario finishes.
     const keepAlive = setInterval(() => {}, 1000);

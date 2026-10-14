@@ -43,9 +43,14 @@ interface ClaudeRecord {
   argv: string[];
   mcp: Record<string, unknown> | null;
   settings: Record<string, unknown> | null;
-  frames: { type: string; subtype?: string; message?: Record<string, unknown> }[];
+  systemPrompt: string | null;
+  frames: { type: string; message?: Record<string, unknown>; isReplay?: boolean }[];
   responses: Record<string, unknown>[];
   mcpTools: string[] | null;
+  userMessages: string[];
+  assistantFrames: number;
+  multiUser: boolean;
+  usedReplay: boolean;
 }
 
 async function readRecord(path: string): Promise<ClaudeRecord> {
@@ -190,6 +195,9 @@ describe('runClaudeCodeCli', () => {
       expect(record.argv).toContain('--disable-slash-commands');
       expect(record.argv).toContain('--no-session-persistence');
       expect(record.argv).toContain('--include-partial-messages');
+      expect(record.argv).toContain('--system-prompt-file');
+      expect(record.systemPrompt).toContain('NO native tools');
+      expect(record.userMessages.length).toBe(1);
       const modelIndex = record.argv.indexOf('--model');
       expect(record.argv[modelIndex + 1]).toBe(MODEL);
       expect(record.settings?.fastMode).toBe(false);
@@ -229,6 +237,7 @@ describe('runClaudeCodeCli', () => {
 
       const continueRecord = join(dir, 'continue.json');
       const history: CliConversationMessage[] = [
+        { role: 'system', content: 'Be concise.' },
         { role: 'user', content: 'Read marker.txt' },
         {
           role: 'assistant',
@@ -242,30 +251,70 @@ describe('runClaudeCodeCli', () => {
           ],
         },
         { role: 'tool', tool_call_id: 'toolu_fixture_1', content: 'file contents' },
+        { role: 'user', content: 'Reply exactly the actual tool result.' },
       ];
       await runClaudeCodeCli(
         makeInput({ scenario: 'text', record: continueRecord, tools, messages: history }),
       );
       const record = await readRecord(continueRecord);
-      const assistant = record.frames.find((frame) => frame.type === 'assistant');
-      const toolUse = asRecord((assistant?.message?.content as unknown[])[0]);
-      expect(toolUse.type).toBe('tool_use');
-      expect(toolUse.id).toBe('toolu_fixture_1');
-      expect(toolUse.name).toBe('mcp__ferry_tools__tool_0');
-      const toolResult = record.frames.find((frame) => {
-        const content = frame.message?.content;
-        return (
-          frame.type === 'user' &&
-          Array.isArray(content) &&
-          asRecord(content[0]).type === 'tool_result'
-        );
-      });
-      expect(asRecord((toolResult?.message?.content as unknown[])[0]).tool_use_id).toBe(
-        'toolu_fixture_1',
+      // Exactly one live user frame: historical user turns must never be re-sent/re-executed.
+      expect(record.userMessages.length).toBe(1);
+      expect(record.multiUser).toBe(false);
+      expect(record.usedReplay).toBe(false);
+      expect(record.assistantFrames).toBe(0);
+      const transcript = record.userMessages[0] ?? '';
+      expect(transcript).toContain('toolu_fixture_1');
+      expect(transcript).toContain('read_file');
+      expect(transcript).toContain('file contents');
+      expect(transcript).toContain('FINAL USER');
+      // Caller system instructions live in a private system-prompt file, not user text.
+      expect(record.systemPrompt).toContain('[system]\nBe concise.');
+      expect(record.systemPrompt).toContain('NO native tools');
+      expect(transcript).not.toContain('Be concise.');
+    },
+  );
+
+  it(
+    'sends exactly one live user frame with full structured history',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'history.json');
+      const tools = [
+        { name: 'read_file', description: 'Read a file', parameters: { type: 'object' } },
+      ];
+      const history: CliConversationMessage[] = [
+        { role: 'developer', content: 'Follow the caller policy.' },
+        { role: 'user', content: '第一回合：读取文件 📁\n' + 'long-line '.repeat(200) },
+        { role: 'assistant', content: '好的' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'toolu_hist_1',
+              type: 'function',
+              function: { name: 'read_file', arguments: '{"path":"long/路径.txt"}' },
+            },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'toolu_hist_1', content: 'TOOL_RESULT::VALUE_路径' },
+        { role: 'user', content: '第二回合并请求：继续' },
+      ];
+      await runClaudeCodeCli(
+        makeInput({ scenario: 'text', record: recordPath, tools, messages: history }),
       );
-      expect(asRecord((toolResult?.message?.content as unknown[])[0]).content).toBe(
-        'file contents',
-      );
+      const record = await readRecord(recordPath);
+      expect(record.userMessages.length).toBe(1);
+      expect(record.multiUser).toBe(false);
+      const transcript = record.userMessages[0] ?? '';
+      expect(transcript).toContain('第一回合：读取文件 📁');
+      expect(transcript).toContain('toolu_hist_1');
+      expect(transcript).toContain('long/路径.txt');
+      expect(transcript).toContain('TOOL_RESULT::VALUE_路径');
+      expect(transcript).toContain('FINAL USER');
+      expect(record.systemPrompt).toContain('[developer]\nFollow the caller policy.');
+      expect(record.systemPrompt).toContain('NO native tools');
     },
   );
 
