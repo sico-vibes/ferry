@@ -203,12 +203,16 @@ it('discovers OpenCode models and identifies the OpenCode Go credential', async 
   expect(connection.account.state).toBe('signed_in');
   expect(connection.account.label).toBe('OpenCode Go');
   expect(connection.account.key).toMatch(/^opencode-cli:[a-f0-9]{24}$/);
-  const model = connection.models[0];
-  expect(model?.ref).toBe('opencode-cli/opencode-go/deepseek-v4.1-flash');
+  const model = connection.models.find(
+    (entry) => entry.ref === 'opencode-cli/opencode-go/deepseek-v4.1-flash',
+  );
   expect(model?.upstreamProvider).toBe('opencode-go');
   expect(model?.efforts).toEqual(['low', 'high', 'max']);
   // OpenCode Go is included subscription capacity, never reported as a free route.
   expect(model?.billing).toBe('included_subscription');
+  // Budget-only native variants (no reasoningEffort value) are discovered by their map key.
+  const budget = connection.models.find((entry) => entry.ref.endsWith('qwen-thinking'));
+  expect(budget?.efforts).toEqual(['thinking']);
 }, 30_000);
 
 it('refreshes usage from a cached connection without re-detecting install', async () => {

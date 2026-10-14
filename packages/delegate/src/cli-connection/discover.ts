@@ -789,16 +789,20 @@ function opencodeCapabilities(
   raw: Record<string, unknown>,
 ): CliModelCapabilities {
   const variants = raw.variants;
-  const efforts =
+  // Native variants are keyed by the option name (e.g. `low`/`high`/`max`); some carry a
+  // `reasoningEffort` value and others only a thinking budget, so preserve the map keys too.
+  const variantEntries =
     typeof variants === 'object' && variants !== null
-      ? uniqueEfforts(
-          Object.values(variants as Record<string, unknown>).map((variant) =>
-            typeof variant === 'object' && variant !== null
-              ? (variant as { reasoningEffort?: unknown }).reasoningEffort
-              : undefined,
-          ),
-        )
+      ? Object.entries(variants as Record<string, unknown>)
       : [];
+  const efforts = uniqueEfforts([
+    ...variantEntries.map(([name]) => name),
+    ...variantEntries.map(([, variant]) =>
+      typeof variant === 'object' && variant !== null
+        ? (variant as { reasoningEffort?: unknown }).reasoningEffort
+        : undefined,
+    ),
+  ]);
   const capabilities =
     typeof raw.capabilities === 'object' && raw.capabilities !== null
       ? (raw.capabilities as { toolcall?: unknown })

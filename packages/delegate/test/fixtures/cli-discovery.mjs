@@ -159,6 +159,16 @@ if (args[0] === 'auth' && args[1] === 'status') {
     },
   };
   process.stdout.write(`opencode-go/deepseek-v4.1-flash\n${JSON.stringify(model, null, 2)}\n`);
+  const budgetModel = {
+    id: 'qwen-thinking',
+    providerID: 'opencode-go',
+    name: 'Qwen Thinking',
+    cost: { input: 0, output: 0 },
+    capabilities: { toolcall: true, reasoning: true },
+    // A native variant that only carries a thinking budget, not a reasoningEffort value.
+    variants: { thinking: { thinkingBudget: 8192 } },
+  };
+  process.stdout.write(`opencode-go/qwen-thinking\n${JSON.stringify(budgetModel, null, 2)}\n`);
 } else if (args.includes('--input-format')) {
   let buffer = '';
   const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
