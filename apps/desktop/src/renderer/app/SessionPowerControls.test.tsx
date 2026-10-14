@@ -93,7 +93,7 @@ describe('ComposerModelChip', () => {
 
   it.each([
     { override: undefined, expected: 'high' },
-    { override: { effort: null, speed: 'standard' as const }, expected: 'medium' },
+    { override: { effort: null, speed: 'standard' as const }, expected: '' },
   ])(
     'opens CLI options with the shared default precedence ($expected)',
     async ({ override, expected }) => {

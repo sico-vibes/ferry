@@ -124,6 +124,23 @@ export function CliOptionsChip({
               Standard speed · Fast mode is not advertised by this client.
             </p>
           )}
+          {value.speed === 'fast' && !capabilities.speeds.includes('fast') && (
+            <div className="grid gap-2">
+              <p className="cli-options-description" role="status">
+                The saved Fast setting is unavailable for this model.
+              </p>
+              <UiV2.Button
+                size="sm"
+                variant="secondary"
+                disabled={busy}
+                onClick={() => {
+                  onChange({ ...value, speed: 'standard' });
+                }}
+              >
+                Use standard speed
+              </UiV2.Button>
+            </div>
+          )}
           <p className="cli-options-description">
             Subscription and metered limits still apply. Separately billed options follow your
             spending permissions.

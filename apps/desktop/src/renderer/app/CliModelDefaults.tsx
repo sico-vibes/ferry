@@ -95,7 +95,7 @@ export function CliModelDefaults({
           ))}
         </label>
       )}
-      {capabilities.speeds.includes('fast') && (
+      {(capabilities.speeds.includes('fast') || options.speed === 'fast') && (
         <label className="cli-options-field">
           <span>Default speed</span>
           <select
@@ -113,7 +113,11 @@ export function CliModelDefaults({
             }}
           >
             <option value="standard">Standard</option>
-            <option value="fast">Fast · spending permissions apply</option>
+            <option value="fast" disabled={!capabilities.speeds.includes('fast')}>
+              {capabilities.speeds.includes('fast')
+                ? 'Fast · spending permissions apply'
+                : 'Unavailable · Fast'}
+            </option>
           </select>
         </label>
       )}

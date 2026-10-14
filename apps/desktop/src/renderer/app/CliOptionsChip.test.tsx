@@ -103,6 +103,27 @@ it('displays a stale effort override without substituting another value', async 
   expect(change).not.toHaveBeenCalled();
 });
 
+it('lets the user clear a saved Fast setting after the model stops advertising it', async () => {
+  const model = await modelWithOptions(['high']);
+  const change = vi.fn();
+  render(
+    <CliOptionsChip
+      model={model}
+      value={{ effort: 'high', speed: 'fast' }}
+      open
+      onOpenChange={vi.fn()}
+      onChange={change}
+      busy={false}
+      error=""
+    />,
+  );
+  expect(screen.queryByRole('switch', { name: 'CLI fast mode' })).toBeNull();
+  expect(screen.getByRole('status').textContent).toContain('saved Fast setting is unavailable');
+  expect(change).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Use standard speed' }));
+  expect(change).toHaveBeenCalledWith({ effort: 'high', speed: 'standard' });
+});
+
 it('explains advertised efforts the bridge cannot run and does not submit them', async () => {
   const model = await modelWithOptions(['high', 'ultra']);
   if (!model.cliCapabilities) throw new Error('Missing CLI capabilities');

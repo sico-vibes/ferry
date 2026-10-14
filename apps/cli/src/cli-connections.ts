@@ -296,11 +296,10 @@ export function connectionOptionLayer(
 ): Partial<CliOption> | undefined {
   if (!saved) return undefined;
   const entry = saved.modelDefaults[ref];
-  const merged = { ...saved.defaultOptions, ...entry };
-  return {
-    ...(merged.effort !== undefined ? { effort: merged.effort } : {}),
-    ...(merged.speed !== undefined ? { speed: merged.speed } : {}),
-  };
+  const merged: Partial<CliOption> = { ...saved.defaultOptions };
+  if (entry?.effort !== undefined) merged.effort = entry.effort;
+  merged.speed = entry?.speed ?? saved.defaultOptions.speed;
+  return merged;
 }
 
 export interface CliModelStatus {

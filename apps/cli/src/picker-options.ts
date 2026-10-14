@@ -74,7 +74,9 @@ export async function modelOptions(client: FerryClient): Promise<PickerOption[]>
       pinned: true,
     },
     ...models
-      .filter((row) => row.verified === true && connected.has(row.providerId))
+      .filter(
+        (row) => !row.cliConnectionId && row.verified === true && connected.has(row.providerId),
+      )
       .sort((a, b) => a.providerId.localeCompare(b.providerId) || a.name.localeCompare(b.name))
       .map((row) => ({
         value: row.ref,

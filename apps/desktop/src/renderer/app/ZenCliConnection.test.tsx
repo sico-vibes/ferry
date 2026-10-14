@@ -30,7 +30,7 @@ it('keeps the setup dialog open for success feedback when verification enables Z
     expect(screen.queryByRole('button', { name: 'Set up Zen' })).toBeNull();
   });
 });
-it('detects Zen credentials, enables CLI for both paths and verifies only after an explicit check', async () => {
+it('detects Zen credentials and requires independent surface opt-ins and an explicit check', async () => {
   const client = createMockFerryClient({ behavior: 'test' });
   const verify = vi.spyOn(client.providers, 'verifyZenCli');
   const addKey = vi.spyOn(client.providers, 'addKey');
@@ -48,6 +48,8 @@ it('detects Zen credentials, enables CLI for both paths and verifies only after 
   await user.click(screen.getByRole('switch', { name: 'Use installed OpenCode CLI' }));
   await waitFor(async () => {
     expect((await client.settings.get()).opencodeZenTransport).toBe('cli');
+    expect((await client.settings.get()).cliConnections['opencode-cli']?.native).toBe(true);
+    expect((await client.settings.get()).cliConnections['opencode-cli']?.gateway).toBe(false);
   });
   expect(verify).not.toHaveBeenCalled();
   expect(screen.getByText(/Ferry chat and the Gateway API/)).toBeTruthy();
@@ -55,7 +57,17 @@ it('detects Zen credentials, enables CLI for both paths and verifies only after 
   await screen.findByText('Preview: free generation verified through OpenCode CLI.');
   expect(verify).toHaveBeenCalledWith('opencode/big-pickle');
   expect(addKey).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('switch', { name: 'Allow Zen CLI in Gateway' }));
+  await waitFor(async () => {
+    expect((await client.settings.get()).cliConnections['opencode-cli']?.gateway).toBe(true);
+  });
   await user.click(screen.getByRole('switch', { name: 'Use installed OpenCode CLI' }));
+  await waitFor(async () => {
+    expect((await client.settings.get()).cliConnections['opencode-cli']?.native).toBe(false);
+    expect((await client.settings.get()).cliConnections['opencode-cli']?.gateway).toBe(true);
+    expect((await client.settings.get()).opencodeZenTransport).toBe('cli');
+  });
+  await user.click(screen.getByRole('switch', { name: 'Allow Zen CLI in Gateway' }));
   await waitFor(async () => {
     expect((await client.settings.get()).opencodeZenTransport).toBe('api');
   });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   CliConnectionSchema,
+  CliConnectionSettingsSchema,
   type CliConnection,
   type CliConnectionKind,
   type CliModelCapabilities,
@@ -13,6 +14,7 @@ import {
   cliModelSelectability,
   connectionFacts,
   connectionLimits,
+  connectionOptionLayer,
   decodeCliModelValue,
   encodeCliModelValue,
   mergeCliOptionDraft,
@@ -277,6 +279,22 @@ describe('cli connection helpers', () => {
     expect(mergeCliOptionDraft(draft, 'codex-cli/other', { speed: 'fast' })).toEqual({
       modelRef: 'codex-cli/other',
       options: { speed: 'fast' },
+    });
+  });
+
+  it('inherits absent per-model fields while keeping an explicit client-default selection', () => {
+    const target = model();
+    const settings = CliConnectionSettingsSchema.parse({
+      defaultOptions: { effort: 'high', speed: 'standard' },
+      modelDefaults: { [target.ref]: { effort: undefined, speed: 'fast' } },
+    });
+    expect(connectionOptionLayer(settings, target.ref)).toEqual({ effort: 'high', speed: 'fast' });
+    settings.modelDefaults[target.ref] = { effort: null };
+    const layer = connectionOptionLayer(settings, target.ref);
+    expect(layer).toEqual({ effort: null, speed: 'standard' });
+    expect(resolveCliOptions(target, { connection: layer })).toEqual({
+      effort: 'medium',
+      speed: 'standard',
     });
   });
 

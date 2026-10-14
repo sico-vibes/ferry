@@ -28,6 +28,9 @@ const screens = [
   { name: 'provider-verification', path: '/models', integrationTooltip: true },
   { name: 'installed-cli-connections', path: '/models', inspectCliConnections: true },
   { name: 'cli-sign-in-instructions', path: '/models', cliSignIn: true },
+  { name: 'cli-verified-connection', path: '/models', connectedCli: true },
+  { name: 'cli-subscription-picker', path: '/models', connectedCli: true, cliPicker: true },
+  { name: 'cli-model-options', path: '/models', connectedCli: true, cliOptions: true },
   { name: 'provider-endpoint', path: '/models', endpoint: true },
   { name: 'model-picker', path: '/', modelPicker: true },
   { name: 'command-palette', path: '/', palette: true },
@@ -240,6 +243,38 @@ async function checkScreen({ theme, viewport, deviceScaleFactor, screen }) {
     if (screen.cliSignIn) {
       await connections.getByRole('button', { name: 'Sign-in instructions' }).first().click();
       await page.getByRole('dialog', { name: 'Sign in to Codex CLI' }).waitFor();
+    }
+  }
+  if (screen.connectedCli) {
+    const connections = page.getByRole('region', { name: 'Installed CLIs', exact: true });
+    const native = connections.getByRole('switch', { name: 'Use Codex CLI in Ferry' });
+    await native.waitFor();
+    await connections
+      .getByRole('button', { name: 'Verify connection', exact: true })
+      .first()
+      .click();
+    await connections.getByText('1 model generation verified', { exact: true }).waitFor();
+    await native.click();
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[aria-label="Use Codex CLI in Ferry"]')
+          ?.getAttribute('aria-checked') === 'true',
+    );
+    if (screen.cliPicker || screen.cliOptions) {
+      await page.getByRole('button', { name: 'New chat', exact: true }).click();
+      await page.locator('.v2-composer-chip[aria-controls]').click();
+      await page.getByRole('combobox', { name: 'Model access' }).selectOption('subscription');
+      const model = page.getByRole('option', { name: /GPT-5.1 Codex/ });
+      await model.waitFor();
+      if (screen.cliOptions) {
+        await model.click();
+        await page.getByRole('combobox', { name: 'CLI reasoning effort' }).waitFor();
+      } else {
+        await model.hover();
+      }
+    } else {
+      await connections.scrollIntoViewIfNeeded();
     }
   }
   if (screen.palette) await page.keyboard.press('Control+k');

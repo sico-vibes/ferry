@@ -798,22 +798,36 @@ export function ComposerModelChip({
   const modelDefaults = optionsModel
     ? connectionDefaults?.modelDefaults[optionsModel.ref]
     : undefined;
-  const effectiveOptions = optionsModel?.cliCapabilities
-    ? resolveCliOption({
-        model: optionsModel.cliCapabilities,
-        conversation: cliOptions ?? sessionOptions.data?.session.cliOptions?.[optionsModel.ref],
-        profile: profiles.find((profile) => profile.id === activeProfileId)?.cliDefaults?.[
-          optionsModel.ref
-        ],
-        connectionModel: modelDefaults
-          ? {
-              ...(modelDefaults.effort !== undefined ? { effort: modelDefaults.effort } : {}),
-              ...(modelDefaults.speed !== undefined ? { speed: modelDefaults.speed } : {}),
-            }
-          : undefined,
-        connection: connectionDefaults?.defaultOptions,
-      })
+  const optionLayers = {
+    conversation:
+      cliOptions ??
+      (optionsModel ? sessionOptions.data?.session.cliOptions?.[optionsModel.ref] : undefined),
+    profile: optionsModel
+      ? profiles.find((profile) => profile.id === activeProfileId)?.cliDefaults?.[optionsModel.ref]
+      : undefined,
+    connectionModel: modelDefaults
+      ? {
+          ...(modelDefaults.effort !== undefined ? { effort: modelDefaults.effort } : {}),
+          ...(modelDefaults.speed !== undefined ? { speed: modelDefaults.speed } : {}),
+        }
+      : undefined,
+    connection: connectionDefaults?.defaultOptions,
+  };
+  const resolvedOptions = optionsModel?.cliCapabilities
+    ? resolveCliOption({ model: optionsModel.cliCapabilities, ...optionLayers })
     : { effort: null, speed: 'standard' as const };
+  // Keep the default choice visible and durable when changing another field. Core resolves its
+  // null marker to the reported effort; showing that concrete effort must not pin it as an override.
+  const savedEffort = [
+    optionLayers.conversation,
+    optionLayers.profile,
+    optionLayers.connectionModel,
+    optionLayers.connection,
+  ].find((layer) => layer?.effort !== undefined)?.effort;
+  const effectiveOptions = {
+    ...resolvedOptions,
+    effort: savedEffort === null ? null : resolvedOptions.effort,
+  };
   const changeCliOptions = async (options: CliOption) => {
     setOptionsBusy(true);
     setOptionsError('');
