@@ -115,17 +115,144 @@ it('uses only the explicit Ferry key in ferry mode inside a private data root', 
   expect(result.text).toContain('|key|private|');
 });
 
-it('resolves an explicitly offered native provider entry in installed mode', async () => {
-  const result = await runOpenCodeAcp({
-    ...base,
-    model: 'opencode/big-pickle',
-    credentialProvider: 'opencode-go',
-    prompt: 'go',
-    signal: signal(),
+function authHome(records: Record<string, unknown>): string {
+  const dir = mkdtempSync(join(tmpdir(), 'ferry-oc-auth-'));
+  mkdirSync(join(dir, 'opencode'), { recursive: true });
+  writeFileSync(join(dir, 'opencode', 'auth.json'), JSON.stringify(records), 'utf8');
+  return dir;
+}
+
+const cleanup = (path: string): void => {
+  rmSync(path, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+};
+
+it('pins an offered native Go credential to the actual Zen provider via the config override', async () => {
+  const home = authHome({
+    opencode: { type: 'api', key: 'zen-A' },
+    'opencode-go': { type: 'api', key: 'go-B' },
   });
-  expect(result.responseModel).toBe('opencode/big-pickle');
-  expect(result.text).toContain('|key|native|');
-  expect(result.text).toContain('opencode,opencode-go');
+  try {
+    const result = await runOpenCodeAcp({
+      ...base,
+      model: 'opencode/big-pickle',
+      credentialProvider: 'opencode-go',
+      environment: {
+        ...environment,
+        XDG_DATA_HOME: home,
+        OPENCODE_API_KEY: 'env-C',
+        FERRY_OC_EXPECT_KEY: 'go-B',
+      },
+      prompt: 'go',
+      signal: signal(),
+    });
+    expect(result.responseModel).toBe('opencode/big-pickle');
+    // The offered Go key is pinned to the Zen provider; a native Zen key A and env C cannot override
+    // it. The env fallback is removed for this path, so only the config override carries the key.
+    expect(result.text).toContain('|nokey|native|');
+    expect(result.text).toContain('opencode,opencode-go');
+    expect(result.text).toContain('|src:config|');
+    expect(result.text).toContain('|match:yes');
+  } finally {
+    cleanup(home);
+  }
+});
+
+it('honors a caller-captured installed key instead of rereading a changed native store', async () => {
+  const home = authHome({ 'opencode-go': { type: 'api', key: 'changed-C' } });
+  try {
+    const result = await runOpenCodeAcp({
+      ...base,
+      model: 'opencode/big-pickle',
+      credentialProvider: 'opencode-go',
+      apiKey: 'captured-B',
+      environment: {
+        ...environment,
+        XDG_DATA_HOME: home,
+        OPENCODE_API_KEY: 'env-C',
+        FERRY_OC_EXPECT_KEY: 'captured-B',
+      },
+      prompt: 'go',
+      signal: signal(),
+    });
+    expect(result.text).toContain('|src:config|');
+    expect(result.text).toContain('|match:yes');
+    expect(result.text).not.toContain('changed-C');
+    expect(result.text).not.toContain('env-C');
+  } finally {
+    cleanup(home);
+  }
+});
+
+it('reflects native same-provider precedence (installed store key beats env)', async () => {
+  const home = authHome({ opencode: { type: 'api', key: 'zen-A' } });
+  try {
+    const result = await runOpenCodeAcp({
+      ...base,
+      model: 'opencode/big-pickle',
+      environment: {
+        ...environment,
+        XDG_DATA_HOME: home,
+        OPENCODE_API_KEY: 'env-C',
+        FERRY_OC_EXPECT_KEY: 'zen-A',
+      },
+      prompt: 'go',
+      signal: signal(),
+    });
+    // Same-provider runs inject nothing: the child applies the native store-over-env precedence.
+    expect(result.text).toContain('|key|native|');
+    expect(result.text).toContain('|src:store|');
+    expect(result.text).toContain('|match:yes');
+    expect(result.text).not.toContain('|src:config|');
+  } finally {
+    cleanup(home);
+  }
+});
+
+it('rejects an unapproved cross-provider offer before reading any credential', async () => {
+  const home = authHome({ anthropic: { type: 'api', key: 'anthropic-secret' } });
+  try {
+    await expect(
+      runOpenCodeAcp({
+        ...base,
+        model: 'opencode/big-pickle',
+        credentialProvider: 'anthropic',
+        environment: { ...environment, XDG_DATA_HOME: home },
+        prompt: 'go',
+        signal: signal(),
+      }),
+    ).rejects.toMatchObject({ category: 'credential' });
+    // A Go model receiving a Zen offer is not the approved direction either.
+    await expect(
+      runOpenCodeAcp({
+        ...base,
+        model: 'opencode-go/deepseek-v4.1-flash',
+        credentialProvider: 'opencode',
+        environment: { ...environment, XDG_DATA_HOME: home },
+        prompt: 'go',
+        signal: signal(),
+      }),
+    ).rejects.toMatchObject({ category: 'credential' });
+  } finally {
+    cleanup(home);
+  }
+});
+
+it('never copies an OAuth record as an offered API key', async () => {
+  const home = authHome({ 'opencode-go': { type: 'oauth', key: 'oauth-stray', refresh: 'r' } });
+  try {
+    await expect(
+      runOpenCodeAcp({
+        ...base,
+        model: 'opencode/big-pickle',
+        credentialProvider: 'opencode-go',
+        environment: { ...environment, XDG_DATA_HOME: home },
+        prompt: 'go',
+        signal: signal(),
+      }),
+    ).rejects.toMatchObject({ category: 'credential' });
+  } finally {
+    cleanup(home);
+  }
 });
 
 it('rejects anonymous mode combined with an explicit provider entry', async () => {
@@ -140,13 +267,17 @@ it('rejects anonymous mode combined with an explicit provider entry', async () =
   ).rejects.toMatchObject({ category: 'credential' });
 });
 
-it('reports an unavailable installed provider credential instead of falling back', async () => {
+it('reports an unavailable approved Go offer instead of falling back', async () => {
   await expect(
     runOpenCodeAcp({
       ...base,
       model: 'opencode/big-pickle',
-      credentialProvider: 'missing-provider',
-      environment: { ...environment, XDG_DATA_HOME: join(fixturesDir, 'nonexistent-data') },
+      credentialProvider: 'opencode-go',
+      environment: {
+        ...environment,
+        XDG_DATA_HOME: join(fixturesDir, 'nonexistent-data'),
+        OPENCODE_API_KEY: '',
+      },
       prompt: 'go',
       signal: signal(),
     }),

@@ -62,7 +62,10 @@ export interface OpenCodeAcpInput {
   /** Entire caller conversation, including real tool results, encoded by Core. */
   prompt: string;
   tools?: readonly ZenTool[];
-  /** Explicit Ferry-held key, only used by `credentialMode: 'ferry'`. */
+  /**
+   * Explicit key. Required by `credentialMode: 'ferry'`; for the approved installed Go-to-Zen offer
+   * it is the caller-captured credential to pin (used verbatim instead of rereading the store).
+   */
   apiKey?: string;
   signal: AbortSignal;
   onText?: (text: string) => void;
@@ -162,21 +165,37 @@ function findSpeedSelector(options: readonly SessionConfigOption[]) {
   return options.find((option) => matches(option, /speed|fast|priority/i));
 }
 
+/** Providers whose OpenCode catalog entry declares `OPENCODE_API_KEY` (verified against 1.18.35). */
+const OPENCODE_ENV_PROVIDERS: ReadonlySet<string> = new Set(['opencode', 'opencode-go']);
+
+/**
+ * Resolve one installed provider's API credential the way the genuine CLI does (verified against
+ * OpenCode 1.18.35): an auth-store `type: 'api'` key wins over `OPENCODE_API_KEY`, and the env
+ * variable only applies to the two providers whose catalog entry declares it. OAuth and unknown
+ * records never yield a key, so a stray `key` on an OAuth record can never be copied out.
+ */
 async function readNativeOpencodeCredential(
   environment: NodeJS.ProcessEnv,
   providerId: string,
 ): Promise<string | null> {
   const dataHome = environment.XDG_DATA_HOME ?? join(homedir(), '.local', 'share');
-  try {
-    const raw: unknown = JSON.parse(
-      await readFile(join(dataHome, 'opencode', 'auth.json'), 'utf8'),
-    );
-    return (
-      parseOpencodeAuthStore(raw).find((record) => record.providerId === providerId)?.key ?? null
-    );
-  } catch {
-    return null;
+  const readStore = async (): Promise<ReturnType<typeof parseOpencodeAuthStore>> => {
+    try {
+      const raw: unknown = JSON.parse(
+        await readFile(join(dataHome, 'opencode', 'auth.json'), 'utf8'),
+      );
+      return parseOpencodeAuthStore(raw);
+    } catch {
+      return [];
+    }
+  };
+  const record = (await readStore()).find((candidate) => candidate.providerId === providerId);
+  if (record?.type === 'api' && record.key) return record.key;
+  if (OPENCODE_ENV_PROVIDERS.has(providerId)) {
+    const fromEnv = environment.OPENCODE_API_KEY;
+    if (typeof fromEnv === 'string' && fromEnv.length > 0) return fromEnv;
   }
+  return null;
 }
 
 function nativeCredentialEnvs(environment: NodeJS.ProcessEnv): Record<string, string> {
@@ -190,8 +209,14 @@ function nativeCredentialEnvs(environment: NodeJS.ProcessEnv): Record<string, st
 
 interface ResolvedCredential {
   mode: OpenCodeCredentialMode;
-  /** Credential injected as `OPENCODE_API_KEY`, or `undefined` to leave native auth untouched. */
+  /** Credential injected as `OPENCODE_API_KEY` (Ferry mode only), or `undefined`. */
   apiKey: string | undefined;
+  /**
+   * Explicit API credential pinned to the *actual* requested provider through the supported
+   * `provider.<id>.options.apiKey` config override (the approved cross-provider offer). This path
+   * has no native-key fallback: the pinned override is authoritative.
+   */
+  pinned: { provider: string; apiKey: string } | null;
   /** Providers that stay enabled in the private config. */
   enabledProviders: string[];
 }
@@ -204,6 +229,7 @@ async function resolveCredential(
   const mode: OpenCodeCredentialMode = input.credentialMode ?? 'installed';
   const enabledProviders = new Set([providerId]);
   if (input.credentialProvider) enabledProviders.add(input.credentialProvider);
+  const enabled = [...enabledProviders];
 
   if (mode === 'anonymous') {
     if (input.credentialProvider)
@@ -211,7 +237,7 @@ async function resolveCredential(
         'Anonymous OpenCode mode cannot use a provider credential. No fallback was used.',
         { category: 'credential' },
       );
-    return { mode, apiKey: undefined, enabledProviders: [...enabledProviders] };
+    return { mode, apiKey: undefined, pinned: null, enabledProviders: enabled };
   }
   if (mode === 'ferry') {
     if (!input.apiKey)
@@ -219,23 +245,43 @@ async function resolveCredential(
         'Ferry credential mode requires an explicit apiKey. No installed key was used.',
         { category: 'credential' },
       );
-    return { mode, apiKey: input.apiKey, enabledProviders: [...enabledProviders] };
+    return { mode, apiKey: input.apiKey, pinned: null, enabledProviders: enabled };
   }
-  // installed: reuse a native credential entry only when an explicit provider is offered.
+  // installed: a same-provider credential stays native-owned; only the single approved cross-provider
+  // offer (an installed Go credential supplied to a Zen model) pins a key explicitly.
   if (input.credentialProvider && input.credentialProvider !== providerId) {
-    const native = await readNativeOpencodeCredential(environment, input.credentialProvider);
-    if (!native)
+    if (providerId !== 'opencode' || input.credentialProvider !== 'opencode-go')
+      throw new OpenCodeAcpError(
+        `Offering the installed "${input.credentialProvider}" credential to the "${providerId}" upstream is not supported. No credential was read and no fallback was used.`,
+        { category: 'credential' },
+      );
+    // Honor a caller-captured key (survives a native store change between selection and dispatch);
+    // otherwise resolve the approved offer exactly once, before the child starts.
+    const key =
+      input.apiKey ?? (await readNativeOpencodeCredential(environment, input.credentialProvider));
+    if (!key)
       throw new OpenCodeAcpError(
         `No installed credential for ${input.credentialProvider}. No fallback was used.`,
         { category: 'credential' },
       );
-    return { mode, apiKey: native, enabledProviders: [...enabledProviders] };
+    return {
+      mode,
+      apiKey: undefined,
+      pinned: { provider: providerId, apiKey: key },
+      enabledProviders: enabled,
+    };
   }
-  return { mode, apiKey: environment.OPENCODE_API_KEY, enabledProviders: [...enabledProviders] };
+  // Same-provider: no key is injected or reread. The child applies the CLI's own auth-store/env
+  // precedence, so Ferry's evidence reflects the same credential the native CLI selects.
+  return { mode, apiKey: undefined, pinned: null, enabledProviders: enabled };
 }
 
-function buildConfig(model: string, enabledProviders: readonly string[]) {
-  return {
+function buildConfig(
+  model: string,
+  enabledProviders: readonly string[],
+  pinned: ResolvedCredential['pinned'],
+): Record<string, unknown> {
+  const config: Record<string, unknown> = {
     model,
     small_model: model,
     enabled_providers: [...enabledProviders],
@@ -256,6 +302,13 @@ function buildConfig(model: string, enabledProviders: readonly string[]) {
     formatter: false,
     lsp: false,
   };
+  if (pinned) {
+    // The supported provider override pins the supplied API credential to the ACTUAL requested
+    // provider (config options win over the native auth store and the env variable), so a different
+    // native key can never be selected instead of the offered one. Memory-only, never persisted.
+    config.provider = { [pinned.provider]: { options: { apiKey: pinned.apiKey } } };
+  }
+  return config;
 }
 
 function buildChildEnvironment(
@@ -278,13 +331,15 @@ function buildChildEnvironment(
   env.XDG_CACHE_HOME = join(root, 'cache');
   env.XDG_STATE_HOME = join(root, 'state');
   if (credential.mode === 'installed') {
-    // Keep the native data root so native-owned auth/session data stays authoritative.
-    if (credential.apiKey !== undefined) env.OPENCODE_API_KEY = credential.apiKey;
+    // Keep the native data root so native-owned auth/session data stays authoritative. The pinned
+    // cross-provider offer supplies its key through the config override, so the env fallback is
+    // removed: no other native/env key can be substituted for the offered credential.
+    if (credential.pinned) Reflect.deleteProperty(env, 'OPENCODE_API_KEY');
   } else {
     // Private data root hides the user's auth store; only an explicit Ferry key may be injected.
     env.XDG_DATA_HOME = join(root, 'data');
-    env.OPENCODE_API_KEY = credential.apiKey;
-    if (credential.mode === 'anonymous')
+    if (credential.mode === 'ferry') env.OPENCODE_API_KEY = credential.apiKey;
+    else
       for (const key of Object.keys(nativeCredentialEnvs(base))) Reflect.deleteProperty(env, key);
   }
   return env;
@@ -295,6 +350,12 @@ function buildChildEnvironment(
  * requested variant/speed only when the ACP config options advertise it, streams caller tool calls
  * back without executing them, and keeps a strict private context (config/plugins/rules/cwd) while
  * leaving native-owned credentials and session data untouched.
+ *
+ * Credential binding: same-provider runs leave native auth/env precedence to the CLI. Ferry mode
+ * injects only the supplied key inside a private data root. The one approved cross-provider offer
+ * (an installed Go credential for a Zen model) pins the captured key to the requested provider via
+ * the supported `provider.<id>.options.apiKey` override, so native precedence cannot select a
+ * different key; the key exists only in memory and the ephemeral child environment.
  */
 export async function runOpenCodeAcp(input: OpenCodeAcpInput): Promise<OpenCodeAcpResult> {
   const ref = parseOpenCodeModelRef(input.model);
@@ -349,9 +410,10 @@ export async function runOpenCodeAcp(input: OpenCodeAcpInput): Promise<OpenCodeA
     controller.signal.throwIfAborted();
     const credential = await resolveCredential(input, ref.providerId, environment);
     if (credential.apiKey) rememberSecret(credential.apiKey);
+    if (credential.pinned) rememberSecret(credential.pinned.apiKey);
     root = await mkdtemp(join(tmpdir(), 'ferry-opencode-'));
     bridge = await openZenToolBridge(input.tools ?? []);
-    const config = buildConfig(input.model, credential.enabledProviders);
+    const config = buildConfig(input.model, credential.enabledProviders, credential.pinned);
     const spawnArgs = input.executableArgs ?? ['acp'];
     const invocation = commandInvocation(executable, spawnArgs);
     const child = execa(invocation.file, invocation.args, {

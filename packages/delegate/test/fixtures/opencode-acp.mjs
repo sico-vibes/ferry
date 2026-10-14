@@ -2,13 +2,53 @@
 //   argv[0] === 'session' && argv[1] === 'delete' -> native session cleanup (exit 0)
 //   otherwise -> headerless NDJSON ACP agent on stdio.
 import { createInterface } from 'node:readline';
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const args = process.argv.slice(2);
 if (args[0] === 'session' && args[1] === 'delete') {
   if (process.env.FERRY_OC_DELETE_MARKER)
     writeFileSync(process.env.FERRY_OC_DELETE_MARKER, args[2] ?? '');
   process.exit(0);
+}
+
+// Mirrors the genuine CLI's credential resolution (verified against OpenCode 1.18.35): a config
+// `provider.<id>.options.apiKey` override wins over an auth-store `type: 'api'` key, which wins over
+// `OPENCODE_API_KEY` (declared only for the two OpenCode providers). OAuth/unknown never yield a key.
+function configProviderKey(provider) {
+  try {
+    const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT ?? '{}');
+    const key = config?.provider?.[provider]?.options?.apiKey;
+    return typeof key === 'string' && key ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeProviderKey(provider) {
+  try {
+    const dataHome = process.env.XDG_DATA_HOME ?? join(process.env.HOME ?? '', '.local', 'share');
+    const path = join(dataHome, 'opencode', 'auth.json');
+    if (!existsSync(path)) return null;
+    const store = JSON.parse(readFileSync(path, 'utf8'));
+    const record = store?.[provider];
+    if (record?.type === 'api' && typeof record.key === 'string' && record.key) return record.key;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function effectiveCredential(provider) {
+  const configKey = configProviderKey(provider);
+  if (configKey) return { key: configKey, source: 'config' };
+  const storeKey = storeProviderKey(provider);
+  if (storeKey) return { key: storeKey, source: 'store' };
+  if (provider === 'opencode' || provider === 'opencode-go') {
+    const envKey = process.env.OPENCODE_API_KEY;
+    if (typeof envKey === 'string' && envKey) return { key: envKey, source: 'env' };
+  }
+  return { key: null, source: provider === 'opencode' ? 'public' : 'none' };
 }
 
 const models = [
@@ -201,6 +241,11 @@ for await (const line of lines) {
           break;
         }
         const keyState = process.env.OPENCODE_API_KEY ? 'key' : 'nokey';
+        const provider = currentModel.split('/')[0] ?? '';
+        const effective = effectiveCredential(provider);
+        // `FERRY_OC_EXPECT_KEY` lets a test assert the CLI resolved exactly the offered credential.
+        const expected = process.env.FERRY_OC_EXPECT_KEY;
+        const match = expected ? (effective.key === expected ? 'yes' : 'no') : 'none';
         const dataState = (process.env.XDG_DATA_HOME ?? '').includes('ferry-opencode')
           ? 'private'
           : 'native';
@@ -228,7 +273,7 @@ for await (const line of lines) {
         text(
           `CONFIG|${currentModel}|${currentVariant}|${fast ? 'fast' : 'standard'}|${keyState}|${dataState}|${enabled}|${
             prompt.includes('TOOL_RESULT') ? 'TOOL_RESULT' : ''
-          }|${pwdState}|${projState}|${configEnvState}`,
+          }|${pwdState}|${projState}|${configEnvState}|src:${effective.source}|match:${match}`,
         );
         reply(message.id, { stopReason: 'end_turn', usage: { inputTokens: 12, outputTokens: 2 } });
         break;

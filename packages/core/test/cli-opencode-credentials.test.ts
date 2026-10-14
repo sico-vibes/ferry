@@ -100,41 +100,53 @@ describe('resolveOpenCodeCredential', () => {
     expect(again.accountKey).toBe(evidence.accountKey);
   });
 
-  it('resolves the Zen OPENCODE_API_KEY before the store (Ferry policy; native precedence unverified)', async () => {
+  it('lets an installed Zen api key win over OPENCODE_API_KEY (verified native precedence)', async () => {
     setConnection('installed', null);
     await writeAuth({ opencode: { type: 'api', key: 'store-secret' } });
-    const fromStore = await resolveOpenCodeCredential(services, model());
     services.env.OPENCODE_API_KEY = 'env-secret';
-    const fromEnv = await resolveOpenCodeCredential(services, model());
-    services.env.OPENCODE_API_KEY = '';
-    const emptyEnv = await resolveOpenCodeCredential(services, model());
-    expect(fromStore.accountKey).not.toBeNull();
-    expect(fromEnv.accountKey).not.toBeNull();
-    // This asserts Ferry's own resolution order only: native OpenCode precedence was not verifiable
-    // from installed source/docs in this environment and is reported as a limitation.
-    expect(fromEnv.accountKey).not.toBe(fromStore.accountKey);
-    expect(emptyEnv.accountKey).toBe(fromStore.accountKey);
+    const fromStore = await resolveOpenCodeCredential(services, model());
+
+    // The same key read from the env variable alone yields the same fingerprint; if the env key had
+    // won, this identity would instead be the env-secret identity.
+    await rm(authPath, { force: true });
+    services.env.OPENCODE_API_KEY = 'store-secret';
+    const envKey = await resolveOpenCodeCredential(services, model());
+    expect(fromStore.accountKey).toBe(envKey.accountKey);
+
+    await rm(authPath, { force: true });
+    services.env.OPENCODE_API_KEY = 'env-secret';
+    const envOnly = await resolveOpenCodeCredential(services, model());
+    expect(envOnly.accountKey).not.toBe(fromStore.accountKey);
   });
 
-  it('never applies the Zen OPENCODE_API_KEY to a non-Zen provider', async () => {
+  it('applies OPENCODE_API_KEY to the two OpenCode providers but never to an unrelated provider', async () => {
     setConnection('installed', null);
-    await writeAuth({ 'opencode-go': { type: 'api', key: 'go-store-secret' } });
-    services.env.OPENCODE_API_KEY = 'zen-env-secret';
+    services.env.OPENCODE_API_KEY = 'shared-opencode-key';
+    const zen = await resolveOpenCodeCredential(services, model());
     const go = await resolveOpenCodeCredential(
       services,
       model({ upstreamProvider: 'opencode-go', billing: 'included_subscription' }),
     );
-    const zen = await resolveOpenCodeCredential(services, model());
-    expect(go.provider).toBe('opencode-go');
-    expect(go.apiKey).toBeUndefined();
+    expect(zen.accountKey).not.toBeNull();
+    expect(go.accountKey).not.toBeNull();
+    // Same key, different provider domain => distinct identities, but both are covered by the env.
     expect(go.accountKey).not.toBe(zen.accountKey);
-    // With no Go record at all, the Zen env key must not leak into the Go provider.
-    await rm(authPath, { force: true });
-    const goMissing = await resolveOpenCodeCredential(
+
+    // An unrelated provider never inherits the OpenCode env key.
+    const unrelated = await resolveOpenCodeCredential(
+      services,
+      model({ upstreamProvider: 'anthropic', billing: 'metered' }),
+    );
+    expect(unrelated.accountKey).toBeNull();
+    expect(unrelated.apiKey).toBeUndefined();
+
+    // A Go api store key still wins over the shared env key.
+    await writeAuth({ 'opencode-go': { type: 'api', key: 'go-store-secret' } });
+    const goStore = await resolveOpenCodeCredential(
       services,
       model({ upstreamProvider: 'opencode-go', billing: 'included_subscription' }),
     );
-    expect(goMissing.accountKey).toBeNull();
+    expect(goStore.accountKey).not.toBe(go.accountKey);
   });
 
   it('maps the approved Go offer onto a Zen model without proving Zen entitlement', async () => {
@@ -152,6 +164,30 @@ describe('resolveOpenCodeCredential', () => {
     setConnection('installed', null);
     const zenSameKey = await resolveOpenCodeCredential(services, model());
     expect(zenSameKey.accountKey).not.toBe(evidence.accountKey);
+  });
+
+  it('binds the approved Go offer to the Go key even when Zen A and env C are installed', async () => {
+    setConnection('installed', 'opencode-go');
+    services.env.OPENCODE_API_KEY = 'env-C';
+    await writeAuth({
+      opencode: { type: 'api', key: 'zen-A' },
+      'opencode-go': { type: 'api', key: 'go-B' },
+    });
+    const evidence = await resolveOpenCodeCredential(services, model());
+    expect(evidence.provider).toBe('opencode');
+    expect(evidence.credentialProvider).toBe('opencode-go');
+    expect(evidence.apiKey).toBe('go-B');
+    // Identical to a Go-native read of the offered key (same provider+key domain)...
+    services.env.OPENCODE_API_KEY = '';
+    setConnection('installed', null);
+    const goNative = await resolveOpenCodeCredential(
+      services,
+      model({ upstreamProvider: 'opencode-go', billing: 'included_subscription' }),
+    );
+    expect(goNative.accountKey).toBe(evidence.accountKey);
+    // ...and distinct from the Zen A identity, so the offered Go key is not a Zen receipt.
+    const zenNative = await resolveOpenCodeCredential(services, model());
+    expect(zenNative.accountKey).not.toBe(evidence.accountKey);
   });
 
   it('keeps a same-provider selection native-owned for the Go provider', async () => {
@@ -403,6 +439,31 @@ describe('resolveOpenCodeCredential', () => {
     await expect(resolveOpenCodeCredential(services, model())).rejects.toMatchObject({
       kind: 'authentication',
     });
+  });
+
+  it('wraps a secret-store read failure in a redacted typed error', async () => {
+    setConnection('ferry', null);
+    services.providerKeyEntries.put(entry({ providerId: 'opencode' }));
+    const secretGet = vi
+      .spyOn(services.secrets, 'get')
+      .mockRejectedValue(new Error('keyring backend unavailable at C:\\secret\\path'));
+    try {
+      let thrown: unknown;
+      try {
+        await resolveOpenCodeCredential(services, model());
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(CliTransportError);
+      expect((thrown as CliTransportError).kind).toBe('authentication');
+      const message = (thrown as CliTransportError).message;
+      // Never surface the keyring reference or the storage error content.
+      expect(message).not.toContain('keyring backend unavailable');
+      expect(message).not.toContain('C:\\secret\\path');
+      expect(message).not.toContain('opencode');
+    } finally {
+      secretGet.mockRestore();
+    }
   });
 
   it('rejects an explicit different provider without silently falling back', async () => {

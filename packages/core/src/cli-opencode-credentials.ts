@@ -28,6 +28,8 @@ import type { FerryServices } from './services.js';
  * - Any key material Ferry reads (returned or merely fingerprinted) is registered with the public
  *   `rememberSecret` so downstream known-secret redaction covers it. Nothing here prints a key, the
  *   auth store, or a file path.
+ * - A failure to read the secret store is wrapped in a redacted typed `CliTransportError`; the
+ *   keyring reference and the underlying storage error are never surfaced.
  *
  * Cross-provider offers are deliberately narrow. The only supported case is a Go credential offered
  * to a Zen model, which enables a *real* Zen access check without ever claiming Zen entitlement. Any
@@ -42,10 +44,15 @@ import type { FerryServices } from './services.js';
  *   offer. Native OAuth refresh material is untouched. Such records resolve to `accountKey: null`.
  * - `accountKey` is an opaque fingerprint over the selected provider id and its API key. It never
  *   contains the key, but cannot represent OAuth/unknown accounts.
- * - `OPENCODE_API_KEY` is treated as taking precedence over the Zen auth-store entry. This is
- *   Ferry's own resolution policy (mirrored from the existing Zen CLI detection), NOT a verified
- *   statement of upstream OpenCode behaviour; no installed OpenCode source or documentation is
- *   available in this environment to confirm native precedence.
+ *
+ * Native credential precedence (verified against the installed OpenCode CLI, 1.18.35): for a given
+ * provider the provider-state merge first records the `OPENCODE_API_KEY` environment source and then
+ * overwrites it with the auth-store `type: 'api'` key, so an installed API key WINS over the env
+ * variable; a config `provider.<id>.options.apiKey` override wins over both. `OPENCODE_API_KEY` is
+ * declared by the OpenCode catalog for BOTH `opencode` (Zen) and `opencode-go`, so it applies to
+ * exactly those two providers and never to an unrelated provider. This resolver mirrors that order:
+ * auth-store `api` key, then `OPENCODE_API_KEY` (OpenCode providers only), then an `oauth`/unknown/
+ * absent record. OAuth is never treated as an API key.
  */
 
 /** The connection kind whose persisted credential selection this resolver reads. */
@@ -54,6 +61,8 @@ const CONNECTION_KIND = 'opencode-cli';
 const ZEN_PROVIDER = 'opencode';
 /** OpenCode's Go provider id; the only provider Ferry offers across to a Zen model. */
 const GO_PROVIDER = 'opencode-go';
+/** Providers whose OpenCode catalog entry declares `OPENCODE_API_KEY` (verified 1.18.35). */
+const ENV_PROVIDERS: ReadonlySet<string> = new Set([ZEN_PROVIDER, GO_PROVIDER]);
 /** The only auth-store record type treated as a usable API credential. */
 const API_AUTH_TYPE = 'api';
 /** Domain separator so the same key under different providers yields different fingerprints. */
@@ -167,9 +176,10 @@ async function readNativeRecords(services: FerryServices): Promise<OpencodeAuthR
 }
 
 /**
- * Resolve the native credential for one provider. `OPENCODE_API_KEY` is Ferry's supported Zen
- * credential and is resolved before the auth store; it is deliberately ignored for every other
- * provider so a Zen env value can never apply to an unrelated model provider.
+ * Resolve the native credential for one provider using the installed CLI's precedence (verified
+ * against OpenCode 1.18.35): an auth-store `type: 'api'` key overrides `OPENCODE_API_KEY`, which in
+ * turn applies only to the providers whose catalog entry declares it (`opencode`/`opencode-go`).
+ * `OPENCODE_API_KEY` is therefore never applied to an unrelated provider.
  *
  * Only an explicit `type: 'api'` record with a string key is a usable API credential. An OAuth
  * record (even one carrying a stray `key`) and an unknown/absent record type are never treated as
@@ -180,15 +190,15 @@ function nativeCredentialFor(
   providerId: string,
   environment: NodeJS.ProcessEnv,
 ): NativeCredential {
-  if (providerId === ZEN_PROVIDER) {
+  const record = records.find((candidate) => candidate.providerId === providerId);
+  if (record?.type === API_AUTH_TYPE && record.key) return { state: 'api', key: record.key };
+  if (ENV_PROVIDERS.has(providerId)) {
     const fromEnv = environment.OPENCODE_API_KEY;
     if (typeof fromEnv === 'string' && fromEnv.length > 0) return { state: 'api', key: fromEnv };
   }
-  const record = records.find((candidate) => candidate.providerId === providerId);
-  if (!record) return { state: 'missing' };
-  if (record.type === 'oauth') return { state: 'oauth' };
-  if (record.type === API_AUTH_TYPE && record.key) return { state: 'api', key: record.key };
-  return { state: 'unknown' };
+  if (record?.type === 'oauth') return { state: 'oauth' };
+  if (record) return { state: 'unknown' };
+  return { state: 'missing' };
 }
 
 /** Opaque, non-secret fingerprint over the selected provider and its API key; never the key itself. */
@@ -232,7 +242,17 @@ async function readFerryZenKey(services: FerryServices): Promise<string> {
         ? 'The saved Ferry Zen credential is disabled, invalid or cooling down. Ferry did not fall back to another provider or the legacy key.'
         : 'No saved Ferry Zen credential is available. No fallback was used.',
     );
-  const key = await services.secrets.get(reference);
+  let key: string | undefined;
+  try {
+    key = await services.secrets.get(reference);
+  } catch {
+    // Never surface the keyring reference or the underlying storage error: both can name the
+    // secret's location. A redacted typed failure keeps the no-fallback contract honest.
+    throw typedError(
+      'authentication',
+      'The selected saved Ferry Zen credential could not be read from the secret store. No substitution was used.',
+    );
+  }
   if (typeof key !== 'string' || key.length === 0)
     throw typedError(
       'authentication',
