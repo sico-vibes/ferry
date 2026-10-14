@@ -22,6 +22,7 @@ The parser in `apps/cli/src/main.tsx` is the current source of truth. Run `ferry
 | `ferry providers overrides <provider>` | Show effective parameter, header, and status overrides |
 | `ferry models map list|set|remove ...` | Manage logical model mappings and inspect Gateway aliases |
 | `ferry oauth [list\|login\|logout ...]` | Manage supported subscription OAuth logins |
+| `ferry connect [list\|refresh\|verify\|update ...]` | Inspect installed CLI connections, refresh discovery, verify generation, and persist native/Gateway opt-ins |
 | `ferry profiles [list\|show\|chain show\|chain set ...]` | Inspect profiles and set fallback chains |
 | `ferry profiles affinity <profile> [soft\|strict]` | Show or set account affinity on a routing profile |
 | `ferry skills [list\|show ...]` | Inspect available skills |
@@ -44,6 +45,10 @@ ferry gateway keys create "Build bot" auto-free --rpm 60 --concurrency 3 --token
 ferry gateway keys show <key-id> --json
 ferry gateway keys update <key-id> --rpm 120 --clear tokens-per-day --json
 ```
+
+### Installed CLI connections
+
+`ferry connect list` prints the cached installed-CLI snapshot; `ferry connect refresh [kind]` runs bounded fresh discovery for one or all CLIs; `ferry connect verify <codex-cli|claude-code-cli|opencode-cli> [--model <ref>]` performs the explicit generation check; and `ferry connect update <kind> [--native true|false] [--gateway true|false] [--effort <token>] [--speed standard|fast]` persists independent opt-ins and per-connection defaults. Native and Gateway are separate; enabling Gateway alone never makes native models selectable. Effort tokens are preserved verbatim from the installed CLI. In the TUI, Verify checks the already-verified model or a free/included-subscription model by default (never guessing a metered one, which would spend), and every discovered model can be chosen explicitly. Discovery is not proof: a native model becomes selectable only after a real generation proves that exact model, and a signed-out connection is never selectable except OpenCode anonymous free generation.
 
 ### Provider keys
 
