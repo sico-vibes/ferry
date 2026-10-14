@@ -63,6 +63,7 @@ import {
   type ModelInfo,
   type ModelRef,
   type ProviderFailureFamily,
+  type ProviderId,
   type Profile,
   type Session,
   type TaskRecord,
@@ -153,6 +154,21 @@ export interface ReportedStepUsage {
   cachedTokens: number | null;
   reasoningTokens: number | null;
 }
+/**
+ * Authoritative generation/dispatch-captured provenance for a step, returned by the generator.
+ *
+ * The values reflect what actually produced the step at dispatch time (a native CLI account or a
+ * Gateway outcome), captured before any `await` — never looked up afterwards, so an account that
+ * changes underneath the connection does not rewrite a completed step's attribution. `accountKey` is
+ * opaque, non-secret metadata (for example `<kind>:<fingerprint>`); it is never credentials.
+ */
+export interface StepProducer {
+  modelRef: ModelRef;
+  providerId: ProviderId;
+  connectionId: string | null;
+  accountKey: string | null;
+  requestedModelRef?: ModelRef;
+}
 export interface GeneratedStep {
   text?: string;
   reasoning?: string;
@@ -165,6 +181,8 @@ export interface GeneratedStep {
   outputTokens?: number;
   /** Reported usage with nullable dimensions; absent for providers that only estimate. */
   reportedUsage?: ReportedStepUsage;
+  /** Actual producer captured at generation time; absent for ordinary API providers. */
+  producer?: StepProducer;
   finishReason?: string;
   responseModel?: string;
 }
@@ -2310,20 +2328,31 @@ export class AgentLoop {
           }
         }
         this.activeMessageParts.delete(sessionId);
+        // Actual producer captured by the generator at dispatch time. Ordinary API providers leave
+        // it unset and keep the routed model; a logical `gateway/<keyId>` is never an LLM producer.
+        const producer = generated.producer;
+        const producedByRef: ModelRef | undefined =
+          producer?.modelRef ?? (isLogicalGatewayRef(model.ref) ? undefined : model.ref);
         // Prefer a source-reported usage value: a reported zero is kept as 0, an unreported
         // dimension is omitted (never coerced to 0) so the durable aggregate can show "Not reported".
+        // A known generator token count is a legacy estimate; a missing one stays omitted.
         const reported = generated.reportedUsage;
-        const reportedInput = reported ? reported.inputTokens : (generated.inputTokens ?? 0);
-        const reportedOutput = reported ? reported.outputTokens : (generated.outputTokens ?? 0);
+        const reportedInput = reported ? reported.inputTokens : (generated.inputTokens ?? null);
+        const reportedOutput = reported ? reported.outputTokens : (generated.outputTokens ?? null);
         const reportedReasoning = reported ? reported.reasoningTokens : generated.reasoningTokens;
         const reportedCached = reported?.cachedTokens;
         this.options.onUsage?.({
           id: pendingPaidUsageId ?? newId('usage'),
-          providerId: model.providerId,
-          modelRef: model.ref,
+          providerId: producer?.providerId ?? model.providerId,
+          modelRef: producer?.modelRef ?? model.ref,
           occurredAt: new Date().toISOString(),
           sessionId,
           stepKind,
+          // Connection/account come from the captured producer only; never a logical Gateway key.
+          ...(producer
+            ? { connectionId: producer.connectionId, accountKey: producer.accountKey }
+            : {}),
+          ...(producer?.requestedModelRef ? { requestedModelRef: producer.requestedModelRef } : {}),
           ...(reportedInput === null ? {} : { inputTokens: reportedInput }),
           ...(reportedOutput === null ? {} : { outputTokens: reportedOutput }),
           ...(reportedReasoning == null ? {} : { reasoningTokens: reportedReasoning }),
@@ -2365,7 +2394,7 @@ export class AgentLoop {
               type: 'reasoning',
               id: PartIdSchema.parse(newId('part')),
               text: generated.reasoning ?? '',
-              producedBy: model.ref,
+              ...(producedByRef ? { producedBy: producedByRef } : {}),
               ...(generated.reasoningProviderMetadata
                 ? { providerMetadata: generated.reasoningProviderMetadata }
                 : {}),
@@ -2373,12 +2402,23 @@ export class AgentLoop {
           ];
         if (generated.text && streamedText)
           parts = parts.map((part) =>
-            part.id === streamedTextPartId ? { ...part, text: generated.text ?? '' } : part,
+            part.id === streamedTextPartId
+              ? {
+                  ...part,
+                  text: generated.text ?? '',
+                  ...(producedByRef ? { producedBy: producedByRef } : {}),
+                }
+              : part,
           );
         else if (generated.text)
           parts = [
             ...parts,
-            { type: 'text', id: PartIdSchema.parse(newId('part')), text: generated.text },
+            {
+              type: 'text',
+              id: PartIdSchema.parse(newId('part')),
+              text: generated.text,
+              ...(producedByRef ? { producedBy: producedByRef } : {}),
+            },
           ];
         assistant = {
           ...assistant,
@@ -2551,7 +2591,7 @@ export class AgentLoop {
             id: PartIdSchema.parse(newId('part')),
             ...(call.toolCallId || call.id ? { toolCallId: call.toolCallId ?? call.id } : {}),
             ...(call.providerOptions ? { providerOptions: call.providerOptions } : {}),
-            producedBy: model.ref,
+            ...(producedByRef ? { producedBy: producedByRef } : {}),
             tool: call.name,
             title: definition.title,
             args: parsed.value as Record<string, unknown>,
@@ -3730,6 +3770,11 @@ export function createStepGenerator(
       return generate(true);
     }
   };
+}
+
+/** A logical Gateway key ref (`gateway/<keyId>`) routes a request but is never itself an LLM. */
+function isLogicalGatewayRef(ref: string): boolean {
+  return ref.startsWith('gateway/');
 }
 
 function toolSchemaForEstimate(schema: z.ZodType): unknown {

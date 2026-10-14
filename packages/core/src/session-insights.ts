@@ -307,7 +307,20 @@ function isReplyPart(part: MessagePart): boolean {
 
 /** The producing model recorded on a reply part, when the adapter reported one. */
 function partProducingModel(part: MessagePart): ModelRef | null {
-  return part.type === 'reasoning' || part.type === 'tool_call' ? (part.producedBy ?? null) : null;
+  return part.type === 'text' || part.type === 'reasoning' || part.type === 'tool_call'
+    ? (part.producedBy ?? null)
+    : null;
+}
+
+/**
+ * The honest, non-logical model recorded on a message. A logical Gateway key ref
+ * (`gateway/<keyId>`) routes a request but is never itself the LLM that produced the reply, so it is
+ * reported as unknown (`null`) rather than claimed as the responder.
+ */
+function honestMessageModel(message: Message): ModelRef | null {
+  const ref = message.modelRef;
+  if (!ref || ref.startsWith('gateway/')) return null;
+  return ref;
 }
 
 /** Chronological order (createdAt, then id) so "latest" is well-defined for id-ordered storage. */
@@ -326,10 +339,13 @@ interface EligibleReply {
 
 /**
  * The latest assistant message that actually carries a reply (text, reasoning or tool output). A
- * user/system/empty-placeholder/error-only message never replaces an earlier reply. The model is the
- * actual producer from the latest eligible part that recorded `producedBy` (so a fallback producer
- * wins over the initial/logical `message.modelRef`), then that message's `modelRef`, then an honest
- * `null`.
+ * user/system/empty-placeholder/error-only message never replaces an earlier reply.
+ *
+ * Only the LATEST eligible part decides attribution: its actual `producedBy` wins, so a fallback
+ * producer that wrote the trailing text outranks an earlier reasoning/tool producer. When that
+ * latest part has no producer the result is honest about unknown provenance — it uses the message's
+ * non-logical `modelRef` or `null` and never borrows an older part's producer or claims a logical
+ * Gateway key was the LLM.
  */
 function latestEligibleReply(messages: readonly Message[]): EligibleReply | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -337,12 +353,9 @@ function latestEligibleReply(messages: readonly Message[]): EligibleReply | null
     if (message?.role !== 'assistant') continue;
     const replyParts = message.parts.filter(isReplyPart);
     if (replyParts.length === 0) continue;
-    for (let part = replyParts.length - 1; part >= 0; part -= 1) {
-      const candidate = replyParts[part];
-      const producedBy = candidate ? partProducingModel(candidate) : null;
-      if (producedBy) return { index, model: producedBy };
-    }
-    return { index, model: message.modelRef ?? null };
+    const latestPart = replyParts.at(-1);
+    const producedBy = latestPart ? partProducingModel(latestPart) : null;
+    return { index, model: producedBy ?? honestMessageModel(message) };
   }
   return null;
 }

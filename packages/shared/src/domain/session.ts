@@ -78,7 +78,12 @@ export const ToolOutputSchema = z.object({
 export type ToolOutput = z.infer<typeof ToolOutputSchema>;
 const partBase = { id: PartIdSchema };
 export const MessagePartSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('text'), ...partBase, text: z.string() }),
+  z.object({
+    type: z.literal('text'),
+    ...partBase,
+    text: z.string(),
+    producedBy: ModelRefSchema.optional(),
+  }),
   z.object({
     type: z.literal('reasoning'),
     ...partBase,

@@ -104,6 +104,10 @@ function textPart(text: string): Message['parts'][number] {
   return { type: 'text', id: nextPartId(), text };
 }
 
+function producedTextPart(text: string, producedBy: ModelRef): Message['parts'][number] {
+  return { type: 'text', id: nextPartId(), text, producedBy };
+}
+
 function reasoningPart(text: string, producedBy?: ModelRef): Message['parts'][number] {
   return { type: 'reasoning', id: nextPartId(), text, ...(producedBy ? { producedBy } : {}) };
 }
@@ -736,6 +740,42 @@ describe('lastRespondingModel', () => {
     expect(lastRespondingModel(messages)).toBe(MODEL_B);
   });
 
+  it('uses the latest eligible part, including text, instead of borrowing an older producer', () => {
+    // A fallback producer wrote the trailing text; the older reasoning/tool producers must not win.
+    const messages = [
+      message(
+        sessionId,
+        'assistant',
+        [
+          reasoningPart('planned', MODEL_A),
+          toolCallPart('executed', MODEL_B),
+          producedTextPart('final answer', PRODUCED),
+        ],
+        MODEL_A,
+      ),
+    ];
+    expect(lastRespondingModel(messages)).toBe(PRODUCED);
+  });
+
+  it('is honest when the latest part has no producer and does not borrow an older attribution', () => {
+    // The trailing text is unattributed, so the older reasoning producer must not be claimed.
+    const messages = [
+      message(
+        sessionId,
+        'assistant',
+        [reasoningPart('thinking', MODEL_A), textPart('answer')],
+        MODEL_B,
+      ),
+    ];
+    expect(lastRespondingModel(messages)).toBe(MODEL_B);
+  });
+
+  it('does not claim a logical Gateway key as the responder', () => {
+    const logical = ModelRefSchema.parse('gateway/requested-key');
+    const messages = [message(sessionId, 'assistant', [textPart('routed reply')], logical)];
+    expect(lastRespondingModel(messages)).toBeNull();
+  });
+
   it('is honest about an unknown model instead of reusing an earlier reply', () => {
     const messages = [
       message(sessionId, 'assistant', [textPart('one')], MODEL_A, '2026-01-01T00:00:01.000Z'),
@@ -794,6 +834,32 @@ describe('sessionSummaryWithLastReply', () => {
       ),
     ]);
     expect(summary.lastReplyModelRef).toBe(MODEL_B);
+  });
+
+  it('records the actual producer of the latest text part across mixed producer parts', () => {
+    const session = makeSession('session_summary', { pinnedModelRef: MODEL_A, modelRef: MODEL_A });
+    const summary = sessionSummaryWithLastReply(session, [
+      message(
+        sessionId,
+        'assistant',
+        [
+          reasoningPart('planned', MODEL_A),
+          toolCallPart('executed', MODEL_B),
+          producedTextPart('final answer', PRODUCED),
+        ],
+        MODEL_A,
+      ),
+    ]);
+    expect(summary.lastReplyModelRef).toBe(PRODUCED);
+  });
+
+  it('does not claim a logical Gateway key while the trailing reply is finalized', () => {
+    const logical = ModelRefSchema.parse('gateway/requested-key');
+    const session = makeSession('session_summary', { lastReplyModelRef: MODEL_A });
+    const summary = sessionSummaryWithLastReply(session, [
+      message(sessionId, 'assistant', [textPart('routed reply')], logical),
+    ]);
+    expect(summary.lastReplyModelRef).toBeNull();
   });
 
   it('preserves the existing value while the trailing reply may still be streaming', () => {
