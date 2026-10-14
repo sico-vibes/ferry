@@ -142,6 +142,95 @@ if (argv.includes('auth') && argv.includes('status')) {
         });
         break;
       }
+      case 'toolstream': {
+        await inspectBridge();
+        send({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_start',
+            index: 0,
+            content_block: {
+              type: 'tool_use',
+              id: 'toolu_stream_1',
+              name: 'mcp__ferry_tools__tool_0',
+              input: {},
+            },
+          },
+        });
+        send({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'input_json_delta', partial_json: '{"val' },
+          },
+        });
+        send({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'input_json_delta', partial_json: 'ue":"cli_' },
+          },
+        });
+        await sendSplit({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'input_json_delta', partial_json: 'safe😀_\\"quoted\\""}' },
+          },
+        });
+        send({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 } });
+        // A complete assistant frame for the same id must not produce a duplicate call.
+        send({
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            model: requestedModel,
+            content: [
+              {
+                type: 'tool_use',
+                id: 'toolu_stream_1',
+                name: 'mcp__ferry_tools__tool_0',
+                input: { value: 'cli_safe😀_"quoted"' },
+              },
+            ],
+          },
+        });
+        break;
+      }
+      case 'toolpermission': {
+        await inspectBridge();
+        send({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_start',
+            index: 0,
+            content_block: {
+              type: 'tool_use',
+              id: 'toolu_perm_1',
+              name: 'mcp__ferry_tools__tool_0',
+              input: {},
+            },
+          },
+        });
+        send({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'input_json_delta', partial_json: '{"value":"partial' },
+          },
+        });
+        // Permission arrives BEFORE content_block_stop with the COMPLETE input.
+        await requestClient('can_use_tool', {
+          tool_name: 'mcp__ferry_tools__tool_0',
+          input: { value: 'permission_complete' },
+          tool_use_id: 'toolu_perm_1',
+        });
+        break;
+      }
       case 'hostile': {
         const response = await requestClient('can_use_tool', {
           tool_name: 'Bash',

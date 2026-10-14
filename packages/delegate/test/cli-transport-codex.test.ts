@@ -486,6 +486,29 @@ describe('runCodexCli', () => {
     },
   );
 
+  it(
+    'pins the advertised default effort and rejects an ultra default before prompting',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'effort.json');
+      const model = codexModel({ defaultEffort: 'low' });
+      await runCodexCli(makeInput({ scenario: 'text', record: recordPath, model }));
+      expect(requestOf(await readRecord(recordPath), 'turn/start').effort).toBe('low');
+
+      const ultraPath = join(dir, 'ultra.json');
+      const ultra = codexModel({
+        defaultEffort: 'ultra',
+        efforts: ['low', 'medium', 'high', 'ultra'],
+      });
+      const error = await runCodexCli(
+        makeInput({ scenario: 'text', record: ultraPath, model: ultra }),
+      ).catch((value: unknown) => value);
+      expect((error as CliTransportError).kind).toBe('unsupported_capability');
+      expect(existsSync(ultraPath)).toBe(false);
+    },
+  );
+
   it('emits an account rate-limit usage snapshot', { timeout: 30_000 }, async () => {
     const dir = await tempRoot();
     const snapshots: CliUsageSnapshot[] = [];

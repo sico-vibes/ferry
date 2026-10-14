@@ -269,6 +269,64 @@ describe('runClaudeCodeCli', () => {
     },
   );
 
+  it(
+    'never settles on the empty streamed tool block and uses the complete arguments',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const tools = [
+        { name: 'read_file', description: 'Read a file', parameters: { type: 'object' } },
+      ];
+      const result = await runClaudeCodeCli(
+        makeInput({ scenario: 'toolstream', record: join(dir, 'toolstream.json'), tools }),
+      );
+      expect(result.toolCalls).toEqual([
+        { id: 'toolu_stream_1', name: 'read_file', arguments: { value: 'cli_safe😀_"quoted"' } },
+      ]);
+    },
+  );
+
+  it(
+    'handles can_use_tool arriving before block stop with complete input',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const tools = [
+        { name: 'read_file', description: 'Read a file', parameters: { type: 'object' } },
+      ];
+      const result = await runClaudeCodeCli(
+        makeInput({ scenario: 'toolpermission', record: join(dir, 'toolpermission.json'), tools }),
+      );
+      expect(result.toolCalls).toEqual([
+        { id: 'toolu_perm_1', name: 'read_file', arguments: { value: 'permission_complete' } },
+      ]);
+    },
+  );
+
+  it(
+    'pins the advertised default effort and rejects an ultra default before prompting',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'effort.json');
+      const model = claudeModel({ defaultEffort: 'low' });
+      await runClaudeCodeCli(makeInput({ scenario: 'text', record: recordPath, model }));
+      const argv = (await readRecord(recordPath)).argv;
+      expect(argv[argv.indexOf('--effort') + 1]).toBe('low');
+
+      const ultraPath = join(dir, 'ultra.json');
+      const ultra = claudeModel({
+        defaultEffort: 'ultra',
+        efforts: ['low', 'medium', 'high', 'ultra'],
+      });
+      const error = await runClaudeCodeCli(
+        makeInput({ scenario: 'text', record: ultraPath, model: ultra }),
+      ).catch((value: unknown) => value);
+      expect((error as CliTransportError).kind).toBe('unsupported_capability');
+      expect(existsSync(ultraPath)).toBe(false);
+    },
+  );
+
   it('denies native tool requests and never executes them', { timeout: 30_000 }, async () => {
     const dir = await tempRoot();
     const recordPath = join(dir, 'hostile.json');

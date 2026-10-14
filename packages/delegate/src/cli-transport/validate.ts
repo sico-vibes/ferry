@@ -59,7 +59,23 @@ export function resolveOptions(
   model: CliModelCapabilities,
   options: CliOption,
 ): ResolvedOptions {
-  const effort = options.effort ?? null;
+  // Never inherit the CLI's native/global configured effort: when the caller leaves effort unset,
+  // pin the discovered model default explicitly (and reject an unsupported/ultra default).
+  const explicit = options.effort ?? null;
+  const advertisedDefault = model.defaultEffort ?? null;
+  const effort = explicit ?? advertisedDefault;
+  if (explicit === null && advertisedDefault !== null) {
+    if (advertisedDefault === ULTRA_EFFORT)
+      throw new CliTransportError(
+        'unsupported_capability',
+        `The advertised default reasoning effort for ${model.upstreamId} is "ultra", which delegates to native subagents Ferry cannot isolate`,
+      );
+    if (!model.efforts.includes(advertisedDefault))
+      throw new CliTransportError(
+        'unsupported_capability',
+        `The advertised default reasoning effort "${advertisedDefault}" for ${model.upstreamId} is not in its supported efforts`,
+      );
+  }
   if (effort !== null) {
     if (effort === ULTRA_EFFORT)
       throw new CliTransportError(

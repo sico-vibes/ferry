@@ -414,6 +414,8 @@ export async function runClaudeCodeCli(input: CliTransportInput): Promise<CliTur
       '--disable-slash-commands',
       '--model',
       input.model.upstreamId,
+      // Pin the effective reasoning effort so a native/global configured effort never leaks in.
+      ...(resolved.effort ? ['--effort', resolved.effort] : []),
     ];
     const executable = await resolveExecutable('claude', input.executable, environment);
     // Confirm the current native sign-in/source from bounded read-only status JSON BEFORE any
@@ -515,23 +517,83 @@ export async function runClaudeCodeCli(input: CliTransportInput): Promise<CliTur
       return { tool, index };
     };
 
-    const onAssistantToolUse = (block: Record<string, unknown>): void => {
-      const name = str(block.name);
-      const matched = name ? toolFromClaudeName(name) : null;
-      if (!matched)
+    // Streaming tool_use blocks arrive as content_block_start(input:{}) + input_json_delta fragments
+    // + content_block_stop. Never settle on the empty start block; accumulate by block index and
+    // only hand off once the JSON is complete. Duplicate sources for the same id are deduped.
+    interface StreamingToolBlock {
+      id: string;
+      name: string;
+      json: string;
+    }
+    const streamingBlocks = new Map<number, StreamingToolBlock>();
+    const handledToolIds = new Set<string>();
+
+    const completeToolCall = (
+      id: string | null,
+      name: string | null,
+      args: Record<string, unknown>,
+    ): void => {
+      if (!id || !name) {
+        fail(
+          new CliTransportError('provider_error', 'Claude returned an incomplete tool call', {
+            accountKey,
+          }),
+        );
+        return;
+      }
+      if (handledToolIds.has(id)) return;
+      const matched = toolFromClaudeName(name);
+      if (!matched) {
         fail(
           new CliTransportError(
             'unsupported_capability',
-            `Claude requested a non-caller tool (${name ?? 'unknown'}); Ferry will not run native tools`,
+            `Claude requested a non-caller tool (${name}); Ferry will not run native tools`,
             { accountKey },
           ),
         );
-      else
-        handoff({
-          id: str(block.id) ?? `call_${String(toolCalls.length)}`,
-          name: matched.tool.name,
-          arguments: isRecord(block.input) ? block.input : {},
-        });
+        return;
+      }
+      handledToolIds.add(id);
+      handoff({ id, name: matched.tool.name, arguments: args });
+    };
+
+    const finalizeBlock = (index: number): void => {
+      const block = streamingBlocks.get(index);
+      if (!block) return;
+      streamingBlocks.delete(index);
+      const raw = block.json.trim();
+      if (raw === '') {
+        completeToolCall(
+          block.id === '' ? null : block.id,
+          block.name === '' ? null : block.name,
+          {},
+        );
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        fail(
+          new CliTransportError('provider_error', 'Claude sent invalid tool arguments', {
+            accountKey,
+          }),
+        );
+        return;
+      }
+      if (!isRecord(parsed)) {
+        fail(
+          new CliTransportError('provider_error', 'Claude sent invalid tool arguments', {
+            accountKey,
+          }),
+        );
+        return;
+      }
+      completeToolCall(
+        block.id === '' ? null : block.id,
+        block.name === '' ? null : block.name,
+        parsed,
+      );
     };
 
     const handleFrame = (frame: unknown): void => {
@@ -554,13 +616,21 @@ export async function runClaudeCodeCli(input: CliTransportInput): Promise<CliTur
         const requestId = str(frame.request_id);
         if (str(request.subtype) === 'can_use_tool') {
           const toolName = str(request.tool_name);
+          const toolUseId = str(request.tool_use_id);
           const matched = toolName ? toolFromClaudeName(toolName) : null;
           if (matched) {
-            handoff({
-              id: str(request.tool_use_id) ?? `call_${String(toolCalls.length)}`,
-              name: matched.tool.name,
-              arguments: isRecord(request.input) ? request.input : {},
-            });
+            if (toolUseId && handledToolIds.has(toolUseId)) return;
+            if (!isRecord(request.input)) {
+              fail(
+                new CliTransportError(
+                  'provider_error',
+                  'Claude returned incomplete tool arguments',
+                  { accountKey },
+                ),
+              );
+              return;
+            }
+            completeToolCall(toolUseId, toolName, request.input);
             return;
           }
         }
@@ -579,19 +649,34 @@ export async function runClaudeCodeCli(input: CliTransportInput): Promise<CliTur
       if (type === 'stream_event') {
         const event = isRecord(frame.event) ? frame.event : {};
         const eventType = str(event.type);
-        if (eventType === 'content_block_delta') {
+        if (eventType === 'content_block_start') {
+          const block = isRecord(event.content_block) ? event.content_block : {};
+          if (str(block.type) === 'tool_use') {
+            // Do not hand off here: `input` is an empty placeholder until the deltas complete.
+            const index = num(event.index) ?? -1;
+            streamingBlocks.set(index, {
+              id: str(block.id) ?? '',
+              name: str(block.name) ?? '',
+              json: '',
+            });
+          }
+        } else if (eventType === 'content_block_delta') {
           const delta = isRecord(event.delta) ? event.delta : {};
-          if (str(delta.type) === 'text_delta') {
+          const deltaType = str(delta.type);
+          if (deltaType === 'text_delta') {
             const chunk = str(delta.text) ?? '';
             if (chunk) {
               sawStreamEvent = true;
               text += chunk;
               input.onText?.(chunk);
             }
+          } else if (deltaType === 'input_json_delta') {
+            const index = num(event.index) ?? -1;
+            const block = streamingBlocks.get(index);
+            if (block) block.json += str(delta.partial_json) ?? '';
           }
-        } else if (eventType === 'content_block_start') {
-          const block = isRecord(event.content_block) ? event.content_block : {};
-          if (str(block.type) === 'tool_use') onAssistantToolUse(block);
+        } else if (eventType === 'content_block_stop') {
+          finalizeBlock(num(event.index) ?? -1);
         }
         if (isRecord(event.usage)) latestUsage = event.usage;
         else if (isRecord(event.message) && isRecord(event.message.usage))
@@ -605,8 +690,21 @@ export async function runClaudeCodeCli(input: CliTransportInput): Promise<CliTur
         const content = Array.isArray(message.content) ? message.content : [];
         for (const item of content) {
           if (!isRecord(item)) continue;
-          if (str(item.type) === 'tool_use') onAssistantToolUse(item);
-          else if (str(item.type) === 'text' && !sawStreamEvent) {
+          if (str(item.type) === 'tool_use') {
+            const id = str(item.id);
+            if (id && handledToolIds.has(id)) continue;
+            if (!isRecord(item.input)) {
+              fail(
+                new CliTransportError(
+                  'provider_error',
+                  'Claude returned incomplete tool arguments',
+                  { accountKey },
+                ),
+              );
+              return;
+            }
+            completeToolCall(id, str(item.name), item.input);
+          } else if (str(item.type) === 'text' && !sawStreamEvent) {
             const chunk = str(item.text) ?? '';
             if (chunk) {
               text += chunk;
