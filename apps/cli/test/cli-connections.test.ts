@@ -128,7 +128,34 @@ describe('cli connection helpers', () => {
     });
     const result = cliModelSelectability(verifiedNoModel, model());
     expect(result.selectable).toBe(false);
-    expect(result.reason).toMatch(/named no model/);
+    expect(result.reason).toMatch(/discovery alone/);
+  });
+
+  it('keeps previously verified models selectable after checking another model', () => {
+    const first = model();
+    const second = model({ ref: 'codex-cli/second' as CliModelCapabilities['ref'] });
+    const discovered = model({ ref: 'codex-cli/unverified' as CliModelCapabilities['ref'] });
+    const proven = connection('codex-cli', {
+      surfaces: { native: true, gateway: false },
+      models: [first, second, discovered],
+      verify: {
+        state: 'verified',
+        modelRef: second.ref,
+        checkedAt: null,
+        message: null,
+        modelReceipts: {
+          [first.ref]: { checkedAt: '2026-10-14T12:00:00.000Z', receiptKey: 'first' },
+          [second.ref]: { checkedAt: '2026-10-14T13:00:00.000Z', receiptKey: 'second' },
+        },
+      },
+    });
+    expect(cliModelSelectability(proven, first).selectable).toBe(true);
+    expect(cliModelSelectability(proven, second).selectable).toBe(true);
+    expect(cliModelSelectability(proven, discovered).selectable).toBe(false);
+    expect(
+      cliModelSelectability({ ...proven, surfaces: { native: false, gateway: true } }, first)
+        .selectable,
+    ).toBe(false);
   });
 
   it('blocks explicit signed-out accounts except OpenCode anonymous free generation', () => {
@@ -218,17 +245,17 @@ describe('cli connection helpers', () => {
         conversation: { effort: 'high' },
       }),
     ).toEqual({ effort: 'high', speed: 'standard' });
-    // A null effort layer falls through to the next real value / reported effort.
+    // A default selection stops inheritance and uses the actual reported default.
     expect(
       resolveCliOptions(target, { profile: { effort: 'low' }, conversation: { effort: null } }),
-    ).toEqual({ effort: 'low', speed: 'standard' });
-    // Incompatible stored values reset to the reported effort and standard speed.
+    ).toEqual({ effort: 'medium', speed: 'standard' });
+    // Unsupported explicit controls remain visible; Core rejects them before dispatch.
     expect(resolveCliOptions(target, { conversation: { effort: 'ultra', speed: 'fast' } })).toEqual(
-      { effort: 'medium', speed: 'fast' },
+      { effort: 'ultra', speed: 'fast' },
     );
     expect(
-      resolveCliOptions(target, { conversation: { effort: 'nope', speed: 'warp' as 'fast' } }),
-    ).toEqual({ effort: 'medium', speed: 'standard' });
+      resolveCliOptions(target, { conversation: { effort: 'nope', speed: 'standard' } }),
+    ).toEqual({ effort: 'nope', speed: 'standard' });
     const noEffort = model({ efforts: [], defaultEffort: null });
     expect(resolveCliOptions(noEffort)).toEqual({ effort: null, speed: 'standard' });
   });

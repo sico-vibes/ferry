@@ -1,3 +1,4 @@
+import { isCliModelVerified, resolveCliOption } from '@ferry/shared';
 import type {
   CliAuthState,
   CliBilling,
@@ -240,12 +241,10 @@ export function cliModelSelectability(
       reason: `Sign in to ${cliBrandName(connection.kind)} in /connect before selecting this model`,
     };
   if (connection.verify.state === 'verified') {
-    if (connection.verify.modelRef === model.ref) return { selectable: true, reason: null };
+    if (isCliModelVerified(connection, model.ref)) return { selectable: true, reason: null };
     return {
       selectable: false,
-      reason: connection.verify.modelRef
-        ? `Only ${connection.verify.modelRef} is verified for ${cliBrandName(connection.kind)}`
-        : `Verify ${model.ref} in /connect to select it; a verification that named no model is not proof`,
+      reason: `Verify ${model.ref} in /connect to select it; discovery alone does not prove access`,
     };
   }
   if (connection.verify.state === 'failed')
@@ -277,65 +276,19 @@ export interface CliOptionLayers {
 }
 
 /**
- * First non-null value for a key across the precedence layers. A `null` effort (the schema default
- * and the `--effort default` clearing value) means "no explicit choice", so it falls through to the
- * next layer and finally to the reported CLI effort instead of freezing an empty override.
- */
-function layerField(
-  layers: readonly (Partial<CliOption> | undefined)[],
-  key: keyof CliOption,
-): { present: boolean; value: CliOption[keyof CliOption] | undefined } {
-  for (const layer of layers) {
-    if (!layer || !Object.hasOwn(layer, key)) continue;
-    const value = layer[key];
-    if (value === null || value === undefined) continue;
-    return { present: true, value };
-  }
-  return { present: false, value: undefined };
-}
-
-function usableEffort(
-  model: CliModelCapabilities,
-  token: string | null | undefined,
-): token is string {
-  if (typeof token !== 'string') return false;
-  return model.efforts.includes(token) && model.unsupportedEfforts?.[token] === undefined;
-}
-
-/**
- * Resolve the effective per-conversation options for a model. Conversation, profile, then
- * connection overrides win in that order; an explicit `null` effort (`--effort default`) means "no
- * explicit choice" and falls through. When no layer selects one, the CLI-reported default effort
- * applies. `fast` is never defaulted on: an absent speed resolves to `standard`, and any
- * incompatible stored value resets to the reported default effort and `standard` speed.
+ * Use the same field-by-field precedence as Core. An explicit default selects the reported CLI
+ * effort and stops inheritance; unsupported explicit options remain visible for dispatch validation.
  */
 export function resolveCliOptions(
   model: CliModelCapabilities,
   layers: CliOptionLayers = {},
 ): CliOption {
-  const ordered = [layers.conversation, layers.profile, layers.connection];
-  const reportedEffort = usableEffort(model, model.defaultEffort) ? model.defaultEffort : null;
-  const effortLayer = layerField(ordered, 'effort');
-  const requestedEffort: string | null = effortLayer.present
-    ? (effortLayer.value ?? null)
-    : reportedEffort;
-  const effort =
-    requestedEffort !== null && !usableEffort(model, requestedEffort)
-      ? reportedEffort
-      : requestedEffort;
-  const speedLayer = layerField(ordered, 'speed');
-  const requestedSpeed: string | null | undefined = speedLayer.present
-    ? speedLayer.value
-    : 'standard';
-  const speed: CliSpeed =
-    requestedSpeed === 'fast' && model.speeds.includes('fast') ? 'fast' : 'standard';
-  return { effort, speed };
+  return resolveCliOption({ model, ...layers });
 }
 
 /**
  * Merge a connection's stored `defaultOptions` with its per-model override for one ref. A missing
- * per-model field (and a `null` effort, which means "use the reported default") falls back to the
- * connection default, matching how the precedence layers treat an unset effort.
+ * per-model field inherits the connection default; an explicit null remains a default selection.
  */
 export function connectionOptionLayer(
   saved: CliConnectionSettings | undefined,
@@ -343,9 +296,10 @@ export function connectionOptionLayer(
 ): Partial<CliOption> | undefined {
   if (!saved) return undefined;
   const entry = saved.modelDefaults[ref];
+  const merged = { ...saved.defaultOptions, ...entry };
   return {
-    effort: entry?.effort ?? saved.defaultOptions.effort,
-    speed: entry?.speed ?? saved.defaultOptions.speed,
+    ...(merged.effort !== undefined ? { effort: merged.effort } : {}),
+    ...(merged.speed !== undefined ? { speed: merged.speed } : {}),
   };
 }
 

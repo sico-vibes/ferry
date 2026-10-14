@@ -1,4 +1,4 @@
-import { isOpenCodeAppModel } from '@ferry/shared';
+import { isCliModelVerified, isOpenCodeAppModel, resolveCliOption } from '@ferry/shared';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
@@ -83,10 +83,12 @@ export function ApprovalsTray({ activeSessionId }: { activeSessionId?: string | 
       if (part.type === 'approval_request') refresh();
     });
     const offRemove = client.on('session.removed', refresh);
+    const offPending = client.on('approvals.pending.updated', refresh);
     return () => {
       offRequest();
       offPart();
       offRemove();
+      offPending();
     };
   }, [client, cache]);
   useEffect(() => {
@@ -720,10 +722,11 @@ export function ComposerModelChip({
   });
   const cliNativeReady = (model: ModelInfo) => {
     if (!model.cliConnectionId) return true;
-    if (model.providerId === 'opencode' && transportSettings?.opencodeZenTransport === 'cli')
-      return model.cliAccessVerified === true;
     const connection = cliConnections.find((item) => item.id === model.cliConnectionId);
-    return !!connection?.surfaces.native && connection.verify.state === 'verified';
+    return (
+      !!connection?.surfaces.native &&
+      isCliModelVerified(connection, model.cliCapabilities?.ref ?? model.ref)
+    );
   };
 
   const { data: gatewayKeys = [] } = useQuery({
@@ -795,18 +798,21 @@ export function ComposerModelChip({
   const modelDefaults = optionsModel
     ? connectionDefaults?.modelDefaults[optionsModel.ref]
     : undefined;
-  const inheritedOptions: CliOption = {
-    effort:
-      modelDefaults?.effort !== undefined
-        ? modelDefaults.effort
-        : (connectionDefaults?.defaultOptions.effort ?? null),
-    speed: modelDefaults?.speed ?? connectionDefaults?.defaultOptions.speed ?? 'standard',
-  };
-  const effectiveOptions = optionsModel
-    ? (cliOptions ??
-      sessionOptions.data?.session.cliOptions?.[optionsModel.ref] ??
-      profiles.find((profile) => profile.id === activeProfileId)?.cliDefaults?.[optionsModel.ref] ??
-      inheritedOptions)
+  const effectiveOptions = optionsModel?.cliCapabilities
+    ? resolveCliOption({
+        model: optionsModel.cliCapabilities,
+        conversation: cliOptions ?? sessionOptions.data?.session.cliOptions?.[optionsModel.ref],
+        profile: profiles.find((profile) => profile.id === activeProfileId)?.cliDefaults?.[
+          optionsModel.ref
+        ],
+        connectionModel: modelDefaults
+          ? {
+              ...(modelDefaults.effort !== undefined ? { effort: modelDefaults.effort } : {}),
+              ...(modelDefaults.speed !== undefined ? { speed: modelDefaults.speed } : {}),
+            }
+          : undefined,
+        connection: connectionDefaults?.defaultOptions,
+      })
     : { effort: null, speed: 'standard' as const };
   const changeCliOptions = async (options: CliOption) => {
     setOptionsBusy(true);

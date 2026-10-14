@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { CliConnection, CliConnectionKind, ModelRef } from '@ferry/shared';
+import {
+  isCliModelVerified,
+  type CliConnection,
+  type CliConnectionKind,
+  type ModelRef,
+} from '@ferry/shared';
 import { Dialog, ProviderLogo, UiV2 } from '@ferry/ui';
 import { BadgeCheck, CircleAlert, RefreshCw, Terminal } from 'lucide-react';
 import { useFerryClient } from '../data/client';
@@ -163,8 +168,11 @@ export function InstalledCliConnections() {
         connections.data.map((connection) => {
           const name = cliConnectionNames[connection.kind];
           const active = busy === connection.id;
-          const verified = connection.verify.state === 'verified';
           const models = connection.models.filter((model) => !model.hidden);
+          const verifiedCount = models.filter((model) =>
+            isCliModelVerified(connection, model.ref),
+          ).length;
+          const verified = verifiedCount > 0;
           const verificationModels = models.filter(
             (model) => model.billing === 'free' || model.billing === 'included_subscription',
           );
@@ -199,7 +207,11 @@ export function InstalledCliConnections() {
                     ? `${String(models.length)} models discovered`
                     : 'Models not discovered'}
                 </span>
-                <span>{verified ? 'Generation verified' : 'Generation not verified'}</span>
+                <span>
+                  {verified
+                    ? `${String(verifiedCount)} ${verifiedCount === 1 ? 'model' : 'models'} generation verified`
+                    : 'Generation not verified'}
+                </span>
               </div>
               <div className="installed-cli-actions">
                 {verificationModels.length > 0 && (
@@ -224,6 +236,7 @@ export function InstalledCliConnections() {
                         <option key={model.ref} value={model.ref}>
                           {model.name}
                           {model.upstreamProvider ? ` · ${model.upstreamProvider}` : ''}
+                          {isCliModelVerified(connection, model.ref) ? ' · Verified' : ''}
                         </option>
                       ))}
                     </select>

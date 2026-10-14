@@ -91,85 +91,93 @@ describe('ComposerModelChip', () => {
     expect(select).toHaveBeenCalledWith(latest.id);
   });
 
-  it('opens advertised CLI options after selection without presenting included capacity as free', async () => {
-    const client = createMockFerryClient({ behavior: 'test' });
-    const store = client.__store();
-    const base = store.models[0];
-    const provider = store.providers[0];
-    const connection = (await client.cliConnections.list()).find((row) => row.id === 'codex-cli');
-    const capabilities = connection?.models[0];
-    if (!base || !provider || !connection || !capabilities) throw new Error('Missing CLI fixtures');
-    await client.cliConnections.update('codex-cli', { defaultOptions: { effort: 'high' } });
-    const model = ModelInfoSchema.parse({
-      ...base,
-      ref: capabilities.ref,
-      providerId: 'codex-cli',
-      name: capabilities.name,
-      free: false,
-      transport: 'codex_cli',
-      cliConnectionId: 'codex-cli',
-      cliCapabilities: capabilities,
-    });
-    store.models.push(model);
-    store.providers.push(
-      ProviderSchema.parse({
-        ...provider,
-        id: 'codex-cli',
-        name: 'Codex CLI',
-        kind: 'cli',
-        tag: 'subscription_cli',
-        keyStatus: 'not_applicable',
-        enabled: true,
-      }),
-    );
-    vi.spyOn(client.cliConnections, 'list').mockResolvedValue([
-      {
-        ...connection,
-        surfaces: { native: true, gateway: false },
-        verify: {
-          state: 'verified',
-          modelRef: model.ref,
-          checkedAt: '2026-10-13T10:00:00.000Z',
-          message: null,
+  it.each([
+    { override: undefined, expected: 'high' },
+    { override: { effort: null, speed: 'standard' as const }, expected: 'medium' },
+  ])(
+    'opens CLI options with the shared default precedence ($expected)',
+    async ({ override, expected }) => {
+      const client = createMockFerryClient({ behavior: 'test' });
+      const store = client.__store();
+      const base = store.models[0];
+      const provider = store.providers[0];
+      const connection = (await client.cliConnections.list()).find((row) => row.id === 'codex-cli');
+      const capabilities = connection?.models[0];
+      if (!base || !provider || !connection || !capabilities)
+        throw new Error('Missing CLI fixtures');
+      await client.cliConnections.update('codex-cli', { defaultOptions: { effort: 'high' } });
+      const model = ModelInfoSchema.parse({
+        ...base,
+        ref: capabilities.ref,
+        providerId: 'codex-cli',
+        name: capabilities.name,
+        free: false,
+        transport: 'codex_cli',
+        cliConnectionId: 'codex-cli',
+        cliCapabilities: capabilities,
+      });
+      store.models.push(model);
+      store.providers.push(
+        ProviderSchema.parse({
+          ...provider,
+          id: 'codex-cli',
+          name: 'Codex CLI',
+          kind: 'cli',
+          tag: 'subscription_cli',
+          keyStatus: 'not_applicable',
+          enabled: true,
+        }),
+      );
+      vi.spyOn(client.cliConnections, 'list').mockResolvedValue([
+        {
+          ...connection,
+          surfaces: { native: true, gateway: false },
+          verify: {
+            state: 'verified',
+            modelRef: model.ref,
+            checkedAt: '2026-10-13T10:00:00.000Z',
+            message: null,
+          },
         },
-      },
-    ]);
-    const select = vi.fn();
-    const options = vi.fn();
-    renderChip(
-      client,
-      <ComposerModelChip
-        sessionId={null}
-        modelName={base.name}
-        modelRef={base.ref}
-        mode="manual"
-        onModelSelect={select}
-        onCliOptionsChange={options}
-      />,
-    );
-    fireEvent.click(screen.getByRole('button', { name: base.name }));
-    const access = await screen.findByRole('combobox', { name: 'Model access' });
-    fireEvent.change(access, { target: { value: 'subscription' } });
-    const cliOption = await screen.findByRole('option', { name: new RegExp(model.name) });
-    expect(cliOption.textContent).toContain('Included');
-    fireEvent.click(cliOption);
-    await waitFor(() => {
-      expect(select).toHaveBeenCalledWith(model.ref);
-    });
-    await screen.findByRole('combobox', { name: 'CLI reasoning effort' });
-    expect(
-      screen.getByRole<HTMLSelectElement>('combobox', { name: 'CLI reasoning effort' }).value,
-    ).toBe('high');
-    expect(screen.queryByRole('dialog', { name: 'Choose model' })).toBeNull();
-    const fast = screen.queryByRole('switch', { name: 'CLI fast mode' });
-    if (capabilities.speeds.includes('fast'))
-      expect(fast?.getAttribute('aria-checked')).toBe('false');
-    else expect(fast).toBeNull();
-    fireEvent.change(screen.getByRole('combobox', { name: 'CLI reasoning effort' }), {
-      target: { value: 'medium' },
-    });
-    expect(options).toHaveBeenCalledWith({ effort: 'medium', speed: 'standard' });
-  });
+      ]);
+      const select = vi.fn();
+      const options = vi.fn();
+      renderChip(
+        client,
+        <ComposerModelChip
+          sessionId={null}
+          modelName={base.name}
+          modelRef={base.ref}
+          mode="manual"
+          onModelSelect={select}
+          onCliOptionsChange={options}
+          {...(override ? { cliOptions: override } : {})}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: base.name }));
+      const access = await screen.findByRole('combobox', { name: 'Model access' });
+      fireEvent.change(access, { target: { value: 'subscription' } });
+      const cliOption = await screen.findByRole('option', { name: new RegExp(model.name) });
+      expect(cliOption.textContent).toContain('Included');
+      fireEvent.click(cliOption);
+      await waitFor(() => {
+        expect(select).toHaveBeenCalledWith(model.ref);
+      });
+      await screen.findByRole('combobox', { name: 'CLI reasoning effort' });
+      expect(
+        screen.getByRole<HTMLSelectElement>('combobox', { name: 'CLI reasoning effort' }).value,
+      ).toBe(expected);
+      expect(screen.queryByRole('dialog', { name: 'Choose model' })).toBeNull();
+      const fast = screen.queryByRole('switch', { name: 'CLI fast mode' });
+      if (capabilities.speeds.includes('fast'))
+        expect(fast?.getAttribute('aria-checked')).toBe('false');
+      else expect(fast).toBeNull();
+      fireEvent.change(screen.getByRole('combobox', { name: 'CLI reasoning effort' }), {
+        target: { value: 'medium' },
+      });
+      expect(options).toHaveBeenCalledWith({ effort: 'medium', speed: 'standard' });
+    },
+  );
 
   it('shows unverified Zen free models with an access explanation and permits API-verified ones', async () => {
     const client = createMockFerryClient({ behavior: 'test' });

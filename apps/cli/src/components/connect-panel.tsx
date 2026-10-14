@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { FerryClient } from '@ferry/client';
 import {
+  isCliModelVerified,
   providerDefinition,
   type CliConnection,
   type CliConnectionKind,
@@ -351,7 +352,7 @@ export function ConnectPanel({ client, onClose }: { client: FerryClient; onClose
                 value: model.ref,
                 label: model.name,
                 description: `${billingLabel(model.billing)}${
-                  model.ref === connection.verify.modelRef ? ' · verified' : ''
+                  isCliModelVerified(connection, model.ref) ? ' · verified' : ''
                 }`,
               }))}
             onClose={() => {
