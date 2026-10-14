@@ -5,6 +5,7 @@ export {
   parseOpenCodeModelRef,
   mapOpenCodeUsage,
   OpenCodeAcpError,
+  isOpenCodeAcpError,
   type OpenCodeAcpInput,
   type OpenCodeAcpResult,
   type OpenCodeAcpUsage,

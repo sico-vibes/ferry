@@ -4,9 +4,12 @@ import { MockNotFoundError } from '../errors.js';
 import type { FerryClient } from '../../ferry-client.js';
 import type { MockDeps } from './deps.js';
 import type { MockStore } from '../types.js';
+import { mockCliModelRows } from '../cli-inventory.js';
 
 export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClient['models'] {
   const { state, before, persist, session, updateSession } = deps;
+  // Installed-CLI rows are discovered from the live connection state so Verify/opt-ins react.
+  const allModels = () => [...state.models, ...mockCliModelRows(state)];
   return {
     async list(providerId) {
       await before();
@@ -15,7 +18,7 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
           provider.models.filter((model) => model.failing).map((model) => model.modelRef),
         ),
       );
-      return state.models
+      return allModels()
         .filter((model) => providerId === undefined || model.providerId === providerId)
         .map((model) =>
           structuredClone({
@@ -41,7 +44,7 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
         ),
       );
       const needle = search.trim().toLocaleLowerCase();
-      const filtered = state.models
+      const filtered = allModels()
         .filter((model) => !filters.providerId || model.providerId === filters.providerId)
         .filter((model) => !filters.tier || model.tier === filters.tier)
         .filter((model) => filters.free === undefined || model.free === filters.free)
@@ -73,12 +76,16 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
     },
     async candidates(sessionId) {
       await before();
+      const cliChoices = mockCliModelRows(state).filter(
+        (model) => model.verified === true && model.toolCalling,
+      );
       const choices = state.models
         .filter((model) => !isOpenCodeAppModel(model))
         .filter((m) => {
           const p = state.providers.find((x) => x.id === m.providerId);
           return p?.enabled && p.keyStatus === 'valid';
         })
+        .concat(cliChoices)
         .sort(
           (a, b) =>
             Number(b.free) - Number(a.free) ||
@@ -101,10 +108,10 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
     async select(sessionId, ref) {
       await before();
       const s = session(sessionId);
-      const model = state.models.find((model) => model.ref === ref);
+      const model = allModels().find((model) => model.ref === ref);
       if (model && isOpenCodeAppModel(model))
         throw new Error('Available in the OpenCode app. Use ferry run opencode --native.');
-      if (ref !== 'auto' && !state.models.some((m) => m.ref === ref))
+      if (ref !== 'auto' && !allModels().some((m) => m.ref === ref))
         throw new MockNotFoundError('Model', ref);
       if (ref === 'auto') state.selections.delete(sessionId);
       else state.selections.set(sessionId, ref);

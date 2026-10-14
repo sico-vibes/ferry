@@ -50,6 +50,11 @@ export class OpenCodeAcpError extends Error {
   }
 }
 
+/** Structural guard so Core can normalize an OpenCode failure without importing the class. */
+export function isOpenCodeAcpError(value: unknown): value is OpenCodeAcpError {
+  return value instanceof OpenCodeAcpError;
+}
+
 export interface OpenCodeAcpInput {
   /** Exact selected upstream model `<provider>/<id>`; no hidden fallback is used. */
   model: string;

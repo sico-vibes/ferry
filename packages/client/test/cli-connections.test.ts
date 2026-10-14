@@ -3,6 +3,7 @@ import {
   ApprovalsPendingSchema,
   CliConnectionSchema,
   CliConnectionSettingsPatchSchema,
+  ProviderIdSchema,
   SessionModelUsageSchema,
 } from '@ferry/shared';
 import { createMockFerryClient } from '../src/index.js';
@@ -76,6 +77,39 @@ it('distinguishes an explicit null effort from an absent one in CLI patches', ()
   expect(cleared.defaultOptions?.effort).toBeNull();
   const preserved = CliConnectionSettingsPatchSchema.parse({ defaultOptions: { speed: 'fast' } });
   expect(preserved.defaultOptions && 'effort' in preserved.defaultOptions).toBe(false);
+});
+
+it('discovers CLI models naturally from verify and surface opt-ins', async () => {
+  const client = createMockFerryClient();
+  const session = (await client.sessions.list())[0];
+  if (!session) throw new Error('Mock session fixture missing');
+  const sessionId = session.id;
+  // Default (surfaces off, unverified) keeps the CLI rows invisible.
+  expect((await client.models.list()).some((model) => model.ref.startsWith('codex-cli/'))).toBe(
+    false,
+  );
+
+  await client.cliConnections.update('codex-cli', { surfaces: { native: true } });
+  const surfaced = await client.models.list(ProviderIdSchema.parse('codex-cli'));
+  expect(surfaced.map((model) => model.ref)).toContain('codex-cli/gpt-5.1-codex');
+  expect(surfaced[0]?.cliConnectionId).toBe('codex-cli');
+  // Subscription capacity is never a synthetic free route, and capacity is reported, not invented.
+  expect(surfaced[0]?.free).toBe(false);
+  expect(surfaced[0]?.capacityKnown).toBe(true);
+  expect(surfaced[0]?.cliCapabilities?.unsupportedEfforts?.ultra).toBeTruthy();
+
+  // Candidates require a verified connection, not just an opt-in.
+  expect(
+    (await client.models.candidates(sessionId)).some(
+      (candidate) => candidate.ref === 'codex-cli/gpt-5.1-codex',
+    ),
+  ).toBe(false);
+  await client.cliConnections.verify('codex-cli');
+  expect(
+    (await client.models.candidates(sessionId)).some(
+      (candidate) => candidate.ref === 'codex-cli/gpt-5.1-codex',
+    ),
+  ).toBe(true);
 });
 
 it('exposes session model usage and pending approvals schemas', async () => {

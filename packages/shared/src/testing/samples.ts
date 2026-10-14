@@ -319,6 +319,7 @@ export const sampleOptimizerStats: OptimizerStats = {
 export const sampleSettings: Settings = {
   opencodeZenTransport: 'api',
   opencodeZenCliUseFerryKey: false,
+  zenCliMigratedToShared: true,
   providerEndpoints: {},
   globalOptimizerOverride: false,
   permissionRules: [],

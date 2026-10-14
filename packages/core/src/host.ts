@@ -600,10 +600,11 @@ export async function serveStdio(dataDir: string): Promise<CoreHost> {
 }
 
 export async function createCoreHost(
-  options: Omit<CoreOptions, 'services'> & {
-    clock?: import('./services.js').FerryClock;
-    env?: NodeJS.ProcessEnv;
-  },
+  options: Omit<CoreOptions, 'services'> &
+    import('./services.js').CliTransportSeams & {
+      clock?: import('./services.js').FerryClock;
+      env?: NodeJS.ProcessEnv;
+    },
 ): Promise<CoreHost> {
   const existingLock = await readLockInfo(options.dataDir);
   if (
@@ -629,6 +630,9 @@ export async function createCoreHost(
     dataDir: options.dataDir,
     ...(options.clock ? { clock: options.clock } : {}),
     ...(options.env ? { env: options.env } : {}),
+    ...(options.cliScan ? { cliScan: options.cliScan } : {}),
+    ...(options.cliUsage ? { cliUsage: options.cliUsage } : {}),
+    ...(options.cliRunTurn ? { cliRunTurn: options.cliRunTurn } : {}),
   });
   const host = new CoreHost({ ...options, services });
   for (const register of domainRegistrars) register(host, services);

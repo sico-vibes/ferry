@@ -694,6 +694,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           agentEventHandler(event);
         },
         traceContext,
+        { profile },
       );
       let revokeGatewayTokens: () => void = () => undefined;
       const watchdog = setTimeout(() => {
@@ -777,6 +778,24 @@ export function register(host: CoreHost, services: FerryServices): void {
               (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
             );
             if (gatewayModel) availableModels.push(gatewayModel);
+            // Installed-CLI models reach the agent only when a manual pin selects one, or an explicit
+            // profile opt-in includes verified native-eligible subscription capacity for Auto. The
+            // default Auto behaviour never silently adds CLI subscription capacity.
+            const cliBroker = getCliBroker(services, (method, payload) => {
+              host.emit(method, payload);
+            });
+            const cliConnections = cliBroker.connections();
+            for (const cliModel of cliBroker.models()) {
+              const connection = cliConnections.find(
+                (entry) => entry.kind === cliModel.cliConnectionId,
+              );
+              const isPinned = session.pinnedModelRef === cliModel.ref;
+              const autoEligible =
+                profile.allowSubscriptionCli === true &&
+                cliModel.verified === true &&
+                connection?.surfaces.native === true;
+              if (isPinned || autoEligible) availableModels.push(cliModel);
+            }
             const preflightCapacity = preflight.capacity();
             const verifiedModelRefs = preflightCapacity.providers.flatMap((provider) =>
               provider.modelsVerifiedAt && provider.availableModels

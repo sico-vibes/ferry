@@ -95,6 +95,11 @@ export type UserPermissionRule = z.infer<typeof UserPermissionRuleSchema>;
 export const SettingsSchema = z.object({
   opencodeZenTransport: z.enum(['api', 'cli']).default('api'),
   opencodeZenCliUseFerryKey: z.boolean().default(false),
+  /**
+   * Set once the legacy Zen CLI opt-in has been migrated into the shared `cliConnections` record, so
+   * an explicit shared false afterwards is never overwritten by re-running the migration.
+   */
+  zenCliMigratedToShared: z.boolean().default(false),
   globalOptimizerOverride: z.boolean().default(false),
   providerEndpoints: z
     .record(

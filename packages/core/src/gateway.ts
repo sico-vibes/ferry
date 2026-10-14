@@ -25,6 +25,7 @@ import {
   providerDefinition,
   type GatewayRequestRecord,
   type GatewayRoutingExplanation,
+  type ModelRef,
 } from '@ferry/shared';
 import { gatewayHistory, gatewayRequest, gatewayUsageSummary } from './gateway-history.js';
 import {
@@ -36,8 +37,13 @@ import {
   type GatewayMessage,
   type GatewayAttempt,
   type GatewayAttemptState,
+  type GatewayCompletion,
 } from '@ferry/gateway';
 import { randomBytes } from 'node:crypto';
+import type { CliCallerTool, CliConversationMessage } from '@ferry/delegate';
+import { CliTransportError, isCliTransportError } from '@ferry/delegate';
+import { getCliBroker } from './cli-broker.js';
+import type { CliConnection, CliModelCapabilities } from '@ferry/shared';
 import type { FerryServices } from './services.js';
 import { recordRequestFailure, recordRequestSuccess, ledgerKind } from './request-failures.js';
 import {
@@ -164,6 +170,217 @@ export function toGatewayModelMessages(messages: GatewayMessage[]): ModelMessage
     return [];
   });
 }
+function gatewayCliCode(kind: CliTransportError['kind']): string {
+  switch (kind) {
+    case 'authentication':
+      return 'upstream_credentials';
+    case 'exhausted_capacity':
+      return 'quota_exhausted';
+    case 'timeout':
+      return 'request_timeout';
+    default:
+      return 'unsupported_request';
+  }
+}
+
+function unsupportedCli(message: string): Error {
+  return Object.assign(new Error(message), {
+    code: 'unsupported_request',
+    statusCode: 400,
+  });
+}
+
+/** Convert OpenAI-style caller tools into the transport's caller tools (text-only schema). */
+export function toCliCallerTools(tools: readonly unknown[] | undefined): CliCallerTool[] {
+  return (tools ?? []).flatMap((raw) => {
+    if (!raw || typeof raw !== 'object') return [];
+    const item = raw as Record<string, unknown>;
+    if (item.type !== 'function' || !item.function || typeof item.function !== 'object') return [];
+    const fn = item.function as Record<string, unknown>;
+    if (typeof fn.name !== 'string' || !fn.name) return [];
+    return [
+      {
+        name: fn.name,
+        ...(typeof fn.description === 'string' ? { description: fn.description } : {}),
+        parameters:
+          fn.parameters && typeof fn.parameters === 'object'
+            ? (fn.parameters as Record<string, unknown>)
+            : {},
+      },
+    ];
+  });
+}
+
+/**
+ * Convert caller messages into the CLI conversation. Text only for the beta; any image part is
+ * rejected before a CLI process is spawned so nothing silently loses content.
+ */
+export function toCliGatewayMessages(
+  messages: readonly GatewayMessage[],
+): CliConversationMessage[] {
+  const conversation: CliConversationMessage[] = [];
+  for (const message of messages) {
+    const role = message.role === 'developer' ? 'developer' : message.role;
+    if (Array.isArray(message.content)) {
+      const text = message.content
+        .map((part) => {
+          if (!part || typeof part !== 'object') return '';
+          const record = part as Record<string, unknown>;
+          if ('image' in record || 'image_url' in record || record.type === 'image_url')
+            throw unsupportedCli(
+              'Installed-CLI routes support text only. Remove image input or use the standard API.',
+            );
+          return typeof record.text === 'string' ? record.text : '';
+        })
+        .join('');
+      if (role === 'assistant') {
+        if (message.tool_calls?.length)
+          conversation.push({
+            role: 'assistant',
+            content: text || null,
+            tool_calls: message.tool_calls.map((call) => ({
+              id: call.id,
+              type: 'function' as const,
+              function: { name: call.function.name, arguments: call.function.arguments },
+            })),
+          });
+        else if (text) conversation.push({ role: 'assistant', content: text });
+        continue;
+      }
+      if (role === 'tool')
+        conversation.push({
+          role: 'tool',
+          content: text,
+          ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
+        });
+      else if (text && (role === 'user' || role === 'system' || role === 'developer'))
+        conversation.push({ role, content: text });
+      continue;
+    }
+    const content = typeof message.content === 'string' ? message.content : '';
+    if (message.role === 'assistant' && message.tool_calls?.length) {
+      conversation.push({
+        role: 'assistant',
+        content: content || null,
+        tool_calls: message.tool_calls.map((call) => ({
+          id: call.id,
+          type: 'function' as const,
+          function: { name: call.function.name, arguments: call.function.arguments },
+        })),
+      });
+    } else if (message.role === 'tool') {
+      conversation.push({
+        role: 'tool',
+        content,
+        ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
+      });
+    } else if (
+      message.role === 'user' ||
+      message.role === 'system' ||
+      message.role === 'developer' ||
+      message.role === 'assistant'
+    ) {
+      if (content) conversation.push({ role: message.role, content });
+    }
+  }
+  return conversation;
+}
+
+/**
+ * Route one explicit installed-CLI request through the shared Core broker on the Gateway surface.
+ * Text and the CLI's real function tool calls stream to the caller; the caller executes the tools and
+ * sends the original results on the next request. Never retried or spliced: a CLI turn is one call.
+ */
+async function routeCliCompletion(
+  services: FerryServices,
+  input: Parameters<GatewayRuntime['complete']>[0],
+  cli: { connection: CliConnection; model: CliModelCapabilities },
+  _requestStarted: number,
+): Promise<GatewayCompletion> {
+  if (input.jsonMode || input.structuredOutput)
+    throw unsupportedCli(
+      'Installed-CLI routes support text and caller tools only. Structured output needs the standard API.',
+    );
+  if (input.parallelToolCalls === true)
+    throw unsupportedCli('Installed-CLI routes do not support parallel_tool_calls.');
+  if (
+    input.toolChoice !== undefined &&
+    input.toolChoice !== 'auto' &&
+    input.toolChoice !== 'none' &&
+    input.toolChoice !== 'required'
+  )
+    throw unsupportedCli('Installed-CLI routes support tool_choice auto, none or required only.');
+  const tools = input.toolChoice === 'none' ? [] : toCliCallerTools(input.tools);
+  const messages = toCliGatewayMessages(input.messages);
+  const broker = getCliBroker(services, () => undefined);
+  const startedAt = Date.now();
+  input.onAttempt?.({
+    servedModel: cli.model.ref,
+    attempts: [{ model: cli.model.ref, status: 'started' }],
+  });
+  try {
+    const { result } = await broker.dispatch({
+      surface: 'gateway',
+      modelRef: cli.model.ref,
+      messages,
+      tools,
+      signal: input.signal,
+      ...(input.effort
+        ? { optionOverride: { effort: input.effort, speed: 'standard' as const } }
+        : {}),
+      onText: (delta) => {
+        void input.onText?.(delta);
+      },
+      inputTokens: Math.ceil(JSON.stringify(input.messages).length / 4),
+    });
+    for (const call of result.toolCalls)
+      await input.onToolCall?.({
+        id: call.id,
+        name: call.name,
+        arguments: JSON.stringify(call.arguments),
+      });
+    input.onAttempt?.({
+      servedModel: cli.model.ref,
+      attempts: [
+        {
+          model: cli.model.ref,
+          status: 'served',
+          durationMs: Date.now() - startedAt,
+          inputTokens: result.usage.inputTokens ?? 0,
+          outputTokens: result.usage.outputTokens ?? 0,
+          cachedTokens: result.usage.cachedTokens ?? 0,
+        },
+      ],
+    });
+    return {
+      id: `gw-cli-${String(Date.now())}`,
+      model: cli.model.ref,
+      responseModel: result.responseModel,
+      text: result.text,
+      ...(result.toolCalls.length
+        ? {
+            toolCalls: result.toolCalls.map((call) => ({
+              id: call.id,
+              name: call.name,
+              arguments: JSON.stringify(call.arguments),
+            })),
+          }
+        : {}),
+      inputTokens: result.usage.inputTokens ?? 0,
+      outputTokens: result.usage.outputTokens ?? 0,
+      ...(result.usage.cachedTokens === null ? {} : { cachedTokens: result.usage.cachedTokens }),
+      finishReason: result.toolCalls.length ? 'tool_calls' : 'stop',
+    };
+  } catch (error) {
+    if (isCliTransportError(error))
+      throw Object.assign(new Error(error.message), {
+        statusCode: error.statusCode,
+        code: gatewayCliCode(error.kind),
+      });
+    throw error;
+  }
+}
+
 function compressedMessages(messages: GatewayMessage[], enabled: boolean): GatewayMessage[] {
   if (!enabled) return messages;
   return messages.map((message) => {
@@ -524,11 +741,22 @@ export function createGatewayController(
       const eligible = (await routeableCandidates(key, profileName)).filter((model) =>
         assigned.has(model.ref),
       );
+      // Gateway-eligible installed-CLI models are explicit direct-connection refs. They are listed
+      // (and pass the explicit-model admission check) once the Gateway surface is opted in; the
+      // broker then enforces verification, identity and billing before any dispatch. They never
+      // enter profile/Auto routing.
+      const cliRefs = getCliBroker(services, () => undefined)
+        .connections()
+        .filter((connection) => connection.surfaces.gateway)
+        .flatMap((connection) =>
+          connection.models.filter((model) => !model.hidden).map((model) => model.ref),
+        )
+        .filter((ref) => !key.allowedModels.length || key.allowedModels.includes(ref));
       const concreteAllowlist = key.allowedModels.filter(
         (model) => model.includes('/') && !model.startsWith('ferry/'),
       );
       if (key.profile === 'none' && concreteAllowlist.length > 0)
-        return eligible.map((model) => model.ref);
+        return [...new Set([...eligible.map((model) => model.ref), ...cliRefs])];
       const hasLogicalAllowlist = key.allowedModels.some(
         (model) => !model.includes('/') && !model.startsWith('ferry/'),
       );
@@ -551,7 +779,9 @@ export function createGatewayController(
         );
         return resolved.length > 0;
       });
-      return [...concreteModels.map((model) => model.ref), ...availableLogical];
+      return [
+        ...new Set([...concreteModels.map((model) => model.ref), ...availableLogical, ...cliRefs]),
+      ];
     },
     async complete(input) {
       const started = input.receivedAt ? new Date(input.receivedAt) : services.clock.now();
@@ -714,6 +944,12 @@ export function createGatewayController(
     hasVisibleOutput: () => boolean,
   ): ReturnType<GatewayRuntime['complete']> {
     const requestStarted = Date.now();
+    // An explicit installed-CLI model is a direct connection: same Core broker, same admission
+    // policy and the original caller tool calls returned for execution on the caller side.
+    if (!input.model.startsWith('@profile:')) {
+      const cli = getCliBroker(services, () => undefined).model(input.model as ModelRef);
+      if (cli) return await routeCliCompletion(services, input, cli, requestStarted);
+    }
     const selectedProfile = input.model.startsWith('@profile:')
       ? input.model.slice('@profile:'.length)
       : input.key.profile;

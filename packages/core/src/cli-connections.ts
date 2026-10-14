@@ -65,7 +65,10 @@ export function getCliConnectionService(
 ): CliConnectionService {
   let service = servicesIndex.get(services);
   if (!service) {
-    service = new CliConnectionService(services, emit);
+    service = new CliConnectionService(services, emit, {
+      ...(services.cliScan ? { scan: services.cliScan } : {}),
+      ...(services.cliUsage ? { usage: services.cliUsage } : {}),
+    });
     servicesIndex.set(services, service);
   }
   return service;

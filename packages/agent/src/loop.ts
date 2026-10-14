@@ -142,6 +142,17 @@ export interface ModelToolCall {
   input: unknown;
   providerOptions?: Record<string, Record<string, unknown>>;
 }
+/**
+ * Actual usage a provider/CLI reported for one step. A dimension the source did not report is
+ * `null`; a reported zero stays `0`. Kept separate from Ferry's token estimates so missing usage is
+ * never recorded as a zero.
+ */
+export interface ReportedStepUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  reasoningTokens: number | null;
+}
 export interface GeneratedStep {
   text?: string;
   reasoning?: string;
@@ -152,6 +163,8 @@ export interface GeneratedStep {
   toolCalls?: ModelToolCall[];
   inputTokens?: number;
   outputTokens?: number;
+  /** Reported usage with nullable dimensions; absent for providers that only estimate. */
+  reportedUsage?: ReportedStepUsage;
   finishReason?: string;
   responseModel?: string;
 }
@@ -2297,6 +2310,13 @@ export class AgentLoop {
           }
         }
         this.activeMessageParts.delete(sessionId);
+        // Prefer a source-reported usage value: a reported zero is kept as 0, an unreported
+        // dimension is omitted (never coerced to 0) so the durable aggregate can show "Not reported".
+        const reported = generated.reportedUsage;
+        const reportedInput = reported ? reported.inputTokens : (generated.inputTokens ?? 0);
+        const reportedOutput = reported ? reported.outputTokens : (generated.outputTokens ?? 0);
+        const reportedReasoning = reported ? reported.reasoningTokens : generated.reasoningTokens;
+        const reportedCached = reported?.cachedTokens;
         this.options.onUsage?.({
           id: pendingPaidUsageId ?? newId('usage'),
           providerId: model.providerId,
@@ -2304,22 +2324,19 @@ export class AgentLoop {
           occurredAt: new Date().toISOString(),
           sessionId,
           stepKind,
-          inputTokens: generated.inputTokens ?? 0,
-          outputTokens: generated.outputTokens ?? 0,
-          ...(generated.reasoningTokens === undefined
-            ? {}
-            : { reasoningTokens: generated.reasoningTokens }),
+          ...(reportedInput === null ? {} : { inputTokens: reportedInput }),
+          ...(reportedOutput === null ? {} : { outputTokens: reportedOutput }),
+          ...(reportedReasoning == null ? {} : { reasoningTokens: reportedReasoning }),
+          ...(reportedCached == null ? {} : { cachedTokens: reportedCached }),
           latencyMs: stepDurationMs,
           status: 'success',
         });
         this.emitStructuredEvent(sessionId, {
           id: newId('event'),
           type: 'usage',
-          inputTokens: generated.inputTokens ?? 0,
-          outputTokens: generated.outputTokens ?? 0,
-          ...(generated.reasoningTokens === undefined
-            ? {}
-            : { reasoningTokens: generated.reasoningTokens }),
+          ...(reportedInput === null ? {} : { inputTokens: reportedInput }),
+          ...(reportedOutput === null ? {} : { outputTokens: reportedOutput }),
+          ...(reportedReasoning == null ? {} : { reasoningTokens: reportedReasoning }),
           durationMs: stepDurationMs,
           timestamp: new Date().toISOString(),
         });

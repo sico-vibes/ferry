@@ -33,6 +33,8 @@ export interface MockState {
   mcps: McpServer[];
   delegationRuns: DelegationRun[];
   selections: Map<string, string>;
+  /** Scripted verification receipts per installed-CLI kind, so the mock inventory reacts to Verify. */
+  cliVerifiedModels: Map<string, string>;
 }
 export interface MockStore extends MockState {
   nextId(prefix: string): string;

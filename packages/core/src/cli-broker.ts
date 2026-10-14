@@ -16,11 +16,13 @@ import { createHash } from 'node:crypto';
 import {
   CliTransportError,
   isCliTransportError,
+  isOpenCodeAcpError,
   runClaudeCodeCli,
   runCodexCli,
   runOpenCodeAcp,
   type CliCallerTool,
   type CliConversationMessage,
+  type CliTransportErrorKind,
   type CliTransportInput,
   type CliTurnResult,
 } from '@ferry/delegate';
@@ -56,6 +58,36 @@ export interface CliBrokerRequest {
 }
 
 export type CliTurnRunner = (request: CliBrokerRequest) => Promise<CliTurnResult>;
+
+/** A pinned manual CLI generation routed through the shared admission + option policy. */
+export interface CliDispatchInput {
+  surface: 'native' | 'gateway';
+  modelRef: ModelRef;
+  messages: readonly CliConversationMessage[];
+  tools: readonly CliCallerTool[];
+  signal: AbortSignal;
+  onText?: (text: string) => void;
+  onProgress?: () => void;
+  /** Profile `cliDefaults[ref]`, applied below an explicit conversation override. */
+  profileCliDefault?: CliOption | undefined;
+  /** Explicit conversation override; highest priority. */
+  optionOverride?: CliOption | undefined;
+  /** Estimated prompt tokens, used only to bound a controlled admission when capacity is unknown. */
+  inputTokens?: number;
+  timeoutMs?: number;
+  /** Selected saved Ferry key for `credentialMode: 'ferry'`. */
+  apiKey?: string;
+  /** Explicit executable seam for offline fixtures. Never set in production. */
+  executable?: string;
+  executableArgs?: string[];
+}
+
+export interface CliDispatchResult {
+  connection: CliConnection;
+  model: CliModelCapabilities;
+  option: CliOption;
+  result: CliTurnResult;
+}
 
 /** Bounded single-generation queue limits; one active turn per connection, small fair backlog. */
 export const CLI_QUEUE_LIMIT = 8;
@@ -133,6 +165,151 @@ export function mergeCliOption(current: CliOption | undefined, patch: CliOptionP
     effort: 'effort' in patch ? (patch.effort ?? null) : (current?.effort ?? null),
     speed: patch.speed ?? current?.speed ?? 'standard',
   };
+}
+
+/**
+ * Lower bound for a controlled manual admission when the CLI never reported a real context window:
+ * a small chat always fits, so the beta admits it explicitly rather than fabricating a 128K limit.
+ */
+export const MANUAL_UNKNOWN_CAPACITY_INPUT_BOUND = 8_000;
+
+export interface CliOptionLayers {
+  /** Profile `cliDefaults[ref]` (lower priority than an explicit conversation override). */
+  profileDefault?: CliOption | undefined;
+  /** Connection per-model default (`cliConnections[kind].modelDefaults[ref]`). */
+  connectionModelDefault?: CliOption | undefined;
+  /** Connection default options (`cliConnections[kind].defaultOptions`). */
+  connectionDefault?: CliOption | undefined;
+  /** Explicit conversation/session override; highest priority. */
+  conversation?: CliOption | undefined;
+}
+
+/**
+ * Resolve the effective CLI option for one model. Priority, highest first: conversation override,
+ * profile `cliDefaults`, the connection's per-model default, the connection default, then the
+ * discovered actual model default (`standard` speed is always the fallback).
+ */
+export function resolveCliOption(model: CliModelCapabilities, layers: CliOptionLayers): CliOption {
+  return {
+    effort:
+      layers.conversation?.effort ??
+      layers.profileDefault?.effort ??
+      layers.connectionModelDefault?.effort ??
+      layers.connectionDefault?.effort ??
+      model.defaultEffort ??
+      null,
+    speed:
+      layers.conversation?.speed ??
+      layers.profileDefault?.speed ??
+      layers.connectionModelDefault?.speed ??
+      layers.connectionDefault?.speed ??
+      model.defaultSpeed,
+  };
+}
+
+export interface CliDispatchAdmission {
+  ok: boolean;
+  statusCode: number;
+  message: string;
+}
+
+/**
+ * Decide whether a manual (pinned) CLI generation may dispatch on one surface. Discovery and
+ * verification are prerequisites; metered or unknown-billing capacity additionally requires the
+ * existing spending authorization. An included subscription is never treated as free and never
+ * authorizes metered spend.
+ */
+export function cliManualAdmission(
+  connection: CliConnection,
+  model: CliModelCapabilities,
+  surface: 'native' | 'gateway',
+  options: {
+    authorizeSpend?: (connection: CliConnection, model: CliModelCapabilities) => boolean;
+    inputTokens?: number;
+  } = {},
+): CliDispatchAdmission {
+  if (!connection.surfaces[surface])
+    return {
+      ok: false,
+      statusCode: 400,
+      message: `${connection.kind} is not opted in for the ${surface} surface. Enable it in Providers & keys first.`,
+    };
+  if (connection.verify.state !== 'verified' || connection.verify.modelRef !== model.ref)
+    return {
+      ok: false,
+      statusCode: 400,
+      message: `${model.name} is not verified on ${connection.kind}. Run Verify for this connection before sending.`,
+    };
+  if (connection.account.state !== 'signed_in' || connection.account.key === null)
+    return {
+      ok: false,
+      statusCode: 401,
+      message: `${connection.kind} has no signed-in account identity. Sign in to the CLI and refresh, then verify again.`,
+    };
+  if (model.hidden)
+    return { ok: false, statusCode: 400, message: `${model.name} is not currently available.` };
+  if (
+    model.contextWindow == null &&
+    (options.inputTokens ?? 0) > MANUAL_UNKNOWN_CAPACITY_INPUT_BOUND
+  )
+    return {
+      ok: false,
+      statusCode: 400,
+      message: `${model.name} did not report a context window, so only a small bounded request is admitted (this one is larger). Use a model with a known context or split the request.`,
+    };
+  if (!isNonSpendingBilling(model.billing)) {
+    if (!options.authorizeSpend?.(connection, model))
+      return {
+        ok: false,
+        statusCode: 402,
+        message: `${model.name} is billed as ${model.billing}; dispatching it needs an existing monetary spending authorization and a known price budget. No zero-cost charge was assumed.`,
+      };
+  }
+  return { ok: true, statusCode: 200, message: '' };
+}
+
+/** True for a caller/native abort (DOMException or native transport abort), never a provider fault. */
+export function isAbortLikeError(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('name' in error)) return false;
+  const name = (error as { name?: unknown }).name;
+  return name === 'AbortError' || name === 'NativeAbortError';
+}
+
+const QUOTA_EXHAUSTION =
+  /quota|usage limit|insufficient|exhaust|out of credits|billing hard limit/i;
+
+/**
+ * Map a genuine OpenCode ACP failure category onto the shared transport kinds. A temporary rate
+ * limit (`busy`) stays distinct from an exhausted account quota; only an explicit exhaustion signal
+ * is promoted to `exhausted_capacity`. Account, status and reset metadata are preserved by the
+ * caller.
+ */
+export function normalizeOpenCodeCategory(
+  category: string,
+  message: string,
+  statusCode?: number,
+): CliTransportErrorKind {
+  switch (category) {
+    case 'busy':
+      return 'temporary_rate_limit';
+    case 'model_unavailable':
+      return 'unavailable_model';
+    case 'unsupported_option':
+      return 'unsupported_capability';
+    case 'credential':
+      return 'authentication';
+    case 'cancelled':
+      return 'cancelled';
+    case 'timeout':
+      return 'timeout';
+    case 'provider':
+      return statusCode === 429 && QUOTA_EXHAUSTION.test(message)
+        ? 'exhausted_capacity'
+        : 'provider_error';
+    case 'protocol':
+    default:
+      return 'provider_error';
+  }
 }
 
 function knownReasoningEfforts(model: CliModelCapabilities): Effort[] {
@@ -376,20 +553,97 @@ export class CliBroker {
   /**
    * Run exactly one bounded generation for a connection through the fair queue. Rejects when the
    * connection's backlog is full so a caller can pick another route instead of hanging.
+   *
+   * The request deadline bounds the total time, queue wait included. It is rejected before the slot
+   * is claimed even when the slot is free, and only the remaining budget is passed to the transport,
+   * so queue wait plus generation can never exceed the caller's deadline.
    */
   async run(request: CliBrokerRequest): Promise<CliTurnResult> {
     const kind = request.connection.kind;
-    // The request timeout bounds the total wait, including time parked in the queue.
     const deadlineAt = request.timeoutMs !== undefined ? Date.now() + request.timeoutMs : undefined;
+    if (deadlineAt !== undefined && deadlineAt <= Date.now())
+      throw new CliTransportError('timeout', `${kind} request deadline already expired`);
     const release = await this.#acquire(kind, request.signal, deadlineAt);
+    let bound: { signal: AbortSignal; dispose: () => void } | undefined;
     try {
       request.signal.throwIfAborted();
-      return await this.#run(request);
+      const remainingMs = deadlineAt === undefined ? undefined : deadlineAt - Date.now();
+      if (remainingMs !== undefined && remainingMs <= 0)
+        throw new CliTransportError('timeout', `${kind} request deadline reached before dispatch`);
+      bound = this.#bindDeadline(request.signal, remainingMs);
+      return await this.#run({
+        ...request,
+        signal: bound.signal,
+        ...(remainingMs === undefined ? {} : { timeoutMs: remainingMs }),
+      });
     } catch (error) {
       throw this.#classify(error, request.connection);
     } finally {
+      bound?.dispose();
       release();
     }
+  }
+
+  /**
+   * Manual dispatch for a pinned installed-CLI model on one surface. Resolves options and enforces
+   * the admission policy (surface opt-in, verification, account identity, spending authorization)
+   * before the queue, so native and Gateway share exactly one validated path into the transport.
+   */
+  async dispatch(input: CliDispatchInput): Promise<CliDispatchResult> {
+    const resolved = this.model(input.modelRef);
+    if (!resolved)
+      throw new CliTransportError(
+        'unavailable_model',
+        `Unknown installed-CLI model: ${input.modelRef}`,
+      );
+    const { connection, model } = resolved;
+    const admission = cliManualAdmission(connection, model, input.surface, {
+      authorizeSpend: this.#authorizeSpend,
+      ...(input.inputTokens === undefined ? {} : { inputTokens: input.inputTokens }),
+    });
+    if (!admission.ok)
+      throw new CliTransportError(
+        this.#transportKindForStatus(admission.statusCode),
+        admission.message,
+        { statusCode: admission.statusCode, accountKey: connection.account.key },
+      );
+    const connectionModelDefault = this.#connectionModelDefault(connection.kind, model.ref);
+    const connectionDefault = this.#connectionDefault(connection.kind);
+    const option = resolveCliOption(model, {
+      ...(input.profileCliDefault ? { profileDefault: input.profileCliDefault } : {}),
+      ...(connectionModelDefault ? { connectionModelDefault } : {}),
+      ...(connectionDefault ? { connectionDefault } : {}),
+      ...(input.optionOverride ? { conversation: input.optionOverride } : {}),
+    });
+    // An explicit option the discovered model does not advertise is rejected before any prompt.
+    const optionError = cliOptionError(model.ref, model, option);
+    if (optionError) throw new CliTransportError('unsupported_capability', optionError);
+    const credentialMode = this.#credentialMode(connection.kind);
+    const credentialProvider = this.#credentialProvider(connection.kind);
+    if (credentialMode === 'ferry' && !input.apiKey)
+      throw new CliTransportError(
+        'authentication',
+        'Ferry credential mode requires the selected saved key; refusing to substitute another credential.',
+        { accountKey: connection.account.key },
+      );
+    const result = await this.run({
+      connection,
+      model,
+      options: option,
+      messages: input.messages,
+      tools: input.tools,
+      signal: input.signal,
+      environment: this.#services.env,
+      ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+      credentialMode,
+      ...(credentialProvider ? { credentialProvider } : {}),
+      ...(input.apiKey ? { apiKey: input.apiKey } : {}),
+      ...(input.onText ? { onText: input.onText } : {}),
+      ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+      ...(input.executable ? { executable: input.executable } : {}),
+      ...(input.executableArgs ? { executableArgs: input.executableArgs } : {}),
+    });
+    return { connection, model, option, result };
   }
 
   /**
@@ -564,9 +818,83 @@ export class CliBroker {
     return { ...connection, verify };
   }
 
+  /** Read the persisted connection default options for one kind (`cliConnections[kind]`). */
+  #connectionDefault(kind: CliConnectionKind): CliOption | undefined {
+    const stored = this.#services.settings.get('global') as
+      { cliConnections?: Record<string, { defaultOptions?: CliOption }> } | undefined;
+    return stored?.cliConnections?.[kind]?.defaultOptions;
+  }
+
+  #connectionModelDefault(kind: CliConnectionKind, ref: ModelRef): CliOption | undefined {
+    const stored = this.#services.settings.get('global') as
+      | {
+          cliConnections?: Record<string, { modelDefaults?: Record<string, Partial<CliOption>> }>;
+        }
+      | undefined;
+    const partial = stored?.cliConnections?.[kind]?.modelDefaults?.[ref];
+    if (!partial) return undefined;
+    return { effort: partial.effort ?? null, speed: partial.speed ?? 'standard' };
+  }
+
+  #transportKindForStatus(status: number): CliTransportErrorKind {
+    if (status === 401 || status === 403) return 'authentication';
+    if (status === 402) return 'unsupported_capability';
+    if (status === 429) return 'temporary_rate_limit';
+    return 'unsupported_capability';
+  }
+
+  /**
+   * Link the caller signal to a remaining-time budget. Passes a child signal to the transport and
+   * aborts it with a normalized timeout error when the budget elapses. `dispose` always clears the
+   * timer, so a fast turn never leaks a live deadline.
+   */
+  #bindDeadline(
+    parent: AbortSignal,
+    remainingMs: number | undefined,
+  ): { signal: AbortSignal; dispose: () => void } {
+    const controller = new AbortController();
+    const forward = () => {
+      controller.abort(parent.reason);
+    };
+    if (parent.aborted) forward();
+    else parent.addEventListener('abort', forward, { once: true });
+    let timer: NodeJS.Timeout | undefined;
+    if (remainingMs !== undefined)
+      timer = setTimeout(
+        () => {
+          controller.abort(new CliTransportError('timeout', 'CLI request deadline reached'));
+        },
+        Math.max(0, remainingMs),
+      );
+    return {
+      signal: controller.signal,
+      dispose: () => {
+        parent.removeEventListener('abort', forward);
+        if (timer) clearTimeout(timer);
+      },
+    };
+  }
+
   #classify(error: unknown, connection: CliConnection): CliTransportError {
     if (isCliTransportError(error)) return error;
+    // OpenCode throws its own structured error; normalize it to the shared transport kinds so the
+    // caller keeps the account, quota reset and status instead of a generic provider error.
+    if (isOpenCodeAcpError(error))
+      return new CliTransportError(
+        normalizeOpenCodeCategory(error.category, error.message, error.statusCode),
+        error.message,
+        {
+          ...(error.statusCode === undefined ? {} : { statusCode: error.statusCode }),
+          accountKey: connection.account.key,
+          resetAt: error.resetAt,
+        },
+      );
     const message = error instanceof Error ? error.message : String(error);
+    // A native/caller abort is a cancellation, not a provider failure.
+    if (isAbortLikeError(error))
+      return new CliTransportError('cancelled', 'CLI generation was cancelled', {
+        accountKey: connection.account.key,
+      });
     if (connection.account.state === 'signed_out')
       return new CliTransportError('authentication', `${connection.kind} is not signed in`, {
         accountKey: connection.account.key,
@@ -670,7 +998,11 @@ export function getCliBroker(
 ): CliBroker {
   let broker = brokerIndex.get(services);
   if (!broker) {
-    broker = new CliBroker(services, getCliConnectionService(services, emit));
+    broker = new CliBroker(
+      services,
+      getCliConnectionService(services, emit),
+      services.cliRunTurn ? { runTurn: services.cliRunTurn } : {},
+    );
     brokerIndex.set(services, broker);
   }
   return broker;

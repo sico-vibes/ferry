@@ -11,12 +11,15 @@ import { isOpenCodeAppModel } from '@ferry/shared';
 import {
   createStepGenerator,
   type AgentEvent,
+  type AgentTool,
   type GeneratedStep,
   type ModelHints,
+  type ReportedStepUsage,
   type StepGeneratorInput,
 } from '@ferry/agent';
 import type { RawCallObservation } from '@ferry/providers';
-import type { TraceContext } from '@ferry/shared';
+import type { Message, MessagePart, TraceContext } from '@ferry/shared';
+import type { CliCallerTool, CliConversationMessage } from '@ferry/delegate';
 import { ProviderKeyRotation, resolveProviderRequestOverrides } from '@ferry/providers';
 import {
   ProviderIdSchema,
@@ -58,6 +61,7 @@ import {
 import { getGatewayController } from './gateway.js';
 import { observationsFromRateLimitHeaders } from '@ferry/quota';
 import { getProviderHealth } from './provider-health.js';
+import { getCliBroker } from './cli-broker.js';
 
 const providerKeyPresence = new WeakMap<FerryServices, Map<string, boolean>>();
 
@@ -102,10 +106,16 @@ export interface UsageSink {
   record(record: UsageRecord): void;
 }
 
+export interface SessionDependencyContext {
+  /** Active profile, used to apply `cliDefaults` to an installed-CLI dispatch. */
+  profile?: Profile;
+}
+
 export function createSessionDependencies(
   services: FerryServices,
   emit: (event: AgentEvent) => void,
   traceContext?: TraceContext,
+  context: SessionDependencyContext = {},
 ): {
   gateway: ModelGateway;
   usage: UsageSink;
@@ -695,6 +705,9 @@ export function createSessionDependencies(
     },
     async streamStep(req, signal) {
       const providerId = req.model.providerId;
+      // A discovered installed-CLI model dispatches through the shared Core broker on the native
+      // surface. Its original system/messages/tools/delta/progress/signal are preserved verbatim.
+      if (req.model.cliConnectionId) return await runNativeCliStep(services, req, context.profile);
       if (services.providers.get(providerId)?.enabled === false)
         throw Object.assign(
           new Error(`${providerId} is disabled or paused. Choose another provider or resume it.`),
@@ -1032,6 +1045,144 @@ export function createSessionDependencies(
     associateObservationKey(providerId, keyId) {
       selectedProviderKeys.set(traceContext?.sessionId ?? '', { providerId, keyId });
     },
+  };
+}
+
+/**
+ * Encode the agent's own system/messages into the caller conversation the CLI transports accept,
+ * preserving roles, real tool-call ids and real tool results. Ferry never invents a tool result.
+ */
+export function encodeCliConversation(
+  system: string,
+  messages: readonly Message[],
+): CliConversationMessage[] {
+  const conversation: CliConversationMessage[] = [];
+  if (system.trim()) conversation.push({ role: 'system', content: system });
+  for (const message of messages) {
+    if (message.role === 'user') {
+      const text = message.parts
+        .filter((part): part is Extract<MessagePart, { type: 'text' }> => part.type === 'text')
+        .map((part) => part.text)
+        .join('\n');
+      if (text) conversation.push({ role: 'user', content: text });
+      continue;
+    }
+    const text = message.parts
+      .filter((part): part is Extract<MessagePart, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n');
+    const calls = message.parts.filter(
+      (part): part is Extract<MessagePart, { type: 'tool_call' }> => part.type === 'tool_call',
+    );
+    if (text || calls.length)
+      conversation.push({
+        role: 'assistant',
+        content: text || null,
+        ...(calls.length
+          ? {
+              tool_calls: calls.map((call) => ({
+                id: call.toolCallId ?? call.id,
+                type: 'function' as const,
+                function: { name: call.tool, arguments: JSON.stringify(call.args) },
+              })),
+            }
+          : {}),
+      });
+    for (const call of calls) {
+      if (call.output)
+        conversation.push({
+          role: 'tool',
+          content: call.output.text,
+          tool_call_id: call.toolCallId ?? call.id,
+        });
+    }
+  }
+  return conversation;
+}
+
+function schemaToParameters(schema: AgentTool['schema']): Record<string, unknown> {
+  try {
+    const json = z.toJSONSchema(schema);
+    return typeof json === 'object' ? json : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Convert the agent's tool registry entries into caller tools the CLI transports advertise. */
+export function encodeCliTools(tools: readonly AgentTool[]): CliCallerTool[] {
+  return tools.map((tool) => ({
+    name: tool.name,
+    ...(tool.title ? { description: tool.title } : {}),
+    parameters: schemaToParameters(tool.schema),
+  }));
+}
+
+function estimateCliInputTokens(
+  system: string,
+  messages: readonly CliConversationMessage[],
+  tools: readonly CliCallerTool[],
+): number {
+  const bytes =
+    Buffer.byteLength(system, 'utf8') +
+    Buffer.byteLength(JSON.stringify(messages), 'utf8') +
+    Buffer.byteLength(JSON.stringify(tools), 'utf8');
+  return Math.ceil(bytes / 4);
+}
+
+/**
+ * Native-surface installed-CLI dispatch: resolve the cached CLI model/provider, apply conversation
+ * and profile option defaults over the connection/model defaults, and run exactly one bounded turn
+ * through the broker. Text streams to the caller's `onDelta`; tool calls are returned to the agent
+ * loop for real execution and approval (the adapter never executes or approves a native tool).
+ */
+async function runNativeCliStep(
+  services: FerryServices,
+  req: StepGeneratorInput,
+  profile: Profile | undefined,
+): Promise<GeneratedStep> {
+  const modelRef = req.model.ref;
+  const session = services.sessions.get(req.messages.at(-1)?.sessionId ?? '');
+  const conversationOverride = session?.cliOptions?.[modelRef];
+  const profileDefault = profile?.cliDefaults?.[modelRef];
+  const messages = encodeCliConversation(req.system, req.messages);
+  const tools = encodeCliTools(req.tools);
+  const broker = getCliBroker(services, () => undefined);
+  const { result } = await broker.dispatch({
+    surface: 'native',
+    modelRef,
+    messages,
+    tools,
+    signal: req.signal,
+    ...(req.onProgress ? { onProgress: req.onProgress } : {}),
+    onText: (text) => {
+      req.onDelta(text);
+    },
+    ...(conversationOverride ? { optionOverride: conversationOverride } : {}),
+    ...(profileDefault ? { profileCliDefault: profileDefault } : {}),
+    inputTokens: estimateCliInputTokens(req.system, messages, tools),
+  });
+  const reportedUsage: ReportedStepUsage = {
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    cachedTokens: result.usage.cachedTokens,
+    reasoningTokens: result.usage.reasoningTokens,
+  };
+  return {
+    ...(result.text ? { text: result.text } : {}),
+    ...(result.toolCalls.length
+      ? {
+          toolCalls: result.toolCalls.map((call) => ({
+            id: call.id,
+            toolCallId: call.id,
+            name: call.name,
+            input: call.arguments,
+          })),
+        }
+      : {}),
+    responseModel: result.responseModel,
+    finishReason: result.toolCalls.length ? 'tool-calls' : 'stop',
+    reportedUsage,
   };
 }
 
