@@ -19,6 +19,44 @@ function mount(client: ReturnType<typeof createMockFerryClient>) {
   );
 }
 
+it('offers a Go credential for a Zen check without verifying or changing opt-ins', async () => {
+  const client = createMockFerryClient({ behavior: 'test' });
+  const update = vi.spyOn(client.cliConnections, 'update');
+  const verify = vi.spyOn(client.cliConnections, 'verify');
+  mount(client);
+  const offer = await screen.findByRole('switch', { name: 'Offer OpenCode Go credential to Zen' });
+  await waitFor(() => {
+    expect(offer.getAttribute('disabled')).toBeNull();
+  });
+  fireEvent.click(offer);
+  await waitFor(() => {
+    expect(update).toHaveBeenCalledWith('opencode-cli', { credentialProvider: 'opencode-go' });
+  });
+  await waitFor(() => {
+    expect(offer.getAttribute('aria-checked')).toBe('true');
+  });
+  const source = screen.getByRole('combobox', { name: 'OpenCode credential source' });
+  fireEvent.change(source, { target: { value: 'anonymous' } });
+  await waitFor(() => {
+    expect(update).toHaveBeenCalledWith('opencode-cli', {
+      credentialMode: 'anonymous',
+      credentialProvider: null,
+    });
+    expect(
+      screen.queryByRole('switch', { name: 'Offer OpenCode Go credential to Zen' }),
+    ).toBeNull();
+  });
+  expect(verify).not.toHaveBeenCalled();
+  expect(
+    screen
+      .getByRole('switch', { name: 'Allow OpenCode CLI in Gateway' })
+      .getAttribute('aria-checked'),
+  ).toBe('false');
+  expect(
+    screen.getByRole('switch', { name: 'Use OpenCode CLI in Ferry' }).getAttribute('aria-checked'),
+  ).toBe('false');
+});
+
 it('requires separate native and Gateway opt-ins without treating activation as verification', async () => {
   const client = createMockFerryClient({ behavior: 'test' });
   const update = vi.spyOn(client.cliConnections, 'update');

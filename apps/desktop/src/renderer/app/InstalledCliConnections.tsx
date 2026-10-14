@@ -4,6 +4,7 @@ import {
   isCliModelVerified,
   type CliConnection,
   type CliConnectionKind,
+  type CliConnectionSettingsPatch,
   type ModelRef,
 } from '@ferry/shared';
 import { Dialog, ProviderLogo, UiV2 } from '@ferry/ui';
@@ -47,6 +48,12 @@ export function InstalledCliConnections() {
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
+  });
+  const settings = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => client.settings.get(),
+    staleTime: 60_000,
+    retry: false,
   });
   useEffect(
     () =>
@@ -131,6 +138,24 @@ export function InstalledCliConnections() {
       setBusyAction(null);
     }
   };
+  const changeCredential = async (patch: CliConnectionSettingsPatch) => {
+    setBusy('opencode-cli');
+    setBusyAction('update');
+    setError('');
+    try {
+      const result = await client.cliConnections.update('opencode-cli', patch);
+      cache.setQueryData<CliConnection[]>(cliKey, (previous) =>
+        previous?.map((item) => (item.id === result.id ? result : item)),
+      );
+      await cache.invalidateQueries({ queryKey: ['settings'] });
+      await invalidateModels();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not change the credential source.');
+    } finally {
+      setBusy(null);
+      setBusyAction(null);
+    }
+  };
   return (
     <section className="installed-clis" aria-label="Installed CLIs">
       <header className="installed-clis-header">
@@ -204,7 +229,7 @@ export function InstalledCliConnections() {
                 </span>
                 <span>
                   {models.length
-                    ? `${String(models.length)} models discovered`
+                    ? `${String(models.length)} ${models.length === 1 ? 'model' : 'models'} discovered`
                     : 'Models not discovered'}
                 </span>
                 <span>
@@ -270,6 +295,57 @@ export function InstalledCliConnections() {
                   Sign-in instructions
                 </UiV2.Button>
               </div>
+              {connection.kind === 'opencode-cli' && (
+                <div className="grid gap-3">
+                  <label className="installed-cli-model">
+                    <span>OpenCode credential source</span>
+                    <select
+                      aria-label="OpenCode credential source"
+                      value={
+                        settings.data?.cliConnections['opencode-cli']?.credentialMode ?? 'installed'
+                      }
+                      disabled={busy !== null || !settings.data}
+                      onChange={(event) => {
+                        const mode = event.target.value;
+                        if (mode !== 'installed' && mode !== 'anonymous' && mode !== 'ferry')
+                          return;
+                        void changeCredential({ credentialMode: mode, credentialProvider: null });
+                      }}
+                    >
+                      <option value="installed">Installed CLI credentials</option>
+                      <option value="anonymous">Anonymous Zen free access</option>
+                      <option value="ferry">Zen key saved in Ferry</option>
+                    </select>
+                  </label>
+                  {(settings.data?.cliConnections['opencode-cli']?.credentialMode ??
+                    'installed') === 'installed' &&
+                    models.some((model) => model.upstreamProvider === 'opencode-go') && (
+                      <div className="installed-cli-surfaces">
+                        <label>
+                          <span>Offer the installed Go credential to Zen</span>
+                          <UiV2.Switch
+                            aria-label="Offer OpenCode Go credential to Zen"
+                            checked={
+                              settings.data?.cliConnections['opencode-cli']?.credentialProvider ===
+                              'opencode-go'
+                            }
+                            disabled={busy !== null || !settings.data}
+                            onCheckedChange={(enabled) =>
+                              void changeCredential({
+                                credentialProvider: enabled ? 'opencode-go' : null,
+                              })
+                            }
+                          />
+                        </label>
+                      </div>
+                    )}
+                  <p className="installed-cli-note">
+                    Anonymous mode is limited to Zen free models. A Go credential can be offered for
+                    a Zen access check; it does not prove Zen entitlement. Changing credentials
+                    requires verification again and does not enable metered spending.
+                  </p>
+                </div>
+              )}
               {active && busyAction === 'verify' && (
                 <p className="installed-cli-note" role="status" aria-live="polite">
                   Waiting for {name} to answer one small verification request…
