@@ -18,6 +18,7 @@ import { commandInvocation, detectCli } from '../index.js';
 import { CodexAppServer } from './codex-app-server.js';
 import { ClaudeControlClient } from './claude-control.js';
 import { deriveCliAccountKey } from './account-key.js';
+import { cliCommandName } from './command-name.js';
 import {
   parseClaudeAuthStatus,
   parseOpencodeAuthStore,
@@ -165,7 +166,7 @@ async function resolveInstall(
   if (options.executable) {
     return { installed: true, executable: options.executable, version: options.version ?? null };
   }
-  const detection = await detectCli(kind.replace(/-cli$/, '') as 'codex' | 'claude' | 'opencode', {
+  const detection = await detectCli(cliCommandName(kind), {
     checkAuth: false,
     ...(options.environment ? { environment: options.environment } : {}),
   });
