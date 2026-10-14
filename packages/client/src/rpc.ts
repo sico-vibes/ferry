@@ -160,7 +160,9 @@ export function createRpcFerryClient(
               ? Math.max(timeoutMs, 40_000)
               : method === 'providers.zenCliStatus'
                 ? Math.max(timeoutMs, 20_000)
-                : timeoutMs,
+                : method === 'cliConnections.refresh' || method === 'cliConnections.verify'
+                  ? Math.max(timeoutMs, 45_000)
+                  : timeoutMs,
       );
       pending.set(id, { resolve, reject, timer });
       transport.send({ jsonrpc: '2.0', id, method, params });
@@ -418,19 +420,23 @@ export function createHybridClient(
                     ? 'workspaces'
                     : event === 'approval.request'
                       ? 'sessions'
-                      : event === 'mcp.status'
-                        ? 'mcp'
-                        : event.startsWith('quota.')
-                          ? 'quota'
-                          : event === 'provider.updated' || event === 'providers.health.updated'
-                            ? 'providers'
-                            : event === 'delegation.updated'
-                              ? 'delegation'
-                              : event === 'oauth.progress'
-                                ? 'oauth'
-                                : event === 'workspace.updated'
-                                  ? 'workspaces'
-                                  : '';
+                      : event === 'approvals.pending.updated'
+                        ? 'approvals'
+                        : event.startsWith('cliConnections.')
+                          ? 'cliConnections'
+                          : event === 'mcp.status'
+                            ? 'mcp'
+                            : event.startsWith('quota.')
+                              ? 'quota'
+                              : event === 'provider.updated' || event === 'providers.health.updated'
+                                ? 'providers'
+                                : event === 'delegation.updated'
+                                  ? 'delegation'
+                                  : event === 'oauth.progress'
+                                    ? 'oauth'
+                                    : event === 'workspace.updated'
+                                      ? 'workspaces'
+                                      : '';
             return (real.has(domain) ? rpc : mock).on(event, handler);
           };
         if (typeof key !== 'string') return undefined;

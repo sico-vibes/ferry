@@ -12,6 +12,7 @@ import {
 import { ProviderFailureFamilySchema } from './quota.js';
 import { AgentEventSchema } from './agent-event.js';
 import { EffortSchema } from './provider.js';
+import { CliOptionSchema } from './cli-connection.js';
 import { RunReportSchema } from './run-report.js';
 import { PlanItemSchema } from './plan.js';
 export { PlanItemSchema, type PlanItem } from './plan.js';
@@ -32,6 +33,8 @@ export const SessionSchema = z.object({
   modelRef: ModelRefSchema.nullable(),
   pinnedModelRef: ModelRefSchema.nullable().default(null),
   effort: EffortSchema.nullable().optional(),
+  /** Per-conversation CLI options keyed by the selected model ref. */
+  cliOptions: z.record(ModelRefSchema, CliOptionSchema).optional(),
   starred: z.boolean(),
   pinned: z.boolean(),
   archived: z.boolean().default(false),
@@ -44,6 +47,8 @@ export const SessionSchema = z.object({
   updatedAt: z.iso.datetime(),
   agentEvents: z.array(AgentEventSchema).default([]),
   ownerModelRef: ModelRefSchema.nullable().optional(),
+  /** Model that produced the most recent assistant reply, for the conversation-row logo. */
+  lastReplyModelRef: ModelRefSchema.nullable().optional(),
   runReport: RunReportSchema.optional(),
 });
 export type Session = z.infer<typeof SessionSchema>;
@@ -265,3 +270,19 @@ export const CheckpointSchema = z.object({
 });
 export type Checkpoint = z.infer<typeof CheckpointSchema>;
 export const CheckpointDiffSchema = z.string();
+/** Full actionable list of pending approvals across sessions. */
+export const ApprovalsPendingSchema = z.object({
+  entries: z.array(
+    z.object({
+      sessionId: SessionIdSchema,
+      title: z.string(),
+      partId: PartIdSchema,
+      kind: z.enum(['command', 'edit', 'delegation', 'paid_model', 'model_handover']),
+      summary: z.string(),
+      detail: z.string(),
+      risk: z.enum(['low', 'medium', 'high']),
+    }),
+  ),
+  updatedAt: z.iso.datetime(),
+});
+export type ApprovalsPending = z.infer<typeof ApprovalsPendingSchema>;

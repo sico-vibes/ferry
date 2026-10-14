@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
+  ApprovalsPendingSchema,
   CapacitySummarySchema,
+  CliConnectionSchema,
   RunCompletedSchema,
   ProviderLimitsSchema,
   DelegationRunSchema,
@@ -22,7 +24,9 @@ import {
   WorkspaceIdSchema,
 } from '@ferry/shared';
 import type {
+  ApprovalsPending,
   CapacitySummary,
+  CliConnection,
   ProviderLimits,
   DelegationRun,
   AgentEvent,
@@ -44,6 +48,8 @@ export const FerryEventSchemas = {
       part: MessagePartSchema,
     })
     .refine((event) => event.part.type === 'approval_request'),
+  'approvals.pending.updated': ApprovalsPendingSchema,
+  'cliConnections.updated': CliConnectionSchema,
   'mcp.status': z.object({
     serverId: z.string(),
     status: z.enum(['connected', 'disconnected', 'error']),
@@ -158,6 +164,8 @@ export interface FerryEvents {
     messageId: import('@ferry/shared').MessageId;
     part: Extract<MessagePart, { type: 'approval_request' }>;
   };
+  'approvals.pending.updated': ApprovalsPending;
+  'cliConnections.updated': CliConnection;
   'mcp.status': {
     serverId: string;
     status: 'connected' | 'disconnected' | 'error';

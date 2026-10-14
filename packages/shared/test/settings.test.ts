@@ -13,6 +13,28 @@ describe('storage and content capture settings', () => {
       dailyUsd: 1,
     });
   });
+  it('does not clear CLI connection opt-ins when patching unrelated settings', () => {
+    const patch = SettingsPatchSchema.parse({ theme: 'light' });
+    expect('cliConnections' in patch).toBe(false);
+    const current = SettingsSchema.parse({
+      ...sampleSettings,
+      cliConnections: {
+        'codex-cli': {
+          native: true,
+          gateway: true,
+          defaultOptions: { effort: 'high', speed: 'fast' },
+          modelDefaults: {},
+        },
+      },
+    });
+    // Mirrors the Core settings domain and mock merges (`{ ...current, ...patch }`).
+    const merged = SettingsSchema.parse({ ...current, ...patch });
+    expect(merged.cliConnections['codex-cli']).toMatchObject({ native: true, gateway: true });
+    expect(merged.cliConnections['codex-cli']?.defaultOptions).toEqual({
+      effort: 'high',
+      speed: 'fast',
+    });
+  });
   it('defaults older settings to local mode and resolves capture by mode', () => {
     const { storageMode: _mode, captureContent: _capture, ...legacyInput } = sampleSettings;
     const legacy = SettingsSchema.parse(legacyInput);

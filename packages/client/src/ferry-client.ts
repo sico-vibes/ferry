@@ -4,6 +4,13 @@ import type {
   ProviderLimits,
   Checkpoint,
   CheckpointId,
+  ApprovalsPending,
+  CliConnection,
+  CliConnectionKind,
+  CliConnectionSettingsPatch,
+  CliConnectionVerifyResult,
+  CliOption,
+  SessionModelUsage,
   DelegationRun,
   AcpAgentDetection,
   GatewayRequestRecord,
@@ -200,6 +207,13 @@ export interface FerryClient {
     setStarred(id: SessionId, v: boolean): Promise<Session>;
     setPinned(id: SessionId, v: boolean): Promise<Session>;
     setEffort(id: SessionId, effort: Effort | null): Promise<Session>;
+    /** Per-session/model usage aggregate. */
+    modelUsage(id: SessionId): Promise<SessionModelUsage>;
+    /** Set per-conversation CLI options keyed by the selected model. */
+    updateCliOptions(
+      id: SessionId,
+      input: { modelRef: ModelRef; options: Partial<CliOption> },
+    ): Promise<Session>;
     remove(id: SessionId): Promise<void>;
   };
   approvals: {
@@ -208,6 +222,19 @@ export interface FerryClient {
       partId: import('@ferry/shared').PartId,
       decision: 'allow_once' | 'allow_always' | 'deny',
     ): Promise<void>;
+    /** Full actionable pending approvals across sessions. */
+    pending(): Promise<ApprovalsPending>;
+  };
+  /** Installed CLI connections: discovery, cached snapshots, opt-ins and verification. */
+  cliConnections: {
+    /** Immediate cached snapshot; triggers a bounded background refresh when stale. */
+    list(): Promise<CliConnection[]>;
+    /** Bounded fresh discovery (singleflight) returning the refreshed snapshot. */
+    refresh(id?: CliConnectionKind): Promise<CliConnection[]>;
+    /** Explicit account/model verification. Real generation adapters are not available yet. */
+    verify(id: CliConnectionKind, modelRef?: ModelRef): Promise<CliConnectionVerifyResult>;
+    /** Persist surface opt-ins and per-model option defaults. */
+    update(id: CliConnectionKind, patch: CliConnectionSettingsPatch): Promise<CliConnection>;
   };
   checkpoints: {
     list(sessionId: SessionId): Promise<Checkpoint[]>;
@@ -219,7 +246,7 @@ export interface FerryClient {
       available: boolean;
       version: string | null;
       executable: string | null;
-      credentialSource: 'opencode' | 'ferry' | 'anonymous';
+      credentialSource: 'opencode' | 'opencode_go' | 'ferry' | 'anonymous';
       verifiedModels: string[];
       freeModels: { ref: string; name: string }[];
     }>;

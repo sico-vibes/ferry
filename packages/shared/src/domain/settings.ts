@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { DelegationModeSchema, PermissionModeSchema, ThemeSchema } from './common.js';
 import { ProfileIdSchema, ProviderIdSchema } from './ids.js';
 import { OptimizerTogglesSchema } from './profile.js';
+import { CliConnectionSettingsSchema } from './cli-connection.js';
 export const LogicalModelMappingSchema = z.object({
   logicalName: z
     .string()
@@ -150,6 +151,8 @@ export const SettingsSchema = z.object({
       verifiedRequestId: null,
     }),
   optimizers: OptimizerTogglesSchema,
+  /** Installed-CLI connection opt-ins and per-model option defaults, keyed by connection kind. */
+  cliConnections: z.record(z.string(), CliConnectionSettingsSchema).default({}),
   routing: RoutingSettingsSchema.default(DEFAULT_ROUTING_SETTINGS),
   developer: z.object({
     showReferenceOverlay: z.boolean(),
@@ -165,6 +168,9 @@ export function resolveCaptureContent(
   return settings.captureContent ?? settings.storageMode === 'cloud';
 }
 export const SettingsPatchSchema = SettingsSchema.partial().extend({
+  // `.partial()` would re-inject the `{}` default and wipe stored CLI opt-ins/defaults on any
+  // unrelated settings update; keep this field truly optional (absent = preserve).
+  cliConnections: z.record(z.string(), CliConnectionSettingsSchema).optional(),
   paidCaps: z
     .object({
       sessionUsd: z.number().nonnegative().nullable().optional(),

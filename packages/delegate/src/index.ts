@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 export { detectZenCli, runZenAcp, type ZenAcpInput, type ZenAcpResult } from './zen-acp.js';
+export * from './cli-connection/index.js';
 import { isProtectedWorkspacePath, summarizeAgentEvent } from '@ferry/shared';
 import { access, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';

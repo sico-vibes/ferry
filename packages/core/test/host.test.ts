@@ -216,6 +216,7 @@ describe('core host dispatcher and lifecycle', () => {
         'mcp',
         'optimizer',
         'delegation',
+        'cliConnections',
       ]);
       await mkdir(join(path, 'workspace'), { recursive: true });
       const opened = await rpc.workspaces.open(join(path, 'workspace'));

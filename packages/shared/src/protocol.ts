@@ -1,8 +1,18 @@
 import { z } from 'zod';
 import { ReadOutputInputSchema } from './domain/session.js';
-import { ProviderIdSchema, SessionIdSchema, WorkspaceIdSchema } from './domain/ids.js';
+import {
+  ModelRefSchema,
+  ProviderIdSchema,
+  SessionIdSchema,
+  WorkspaceIdSchema,
+} from './domain/ids.js';
 import { FailureOptionsSchema } from './domain/failures.js';
 import { EffortSchema } from './domain/provider.js';
+import {
+  CliConnectionKindSchema,
+  CliConnectionSettingsPatchSchema,
+  CliOptionPatchSchema,
+} from './domain/cli-connection.js';
 
 export const FERRY_PROTOCOL = 'ferry/1' as const;
 export const DomainErrorKindSchema = z.enum([
@@ -42,7 +52,14 @@ export const FERRY_METHODS = [
   'sessions.archive',
   'sessions.move',
   'sessions.remove',
+  'sessions.modelUsage',
+  'sessions.updateCliOptions',
   'approvals.respond',
+  'approvals.pending',
+  'cliConnections.list',
+  'cliConnections.refresh',
+  'cliConnections.verify',
+  'cliConnections.update',
   'checkpoints.list',
   'checkpoints.diff',
   'checkpoints.restore',
@@ -137,6 +154,16 @@ export const FERRY_METHOD_PARAMS_SCHEMAS: Readonly<
   'sessions.readOutput': z.tuple([ReadOutputInputSchema]),
   'sessions.compact': z.tuple([SessionIdSchema]),
   'sessions.setEffort': z.tuple([SessionIdSchema, EffortSchema.nullable()]),
+  'sessions.modelUsage': z.tuple([SessionIdSchema]),
+  'sessions.updateCliOptions': z.tuple([
+    SessionIdSchema,
+    z.object({ modelRef: ModelRefSchema, options: CliOptionPatchSchema }),
+  ]),
+  'cliConnections.list': z.tuple([]),
+  'cliConnections.refresh': z.tuple([CliConnectionKindSchema.optional()]),
+  'cliConnections.verify': z.tuple([CliConnectionKindSchema, ModelRefSchema.optional()]),
+  'cliConnections.update': z.tuple([CliConnectionKindSchema, CliConnectionSettingsPatchSchema]),
+  'approvals.pending': z.tuple([]),
   'sessions.archive': z.tuple([SessionIdSchema, z.boolean()]),
   'sessions.move': z.tuple([SessionIdSchema, WorkspaceIdSchema.nullable()]),
   'workspaces.archiveChats': z.tuple([WorkspaceIdSchema]),
@@ -181,6 +208,8 @@ export const FERRY_EVENTS = [
   'session.removed',
   'session.status',
   'approval.request',
+  'approvals.pending.updated',
+  'cliConnections.updated',
   'mcp.status',
   'session.message',
   'session.part',

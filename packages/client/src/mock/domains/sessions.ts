@@ -1,5 +1,12 @@
 import type { FerryClient } from '../../ferry-client.js';
-import { EffortSchema, ReadOutputInputSchema, readOutputPage, SessionSchema } from '@ferry/shared';
+import {
+  CliOptionPatchSchema,
+  CliOptionSchema,
+  EffortSchema,
+  ReadOutputInputSchema,
+  readOutputPage,
+  SessionSchema,
+} from '@ferry/shared';
 import type { Message, SessionId } from '@ferry/shared';
 import type { MockDeps } from './deps.js';
 import type { MockStore } from '../types.js';
@@ -375,6 +382,36 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
       await before();
       const s = session(id);
       s.effort = EffortSchema.nullable().parse(effort);
+      return updateSession(s);
+    },
+    async modelUsage(id) {
+      await before();
+      session(id);
+      return {
+        sessionId: id,
+        totals: {
+          requests: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+        },
+        models: [],
+        incomplete: false,
+        coverage: { since: null, missing: false },
+      };
+    },
+    async updateCliOptions(id, input) {
+      await before();
+      const s = session(id);
+      const parsed = CliOptionPatchSchema.parse(input.options);
+      s.cliOptions = {
+        ...(s.cliOptions ?? {}),
+        [input.modelRef]: CliOptionSchema.parse({
+          ...(s.cliOptions?.[input.modelRef] ?? {}),
+          ...parsed,
+        }),
+      };
       return updateSession(s);
     },
     async remove(id) {

@@ -5,24 +5,26 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
-import { z } from 'zod';
 import { rememberSecret } from '@ferry/shared';
 import { commandInvocation, detectCli } from './index.js';
+import { parseOpencodeAuthStore } from './cli-connection/parse.js';
 import { openZenToolBridge, type ZenTool, type ZenToolCall } from './zen-tools.js';
 
-const authSchema = z.object({
-  opencode: z.object({ type: z.literal('api'), key: z.string().min(1) }).optional(),
-});
-async function zenCredential(environment: NodeJS.ProcessEnv) {
-  if (environment.OPENCODE_API_KEY) return environment.OPENCODE_API_KEY;
+async function zenAuthRecords(environment: NodeJS.ProcessEnv) {
   const dataHome = environment.XDG_DATA_HOME ?? join(homedir(), '.local', 'share');
   try {
-    return authSchema.parse(
+    return parseOpencodeAuthStore(
       JSON.parse(await readFile(join(dataHome, 'opencode', 'auth.json'), 'utf8')),
-    ).opencode?.key;
+    );
   } catch {
-    return undefined;
+    return [];
   }
+}
+/** Legacy Zen credential selection: env key, else the `opencode` auth record only. */
+async function zenCredential(environment: NodeJS.ProcessEnv) {
+  if (environment.OPENCODE_API_KEY) return environment.OPENCODE_API_KEY;
+  const records = await zenAuthRecords(environment);
+  return records.find((record) => record.providerId === 'opencode')?.key;
 }
 
 export async function detectZenCli(
@@ -30,16 +32,22 @@ export async function detectZenCli(
   environment: NodeJS.ProcessEnv = process.env,
 ) {
   const detection = await detectCli('opencode', { checkAuth: false, environment });
-  const credential = await zenCredential(environment);
+  const records = await zenAuthRecords(environment);
+  const hasOpencode =
+    Boolean(environment.OPENCODE_API_KEY) ||
+    records.some((record) => record.providerId === 'opencode');
+  const hasOpencodeGo = records.some((record) => record.providerId === 'opencode-go');
   return {
     available: detection.available,
     version: detection.version,
     executable: detection.available ? detection.executable : null,
-    credentialSource: credential
+    credentialSource: hasOpencode
       ? ('opencode' as const)
-      : ferryKey
-        ? ('ferry' as const)
-        : ('anonymous' as const),
+      : hasOpencodeGo
+        ? ('opencode_go' as const)
+        : ferryKey
+          ? ('ferry' as const)
+          : ('anonymous' as const),
   };
 }
 

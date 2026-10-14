@@ -18,6 +18,7 @@ import { createDelegationDomain } from './domains/delegation.js';
 import { createSkillsDomain } from './domains/skills.js';
 import { createMcpDomain } from './domains/mcp.js';
 import { createSystemDomain } from './domains/system.js';
+import { createCliConnectionsDomain } from './domains/cliConnections.js';
 import { MockNotFoundError } from './errors.js';
 
 export { MockNotFoundError };
@@ -310,6 +311,7 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
     delegation: createDelegationDomain(runtime.store, deps),
     skills: createSkillsDomain(runtime.store, deps),
     mcp: createMcpDomain(runtime.store, deps),
+    cliConnections: createCliConnectionsDomain(runtime.store, deps),
     system: createSystemDomain(runtime.store, deps),
     on: (event, handler) => deps.emitter.on(event, handler),
   };

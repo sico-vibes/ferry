@@ -15,6 +15,7 @@ import { register as registerWorkspaces } from './workspaces.js';
 import { register as registerOAuth } from './oauth.js';
 import { register as registerGateway } from './gateway.js';
 import { register as registerCloud } from './cloud.js';
+import { register as registerCliConnections } from './cliConnections.js';
 
 export type DomainRegistrar = (host: CoreHost, services: FerryServices) => void;
 export const domainRegistrars: DomainRegistrar[] = [
@@ -33,4 +34,5 @@ export const domainRegistrars: DomainRegistrar[] = [
   registerMcp,
   registerOptimizer,
   registerDelegation,
+  registerCliConnections,
 ];

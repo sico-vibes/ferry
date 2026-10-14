@@ -5,8 +5,26 @@ import type { MockDeps } from './deps.js';
 import type { MockStore } from '../types.js';
 
 export function createApprovalsDomain(_store: MockStore, deps: MockDeps): FerryClient['approvals'] {
-  const { approvalWaiters, before, persist, emit, sessionDetail } = deps;
+  const { approvalWaiters, before, persist, emit, sessionDetail, state, clock } = deps;
   return {
+    async pending() {
+      await before();
+      const entries: import('@ferry/shared').ApprovalsPending['entries'] = [];
+      for (const s of state.sessions)
+        for (const m of state.messages.get(s.id) ?? [])
+          for (const p of m.parts)
+            if (p.type === 'approval_request' && p.state === 'pending')
+              entries.push({
+                sessionId: s.id,
+                title: s.title,
+                partId: p.id,
+                kind: p.kind,
+                summary: p.summary,
+                detail: p.detail,
+                risk: p.risk,
+              });
+      return { entries, updatedAt: clock.now().toISOString() };
+    },
     async respond(sessionId, partId, decision) {
       await before();
       const detail = sessionDetail(sessionId);
