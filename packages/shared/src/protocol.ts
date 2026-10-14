@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ReadOutputInputSchema } from './domain/session.js';
+import { ProfileSchema } from './domain/profile.js';
 import {
   ModelRefSchema,
   ProviderIdSchema,
@@ -104,6 +105,8 @@ export const FERRY_METHODS = [
   'profiles.save',
   'profiles.remove',
   'profiles.activate',
+  'profiles.applyOptimized',
+  'profiles.undoOptimized',
   'settings.get',
   'settings.update',
   'cloud.status',
@@ -175,6 +178,8 @@ export const FERRY_METHOD_PARAMS_SCHEMAS: Readonly<
     }),
   ]),
   'quota.limits': z.tuple([]),
+  'profiles.applyOptimized': z.tuple([ProfileSchema]),
+  'profiles.undoOptimized': z.tuple([z.string().min(1).max(128)]),
   'providers.listKeys': z.tuple([ProviderIdSchema]),
   'providers.health': z.tuple([]),
   'providers.failures': z.tuple([ProviderIdSchema.optional(), FailureOptionsSchema.optional()]),

@@ -315,6 +315,8 @@ export interface FerryClient {
     save(p: Profile): Promise<Profile>;
     remove(id: ProfileId): Promise<void>;
     activate(id: ProfileId, sessionId?: SessionId): Promise<void>;
+    applyOptimized(profile: Profile): Promise<{ profile: Profile; undoId: string }>;
+    undoOptimized(undoId: string): Promise<void>;
   };
   settings: { get(): Promise<Settings>; update(patch: SettingsPatch): Promise<Settings> };
   optimizer: { stats(): Promise<OptimizerStats> };

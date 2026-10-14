@@ -305,7 +305,9 @@ export function createMockFerryClient(options: MockOptions = {}): MockFerryClien
     oauth: createOAuthDomain(runtime.store, deps),
     quota: createQuotaDomain(runtime.store, deps),
     models: createModelsDomain(runtime.store, deps),
-    profiles: createProfilesDomain(runtime.store, deps),
+    profiles: createProfilesDomain(runtime.store, deps, {
+      isGatewayProfileReferenced: (id: string) => gatewayKeys.some((key) => key.profile === id),
+    }),
     settings: createSettingsDomain(runtime.store, deps),
     optimizer: createOptimizerDomain(runtime.store, deps),
     delegation: createDelegationDomain(runtime.store, deps),
