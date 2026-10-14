@@ -20,13 +20,20 @@ import * as schema from './schema.js';
 import {
   SessionModelUsageRepository,
   backfillSessionModelUsage,
+  isRetainedByUnknownUsage,
+  migrateSessionModelUsageProvenance,
   recordUsageEvent,
 } from './session-model-usage.js';
-import { newId, redactForTelemetry, type TelemetrySink } from '@ferry/shared';
+import { newId, redactForTelemetry, MessageSchema, type TelemetrySink } from '@ferry/shared';
 
 export { schema };
 export { RequestFailureRepository } from './request-failures.js';
-export { SessionModelUsageRepository, backfillSessionModelUsage } from './session-model-usage.js';
+export {
+  SessionModelUsageRepository,
+  UsageProvenanceMigrationError,
+  backfillSessionModelUsage,
+  migrateSessionModelUsageProvenance,
+} from './session-model-usage.js';
 export type {
   SessionModelUsageRow,
   SessionModelUsageSummary,
@@ -43,6 +50,7 @@ const storageMigrationFiles = [
   '0008_gateway_safety.sql',
   '0009_gateway_history.sql',
   '0010_session_model_usage.sql',
+  '0011_session_model_usage_provenance.sql',
 ];
 export const STORAGE_SCHEMA_VERSION = storageMigrationFiles.length;
 /** Observes successful local writes so cloud mode can persist them for later sync. */
@@ -106,6 +114,16 @@ export async function openDatabase(path: string): Promise<DatabaseConnection> {
             client.exec('ALTER TABLE requests ADD COLUMN connection_id TEXT');
           if (!columns.has('account_key'))
             client.exec('ALTER TABLE requests ADD COLUMN account_key TEXT');
+        } else if (targetVersion === 11) {
+          // 0011 leaves the aggregate empty so this proven reconciliation runs first; the old table
+          // is only dropped after it succeeds, and the whole step shares one migration transaction.
+          client.exec(sql);
+          migrateSessionModelUsageProvenance(client);
+          client.exec(
+            'DROP TABLE session_model_usage; ' +
+              'ALTER TABLE session_model_usage_v11 RENAME TO session_model_usage; ' +
+              'CREATE INDEX IF NOT EXISTS session_model_usage_session_idx ON session_model_usage(session_id);',
+          );
         } else client.exec(sql);
         client.pragma(`user_version = ${String(targetVersion)}`);
       });
@@ -216,7 +234,7 @@ type AggregateTable =
   | 'optimizer_blobs';
 export class JsonRepository<T extends { id: string }> {
   constructor(
-    private readonly client: Database.Database,
+    protected readonly client: Database.Database,
     private readonly table: AggregateTable,
     private readonly mirror: StorageMirror = NOOP_STORAGE_MIRROR,
   ) {}
@@ -790,6 +808,11 @@ export class SessionRepository extends JsonRepository<Session> {
     })();
   }
 }
+/** Guarded JSON session expression; migration 0011 indexes this exact expression. */
+const MESSAGE_SESSION_EXPR =
+  "CASE WHEN json_valid(data_json) THEN json_extract(data_json,'$.sessionId') END";
+/** Keeps a session IN-list under SQLite's bound-variable limit. */
+const MESSAGE_SESSION_BATCH = 500;
 export class MessageRepository extends JsonRepository<Message> {
   private textIndex: Map<string, { sessionId: string; text: string; lower: string }[]> | undefined;
   constructor(client: Database.Database, mirror?: StorageMirror) {
@@ -810,6 +833,37 @@ export class MessageRepository extends JsonRepository<Message> {
         ? [{ sessionId: message.sessionId, text: part.text, lower: part.text.toLocaleLowerCase() }]
         : [],
     );
+  }
+  /**
+   * Messages belonging to the given sessions, resolved through the indexed JSON session expression
+   * (`messages_session_id_idx`, created by migration 0011). The session list is chunked to stay
+   * under SQLite's bound-variable limit. A malformed or schema-invalid row is skipped per row so one
+   * corrupt legacy record cannot fail the caller, while a real query/infrastructure failure
+   * propagates instead of being silently swallowed.
+   */
+  listForSessions(sessionIds: readonly string[]): Message[] {
+    const messages: Message[] = [];
+    for (let start = 0; start < sessionIds.length; start += MESSAGE_SESSION_BATCH) {
+      const batch = sessionIds.slice(start, start + MESSAGE_SESSION_BATCH);
+      if (batch.length === 0) continue;
+      const placeholders = batch.map(() => '?').join(',');
+      const rows = this.client
+        .prepare(
+          `SELECT data_json FROM messages WHERE ${MESSAGE_SESSION_EXPR} IN (${placeholders})`,
+        )
+        .all(...batch) as { data_json: string }[];
+      for (const row of rows) {
+        let payload: unknown;
+        try {
+          payload = JSON.parse(row.data_json);
+        } catch {
+          continue;
+        }
+        const parsed = MessageSchema.safeParse(payload);
+        if (parsed.success) messages.push(parsed.data);
+      }
+    }
+    return messages;
   }
   /** Lazily index text once, then scan only normalized strings, never reparse transcripts. */
   searchText(query: string, sessionIds: ReadonlySet<string>): Map<string, string> {
@@ -1210,6 +1264,11 @@ export class RequestRepository {
   }
   put(record: RequestRecord): void {
     const write = this.client.transaction(() => {
+      // Decide before the upsert replaces the retained row: a re-recorded request id that an
+      // unknown-provenance legacy aggregate already covers (and that never produced a ledger entry)
+      // must not be folded again as new usage. Its detail row is still updated, but the residual
+      // totals and their unknown coverage are preserved rather than rewritten without proof.
+      const representedByUnknownUsage = isRetainedByUnknownUsage(this.client, record.id);
       this.client
         .prepare(
           `INSERT OR REPLACE INTO requests (id,ts,provider,model,session_id,task_id,step_id,step_kind,input_tokens,output_tokens,cached_tokens,reasoning_tokens,cost_usd,plan_units,status,error_kind,latency_ms,headers_json,connection_id,account_key) VALUES (@id,@ts,@provider,@model,@session_id,@task_id,@step_id,@step_kind,@input_tokens,@output_tokens,@cached_tokens,@reasoning_tokens,@cost_usd,@plan_units,@status,@error_kind,@latency_ms,@headers_json,@connection_id,@account_key)`,
@@ -1232,6 +1291,7 @@ export class RequestRepository {
           connection_id: record.connection_id ?? null,
           account_key: record.account_key ?? null,
         });
+      if (representedByUnknownUsage) return;
       recordUsageEvent(this.client, {
         eventId: record.id,
         sessionId: record.session_id ?? null,

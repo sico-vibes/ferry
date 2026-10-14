@@ -3,8 +3,8 @@ import { SessionModelUsageRepository, type SessionModelUsageRow } from '@ferry/s
 import {
   ApprovalsPendingSchema,
   CliAccountKeySchema,
-  MessageSchema,
   ModelRefSchema,
+  redactKnownSecretText,
   SessionModelUsageSchema,
   SessionSchema,
   type ApprovalsPending,
@@ -25,8 +25,6 @@ const UNKNOWN_NAMESPACE = 'unknown';
 const MAX_LEGIBLE_LEGACY_KEY = 128;
 /** Safe, non-secret shape for a legible legacy model token. */
 const LEGIBLE_LEGACY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:@+/-]*$/;
-/** Bound each approval query under the classic SQLite 999-variable limit. */
-const MAX_QUERY_PARAMS = 500;
 
 function requireSession(services: FerryServices, sessionId: SessionId): void {
   if (!services.sessions.get(sessionId))
@@ -87,9 +85,12 @@ function validAccountKey(value: string | null): string | null {
   return value !== null && CliAccountKeySchema.safeParse(value).success ? value : null;
 }
 
-/** Two provenance values are compatible when either is unknown (`null`) or they are equal. */
+/**
+ * Two provenance values are compatible only when they are exactly equal. Unknown (`null`) is its own
+ * bucket and is never folded into a known value, so differently evidenced rows stay separate.
+ */
 function compatible(left: string | null, right: string | null): boolean {
-  return left === null || right === null || left === right;
+  return left === right;
 }
 
 interface MergedModelUsage {
@@ -110,11 +111,10 @@ interface MergedModelUsage {
 /**
  * Folds alias rows onto one canonical ref, summing nullable dimensions without inventing zeros.
  *
- * Rows that agree on provider/connection/account (treating `null` as unknown) merge into one entry.
- * Rows whose provider, connection or account genuinely differ are kept as separate entries so a
- * distinction is never collapsed onto an arbitrary first value. The storage aggregate only ever
- * holds the single coalesced provenance per `(session, modelRef)` row, so a per-connection or
- * per-account split inside one row cannot be recovered here and is never invented.
+ * Storage now keeps an exact `(model, provider, connection, account)` bucket, so rows only merge when
+ * their canonical ref and whole provenance are identical (including two legacy aliases that share
+ * the same provenance). Differently evidenced rows — including an unknown-provenance row next to a
+ * known one — are kept as separate entries and never collapsed onto an arbitrary first value.
  */
 function mergeUsageRows(rows: readonly SessionModelUsageRow[]): MergedModelUsage[] {
   const byRef = new Map<string, SessionModelUsageRow[]>();
@@ -184,12 +184,12 @@ function mergeUsageRows(rows: readonly SessionModelUsageRow[]): MergedModelUsage
  * qualified ref, but differently evidenced provider/connection/account rows stay distinct. Unknown
  * or malformed account keys are redacted to `null` rather than surfaced.
  *
- * `coverage.since` is always `null`: the reviewed repository only exposes `lastUsedAt` (last use),
- * never a first-use/coverage-start timestamp, so no exact start is claimed. `coverage.missing` is
- * conservative and driven by supported flags only — incomplete primary dimensions or a model whose
- * provenance could not be attributed. A `backfilled` row alone does not prove older history is gone,
- * so it is not treated as missing. A missing session throws `not_found` without leaking another
- * conversation's usage.
+ * Coverage comes from the repository: `coverage.since` is the real earliest retained usage-ledger
+ * event timestamp (or null without ledger evidence), never a per-model `lastUsedAt` and never
+ * fabricated. `coverage.missing` is true when the retained evidence cannot prove full-lifetime
+ * coverage (historical/backfilled or legacy-uncovered rows), when primary dimensions are incomplete,
+ * or when a model's provenance could not be attributed. A missing session throws `not_found` without
+ * leaking another conversation's usage.
  */
 export function sessionModelUsage(
   services: FerryServices,
@@ -223,51 +223,34 @@ export function sessionModelUsage(
     },
     models,
     incomplete: summary.incomplete,
-    coverage: { since: null, missing: summary.incomplete || unknownProvenance },
+    coverage: {
+      since: summary.coverage.since,
+      missing: summary.coverage.unknown || summary.incomplete || unknownProvenance,
+    },
   });
 }
 
 /**
- * Reads only messages for the given sessions straight from the aggregate table, filtered in SQL via
- * the stored `sessionId`, so idle sessions' transcripts are never materialized. The session list is
- * chunked to stay under SQLite's variable limit, and the `json_valid` guard plus a per-row try/catch
- * keep one corrupt legacy row from failing the whole summary. The `messages` table has no
- * `session_id` column or index, so this is a bounded full scan; a real index/repository lookup is
- * left for later wiring.
+ * Reads only messages for the given sessions through the repository's indexed, bounded lookup
+ * (`MessageRepository.listForSessions`) so idle sessions' transcripts are never materialized. The
+ * repository skips an individual corrupt legacy row; a real query/infrastructure failure is surfaced
+ * here as a redacted domain error instead of being swallowed into an empty approvals list.
  */
 function readMessagesForSessions(
   services: FerryServices,
   sessionIds: readonly string[],
 ): Message[] {
-  const messages: Message[] = [];
-  for (let start = 0; start < sessionIds.length; start += MAX_QUERY_PARAMS) {
-    const batch = sessionIds.slice(start, start + MAX_QUERY_PARAMS);
-    if (batch.length === 0) continue;
-    const placeholders = batch.map(() => '?').join(',');
-    let rows: { data_json: string }[];
-    try {
-      rows = services.db.client
-        .prepare(
-          `SELECT data_json FROM messages WHERE CASE WHEN json_valid(data_json) THEN json_extract(data_json,'$.sessionId') END IN (${placeholders})`,
-        )
-        .all(...batch) as { data_json: string }[];
-    } catch {
-      // A malformed row can still surface through JSON1 on some builds; skip the batch rather than
-      // failing the whole approvals summary.
-      continue;
-    }
-    for (const row of rows) {
-      let payload: unknown;
-      try {
-        payload = JSON.parse(row.data_json);
-      } catch {
-        continue;
-      }
-      const parsed = MessageSchema.safeParse(payload);
-      if (parsed.success) messages.push(parsed.data);
-    }
+  try {
+    return services.messages.listForSessions(sessionIds);
+  } catch (error) {
+    throw rpcDomainError(
+      -32004,
+      'unavailable',
+      `Could not read pending approvals: ${redactKnownSecretText(
+        error instanceof Error ? error.message : 'storage error',
+      )}`,
+    );
   }
-  return messages;
 }
 
 /**

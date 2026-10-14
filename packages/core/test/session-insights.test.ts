@@ -175,7 +175,7 @@ function seedUsageRow(
     reasoningTokens?: number | null;
     lastUsedAt?: string;
     unreportedRequests?: number;
-    backfilled?: boolean;
+    provenanceKnown?: boolean;
   },
 ): void {
   const inputTokens = row.inputTokens ?? null;
@@ -184,26 +184,26 @@ function seedUsageRow(
   const reasoningTokens = row.reasoningTokens ?? null;
   services.db.client
     .prepare(
-      `INSERT INTO session_model_usage (session_id,model_ref,provider_id,connection_id,account_key,requests,input_tokens,output_tokens,cached_tokens,reasoning_tokens,input_reported,output_reported,cached_reported,reasoning_reported,unreported_requests,backfilled,last_used_at)
-       VALUES (@sessionId,@modelRef,@providerId,@connectionId,@accountKey,@requests,@inputTokens,@outputTokens,@cachedTokens,@reasoningTokens,@inputReported,@outputReported,@cachedReported,@reasoningReported,@unreportedRequests,@backfilled,@lastUsedAt)`,
+      `INSERT INTO session_model_usage (session_id,model_ref,provider_id,connection_id,account_key,provenance_known,requests,input_tokens,output_tokens,cached_tokens,reasoning_tokens,input_reported,output_reported,cached_reported,reasoning_reported,unreported_requests,last_used_at)
+       VALUES (@sessionId,@modelRef,@providerId,@connectionId,@accountKey,@provenanceKnown,@requests,@inputTokens,@outputTokens,@cachedTokens,@reasoningTokens,@inputReported,@outputReported,@cachedReported,@reasoningReported,@unreportedRequests,@lastUsedAt)`,
     )
     .run({
       sessionId: row.sessionId,
       modelRef: row.modelRef,
-      providerId: row.providerId,
-      connectionId: row.connectionId ?? null,
-      accountKey: row.accountKey ?? null,
+      providerId: row.providerId ?? '',
+      connectionId: row.connectionId ?? '',
+      accountKey: row.accountKey ?? '',
+      provenanceKnown: row.provenanceKnown === false ? 0 : 1,
       requests: row.requests ?? 1,
-      inputTokens: inputTokens ?? 0,
-      outputTokens: outputTokens ?? 0,
-      cachedTokens: cachedTokens ?? 0,
-      reasoningTokens: reasoningTokens ?? 0,
+      inputTokens,
+      outputTokens,
+      cachedTokens,
+      reasoningTokens,
       inputReported: inputTokens === null ? 0 : 1,
       outputReported: outputTokens === null ? 0 : 1,
       cachedReported: cachedTokens === null ? 0 : 1,
       reasoningReported: reasoningTokens === null ? 0 : 1,
       unreportedRequests: row.unreportedRequests ?? 0,
-      backfilled: row.backfilled ? 1 : 0,
       lastUsedAt: row.lastUsedAt ?? '2026-01-01T00:00:00.000Z',
     });
 }
@@ -317,7 +317,7 @@ describe('sessionModelUsage', () => {
     expect(usage.totals.requests).toBe(2);
   });
 
-  it('merges alias rows that agree on provenance and coalesces an unknown side', async () => {
+  it('groups an unknown-provenance alias separately from a known-provenance alias', async () => {
     const services = await startServices();
     const session = makeSession('session_alias_provenance');
     services.sessions.put(session);
@@ -340,15 +340,105 @@ describe('sessionModelUsage', () => {
       outputTokens: 1,
     });
     const usage = sessionModelUsage(services, session.id);
-    expect(usage.models).toHaveLength(1);
-    expect(usage.models[0]).toMatchObject({
-      modelRef: 'openai/gpt-5',
-      connectionId: 'conn-1',
-      accountKey: VALID_ACCOUNT_KEY,
-      requests: 2,
-      inputTokens: 5,
-      outputTokens: 3,
+    // Unknown (null) provenance is its own bucket and is never folded into the known row.
+    expect(usage.models).toHaveLength(2);
+    expect(usage.models).toContainEqual(
+      expect.objectContaining({
+        modelRef: 'openai/gpt-5',
+        connectionId: null,
+        accountKey: null,
+        requests: 1,
+        inputTokens: 4,
+        outputTokens: 2,
+      }),
+    );
+    expect(usage.models).toContainEqual(
+      expect.objectContaining({
+        modelRef: 'openai/gpt-5',
+        connectionId: 'conn-1',
+        accountKey: VALID_ACCOUNT_KEY,
+        requests: 1,
+        inputTokens: 1,
+        outputTokens: 1,
+      }),
+    );
+  });
+
+  it('keeps the same model split across accounts as distinct model entries', async () => {
+    const services = await startServices();
+    const session = makeSession('session_split_accounts');
+    services.sessions.put(session);
+    const requests = new RequestRepository(services.db.client);
+    requests.put({
+      id: 'split-a',
+      ts: '2026-01-01T00:00:00.000Z',
+      provider: 'openai',
+      model: 'gpt-5',
+      session_id: session.id,
+      connection_id: 'conn-a',
+      account_key: 'openai:aaaaaaaaaaaa',
+      input_tokens: 10,
+      output_tokens: 2,
+      status: 'ok',
     });
+    requests.put({
+      id: 'split-b',
+      ts: '2026-01-01T00:00:05.000Z',
+      provider: 'openai',
+      model: 'gpt-5',
+      session_id: session.id,
+      connection_id: 'conn-b',
+      account_key: 'openai:bbbbbbbbbbbb',
+      input_tokens: 20,
+      output_tokens: 4,
+      status: 'ok',
+    });
+    const usage = sessionModelUsage(services, session.id);
+    expect(usage.models).toHaveLength(2);
+    expect(usage.models.every((model) => model.modelRef === 'openai/gpt-5')).toBe(true);
+    expect(usage.models.map((model) => model.accountKey).sort()).toEqual([
+      'openai:aaaaaaaaaaaa',
+      'openai:bbbbbbbbbbbb',
+    ]);
+    expect(usage.totals).toMatchObject({ requests: 2, inputTokens: 30, outputTokens: 6 });
+  });
+
+  it('keeps an unknown partial remainder alongside the exact covered row', async () => {
+    const services = await startServices();
+    const session = makeSession('session_partial');
+    services.sessions.put(session);
+    seedUsageRow(services, {
+      sessionId: session.id,
+      modelRef: 'openai/gpt-5',
+      providerId: 'openai',
+      connectionId: 'conn-ledger',
+      accountKey: VALID_ACCOUNT_KEY,
+      inputTokens: 10,
+      outputTokens: 2,
+    });
+    seedUsageRow(services, {
+      sessionId: session.id,
+      modelRef: 'openai/gpt-5',
+      providerId: 'openai',
+      connectionId: 'conn-legacy',
+      accountKey: 'openai:cccccccccccc',
+      requests: 2,
+      inputTokens: 20,
+      outputTokens: 4,
+      provenanceKnown: false,
+    });
+    const usage = sessionModelUsage(services, session.id);
+    // The exact covered row and the honest unknown remainder stay distinct entries.
+    expect(usage.models).toHaveLength(2);
+    expect(usage.models).toContainEqual(
+      expect.objectContaining({ connectionId: 'conn-ledger', requests: 1 }),
+    );
+    expect(usage.models).toContainEqual(
+      expect.objectContaining({ connectionId: 'conn-legacy', requests: 2 }),
+    );
+    // No token is lost and the uncertainty is reported rather than hidden.
+    expect(usage.totals).toMatchObject({ requests: 3, inputTokens: 30, outputTokens: 6 });
+    expect(usage.coverage.missing).toBe(true);
   });
 
   it('never collapses differently evidenced connection/account alias rows', async () => {
@@ -504,7 +594,7 @@ describe('sessionModelUsage', () => {
     expect(invalid?.accountKey).toBeNull();
   });
 
-  it('does not claim an exact coverage start and does not treat backfill alone as missing', async () => {
+  it('reports the real retained coverage start and labels backfilled history as missing', async () => {
     const services = await startServices();
     const session = makeSession('session_backfill');
     services.sessions.put(session);
@@ -519,9 +609,8 @@ describe('sessionModelUsage', () => {
     });
     expect(backfillSessionModelUsage(services.db.client)).toBe(1);
     const usage = sessionModelUsage(services, session.id);
-    // The repository only exposes last-use, so no exact start is asserted; backfill alone is not
-    // proof that older lifetime history is gone.
-    expect(usage.coverage).toEqual({ since: null, missing: false });
+    // The start is the real earliest retained ledger timestamp; backfill origin marks it incomplete.
+    expect(usage.coverage).toEqual({ since: '2026-01-02T00:00:00.000Z', missing: true });
     expect(usage.totals).toMatchObject({ requests: 1, inputTokens: 7, outputTokens: 3 });
     expect(usage.incomplete).toBe(false);
   });
@@ -908,5 +997,20 @@ describe('pendingApprovalSummary', () => {
     const summary = pendingApprovalSummary(services);
     expect(summary.entries).toHaveLength(1);
     expect(summary.entries[0]).toMatchObject({ sessionId: session.id });
+  });
+
+  it('surfaces an infrastructure failure as a redacted error instead of empty approvals', async () => {
+    const services = await startServices();
+    const session = makeSession('session_broken_store', { status: 'awaiting_approval' });
+    services.sessions.put(session);
+    services.db.client.exec('DROP TABLE messages');
+    let thrown: unknown;
+    try {
+      pendingApprovalSummary(services);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ kind: 'unavailable' });
+    expect(thrown).toBeInstanceOf(Error);
   });
 });
