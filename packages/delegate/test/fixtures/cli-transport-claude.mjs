@@ -21,6 +21,26 @@ if (argv.includes('auth') && argv.includes('status')) {
     '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"pro"}';
   process.stdout.write(`${status}\n`, () => process.exit(0));
 } else {
+  // Readiness IPC: record the private working directory so cancellation tests can verify cleanup.
+  if (process.env.FERRY_CLAUDE_CWD_FILE) {
+    writeFileSync(process.env.FERRY_CLAUDE_CWD_FILE, process.cwd(), 'utf8');
+  }
+  const stageFile = process.env.FERRY_CLAUDE_STAGE_FILE;
+  const markStage = (value) => {
+    if (stageFile) writeFileSync(stageFile, value, 'utf8');
+  };
+  // Hold scenarios keep a stubborn grandchild alive so tests can prove tree termination.
+  if (scenario.startsWith('hold')) {
+    const child = spawn(
+      process.execPath,
+      ['-e', 'process.on("SIGTERM",()=>{}); setInterval(() => {}, 1000)'],
+      { stdio: 'ignore', windowsHide: true },
+    );
+    if (process.env.FERRY_CLAUDE_CHILD_PID)
+      writeFileSync(process.env.FERRY_CLAUDE_CHILD_PID, String(child.pid));
+    setInterval(() => {}, 1000);
+    if (scenario === 'holdstartup') markStage('holdstartup');
+  }
   const mcpPath = argValue('--mcp-config');
   const settingsPath = argValue('--settings');
   const systemPromptPath = argValue('--system-prompt-file');
@@ -425,14 +445,25 @@ if (argv.includes('auth') && argv.includes('status')) {
       case 'exit':
         process.exit(4);
         break;
-      case 'hold': {
-        const child = spawn(
-          process.execPath,
-          ['-e', 'process.on("SIGTERM",()=>{}); setInterval(() => {}, 1000)'],
-          { stdio: 'ignore', windowsHide: true },
-        );
-        if (process.env.FERRY_CLAUDE_CHILD_PID)
-          writeFileSync(process.env.FERRY_CLAUDE_CHILD_PID, String(child.pid));
+      case 'hold':
+      case 'holdstream':
+      case 'holdtool': {
+        // Grandchild is already spawned at startup for hold* scenarios.
+        if (scenario === 'holdstream') {
+          send({
+            type: 'stream_event',
+            event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'partial' } },
+          });
+        }
+        if (scenario === 'holdtool') {
+          // A native tool permission request; Ferry must deny it and keep waiting.
+          await requestClient('can_use_tool', {
+            tool_name: 'Bash',
+            input: { command: 'rm -rf /' },
+            tool_use_id: 'toolu_hold_native',
+          });
+        }
+        markStage(scenario);
         setInterval(() => {}, 1000);
         break;
       }
@@ -461,6 +492,8 @@ if (argv.includes('auth') && argv.includes('status')) {
       record.frames.push({ type: 'control_request', subtype });
       flush();
       if (subtype === 'initialize') {
+        // Cancel-during-startup: never answer initialize; the process stays alive for the abort test.
+        if (scenario === 'holdstartup') return;
         const models =
           scenario === 'unavailable'
             ? [{ value: 'other', resolvedModel: 'claude-other-fixture', displayName: 'Other' }]

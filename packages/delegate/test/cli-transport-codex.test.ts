@@ -109,6 +109,8 @@ interface CodexRunOptions extends Partial<CliTransportInput> {
   scenario: string;
   record: string;
   childPidFile?: string;
+  cwdFile?: string;
+  stageFile?: string;
 }
 
 function makeInput(options: CodexRunOptions): CliTransportInput {
@@ -127,6 +129,8 @@ function makeInput(options: CodexRunOptions): CliTransportInput {
       FERRY_CODEX_RECORD: options.record,
       FERRY_CODEX_MODEL: model.upstreamId,
       ...(options.childPidFile ? { FERRY_CODEX_CHILD_PID: options.childPidFile } : {}),
+      ...(options.cwdFile ? { FERRY_CODEX_CWD_FILE: options.cwdFile } : {}),
+      ...(options.stageFile ? { FERRY_CODEX_STAGE_FILE: options.stageFile } : {}),
     },
     executable: process.execPath,
     executableArgs: [FIXTURE],
@@ -204,10 +208,47 @@ describe('runCodexCli', () => {
         multi_agent: false,
         code_mode_host: false,
       });
+      expect(asRecord(thread.config).project_doc_max_bytes).toBe(0);
+      expect(asRecord(thread.config).include_permissions_instructions).toBe(false);
+      expect(asRecord(thread.config).include_apps_instructions).toBe(false);
+      expect(asRecord(thread.config).include_collaboration_mode_instructions).toBe(false);
+      expect(asRecord(thread.config).include_environment_context).toBe(false);
+      expect(String(thread.baseInstructions)).toContain('NO host capabilities');
       const turn = requestOf(record, 'turn/start');
       expect(turn.serviceTierForTurn).toBe('default');
       expect(turn.input).toEqual([{ type: 'text', text: 'Say hello' }]);
       expect(record.requests.some((entry) => entry.method === 'model/list')).toBe(false);
+    },
+  );
+
+  it(
+    'sends compact caller-owned instructions and retains caller system/developer',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'instructions.json');
+      const messages: CliConversationMessage[] = [
+        { role: 'system', content: 'CALLER_SYSTEM_MARK' },
+        { role: 'developer', content: 'CALLER_DEV_MARK' },
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'reply' },
+        { role: 'user', content: 'hi' },
+      ];
+      await runCodexCli(makeInput({ scenario: 'text', record: recordPath, messages }));
+      const record = await readRecord(recordPath);
+      const thread = requestOf(record, 'thread/start');
+      const base = String(thread.baseInstructions);
+      expect(base).toContain('NO host capabilities');
+      expect(base).toContain('CALLER_SYSTEM_MARK');
+      expect(thread.developerInstructions).toBe('CALLER_DEV_MARK');
+      // Caller system/developer must not be duplicated into the injected item history.
+      const injected = asRecord(requestOf(record, 'thread/inject_items'));
+      const items = injected.items as unknown[];
+      expect(items.some((item) => asRecord(item).role === 'system')).toBe(false);
+      expect(items.some((item) => asRecord(item).role === 'developer')).toBe(false);
+      expect(
+        items.some((item) => asRecord(item).type === 'message' && asRecord(item).role === 'user'),
+      ).toBe(true);
     },
   );
 
@@ -542,30 +583,38 @@ describe('runCodexCli', () => {
     },
   );
 
-  it(
-    'cancels during a held turn and leaves no orphan child process',
+  it.each(['hold', 'holdstartup', 'holdstream', 'holdtool'])(
+    'cancels during %s and terminates the tree and temp dir',
     { timeout: 30_000 },
-    async () => {
+    async (scenario) => {
       const dir = await tempRoot();
-      const recordPath = join(dir, 'hold.json');
-      const pidPath = join(dir, 'child.pid');
+      const recordPath = join(dir, `${scenario}.json`);
+      const pidPath = join(dir, `${scenario}.pid`);
+      const cwdPath = join(dir, `${scenario}.cwd`);
+      const stagePath = join(dir, `${scenario}.stage`);
       const controller = new AbortController();
       const pending = runCodexCli(
         makeInput({
-          scenario: 'hold',
+          scenario,
           record: recordPath,
           signal: controller.signal,
           childPidFile: pidPath,
+          cwdFile: cwdPath,
+          stageFile: stagePath,
         }),
       );
-      await waitFor(() => existsSync(pidPath));
+      await waitFor(() => existsSync(pidPath) && existsSync(cwdPath) && existsSync(stagePath));
+      expect((await readFile(stagePath, 'utf8')).trim()).toBe(scenario);
       const childPid = Number((await readFile(pidPath, 'utf8')).trim());
+      const privateCwd = (await readFile(cwdPath, 'utf8')).trim();
       expect(isAlive(childPid)).toBe(true);
       controller.abort();
       const error = await pending.catch((value: unknown) => value);
       expect(error).toBeInstanceOf(CliTransportError);
       expect((error as CliTransportError).kind).toBe('cancelled');
       await waitFor(() => !isAlive(childPid));
+      // Cleanup happens before the promise settles, so the private temp dir must be gone.
+      expect(existsSync(privateCwd)).toBe(false);
     },
   );
 

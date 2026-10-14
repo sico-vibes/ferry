@@ -6,6 +6,27 @@ import { createInterface } from 'node:readline';
 const scenario = process.env.FERRY_CODEX_SCENARIO ?? 'text';
 const recordPath = process.env.FERRY_CODEX_RECORD;
 const requestedModel = process.env.FERRY_CODEX_MODEL ?? 'gpt-6.1-sol';
+const stageFile = process.env.FERRY_CODEX_STAGE_FILE;
+function markStage(value) {
+  if (stageFile) writeFileSync(stageFile, value, 'utf8');
+}
+
+// Readiness IPC: record the private working directory so cancellation tests can verify temp cleanup.
+if (process.env.FERRY_CODEX_CWD_FILE) {
+  writeFileSync(process.env.FERRY_CODEX_CWD_FILE, process.cwd(), 'utf8');
+}
+// Hold scenarios keep a stubborn grandchild alive so tests can prove the whole tree is terminated.
+if (scenario.startsWith('hold')) {
+  const child = spawn(
+    process.execPath,
+    ['-e', 'process.on("SIGTERM",()=>{}); setInterval(() => {}, 1000)'],
+    { stdio: 'ignore', windowsHide: true },
+  );
+  if (process.env.FERRY_CODEX_CHILD_PID)
+    writeFileSync(process.env.FERRY_CODEX_CHILD_PID, String(child.pid));
+  setInterval(() => {}, 1000);
+  if (scenario === 'holdstartup') markStage('holdstartup');
+}
 
 const record = { argv: process.argv.slice(1), requests: [], responses: [] };
 function flush() {
@@ -228,14 +249,21 @@ async function runTurn(turn, threadId) {
     case 'exit':
       process.exit(3);
       break;
-    case 'hold': {
-      const child = spawn(
-        process.execPath,
-        ['-e', 'process.on("SIGTERM",()=>{}); setInterval(() => {}, 1000)'],
-        { stdio: 'ignore', windowsHide: true },
-      );
-      if (process.env.FERRY_CODEX_CHILD_PID)
-        writeFileSync(process.env.FERRY_CODEX_CHILD_PID, String(child.pid));
+    case 'hold':
+    case 'holdstream':
+    case 'holdtool': {
+      // Grandchild is already spawned at startup for hold* scenarios.
+      if (scenario === 'holdstream') {
+        notify('item/agentMessage/delta', { delta: 'partial', itemId: 'i1', threadId, turnId });
+      }
+      if (scenario === 'holdtool') {
+        serverRequest('execCommandApproval', {
+          callId: 'native_hold',
+          command: ['rm', '-rf', '/'],
+          cwd: 'C:/',
+        });
+      }
+      markStage(scenario);
       setInterval(() => {}, 1000);
       break;
     }
@@ -268,6 +296,8 @@ lines.on('line', (line) => {
   if (frame.method === 'initialize') {
     record.requests.push({ method: 'initialize', params: frame.params });
     flush();
+    // Cancel-during-startup: never answer initialize; the process stays alive for the abort test.
+    if (scenario === 'holdstartup') return;
     const userAgent =
       scenario === 'oldversion'
         ? 'Codex Desktop/0.161.0 (Windows 10.0.26300; x86_64) dumb (ferry_readonly_probe; 0.9.0)'

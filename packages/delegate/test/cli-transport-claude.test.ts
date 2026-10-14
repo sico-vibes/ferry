@@ -112,6 +112,8 @@ interface ClaudeRunOptions extends Partial<CliTransportInput> {
   scenario: string;
   record: string;
   childPidFile?: string;
+  cwdFile?: string;
+  stageFile?: string;
   authStatus?: string;
 }
 
@@ -131,6 +133,8 @@ function makeInput(options: ClaudeRunOptions): CliTransportInput {
       FERRY_CLAUDE_RECORD: options.record,
       FERRY_CLAUDE_MODEL: model.upstreamId,
       ...(options.childPidFile ? { FERRY_CLAUDE_CHILD_PID: options.childPidFile } : {}),
+      ...(options.cwdFile ? { FERRY_CLAUDE_CWD_FILE: options.cwdFile } : {}),
+      ...(options.stageFile ? { FERRY_CLAUDE_STAGE_FILE: options.stageFile } : {}),
       ...(options.authStatus ? { FERRY_CLAUDE_AUTH_STATUS: options.authStatus } : {}),
     },
     executable: process.execPath,
@@ -537,30 +541,37 @@ describe('runClaudeCodeCli', () => {
     expect(existsSync(notFastRecord)).toBe(false);
   });
 
-  it(
-    'cancels during a held turn and leaves no orphan child process',
+  it.each(['hold', 'holdstartup', 'holdstream', 'holdtool'])(
+    'cancels during %s and terminates the tree and temp dir',
     { timeout: 30_000 },
-    async () => {
+    async (scenario) => {
       const dir = await tempRoot();
-      const recordPath = join(dir, 'hold.json');
-      const pidPath = join(dir, 'child.pid');
+      const recordPath = join(dir, `${scenario}.json`);
+      const pidPath = join(dir, `${scenario}.pid`);
+      const cwdPath = join(dir, `${scenario}.cwd`);
+      const stagePath = join(dir, `${scenario}.stage`);
       const controller = new AbortController();
       const pending = runClaudeCodeCli(
         makeInput({
-          scenario: 'hold',
+          scenario,
           record: recordPath,
           signal: controller.signal,
           childPidFile: pidPath,
+          cwdFile: cwdPath,
+          stageFile: stagePath,
         }),
       );
-      await waitFor(() => existsSync(pidPath));
+      await waitFor(() => existsSync(pidPath) && existsSync(cwdPath) && existsSync(stagePath));
+      expect((await readFile(stagePath, 'utf8')).trim()).toBe(scenario);
       const childPid = Number((await readFile(pidPath, 'utf8')).trim());
+      const privateCwd = (await readFile(cwdPath, 'utf8')).trim();
       expect(isAlive(childPid)).toBe(true);
       controller.abort();
       const error = await pending.catch((value: unknown) => value);
       expect(error).toBeInstanceOf(CliTransportError);
       expect((error as CliTransportError).kind).toBe('cancelled');
       await waitFor(() => !isAlive(childPid));
+      expect(existsSync(privateCwd)).toBe(false);
     },
   );
 

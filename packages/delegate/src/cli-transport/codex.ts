@@ -196,13 +196,18 @@ function parseToolArguments(value: unknown): Record<string, unknown> {
   return {};
 }
 
-/** Conversation as Responses API items, used to give a fresh ephemeral thread real history. */
+/**
+ * Conversation as Responses API items, used to give a fresh ephemeral thread real history. Caller
+ * `system`/`developer` messages are supplied at thread level (baseInstructions/developerInstructions),
+ * so they are excluded here to avoid duplicating them in the token-heavy item history.
+ */
 function conversationItems(
   messages: CliTransportInput['messages'],
   aliasByName: Map<string, string>,
 ): unknown[] {
   const items: unknown[] = [];
   for (const message of messages) {
+    if (message.role === 'system' || message.role === 'developer') continue;
     const text = message.content ?? '';
     if (message.role === 'assistant') {
       if (text)
@@ -238,8 +243,36 @@ function conversationItems(
   return items;
 }
 
+/**
+ * Truthful, compact caller-owned base instructions. Supplied as `baseInstructions` so the native
+ * coding/host base prompt (which advertises shell/filesystem/apply_patch and other host tools) is
+ * replaced rather than paid for on every request. Caller `system` messages are appended verbatim.
+ */
+const FERRY_CODEX_BASE_INSTRUCTIONS = [
+  'You are a text-only assistant running inside Ferry, which owns this thread and its tools.',
+  'You have NO host capabilities: no shell, filesystem read/write, apply_patch, code mode, images, web search, or network. Never attempt host actions and never claim any host action occurred.',
+  'The only tools available are the caller-provided functions listed for this thread. Call at most one when needed, then stop and wait: the caller executes it and returns the real result on the next turn. Never fabricate a tool result.',
+  'Follow the caller system/developer instructions and the conversation. Answer concisely.',
+].join('\n');
+
+function buildCodexBaseInstructions(messages: CliTransportInput['messages']): string {
+  const parts = [FERRY_CODEX_BASE_INSTRUCTIONS];
+  for (const message of messages)
+    if (message.role === 'system') parts.push(`[caller system]\n${message.content ?? ''}`);
+  return parts.join('\n\n');
+}
+
+function buildCodexDeveloperInstructions(messages: CliTransportInput['messages']): string | null {
+  const parts: string[] = [];
+  for (const message of messages)
+    if (message.role === 'developer') parts.push(message.content ?? '');
+  const joined = parts.join('\n\n').trim();
+  return joined.length > 0 ? joined : null;
+}
+
 function serializeConversation(messages: CliTransportInput['messages']): string {
   return messages
+    .filter((message) => message.role !== 'system' && message.role !== 'developer')
     .map((message) => {
       const lines = [`[${message.role}] ${message.content ?? ''}`];
       for (const call of message.tool_calls ?? [])
@@ -671,6 +704,7 @@ export async function runCodexCli(input: CliTransportInput): Promise<CliTurnResu
         }
       }
 
+      const developerInstructions = buildCodexDeveloperInstructions(input.messages);
       const thread = await request('thread/start', {
         model: input.model.upstreamId,
         cwd,
@@ -679,6 +713,10 @@ export async function runCodexCli(input: CliTransportInput): Promise<CliTurnResu
         sandbox: 'read-only',
         approvalPolicy: 'never',
         allowProviderModelFallback: false,
+        // Replace the native coding/host base prompt with truthful caller-owned instructions, and
+        // carry caller system/developer semantics at thread level.
+        baseInstructions: buildCodexBaseInstructions(input.messages),
+        ...(developerInstructions ? { developerInstructions } : {}),
         ...(specs.length ? { dynamicTools: specs } : {}),
         config: {
           features: {
@@ -688,7 +726,13 @@ export async function runCodexCli(input: CliTransportInput): Promise<CliTurnResu
             code_mode_host: false,
           },
           mcp_servers: {},
+          // Do not import unrelated native instruction sources (project AGENTS.md, apps,
+          // collaboration modes, permissions/environment sections).
           project_doc_max_bytes: 0,
+          include_permissions_instructions: false,
+          include_apps_instructions: false,
+          include_collaboration_mode_instructions: false,
+          include_environment_context: false,
         },
       });
       const threadRecord = isRecord(thread) ? thread : {};
