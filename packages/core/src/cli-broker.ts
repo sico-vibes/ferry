@@ -111,10 +111,11 @@ const providerNames: Record<CliConnectionKind, string> = {
 
 const KNOWN_EFFORTS: readonly Effort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 /**
- * Conservative capacity placeholders used only when the CLI never reported a real context/output
- * limit. They are inert whenever `capacityKnown` is false; no native model capacity is invented.
+ * Output placeholder used only when the CLI never reported a real output limit. It is inert whenever
+ * `capacityKnown` is false; no native model capacity is invented. Unknown *context* uses the explicit
+ * transport policy bound (below) rather than a fabricated small window, so the preflight/context
+ * budget admits realistic Ferry prompts instead of rejecting them against a fake 8K native limit.
  */
-const UNKNOWN_CONTEXT_WINDOW = 8_192;
 const UNKNOWN_MAX_OUTPUT = 2_048;
 
 /**
@@ -420,7 +421,10 @@ export function cliModelInfo(connection: CliConnection, model: CliModelCapabilit
     providerId: ProviderIdSchema.parse(connection.providerId),
     name: model.name,
     tier: 'T1',
-    contextWindow: model.contextWindow ?? UNKNOWN_CONTEXT_WINDOW,
+    // A real discovered context window is used verbatim; when the CLI never reported one, the value
+    // is the explicit transport policy bound (not native capacity evidence), and `capacityKnown`
+    // stays false so the UI shows "Not reported" rather than claiming a native window.
+    contextWindow: model.contextWindow ?? MANUAL_UNKNOWN_CAPACITY_INPUT_BOUND,
     maxOutput: model.maxOutput ?? UNKNOWN_MAX_OUTPUT,
     capacityKnown,
     toolCalling: model.toolCalling,
@@ -806,10 +810,16 @@ export class CliBroker {
           connection.install.version,
           model.ref,
           model.efforts,
+          model.defaultEffort,
           model.speeds,
           model.contextWindow,
           model.maxOutput,
           model.billing,
+          model.toolCalling,
+          model.modalities,
+          // Effective unavailable-control reasons, so a change in what the bridge can actually run
+          // invalidates the receipt even when the raw advertised token list is unchanged.
+          unsupportedEffortsFor(model),
           this.#credentialMode(connection.kind),
           this.#credentialProvider(connection.kind),
         ]),
@@ -846,9 +856,10 @@ export class CliBroker {
    */
   #revalidate(connection: CliConnection): CliConnection {
     if (connection.verify.state !== 'verified') return connection;
-    if (connection.verify.modelReceipts) {
+    const receipts = connection.verify.modelReceipts;
+    if (receipts) {
       const kept: Record<ModelRef, CliModelReceipt> = {};
-      for (const [ref, receipt] of Object.entries(connection.verify.modelReceipts)) {
+      for (const [ref, receipt] of Object.entries(receipts)) {
         const model = connection.models.find((candidate) => candidate.ref === ref);
         if (
           model &&
@@ -857,21 +868,36 @@ export class CliBroker {
         )
           kept[ref as ModelRef] = receipt;
       }
-      if (Object.keys(kept).length > 0) {
-        return { ...connection, verify: { ...connection.verify, modelReceipts: kept } };
-      }
-    } else if (
+      // Unchanged: return without persisting or emitting, so reads of a stable cache stay side-effect
+      // free (no duplicate updates/events, no subscriber churn).
+      if (Object.keys(kept).length === Object.keys(receipts).length) return connection;
+      const verify: CliConnection['verify'] =
+        Object.keys(kept).length > 0
+          ? { ...connection.verify, modelReceipts: kept }
+          : {
+              state: 'stale',
+              modelRef: connection.verify.modelRef,
+              checkedAt: connection.verify.checkedAt,
+              message:
+                'The CLI account, version, capabilities or credential changed since this was verified.',
+              receiptKey: null,
+            };
+      // Persist and publish the surviving receipts so no caller (RPC list, UI, CLI) can read the
+      // dropped proof: the filtered map must leave the in-memory/persisted cache, not just a clone.
+      this.#connectionService.applyVerification(connection.kind, verify);
+      return { ...connection, verify };
+    }
+    if (
       connection.verify.receiptKey != null &&
       connection.verify.receiptKey === this.#legacyReceiptKey(connection)
-    ) {
+    )
       return connection;
-    }
     const verify: CliConnection['verify'] = {
       state: 'stale',
       modelRef: connection.verify.modelRef,
       checkedAt: connection.verify.checkedAt,
       message:
-        connection.verify.receiptKey == null && connection.verify.modelReceipts == null
+        connection.verify.receiptKey == null
           ? 'This verification has no bound evidence; verify again.'
           : 'The CLI account, version, capabilities or credential changed since this was verified.',
       receiptKey: null,

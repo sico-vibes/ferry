@@ -189,8 +189,8 @@ export type CliModelCapabilities = z.infer<typeof CliModelCapabilitiesSchema>;
  * capability gate, never defaulted to `fast`.
  */
 export interface CliOptionLayer {
-  effort?: CliEffort | null;
-  speed?: CliSpeed;
+  effort?: CliEffort | null | undefined;
+  speed?: CliSpeed | undefined;
 }
 
 export interface CliOptionResolverInput {
@@ -226,7 +226,8 @@ function isUsableReportedEffort(
  * `effort: null` selects the reported CLI default; when no layer reports an effort, the model's
  * reported default is used, or `null` when that default is disabled/unsupported — an implicit
  * default is never silently substituted. `fast` is never defaulted on: an absent speed resolves to
- * `standard`, and an unsupported explicit `fast` resolves to `standard`.
+ * `standard`, while an explicit speed is returned verbatim (an unsupported explicit `fast` is
+ * rejected by the caller, never silently normalized).
  */
 export function resolveCliOption(input: CliOptionResolverInput): CliOption {
   const reported: CliEffort | null = isUsableReportedEffort(input.model, input.model.defaultEffort)
@@ -252,7 +253,10 @@ export function resolveCliOption(input: CliOptionResolverInput): CliOption {
     if (!layer || !Object.hasOwn(layer, 'speed')) continue;
     const value = layer.speed;
     if (value === undefined) continue;
-    speed = value === 'fast' && !input.model.speeds.includes('fast') ? 'standard' : value;
+    // An explicit speed is returned verbatim. An unsupported explicit `fast` is NOT silently
+    // normalized to `standard`; the caller rejects it before generation (only advertised choices
+    // are supported). An absent speed still defaults to `standard`.
+    speed = value;
     break;
   }
   return { effort, speed };
@@ -319,7 +323,10 @@ export const CliConnectionSettingsSchema = z.object({
   /** Explicit provider entry offered to OpenCode (e.g. `opencode-go`); never a copied secret. */
   credentialProvider: z.string().min(1).max(64).nullable().default(null),
   defaultOptions: CliOptionSchema.default({ effort: null, speed: 'standard' }),
-  modelDefaults: z.record(ModelRefSchema, CliOptionSchema.partial()).default({}),
+  // Defaults-free per-model overrides: an omitted/undefined field stays absent so the shared resolver
+  // inherits it from the next layer, while an explicit `effort: null` still stops at the CLI default.
+  // `CliOptionSchema.partial()` would re-materialize `effort: null` / `speed: 'standard'` defaults.
+  modelDefaults: z.record(ModelRefSchema, CliOptionPatchSchema).default({}),
 });
 export type CliConnectionSettings = z.infer<typeof CliConnectionSettingsSchema>;
 

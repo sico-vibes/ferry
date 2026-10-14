@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { resolveCliOption, type CliModelCapabilities } from '../src/index.js';
+import {
+  CliConnectionSettingsSchema,
+  resolveCliOption,
+  type CliModelCapabilities,
+} from '../src/index.js';
 
 function model(overrides: Partial<CliModelCapabilities> = {}): CliModelCapabilities {
   return {
@@ -80,19 +84,21 @@ describe('resolveCliOption', () => {
     ).toEqual({ effort: 'low', speed: 'fast' });
   });
 
-  it('never defaults fast on and sanitizes an unsupported fast to standard', () => {
+  it('never defaults fast on and returns an explicit speed verbatim (no silent normalization)', () => {
     expect(
       resolveCliOption({ model: model(), connection: { effort: null, speed: 'standard' } }).speed,
     ).toBe('standard');
     expect(resolveCliOption({ model: model(), conversation: { speed: 'fast' } }).speed).toBe(
       'fast',
     );
+    // An explicit fast the model does not advertise is returned verbatim so the caller rejects it
+    // before generation instead of silently substituting standard.
     expect(
       resolveCliOption({
         model: model({ speeds: ['standard'] }),
         conversation: { speed: 'fast' },
       }).speed,
-    ).toBe('standard');
+    ).toBe('fast');
   });
 
   it('does not silently substitute a disabled/unsupported implicit default effort', () => {
@@ -122,5 +128,54 @@ describe('resolveCliOption', () => {
         conversation: { effort: 'xhigh' },
       }).effort,
     ).toBe('xhigh');
+  });
+});
+
+describe('CliConnectionSettingsSchema.modelDefaults', () => {
+  it('keeps omitted/undefined per-model fields absent so they inherit, and preserves explicit null', () => {
+    const parsed = CliConnectionSettingsSchema.parse({
+      defaultOptions: { effort: 'high' },
+      modelDefaults: { 'codex-cli/m': { effort: undefined, speed: 'fast' } },
+    });
+    // defaultOptions materializes only its own defaults (effort 'high' kept; speed defaults).
+    expect(parsed.defaultOptions).toEqual({ effort: 'high', speed: 'standard' });
+    // The per-model override must NOT materialize effort:null — it stays undefined (inherits).
+    const [perModel] = Object.values(parsed.modelDefaults);
+    expect(perModel).toEqual({ speed: 'fast' });
+    expect(perModel?.effort).toBeUndefined();
+  });
+
+  it('preserves an explicit effort:null per-model record as an intentional default', () => {
+    const parsed = CliConnectionSettingsSchema.parse({
+      modelDefaults: { 'codex-cli/m': { effort: null } },
+    });
+    const [perModel] = Object.values(parsed.modelDefaults);
+    expect(perModel).toEqual({ effort: null });
+  });
+
+  it('composes with the shared resolver: absent inherits the connection High; explicit null stops at the CLI default', () => {
+    const m = model({ defaultEffort: 'medium' });
+    const absent = CliConnectionSettingsSchema.parse({
+      defaultOptions: { effort: 'high' },
+      modelDefaults: { 'codex-cli/m': { speed: 'fast' } },
+    });
+    expect(
+      resolveCliOption({
+        model: m,
+        connection: absent.defaultOptions,
+        connectionModel: Object.values(absent.modelDefaults)[0],
+      }),
+    ).toEqual({ effort: 'high', speed: 'fast' });
+    const explicitNull = CliConnectionSettingsSchema.parse({
+      defaultOptions: { effort: 'high' },
+      modelDefaults: { 'codex-cli/m': { effort: null } },
+    });
+    expect(
+      resolveCliOption({
+        model: m,
+        connection: explicitNull.defaultOptions,
+        connectionModel: Object.values(explicitNull.modelDefaults)[0],
+      }),
+    ).toEqual({ effort: 'medium', speed: 'standard' });
   });
 });

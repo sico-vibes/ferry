@@ -61,7 +61,7 @@ import {
 import { getGatewayController } from './gateway.js';
 import { observationsFromRateLimitHeaders } from '@ferry/quota';
 import { getProviderHealth } from './provider-health.js';
-import { getCliBroker } from './cli-broker.js';
+import { cliProviderInfo, getCliBroker } from './cli-broker.js';
 
 const providerKeyPresence = new WeakMap<FerryServices, Map<string, boolean>>();
 
@@ -261,6 +261,18 @@ export function createSessionDependencies(
         stepsLeftToday: null,
       });
     }),
+    // Opted-in/verified installed-CLI connections are first-class providers in the routing capacity
+    // view, so a direct CLI selection resolves its `subscription_cli` lane instead of falling back to
+    // the unknown-price metered path. Un-opted-in CLI kinds stay invisible here.
+    ...getCliBroker(services, () => undefined)
+      .connections()
+      .filter(
+        (connection) =>
+          connection.surfaces.native ||
+          connection.surfaces.gateway ||
+          connection.verify.state === 'verified',
+      )
+      .map((connection) => cliProviderInfo(connection)),
   ];
   const capacity = (): CapacityView => ({
     providers: providers(),
@@ -1136,11 +1148,29 @@ function estimateCliInputTokens(
  * through the broker. Text streams to the caller's `onDelta`; tool calls are returned to the agent
  * loop for real execution and approval (the adapter never executes or approves a native tool).
  */
+/**
+ * An installed-CLI route is text-only. If any durable tool result carries image content (e.g. a
+ * screenshot), the encoder would drop it and the model would answer as if it had seen the image.
+ * Reject explicitly before dispatch instead of silently discarding the attachment.
+ */
+export function unsupportedCliImageMessage(messages: readonly Message[]): string | null {
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === 'tool_call' && part.output?.images && part.output.images.length > 0)
+        return `A tool result for "${part.tool}" contains image content the installed-CLI route cannot send. No image was forwarded; retry without the screenshot or pick a vision-capable API model.`;
+    }
+  }
+  return null;
+}
+
 async function runNativeCliStep(
   services: FerryServices,
   req: StepGeneratorInput,
   profile: Profile | undefined,
 ): Promise<GeneratedStep> {
+  const imagesUnsupported = unsupportedCliImageMessage(req.messages);
+  if (imagesUnsupported)
+    throw Object.assign(new Error(imagesUnsupported), { code: 'unsupported_capability' });
   const modelRef = req.model.ref;
   const session = services.sessions.get(req.messages.at(-1)?.sessionId ?? '');
   const conversationOverride = session?.cliOptions?.[modelRef];

@@ -6,6 +6,7 @@ import {
   SessionIdSchema,
   SessionSchema,
   newId,
+  isCliModelVerified,
   isOpenCodeAppModel,
 } from '@ferry/shared';
 import { oauthModelCatalog } from '@ferry/oauth';
@@ -263,12 +264,27 @@ export function register(host: CoreHost, services: FerryServices): void {
             services.catalog.models.find((model) => model.ref === modelRef);
           if (known && isOpenCodeAppModel(zenModel(services, known)))
             throw new Error('Available in the OpenCode app. Use ferry run opencode --native.');
+          // An installed-CLI model is a real selectable target once it is discovered, even though it
+          // is not in the API catalog. Selection additionally requires the native surface opted in and
+          // a real per-model verification receipt; dispatch re-checks both.
+          const cli = getCliBroker(services, emit).model(modelRef);
+          if (cli) {
+            if (!cli.connection.surfaces.native)
+              throw new Error(
+                `${cli.connection.kind} native surface is not enabled. Enable Native in Providers & keys before selecting ${modelRef}.`,
+              );
+            if (!isCliModelVerified(cli.connection, cli.model.ref))
+              throw new Error(
+                `${cli.model.name} is not verified on ${cli.connection.kind}. Run Verify for this model before selecting it.`,
+              );
+          }
           const available =
             services.catalog.models.some((model) => model.ref === modelRef) ||
             services.catalog.providers.some(({ provider }) =>
               services.models.list(provider).some((model) => model.ref === modelRef),
             ) ||
-            oauthModelCatalog.some((model) => model.ref === modelRef);
+            oauthModelCatalog.some((model) => model.ref === modelRef) ||
+            cli !== undefined;
           if (!available) throw new Error(`Unknown model: ${modelRef}`);
         }
       }

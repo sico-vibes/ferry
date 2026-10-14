@@ -16,11 +16,19 @@ export function register(host: CoreHost, services: FerryServices): void {
   const broker = getCliBroker(services, emit);
   host.registerDomain('cliConnections', {
     list: () => {
-      // The broker revalidates receipts against changes discovery cannot see, then returns the cache.
-      broker.connections();
-      return service.list();
+      // Keep background discovery scheduling (via the service) but return the broker-revalidated
+      // cache, so a receipt bound to changed/removed model capabilities is never reported verified.
+      service.list();
+      return broker.connections();
     },
-    refresh: (id?: unknown) => service.refresh(CliConnectionKindSchema.optional().parse(id)),
+    async refresh(id?: unknown) {
+      const kind = CliConnectionKindSchema.optional().parse(id);
+      // Probe only the requested kind (or all when omitted), but always return the FULL revalidated
+      // snapshot. Callers cache the whole list (e.g. `setQueryData(await refresh(kind))`), so filtering
+      // to one connection would drop the other kinds and their opt-ins/receipts.
+      await service.refresh(kind);
+      return broker.connections();
+    },
     verify: (id: unknown, modelRef?: unknown) =>
       broker.verify(
         CliConnectionKindSchema.parse(id),

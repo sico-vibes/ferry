@@ -9,8 +9,10 @@ import {
   type CliEffort,
   type CliOptionPatch,
   type CliSpeed,
+  type Settings,
 } from '@ferry/shared';
 import { discoverCliConnection, discoverCliUsage, type CliUsageRefresh } from '@ferry/delegate';
+import { DEFAULT_SETTINGS } from '@ferry/config';
 import type { FerryServices } from './services.js';
 import { rpcDomainError } from './host.js';
 
@@ -126,15 +128,6 @@ class Semaphore {
   }
 }
 
-/** Stable fingerprint of effective model capabilities, used to detect access changes. */
-function capabilitySignature(connection: CliConnection): string {
-  return JSON.stringify(
-    connection.models
-      .map((model) => [model.ref, model.efforts, model.speeds])
-      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
-  );
-}
-
 /**
  * Core-owned cached installed-CLI connection state. Snapshots are served immediately from an
  * in-memory cache persisted through the existing settings JSON, while bounded fresh discovery runs
@@ -190,10 +183,22 @@ export class CliConnectionService {
     );
   }
 
+  /**
+   * Read the global settings block. A missing store uses the public `DEFAULT_SETTINGS` fallback
+   * (non-destructive: nothing is written here) so a fresh data dir needs no bootstrap/ordering
+   * prerequisite. A present-but-invalid record is reported as corrupt rather than silently replaced.
+   */
+  #readGlobalSettings(): { settings: Settings; missing: boolean } | null {
+    const raw = this.services.settings.get('global');
+    if (raw === undefined || raw === null)
+      return { settings: SettingsSchema.parse(DEFAULT_SETTINGS), missing: true };
+    const parsed = SettingsSchema.safeParse(raw);
+    return parsed.success ? { settings: parsed.data, missing: false } : null;
+  }
+
   #settingsRecord(): Record<string, CliConnectionSettings> {
-    const global = this.services.settings.get('global');
-    const settings = SettingsSchema.safeParse(global);
-    return settings.success ? settings.data.cliConnections : {};
+    const read = this.#readGlobalSettings();
+    return read ? read.settings.cliConnections : {};
   }
 
   #surfacesFor(kind: CliConnectionKind): { native: boolean; gateway: boolean } {
@@ -252,10 +257,14 @@ export class CliConnectionService {
 
   /** Persist surface opt-ins and per-model option defaults; discovery state is untouched. */
   update(id: CliConnectionKind, patch: CliConnectionSettingsPatch): CliConnection {
-    const global = this.services.settings.get('global');
-    const parsed = SettingsSchema.safeParse(global);
-    if (!parsed.success) throw rpcDomainError(-32010, 'validation', 'Settings are not initialised');
-    const current = parsed.data.cliConnections[id];
+    const read = this.#readGlobalSettings();
+    if (!read)
+      throw rpcDomainError(
+        -32010,
+        'validation',
+        'The stored settings are corrupted. Repair or reset Settings before changing CLI connections.',
+      );
+    const current = read.settings.cliConnections[id];
     const defaultOptions = patch.defaultOptions;
     const effort: CliEffort | null =
       defaultOptions && 'effort' in defaultOptions
@@ -288,8 +297,8 @@ export class CliConnectionService {
       modelDefaults,
     };
     const settings = SettingsSchema.parse({
-      ...parsed.data,
-      cliConnections: { ...parsed.data.cliConnections, [id]: merged },
+      ...read.settings,
+      cliConnections: { ...read.settings.cliConnections, [id]: merged },
     });
     this.services.settings.put('global', settings);
     // A credential selection change invalidates any existing verification immediately, so the
@@ -503,19 +512,10 @@ export class CliConnectionService {
       previous.install.installed !== discovered.install.installed ||
       previous.install.executable !== discovered.install.executable ||
       previous.install.version !== discovered.install.version;
-    const capabilitiesChanged = capabilitySignature(previous) !== capabilitySignature(discovered);
-    // A summary ref or any accumulated per-model receipt whose model vanished invalidates the receipt.
-    const verifiedRefs =
-      previous.verify.modelReceipts !== undefined
-        ? Object.keys(previous.verify.modelReceipts)
-        : previous.verify.modelRef !== null
-          ? [previous.verify.modelRef]
-          : [];
-    const verifiedModelLost = verifiedRefs.some(
-      (ref) => !discovered.models.some((model) => model.ref === ref),
-    );
-    const invalidated =
-      accountChanged || installChanged || capabilitiesChanged || verifiedModelLost;
+    // Only account/auth or install/version changes invalidate every receipt. Per-model capability
+    // changes (adding/changing an unrelated model) are handled per model by the broker's receipt
+    // revalidation, so a successful receipt for an unchanged model survives an unrelated scan.
+    const invalidated = accountChanged || installChanged;
     const usage =
       accountChanged || installChanged
         ? {
@@ -525,7 +525,25 @@ export class CliConnectionService {
           }
         : discovered.usage;
     if (!invalidated && previous.verify.state === 'verified') {
-      return { ...discovered, usage, verify: previous.verify };
+      const discoveredRefs = new Set<string>(discovered.models.map((model) => model.ref));
+      // Keep every accumulated receipt whose model is still discovered; only the receipts for models
+      // that vanished are dropped. An unrelated model change never invalidates the survivors.
+      if (previous.verify.modelReceipts) {
+        const kept = Object.fromEntries(
+          Object.entries(previous.verify.modelReceipts).filter(([ref]) => discoveredRefs.has(ref)),
+        );
+        if (Object.keys(kept).length > 0)
+          return {
+            ...discovered,
+            usage,
+            verify: { ...previous.verify, modelReceipts: kept },
+          };
+      } else if (
+        previous.verify.modelRef === null ||
+        discoveredRefs.has(previous.verify.modelRef)
+      ) {
+        return { ...discovered, usage, verify: previous.verify };
+      }
     }
     return { ...discovered, usage };
   }

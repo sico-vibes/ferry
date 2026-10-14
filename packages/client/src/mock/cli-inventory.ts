@@ -29,7 +29,9 @@ const NAMES: Record<CliConnectionKind, string> = {
   'opencode-cli': 'OpenCode CLI',
 };
 
-const UNKNOWN_CONTEXT_WINDOW = 8_192;
+// Unknown native context uses the explicit transport policy bound (not a fabricated native window);
+// `capacityKnown` stays false so the UI shows "Not reported".
+const UNKNOWN_CONTEXT_WINDOW = 64_000;
 const UNKNOWN_MAX_OUTPUT = 2_048;
 
 const BRIDGE_UNSUPPORTED_EFFORTS: Record<string, string> = {
