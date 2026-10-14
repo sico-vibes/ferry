@@ -102,3 +102,29 @@ it('displays a stale effort override without substituting another value', async 
   expect(screen.getByRole('alert').textContent).toContain('That effort is unavailable');
   expect(change).not.toHaveBeenCalled();
 });
+
+it('explains advertised efforts the bridge cannot run and does not submit them', async () => {
+  const model = await modelWithOptions(['high', 'ultra']);
+  if (!model.cliCapabilities) throw new Error('Missing CLI capabilities');
+  model.cliCapabilities.unsupportedEfforts = { ultra: 'This bridge cannot isolate that effort.' };
+  const change = vi.fn();
+  render(
+    <CliOptionsChip
+      model={model}
+      value={{ effort: 'high', speed: 'standard' }}
+      open
+      onOpenChange={vi.fn()}
+      onChange={change}
+      busy={false}
+      error=""
+    />,
+  );
+  expect(
+    screen.getByRole<HTMLOptionElement>('option', { name: 'Unavailable · Ultra' }).disabled,
+  ).toBe(true);
+  expect(screen.getByText('Ultra: This bridge cannot isolate that effort.')).toBeTruthy();
+  fireEvent.change(screen.getByRole('combobox', { name: 'CLI reasoning effort' }), {
+    target: { value: 'ultra' },
+  });
+  expect(change).not.toHaveBeenCalled();
+});

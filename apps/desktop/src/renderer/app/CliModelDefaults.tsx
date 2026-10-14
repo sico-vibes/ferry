@@ -50,24 +50,49 @@ export function CliModelDefaults({
             value={options.effort ?? ''}
             disabled={disabled}
             onChange={(event) => {
+              const effort = capabilities.efforts.find((item) => item === event.target.value);
+              if (event.target.value && (!effort || capabilities.unsupportedEfforts?.[effort]))
+                return;
               onChange({
                 ...defaults,
                 [model.ref]: {
                   ...options,
-                  effort: capabilities.efforts.find((item) => item === event.target.value) ?? null,
+                  effort: effort ?? null,
                 },
               });
             }}
           >
-            <option value="">
+            <option
+              value=""
+              disabled={Boolean(
+                capabilities.defaultEffort &&
+                capabilities.unsupportedEfforts?.[capabilities.defaultEffort],
+              )}
+            >
               Client default{capabilities.defaultEffort ? ` · ${capabilities.defaultEffort}` : ''}
             </option>
+            {options.effort && !capabilities.efforts.includes(options.effort) && (
+              <option value={options.effort} disabled>
+                Unavailable · {options.effort}
+              </option>
+            )}
             {capabilities.efforts.map((effort) => (
-              <option key={effort} value={effort}>
+              <option
+                key={effort}
+                value={effort}
+                disabled={Boolean(capabilities.unsupportedEfforts?.[effort])}
+                title={capabilities.unsupportedEfforts?.[effort]}
+              >
+                {capabilities.unsupportedEfforts?.[effort] ? 'Unavailable · ' : ''}
                 {effort}
               </option>
             ))}
           </select>
+          {Object.entries(capabilities.unsupportedEfforts ?? {}).map(([effort, reason]) => (
+            <small key={effort}>
+              {effort}: {reason}
+            </small>
+          ))}
         </label>
       )}
       {capabilities.speeds.includes('fast') && (

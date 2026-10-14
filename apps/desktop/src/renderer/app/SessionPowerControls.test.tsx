@@ -99,6 +99,7 @@ describe('ComposerModelChip', () => {
     const connection = (await client.cliConnections.list()).find((row) => row.id === 'codex-cli');
     const capabilities = connection?.models[0];
     if (!base || !provider || !connection || !capabilities) throw new Error('Missing CLI fixtures');
+    await client.cliConnections.update('codex-cli', { defaultOptions: { effort: 'high' } });
     const model = ModelInfoSchema.parse({
       ...base,
       ref: capabilities.ref,
@@ -156,15 +157,18 @@ describe('ComposerModelChip', () => {
       expect(select).toHaveBeenCalledWith(model.ref);
     });
     await screen.findByRole('combobox', { name: 'CLI reasoning effort' });
+    expect(
+      screen.getByRole<HTMLSelectElement>('combobox', { name: 'CLI reasoning effort' }).value,
+    ).toBe('high');
     expect(screen.queryByRole('dialog', { name: 'Choose model' })).toBeNull();
     const fast = screen.queryByRole('switch', { name: 'CLI fast mode' });
     if (capabilities.speeds.includes('fast'))
       expect(fast?.getAttribute('aria-checked')).toBe('false');
     else expect(fast).toBeNull();
     fireEvent.change(screen.getByRole('combobox', { name: 'CLI reasoning effort' }), {
-      target: { value: 'high' },
+      target: { value: 'medium' },
     });
-    expect(options).toHaveBeenCalledWith({ effort: 'high', speed: 'standard' });
+    expect(options).toHaveBeenCalledWith({ effort: 'medium', speed: 'standard' });
   });
 
   it('shows unverified Zen free models with an access explanation and permits API-verified ones', async () => {

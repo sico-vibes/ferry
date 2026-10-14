@@ -61,17 +61,19 @@ export function CliOptionsChip({
                 value={value.effort ?? ''}
                 disabled={busy}
                 onChange={(event) => {
-                  onChange({
-                    ...value,
-                    effort:
-                      event.target.value === ''
-                        ? null
-                        : (capabilities.efforts.find((effort) => effort === event.target.value) ??
-                          null),
-                  });
+                  const effort = capabilities.efforts.find((item) => item === event.target.value);
+                  if (event.target.value && (!effort || capabilities.unsupportedEfforts?.[effort]))
+                    return;
+                  onChange({ ...value, effort: effort ?? null });
                 }}
               >
-                <option value="">
+                <option
+                  value=""
+                  disabled={Boolean(
+                    capabilities.defaultEffort &&
+                    capabilities.unsupportedEfforts?.[capabilities.defaultEffort],
+                  )}
+                >
                   Client default
                   {capabilities.defaultEffort
                     ? ` · ${effortLabel(capabilities.defaultEffort)}`
@@ -83,7 +85,13 @@ export function CliOptionsChip({
                   </option>
                 )}
                 {capabilities.efforts.map((effort) => (
-                  <option value={effort} key={effort}>
+                  <option
+                    value={effort}
+                    key={effort}
+                    disabled={Boolean(capabilities.unsupportedEfforts?.[effort])}
+                    title={capabilities.unsupportedEfforts?.[effort]}
+                  >
+                    {capabilities.unsupportedEfforts?.[effort] ? 'Unavailable · ' : ''}
                     {effortLabel(effort)}
                   </option>
                 ))}
@@ -94,6 +102,11 @@ export function CliOptionsChip({
               This model does not expose a reasoning-effort control.
             </p>
           )}
+          {Object.entries(capabilities.unsupportedEfforts ?? {}).map(([effort, reason]) => (
+            <p className="cli-options-description" key={effort}>
+              {effortLabel(effort)}: {reason}
+            </p>
+          ))}
           {capabilities.speeds.includes('fast') ? (
             <label className="cli-options-fast">
               <span>Fast mode</span>

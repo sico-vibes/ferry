@@ -52,7 +52,8 @@ export function ModelTableName({
         </Popover.Root>
       </div>
       <small className="model-table-access text-ui-meta">
-        {model.cliAccessVerified && (model.cliConnectionId || model.transport === 'opencode_cli')
+        {(model.cliAccessVerified || (model.cliCapabilities && model.verified)) &&
+        (model.cliConnectionId || model.transport === 'opencode_cli')
           ? 'Generation verified through CLI'
           : model.apiAccessVerified
             ? 'Generation verified on this account'

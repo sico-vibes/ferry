@@ -600,7 +600,9 @@ export function ModelsCanvas() {
                           </span>
                         </td>
                         <td className="px-3 tabular-nums text-muted-foreground">
-                          {modelNumberFormat.format(model.contextWindow)}
+                          {model.capacityKnown === false
+                            ? 'Not reported'
+                            : modelNumberFormat.format(model.contextWindow)}
                         </td>
                         <td className="px-3">
                           {model.toolCalling ? (

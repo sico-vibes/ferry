@@ -715,7 +715,8 @@ export function ComposerModelChip({
   const { data: transportSettings } = useQuery({
     queryKey: ['settings'],
     queryFn: () => client.settings.get(),
-    enabled: open,
+    enabled:
+      open || optionsOpen || models.some((item) => item.ref === modelRef && item.cliCapabilities),
   });
   const cliNativeReady = (model: ModelInfo) => {
     if (!model.cliConnectionId) return true;
@@ -788,12 +789,24 @@ export function ComposerModelChip({
     enabled: !!sessionId && !!optionsModel?.cliCapabilities,
     staleTime: 10_000,
   });
+  const connectionDefaults = optionsModel?.cliConnectionId
+    ? transportSettings?.cliConnections[optionsModel.cliConnectionId]
+    : undefined;
+  const modelDefaults = optionsModel
+    ? connectionDefaults?.modelDefaults[optionsModel.ref]
+    : undefined;
+  const inheritedOptions: CliOption = {
+    effort:
+      modelDefaults?.effort !== undefined
+        ? modelDefaults.effort
+        : (connectionDefaults?.defaultOptions.effort ?? null),
+    speed: modelDefaults?.speed ?? connectionDefaults?.defaultOptions.speed ?? 'standard',
+  };
   const effectiveOptions = optionsModel
     ? (cliOptions ??
       sessionOptions.data?.session.cliOptions?.[optionsModel.ref] ??
-      profiles.find((profile) => profile.id === activeProfileId)?.cliDefaults?.[
-        optionsModel.ref
-      ] ?? { effort: null, speed: 'standard' as const })
+      profiles.find((profile) => profile.id === activeProfileId)?.cliDefaults?.[optionsModel.ref] ??
+      inheritedOptions)
     : { effort: null, speed: 'standard' as const };
   const changeCliOptions = async (options: CliOption) => {
     setOptionsBusy(true);
@@ -1212,7 +1225,9 @@ export function ComposerModelChip({
                                   ) : null}
                                 </strong>
                                 <span className="model-row-meta">
-                                  {formatTokens(model.contextWindow)}
+                                  {model.capacityKnown === false
+                                    ? 'Context not reported'
+                                    : formatTokens(model.contextWindow)}
                                   {model.free ? (
                                     <span className="model-free-pill">Free</span>
                                   ) : (

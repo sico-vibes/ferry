@@ -50,8 +50,8 @@ export function ModelDetailsCard({
     model.quality !== undefined &&
     (model.qualitySources?.length ?? 0) > 0;
   const facts: [string, string][] = [
-    ['Context', formatTokens(model.contextWindow)],
-    ['Max output', formatTokens(model.maxOutput)],
+    ['Context', model.capacityKnown === false ? 'Not reported' : formatTokens(model.contextWindow)],
+    ['Max output', model.capacityKnown === false ? 'Not reported' : formatTokens(model.maxOutput)],
     ...(params ? ([['Parameters', params]] as [string, string][]) : []),
     ...(released ? ([['Released', released]] as [string, string][]) : []),
     ...(knowledge ? ([['Knowledge', knowledge]] as [string, string][]) : []),
@@ -109,7 +109,9 @@ export function ModelDetailsCard({
         {qualityKnown && (
           <Meter label="Coding quality" tone="good" value={Math.round((model.quality ?? 0) * 10)} />
         )}
-        <Meter label="Context" tone="info" value={contextSegments(model.contextWindow)} />
+        {model.capacityKnown !== false && (
+          <Meter label="Context" tone="info" value={contextSegments(model.contextWindow)} />
+        )}
       </div>
       <dl className="v2-model-facts">
         {facts.map(([label, value]) => (
