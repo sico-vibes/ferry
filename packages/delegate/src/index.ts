@@ -2061,3 +2061,4 @@ async function canonicalizeWithExistingAncestor(path: string): Promise<string> {
     }
   }
 }
+export * from './cli-transport/index.js';
