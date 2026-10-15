@@ -125,6 +125,7 @@ const runtime: GatewayRuntime = {
       attempts: [servedAttempt],
       text: 'Hello',
       inputTokens: 4,
+      cachedTokens: 0,
       outputTokens: 2,
       finishReason: 'stop',
       toolCalls: input.tools?.length
@@ -1315,5 +1316,254 @@ describe('Ferry gateway', () => {
       requests: 2,
       successfulRequests: 0,
     });
+  }, 30_000);
+
+  it('preserves raw reasoning-effort tokens and maps service_tier across certified protocols', async () => {
+    const base = await server();
+    const headers = {
+      authorization: `Bearer ${created.secret}`,
+      'content-type': 'application/json',
+    };
+    const requests = [
+      [
+        '/v1/chat/completions',
+        {
+          model: 'ferry/auto-free',
+          messages: [{ role: 'user', content: 'x' }],
+          reasoning_effort: 'ultra',
+          service_tier: 'priority',
+        },
+      ],
+      ['/v1/responses', { model: 'ferry/auto-free', input: 'x', reasoning: { effort: 'ultra' } }],
+      [
+        '/v1/messages',
+        {
+          model: 'ferry/auto-free',
+          max_tokens: 8,
+          thinking: { type: 'enabled', budget_tokens: 2048 },
+          output_config: { effort: 'ultra' },
+          messages: [{ role: 'user', content: 'x' }],
+        },
+      ],
+    ] as const;
+    for (const [path, payload] of requests) {
+      const response = await fetch(`${base}${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+      expect(response.status, path).toBe(200);
+      await response.text();
+      expect(received.at(-1)?.effort, path).toBe('ultra');
+    }
+    expect(received[0]?.serviceTier).toBe('fast');
+    const standard = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        messages: [{ role: 'user', content: 'x' }],
+        service_tier: 'default',
+      }),
+    });
+    await standard.text();
+    expect(received.at(-1)?.serviceTier).toBe('standard');
+
+    const before = received.length;
+    for (const [path, payload] of [
+      [
+        '/v1/chat/completions',
+        {
+          model: 'ferry/auto-free',
+          messages: [{ role: 'user', content: 'x' }],
+          service_tier: 'flex',
+        },
+      ],
+      [
+        '/v1/chat/completions',
+        {
+          model: 'ferry/auto-free',
+          messages: [{ role: 'user', content: 'x' }],
+          reasoning_effort: 'High!',
+        },
+      ],
+      ['/v1/responses', { model: 'ferry/auto-free', input: 'x', service_tier: 'scale' }],
+      ['/v1/responses', { model: 'ferry/auto-free', input: 'x', reasoning: { effort: 'Bad!' } }],
+      [
+        '/v1/messages',
+        {
+          model: 'ferry/auto-free',
+          max_tokens: 8,
+          output_config: { effort: 'Bad!' },
+          messages: [{ role: 'user', content: 'x' }],
+        },
+      ],
+      [
+        '/v1/messages',
+        {
+          model: 'ferry/auto-free',
+          max_tokens: 8,
+          service_tier: 'flex',
+          messages: [{ role: 'user', content: 'x' }],
+        },
+      ],
+    ] as const) {
+      const response = await fetch(`${base}${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+      expect(response.status, JSON.stringify(payload)).toBe(400);
+    }
+    expect(received.length).toBe(before);
+  }, 30_000);
+
+  it('omits usage instead of fabricating zero when the producer reports none', async () => {
+    runtime.complete = () =>
+      Promise.resolve({
+        id: 'no-usage',
+        model: 'openai/gpt-test',
+        text: 'Hello',
+        finishReason: 'stop',
+      });
+    const base = await server();
+    const headers = {
+      authorization: `Bearer ${created.secret}`,
+      'content-type': 'application/json',
+    };
+    const chat = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+    });
+    expect(chat.headers.get('x-ferry-usage-reported')).toBe('false');
+    expect(await chat.json()).not.toHaveProperty('usage');
+
+    const responses = await fetch(`${base}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model: 'ferry/auto-free', input: 'Hi' }),
+    });
+    expect(responses.headers.get('x-ferry-usage-reported')).toBe('false');
+    expect(await responses.json()).not.toHaveProperty('usage');
+
+    const messages = await fetch(`${base}/v1/messages`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        max_tokens: 8,
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+    });
+    expect(await messages.json()).not.toHaveProperty('usage');
+
+    const gemini = await fetch(`${base}/v1beta/models/ferry%2Fauto-free:generateContent`, {
+      method: 'POST',
+      headers: { ...headers, 'x-api-key': created.secret },
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Hi' }] }] }),
+    });
+    expect(await gemini.json()).not.toHaveProperty('usageMetadata');
+
+    const stream = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        stream: true,
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+    });
+    expect(await stream.text()).not.toContain('"usage"');
+  }, 30_000);
+
+  it('keeps a reported zero and surfaces captured producer/connection/account evidence', async () => {
+    runtime.complete = () =>
+      Promise.resolve({
+        id: 'evidence',
+        model: 'openai/gpt-test',
+        text: 'Hi',
+        inputTokens: 0,
+        cachedTokens: 0,
+        outputTokens: 0,
+        finishReason: 'stop',
+        servedProviderId: 'openai',
+        servedConnectionId: 'openai',
+        servedAccountKey: 'openai:abcdef012345',
+      });
+    const base = await server();
+    const response = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+    });
+    expect(response.headers.get('x-ferry-usage-reported')).toBe('true');
+    expect(response.headers.get('x-ferry-served-provider')).toBe('openai');
+    expect(response.headers.get('x-ferry-served-connection')).toBe('openai');
+    expect(response.headers.get('x-ferry-served-account')).toBe('openai:abcdef012345');
+    expect(await response.json()).toMatchObject({
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    });
+  }, 30_000);
+
+  it('forwards reported reasoning tokens in Chat and omits an unreported reasoning detail', async () => {
+    runtime.complete = () =>
+      Promise.resolve({
+        id: 'reasoning',
+        model: 'openai/gpt-test',
+        text: 'Hi',
+        inputTokens: 3,
+        cachedTokens: 0,
+        outputTokens: 2,
+        reasoningTokens: 7,
+        finishReason: 'stop',
+      });
+    const base = await server();
+    const headers = {
+      authorization: `Bearer ${created.secret}`,
+      'content-type': 'application/json',
+    };
+    const reported = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+    });
+    expect(await reported.json()).toMatchObject({
+      usage: {
+        prompt_tokens: 3,
+        completion_tokens: 2,
+        completion_tokens_details: { reasoning_tokens: 7 },
+        total_tokens: 5,
+      },
+    });
+
+    runtime.complete = () =>
+      Promise.resolve({
+        id: 'reasoning',
+        model: 'openai/gpt-test',
+        text: 'Hi',
+        inputTokens: 3,
+        outputTokens: 2,
+        finishReason: 'stop',
+      });
+    const unreported = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: 'ferry/auto-free',
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+    });
+    const body = (await unreported.json()) as { usage: Record<string, unknown> };
+    expect(body.usage).not.toHaveProperty('completion_tokens_details');
   }, 30_000);
 });

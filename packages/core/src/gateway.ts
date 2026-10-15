@@ -20,12 +20,16 @@ import {
 } from '@ferry/router';
 import {
   DIRECT_PROFILE_ID,
+  EffortSchema,
   ProfileSchema,
   RoutingSettingsSchema,
   providerDefinition,
+  type CliOptionLayer,
   type GatewayRequestRecord,
   type GatewayRoutingExplanation,
+  type ModelInfo,
   type ModelRef,
+  type Profile,
 } from '@ferry/shared';
 import { gatewayHistory, gatewayRequest, gatewayUsageSummary } from './gateway-history.js';
 import {
@@ -42,8 +46,9 @@ import {
 import { randomBytes } from 'node:crypto';
 import type { CliCallerTool, CliConversationMessage } from '@ferry/delegate';
 import { CliTransportError, isCliTransportError } from '@ferry/delegate';
-import { getCliBroker } from './cli-broker.js';
-import type { CliConnection, CliModelCapabilities } from '@ferry/shared';
+import { getCliBroker, resolveCliOption } from './cli-broker.js';
+import { shortWaitMs } from './cli-capacity-guard.js';
+import type { CliConnection, CliModelCapabilities, CliOption } from '@ferry/shared';
 import type { FerryServices } from './services.js';
 import { recordRequestFailure, recordRequestSuccess, ledgerKind } from './request-failures.js';
 import {
@@ -287,22 +292,28 @@ export function toCliGatewayMessages(
 }
 
 /**
- * Route one explicit installed-CLI request through the shared Core broker on the Gateway surface.
- * Text and the CLI's real function tool calls stream to the caller; the caller executes the tools and
- * sends the original results on the next request. Never retried or spliced: a CLI turn is one call.
+ * Gateway-surface installed-CLI dispatch. Text and the CLI's real function tool calls stream to the
+ * caller; the caller executes the tools and sends the original results on the next request. The
+ * producer/account/connection are captured from the broker's dispatch *before* the await resolves, and
+ * usage dimensions stay nullable (never a fabricated `0`). A CLI turn is one call: never spliced.
  */
+interface CliRouteOptions {
+  /** Profile `cliDefaults[ref]`, applied below an explicit request override. */
+  profileCliDefault?: CliOption | undefined;
+  /** Attempt-state sink. When omitted, the transport's own `onAttempt` is used. */
+  onAttempt?: ((state: GatewayAttemptState) => void) | undefined;
+}
+
 async function routeCliCompletion(
   services: FerryServices,
   input: Parameters<GatewayRuntime['complete']>[0],
   cli: { connection: CliConnection; model: CliModelCapabilities },
-  _requestStarted: number,
+  options: CliRouteOptions = {},
 ): Promise<GatewayCompletion> {
   if (input.jsonMode || input.structuredOutput)
     throw unsupportedCli(
       'Installed-CLI routes support text and caller tools only. Structured output needs the standard API.',
     );
-  if (input.parallelToolCalls === true)
-    throw unsupportedCli('Installed-CLI routes do not support parallel_tool_calls.');
   if (
     input.toolChoice !== undefined &&
     input.toolChoice !== 'auto' &&
@@ -310,51 +321,101 @@ async function routeCliCompletion(
     input.toolChoice !== 'required'
   )
     throw unsupportedCli('Installed-CLI routes support tool_choice auto, none or required only.');
+  // The bridge cannot set sampling controls on the native CLI. An explicit value is rejected rather
+  // than silently dropped; `parallel_tool_calls: true` is accepted because caller tools run serially.
+  if (input.temperature !== undefined)
+    throw unsupportedCli('Installed-CLI routes do not accept a temperature control.');
+  // A separately-billed fast/priority tier cannot be dispatched safely in this beta: the installed-CLI
+  // bridge exposes no known-price or reservation seam to bound the charge, and the shared broker's
+  // spending authorization is closed by default. Reject explicitly before generation rather than
+  // guessing a zero cost or claiming an authorization this path cannot actually confer.
+  if (input.serviceTier === 'fast')
+    throw unsupportedCli(
+      'Fast/priority installed-CLI speed is not supported in this beta: Ferry cannot bound its separately-billed charge with a known price or spending reservation, so it will not be dispatched. Use the standard speed (the default).',
+    );
+  // Build the complete effective option through the single shared resolver so a `service_tier` that
+  // only changes speed never resets the profile's effort default, and an absent field inherits.
+  const conversation: CliOptionLayer = {
+    ...(input.effort !== undefined ? { effort: input.effort } : {}),
+    ...(input.serviceTier !== undefined ? { speed: 'standard' as const } : {}),
+  };
+  const globalSettings = services.settings.get('global') as
+    | {
+        cliConnections?: Record<
+          string,
+          { defaultOptions?: CliOption; modelDefaults?: Record<string, CliOptionLayer> }
+        >;
+      }
+    | undefined;
+  const connectionSettings = globalSettings?.cliConnections?.[cli.connection.kind];
+  const effectiveOption = resolveCliOption(cli.model, {
+    ...(options.profileCliDefault ? { profileDefault: options.profileCliDefault } : {}),
+    ...(connectionSettings?.modelDefaults?.[cli.model.ref]
+      ? { connectionModelDefault: connectionSettings.modelDefaults[cli.model.ref] }
+      : {}),
+    ...(connectionSettings?.defaultOptions
+      ? { connectionDefault: connectionSettings.defaultOptions }
+      : {}),
+    ...(Object.keys(conversation).length ? { conversation } : {}),
+  });
   const tools = input.toolChoice === 'none' ? [] : toCliCallerTools(input.tools);
   const messages = toCliGatewayMessages(input.messages);
   const broker = getCliBroker(services, () => undefined);
+  const reportAttempt =
+    options.onAttempt ??
+    ((state: GatewayAttemptState) => {
+      input.onAttempt?.(state);
+    });
   const startedAt = Date.now();
-  input.onAttempt?.({
+  reportAttempt({
     servedModel: cli.model.ref,
     attempts: [{ model: cli.model.ref, status: 'started' }],
   });
   try {
-    const { result } = await broker.dispatch({
+    const dispatch = await broker.dispatch({
       surface: 'gateway',
       modelRef: cli.model.ref,
       messages,
       tools,
       signal: input.signal,
-      ...(input.effort
-        ? { optionOverride: { effort: input.effort, speed: 'standard' as const } }
-        : {}),
+      optionOverride: effectiveOption,
       onText: (delta) => {
         void input.onText?.(delta);
       },
       inputTokens: Math.ceil(JSON.stringify(input.messages).length / 4),
     });
+    const { result, connection, model } = dispatch;
     for (const call of result.toolCalls)
       await input.onToolCall?.({
         id: call.id,
         name: call.name,
         arguments: JSON.stringify(call.arguments),
       });
-    input.onAttempt?.({
-      servedModel: cli.model.ref,
+    const usage = result.usage;
+    const usageReported =
+      usage.inputTokens !== null ||
+      usage.outputTokens !== null ||
+      usage.cachedTokens !== null ||
+      usage.reasoningTokens !== null;
+    reportAttempt({
+      servedModel: model.ref,
       attempts: [
         {
-          model: cli.model.ref,
+          model: model.ref,
           status: 'served',
           durationMs: Date.now() - startedAt,
-          inputTokens: result.usage.inputTokens ?? 0,
-          outputTokens: result.usage.outputTokens ?? 0,
-          cachedTokens: result.usage.cachedTokens ?? 0,
+          ...(usage.inputTokens === null ? {} : { inputTokens: usage.inputTokens }),
+          ...(usage.outputTokens === null ? {} : { outputTokens: usage.outputTokens }),
+          ...(usage.cachedTokens === null ? {} : { cachedTokens: usage.cachedTokens }),
+          providerId: connection.providerId,
+          connectionId: connection.kind,
+          accountKey: dispatch.accountKey,
         },
       ],
     });
     return {
       id: `gw-cli-${String(Date.now())}`,
-      model: cli.model.ref,
+      model: model.ref,
       responseModel: result.responseModel,
       text: result.text,
       ...(result.toolCalls.length
@@ -366,16 +427,31 @@ async function routeCliCompletion(
             })),
           }
         : {}),
-      inputTokens: result.usage.inputTokens ?? 0,
-      outputTokens: result.usage.outputTokens ?? 0,
-      ...(result.usage.cachedTokens === null ? {} : { cachedTokens: result.usage.cachedTokens }),
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      ...(usage.cachedTokens === null ? {} : { cachedTokens: usage.cachedTokens }),
+      ...(usage.reasoningTokens === null ? {} : { reasoningTokens: usage.reasoningTokens }),
+      usageReported,
+      // The serving Ferry provider identity is the CLI connection/kind, never the credential-source
+      // provider (`dispatch.provider`, e.g. `opencode-go`/`opencode`). Keeping `model.providerId`
+      // (opencode-cli) matches the native CLI producer contract, so the same CLI route aggregates one
+      // provider bucket regardless of invocation surface; `upstreamProvider` describes the upstream
+      // separately. The opaque credential fingerprint is still captured from dispatch.
+      servedProviderId: model.providerId,
+      servedConnectionId: connection.kind,
+      servedAccountKey: dispatch.accountKey,
       finishReason: result.toolCalls.length ? 'tool_calls' : 'stop',
     };
   } catch (error) {
     if (isCliTransportError(error))
       throw Object.assign(new Error(error.message), {
-        statusCode: error.statusCode,
+        statusCode: error.kind === 'unsupported_capability' ? 400 : error.statusCode,
         code: gatewayCliCode(error.kind),
+        cliKind: error.kind,
+        retryAfterMs: error.retryAfterMs,
+        bucketId: error.bucketId,
+        resetAt: error.resetAt,
+        accountKey: error.accountKey,
       });
     throw error;
   }
@@ -565,6 +641,7 @@ export function createGatewayController(
       requiresTools ? 'edit' : 'plan',
       inputTokens,
       requiresTools,
+      'gateway',
     );
     return allowedConcrete.length
       ? allowedConcrete.flatMap((ref) => {
@@ -875,7 +952,11 @@ export function createGatewayController(
           base.id,
           () => outputState.visible,
         );
-        const usageReported = result.inputTokens > 0 || result.outputTokens > 0;
+        const servedProviderId =
+          result.servedProviderId ??
+          (result.model.includes('/') ? result.model.slice(0, result.model.indexOf('/')) : null);
+        const usageReported =
+          result.usageReported ?? ((result.inputTokens ?? 0) > 0 || (result.outputTokens ?? 0) > 0);
         if (!usageReported) reserveUnreportedTokens();
         logRequest({
           ...base,
@@ -883,12 +964,13 @@ export function createGatewayController(
           modelRef: result.model,
           servedModel: result.model,
           attempts: result.attempts ?? attemptState.attempts,
-          providerId: result.model.includes('/')
-            ? result.model.slice(0, result.model.indexOf('/'))
-            : null,
+          providerId: servedProviderId,
+          servedProviderId: result.servedProviderId ?? servedProviderId,
+          servedConnectionId: result.servedConnectionId ?? null,
+          servedAccountKey: result.servedAccountKey ?? null,
           status: 'ok',
-          inputTokens: result.inputTokens,
-          outputTokens: result.outputTokens,
+          inputTokens: result.inputTokens ?? 0,
+          outputTokens: result.outputTokens ?? 0,
           latencyMs: latencyMs(),
           error: null,
           outcome: 'completed',
@@ -896,6 +978,12 @@ export function createGatewayController(
           queueWaitMs: input.queueWaitMs ?? 0,
           usageReported,
           cachedTokens: result.cachedTokens ?? 0,
+          reportedUsage: {
+            inputTokens: result.inputTokens ?? null,
+            outputTokens: result.outputTokens ?? null,
+            cachedTokens: result.cachedTokens ?? null,
+            reasoningTokens: result.reasoningTokens ?? null,
+          },
           ...cost(),
           constraints,
         });
@@ -944,15 +1032,35 @@ export function createGatewayController(
     hasVisibleOutput: () => boolean,
   ): ReturnType<GatewayRuntime['complete']> {
     const requestStarted = Date.now();
+    const profileValues = services.settings.get('profiles');
+    const allProfileRecords: Profile[] = [
+      ...BUILTIN_PROFILES,
+      ...(Array.isArray(profileValues) ? (profileValues as Profile[]) : []),
+    ];
+    const selectedProfile = input.model.startsWith('@profile:')
+      ? input.model.slice('@profile:'.length)
+      : input.key.profile;
+    const selectedProfileRecord = allProfileRecords.find(
+      (entry) => entry.id === profileId(selectedProfile),
+    );
     // An explicit installed-CLI model is a direct connection: same Core broker, same admission
     // policy and the original caller tool calls returned for execution on the caller side.
     if (!input.model.startsWith('@profile:')) {
       const cli = getCliBroker(services, () => undefined).model(input.model as ModelRef);
-      if (cli) return await routeCliCompletion(services, input, cli, requestStarted);
+      if (cli) {
+        const profileCliDefault = selectedProfileRecord?.cliDefaults?.[cli.model.ref];
+        return await routeCliCompletion(services, input, cli, {
+          ...(profileCliDefault ? { profileCliDefault } : {}),
+        });
+      }
     }
-    const selectedProfile = input.model.startsWith('@profile:')
-      ? input.model.slice('@profile:'.length)
-      : input.key.profile;
+    // Fast/priority is not offered in this beta: no standard-API or installed-CLI route can bound its
+    // separately-billed charge with a known price or spending reservation. Reject explicitly before
+    // routing rather than silently ignoring the control or inventing a zero charge.
+    if (input.serviceTier === 'fast')
+      throw unsupportedCli(
+        'Fast/priority service_tier is not supported in this beta: Ferry cannot bound its separately-billed charge with a known price or spending reservation, so it will not be dispatched. Use standard/auto or omit service_tier.',
+      );
     const visibleModels = new Set(allModels());
     const candidates = [...availableModels()].filter((model) => visibleModels.has(model.ref));
     const runtimeDeps = await import('./session-deps.js');
@@ -1010,6 +1118,8 @@ export function createGatewayController(
     if (input.requestedModel === 'ferry/auto-free') {
       const providers = requestDeps.providers();
       ordered = ordered.filter((model) => {
+        // Installed-CLI free capacity is classified by its own billing, not an API price lookup.
+        if (model.cliConnectionId) return model.free;
         const provider = providers.find((provider) => provider.id === model.providerId);
         return (
           !!provider &&
@@ -1021,8 +1131,28 @@ export function createGatewayController(
       ordered = ordered.filter(
         (model) => model.toolCalling && model.capability?.toolCall !== false,
       );
-    const effort = input.effort;
-    if (effort) ordered = ordered.filter((model) => model.reasoningEfforts?.includes(effort));
+    // A raw native effort token (e.g. `ultra`) is not a standard-API control. Validate it per route:
+    // standard-API routes only accept the narrow API enum, CLI routes accept any advertised token the
+    // bridge can actually run. Never reject the whole request before the CLI pool is considered.
+    const explicitEffort = input.effort;
+    const narrowEffort =
+      explicitEffort === undefined ? undefined : EffortSchema.safeParse(explicitEffort);
+    if (explicitEffort !== undefined && narrowEffort && !narrowEffort.success) {
+      ordered = ordered.filter((model) => Boolean(model.cliConnectionId));
+    } else if (narrowEffort?.success) {
+      const token = narrowEffort.data;
+      ordered = ordered.filter((model) =>
+        model.cliConnectionId
+          ? (model.cliCapabilities?.efforts ?? []).includes(token) &&
+            model.cliCapabilities?.unsupportedEfforts?.[token] === undefined
+          : model.reasoningEfforts?.includes(token),
+      );
+    } else {
+      // No explicit effort: a CLI route the bridge cannot run for its *default* effort is still
+      // eligible (the reported default is used), so no filter is applied here.
+    }
+    // The narrow API effort is the only value a standard-API adapter can honor.
+    const effort = narrowEffort?.success ? narrowEffort.data : undefined;
     const containsImage = input.messages.some(
       (message) =>
         Array.isArray(message.content) &&
@@ -1031,22 +1161,19 @@ export function createGatewayController(
         ),
     );
     if (containsImage) {
-      ordered = ordered.filter((candidate) => candidate.capability?.vision === true);
+      // The installed-CLI bridge is text-only; only vision-capable standard-API routes remain.
+      ordered = ordered.filter(
+        (candidate) => !candidate.cliConnectionId && candidate.capability?.vision === true,
+      );
       if (!ordered.length)
         throw Object.assign(new Error('No eligible upstream model supports image input'), {
           name: 'AI_InvalidPromptError',
         });
     }
     const sticky = stickyRoutes.get(input.sessionHint);
-    const profileValues = services.settings.get('profiles');
-    const selectedProfileRecord = [
-      ...BUILTIN_PROFILES,
-      ...(Array.isArray(profileValues) ? (profileValues as typeof BUILTIN_PROFILES) : []),
-    ].find((entry) => entry.id === profileId(selectedProfile));
-    const keyProfileRecord = [
-      ...BUILTIN_PROFILES,
-      ...(Array.isArray(profileValues) ? (profileValues as typeof BUILTIN_PROFILES) : []),
-    ].find((entry) => entry.id === profileId(input.key.profile));
+    const keyProfileRecord = allProfileRecords.find(
+      (entry) => entry.id === profileId(input.key.profile),
+    );
     const tightest = (a: number | null | undefined, b: number | null | undefined) =>
       a == null ? (b ?? null) : b == null ? a : Math.min(a, b);
     const affinityProviderId =
@@ -1070,36 +1197,189 @@ export function createGatewayController(
               ...ordered.filter((item) => !matchesAffinity(item) && item.ref !== sticky.modelRef),
             ];
     }
-    if (!ordered.length)
+    // Classify each already-ranked candidate exactly once. The shared resolver placed free API/CLI
+    // routes first and the Included CLI band after; re-band so the global Auto order is
+    // free API/CLI -> Included subscription -> separately authorized paid API backup. There is no
+    // second broker pool: every route comes from the same key-profile ∩ requested-profile candidate
+    // set that already applied all profile provider/model exclusions and the concrete allowlist.
+    const freeOrdered = ordered.filter((model) => model.free);
+    const includedOrdered = ordered.filter((model) => !model.free && model.cliConnectionId);
+    const paidApiOrdered = ordered.filter((model) => !model.free && !model.cliConnectionId);
+    // Profile/Auto routing gets the global banding; a logical alias keeps the shared ranking; an
+    // explicit concrete standard-API model never pulls CLI fallbacks it did not select.
+    const banded = isProfile
+      ? [...freeOrdered, ...includedOrdered, ...paidApiOrdered]
+      : explicit
+        ? ordered.filter((model) => !model.cliConnectionId)
+        : ordered;
+    if (!banded.length)
       throw Object.assign(
         new Error(
-          'No upstream model meets this key, profile and capability policy. Connect a provider or choose a supported request.',
+          explicitEffort !== undefined
+            ? `No eligible route supports the requested reasoning_effort "${explicitEffort}". Pick another effort or a model that advertises it.`
+            : 'No upstream model meets this key, profile and capability policy. Connect a provider or choose a supported request.',
         ),
         { code: 'unsupported_request', statusCode: 400 },
       );
+    interface GatewayRoute {
+      kind: 'api' | 'cli';
+      model: ModelInfo;
+    }
     let lastError: unknown;
     const now = services.clock.now().getTime();
-    const withKeyFallback = ordered.flatMap((model) => {
-      if (permitsKeylessProvider(services, model.providerId)) return [model];
-      const count = services.providerKeyEntries
-        .list(model.providerId)
-        .filter(
-          (key) =>
-            key.enabled &&
-            key.status !== 'invalid' &&
-            (key.status !== 'disabled' ||
-              Boolean(key.cooldownUntil && Date.parse(key.cooldownUntil) <= now)) &&
-            (key.status !== 'rate_limited' ||
-              !key.cooldownUntil ||
-              Date.parse(key.cooldownUntil) <= now),
-        ).length;
-      return Array.from({ length: Math.max(1, count) }, () => model);
-    });
+    // A CLI route dispatches through the shared broker (never an API adapter) and is a single
+    // attempt; an API route keeps the existing per-key fallback expansion.
+    const routes: GatewayRoute[] = [];
+    for (const model of banded) {
+      if (model.cliConnectionId) {
+        routes.push({ kind: 'cli', model });
+        continue;
+      }
+      const usableKeys = permitsKeylessProvider(services, model.providerId)
+        ? 1
+        : services.providerKeyEntries
+            .list(model.providerId)
+            .filter(
+              (key) =>
+                key.enabled &&
+                key.status !== 'invalid' &&
+                (key.status !== 'disabled' ||
+                  Boolean(key.cooldownUntil && Date.parse(key.cooldownUntil) <= now)) &&
+                (key.status !== 'rate_limited' ||
+                  !key.cooldownUntil ||
+                  Date.parse(key.cooldownUntil) <= now),
+            ).length;
+      for (let attempt = 0; attempt < Math.max(1, usableKeys); attempt += 1)
+        routes.push({ kind: 'api', model });
+    }
     const lastAttemptHistory: GatewayAttempt[] = [];
-    for (const model of withKeyFallback.slice(0, 5)) {
+    // Abortable short wait: a cancellation or an expired deadline wakes the sleep immediately instead
+    // of parking until the retry timer elapses.
+    const waitAbortable = (ms: number): Promise<void> =>
+      new Promise<void>((resolve, reject) => {
+        const abortError = (): Error =>
+          input.signal.reason instanceof Error
+            ? input.signal.reason
+            : new Error('Request cancelled.');
+        if (input.signal.aborted) {
+          reject(abortError());
+          return;
+        }
+        const onAbort = (): void => {
+          clearTimeout(timer);
+          reject(abortError());
+        };
+        const timer = setTimeout(() => {
+          input.signal.removeEventListener('abort', onAbort);
+          resolve();
+        }, ms);
+        input.signal.addEventListener('abort', onAbort, { once: true });
+      });
+    const attemptCliRoute = async (resolved: {
+      connection: CliConnection;
+      model: CliModelCapabilities;
+    }): Promise<GatewayCompletion> => {
+      const attemptStarted = Date.now();
+      lastAttemptHistory.push({ model: resolved.model.ref, status: 'started' });
+      input.onAttempt?.({ servedModel: resolved.model.ref, attempts: [...lastAttemptHistory] });
+      try {
+        const profileCliDefault = selectedProfileRecord?.cliDefaults?.[resolved.model.ref];
+        const completion = await routeCliCompletion(services, input, resolved, {
+          ...(profileCliDefault ? { profileCliDefault } : {}),
+          onAttempt: () => undefined,
+        });
+        lastAttemptHistory[lastAttemptHistory.length - 1] = {
+          model: resolved.model.ref,
+          status: 'served',
+          durationMs: Date.now() - attemptStarted,
+          ...(completion.inputTokens == null ? {} : { inputTokens: completion.inputTokens }),
+          ...(completion.outputTokens == null ? {} : { outputTokens: completion.outputTokens }),
+          ...(completion.cachedTokens == null ? {} : { cachedTokens: completion.cachedTokens }),
+          providerId: completion.servedProviderId ?? null,
+          connectionId: completion.servedConnectionId ?? null,
+          accountKey: completion.servedAccountKey ?? null,
+        };
+        input.onAttempt?.({ servedModel: completion.model, attempts: [...lastAttemptHistory] });
+        return completion;
+      } catch (error) {
+        const details =
+          error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+        lastAttemptHistory[lastAttemptHistory.length - 1] = {
+          model: resolved.model.ref,
+          status: 'failed',
+          reason: error instanceof Error ? error.message : 'Installed-CLI route failed.',
+          durationMs: Date.now() - attemptStarted,
+          providerId: resolved.connection.providerId,
+          connectionId: resolved.connection.kind,
+          ...(typeof details.accountKey === 'string' || details.accountKey === null
+            ? { accountKey: details.accountKey }
+            : {}),
+          ...(typeof details.bucketId === 'string' || details.bucketId === null
+            ? { bucketId: details.bucketId }
+            : {}),
+          ...(typeof details.resetAt === 'string' || details.resetAt === null
+            ? { resetAt: details.resetAt }
+            : {}),
+          ...(typeof details.retryAfterMs === 'number' || details.retryAfterMs === null
+            ? { retryAfterMs: details.retryAfterMs }
+            : {}),
+        };
+        input.onAttempt?.({ servedModel: resolved.model.ref, attempts: [...lastAttemptHistory] });
+        throw error;
+      }
+    };
+    for (const route of routes.slice(0, routes.some((item) => item.kind === 'cli') ? 8 : 5)) {
       input.signal.throwIfAborted();
       const remainingMs = 150_000 - (Date.now() - requestStarted);
       if (remainingMs <= 0) throw new GatewayTimeoutError('Gateway request deadline reached.');
+      if (route.kind === 'cli') {
+        const resolved = getCliBroker(services, () => undefined).model(route.model.ref);
+        if (!resolved) {
+          lastAttemptHistory.push({
+            model: route.model.ref,
+            status: 'skipped',
+            reason: 'Installed-CLI model is no longer available.',
+          });
+          input.onAttempt?.({ servedModel: route.model.ref, attempts: [...lastAttemptHistory] });
+          continue;
+        }
+        try {
+          const completion = await attemptCliRoute(resolved);
+          return { ...completion, attempts: [...lastAttemptHistory] };
+        } catch (error) {
+          if (input.signal.aborted || hasVisibleOutput()) throw error;
+          const details =
+            error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+          const retryWait =
+            details.cliKind === 'temporary_rate_limit'
+              ? shortWaitMs(
+                  {
+                    kind: 'temporary_rate_limit',
+                    retryAfterMs:
+                      typeof details.retryAfterMs === 'number' ? details.retryAfterMs : null,
+                  },
+                  150_000 - (Date.now() - requestStarted),
+                  30_000,
+                )
+              : null;
+          if (retryWait !== null) {
+            await waitAbortable(retryWait);
+            input.signal.throwIfAborted();
+            if (hasVisibleOutput()) throw error;
+            try {
+              const completion = await attemptCliRoute(resolved);
+              return { ...completion, attempts: [...lastAttemptHistory] };
+            } catch (retryError) {
+              if (hasVisibleOutput()) throw retryError;
+              lastError = retryError;
+              continue;
+            }
+          }
+          lastError = error;
+          continue;
+        }
+      }
+      const model = route.model;
       if (services.providers.get(model.providerId)?.enabled === false) {
         lastAttemptHistory.push({
           model: model.ref,
@@ -1264,7 +1544,7 @@ export function createGatewayController(
             const chatInput = {
               model: model.ref,
               modelInfo: model,
-              ...(input.effort ? { effort: input.effort } : {}),
+              ...(effort ? { effort } : {}),
               apiKey: key ?? '',
               sessionId: input.sessionHint,
               messages: routedMessages,

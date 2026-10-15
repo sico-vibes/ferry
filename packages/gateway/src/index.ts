@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { mapProviderError } from '@ferry/providers';
 import { classifyProviderError } from '@ferry/router';
-import { EffortSchema, type Effort } from '@ferry/shared';
+import { CliEffortSchema, type CliEffort } from '@ferry/shared';
 import { GatewayQueue } from './queue.js';
 export { GatewayQueue, GatewayQueueError } from './queue.js';
 import {
@@ -49,6 +49,7 @@ export interface GatewayStore {
     outputTokens: number,
     at: string,
     cachedTokens?: number,
+    reported?: boolean,
   ): void;
   tokenUsage(keyId: string, now: string): { minuteTokens: number; dayTokens: number };
   usage(keyId: string): {
@@ -77,8 +78,11 @@ export interface GatewayRequest {
   max_tokens?: number;
   max_completion_tokens?: number;
   temperature?: number;
-  reasoning_effort?: Effort;
-  reasoning?: { effort?: Effort };
+  /** Raw reasoning-effort token; native CLI tokens are preserved, not narrowed to the API enum. */
+  reasoning_effort?: string;
+  reasoning?: { effort?: string };
+  /** Requested service tier: standard/default/auto map to standard, fast/priority to fast. */
+  service_tier?: string;
 }
 export interface GatewayCompletion {
   id: string;
@@ -88,11 +92,22 @@ export interface GatewayCompletion {
   responseModel?: string | null;
   text: string;
   toolCalls?: { id: string; name: string; arguments: string }[];
-  inputTokens: number;
-  cachedTokens?: number;
-  outputTokens: number;
+  /** Nullable usage dimensions: `null`/absent means the producer did not report that dimension. */
+  inputTokens?: number | null;
+  cachedTokens?: number | null;
+  outputTokens?: number | null;
+  reasoningTokens?: number | null;
+  /**
+   * Explicit reporting signal. When false, no usage dimension is truthful and callers must not
+   * surface a fabricated `0`. Defaults to true when any numeric token dimension is present.
+   */
+  usageReported?: boolean;
   finishReason: string;
   reasoning?: string;
+  /** Actual upstream producer/account captured before any queue wait; never the current account. */
+  servedProviderId?: string | null;
+  servedConnectionId?: string | null;
+  servedAccountKey?: string | null;
 }
 export interface GatewayAttempt {
   model: string;
@@ -104,6 +119,13 @@ export interface GatewayAttempt {
   inputTokens?: number;
   outputTokens?: number;
   cachedTokens?: number;
+  /** Actual producer/connection/account evidence captured before the attempt resolved. */
+  providerId?: string | null;
+  connectionId?: string | null;
+  accountKey?: string | null;
+  bucketId?: string | null;
+  resetAt?: string | null;
+  retryAfterMs?: number | null;
 }
 export interface GatewayAttemptState {
   servedModel: string;
@@ -166,7 +188,10 @@ export interface GatewayRuntime {
     structuredOutput?: { name: string; schema: Record<string, unknown>; strict?: boolean };
     maxTokens?: number;
     temperature?: number;
-    effort?: Effort;
+    /** Raw reasoning-effort token; support is validated against the resolved model before dispatch. */
+    effort?: CliEffort;
+    /** Requested speed tier after `service_tier` mapping; absent means the standard default. */
+    serviceTier?: 'standard' | 'fast';
     sessionHint: string;
     signal: AbortSignal;
     traceId?: string;
@@ -309,6 +334,143 @@ function outputTokenLimit(value: unknown): number {
   return value;
 }
 
+/** Reported vs unreported token usage. `null` is a genuinely unreported dimension, never a fake 0. */
+export interface GatewayUsageReport {
+  reported: boolean;
+  inputTokens: number | null;
+  cachedTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+}
+
+/**
+ * Normalize one completion's usage. A producer that did not report usage yields `reported: false`
+ * with every dimension `null`, so the transport omits usage instead of fabricating `0`. A real
+ * reported `0` stays `0`.
+ */
+export function completionUsage(result: GatewayCompletion): GatewayUsageReport {
+  const dimension = (value: number | null | undefined): number | null =>
+    typeof value === 'number' ? value : null;
+  const reported =
+    result.usageReported ??
+    (dimension(result.inputTokens) !== null ||
+      dimension(result.outputTokens) !== null ||
+      dimension(result.cachedTokens) !== null ||
+      dimension(result.reasoningTokens) !== null);
+  return {
+    reported,
+    inputTokens: dimension(result.inputTokens),
+    cachedTokens: dimension(result.cachedTokens),
+    outputTokens: dimension(result.outputTokens),
+    reasoningTokens: dimension(result.reasoningTokens),
+  };
+}
+
+/**
+ * Preserve the caller's raw reasoning-effort token. Native CLI tokens (`ultra`, `none`, future
+ * names) are accepted verbatim; whether the resolved model supports the token is checked at dispatch.
+ * A malformed explicit value is a 400 rather than being silently ignored or sanitized.
+ */
+export function parseReasoningEffort(value: unknown): { effort?: CliEffort } {
+  if (value === undefined || value === null) return {};
+  const parsed = CliEffortSchema.safeParse(typeof value === 'string' ? value.trim() : value);
+  if (!parsed.success)
+    throw new GatewayRequestError(
+      'Unsupported reasoning_effort. Provide a lowercase effort token such as low, medium, high, xhigh, max, none or a token advertised by the target model.',
+    );
+  return { effort: parsed.data };
+}
+
+/**
+ * Map the OpenAI `service_tier` control onto a Ferry speed. Only the tiers this bridge can actually
+ * run are accepted: `auto`/`default`/`standard` select the standard default, `fast`/`priority`
+ * select the separately-billed fast/priority tier. Any other explicit value is a 400 before dispatch.
+ */
+export function parseServiceTier(value: unknown): { serviceTier?: 'standard' | 'fast' } {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'string') throw new GatewayRequestError('service_tier must be a string.');
+  const token = value.trim().toLowerCase();
+  if (token === 'auto' || token === 'default' || token === 'standard')
+    return { serviceTier: 'standard' };
+  if (token === 'fast' || token === 'priority') return { serviceTier: 'fast' };
+  throw new GatewayRequestError(
+    `Unsupported service_tier "${value}". Supported values: auto, default, standard, fast, priority.`,
+  );
+}
+
+/**
+ * OpenAI Chat usage fields. Omitted entirely when usage was unreported, so an unknown turn never
+ * surfaces a fabricated `0`. When reported, individual nullable dimensions stay `null`.
+ */
+export function openAiUsage(usage: GatewayUsageReport): { usage?: Record<string, unknown> } {
+  if (!usage.reported) return {};
+  return {
+    usage: {
+      prompt_tokens: usage.inputTokens,
+      prompt_tokens_details: { cached_tokens: usage.cachedTokens },
+      completion_tokens: usage.outputTokens,
+      // Forward reported reasoning tokens; omit the detail entirely when the producer did not report
+      // any, so an unreported dimension is never shown as a genuine `0`.
+      ...(usage.reasoningTokens === null
+        ? {}
+        : { completion_tokens_details: { reasoning_tokens: usage.reasoningTokens } }),
+      total_tokens:
+        usage.inputTokens !== null && usage.outputTokens !== null
+          ? usage.inputTokens + usage.outputTokens
+          : null,
+    },
+  };
+}
+
+/** Responses usage fields; omitted when unreported. */
+export function responsesUsage(usage: GatewayUsageReport): { usage?: Record<string, unknown> } {
+  if (!usage.reported) return {};
+  return {
+    usage: {
+      input_tokens: usage.inputTokens,
+      input_tokens_details: { cached_tokens: usage.cachedTokens },
+      output_tokens: usage.outputTokens,
+      ...(usage.reasoningTokens === null
+        ? {}
+        : { output_tokens_details: { reasoning_tokens: usage.reasoningTokens } }),
+      total_tokens:
+        usage.inputTokens !== null && usage.outputTokens !== null
+          ? usage.inputTokens + usage.outputTokens
+          : null,
+    },
+  };
+}
+
+/** Anthropic usage fields; omitted when unreported. */
+export function anthropicUsage(usage: GatewayUsageReport): { usage?: Record<string, unknown> } {
+  if (!usage.reported) return {};
+  return {
+    usage: {
+      input_tokens: usage.inputTokens,
+      cache_read_input_tokens: usage.cachedTokens,
+      output_tokens: usage.outputTokens,
+    },
+  };
+}
+
+/** Gemini usage metadata; omitted when unreported. */
+export function geminiUsage(usage: GatewayUsageReport): {
+  usageMetadata?: Record<string, unknown>;
+} {
+  if (!usage.reported) return {};
+  return {
+    usageMetadata: {
+      promptTokenCount: usage.inputTokens,
+      cachedContentTokenCount: usage.cachedTokens,
+      candidatesTokenCount: usage.outputTokens,
+      totalTokenCount:
+        usage.inputTokens !== null && usage.outputTokens !== null
+          ? usage.inputTokens + usage.outputTokens
+          : null,
+    },
+  };
+}
+
 export function createGatewayKey(
   input: Pick<GatewayKey, 'name' | 'profile'> & Partial<GatewayKey>,
   now = new Date(),
@@ -378,9 +540,13 @@ function ferryMetadata(
   traceId: string;
   requestedModel: string;
   servedModel: string | null;
+  servedProviderId: string | null;
+  servedConnectionId: string | null;
+  servedAccountKey: string | null;
   attempts: GatewayAttempt[];
   responseModel: string | null;
   mismatch: boolean;
+  usageReported: boolean | null;
 } {
   const servedModel = completion?.model ?? completion?.attempts?.at(-1)?.model ?? state.servedModel;
   const attempts = completion?.attempts ?? state.attempts;
@@ -390,6 +556,10 @@ function ferryMetadata(
     traceId: completion?.traceId ?? state.traceId,
     requestedModel: state.requestedModel,
     servedModel: servedModel || null,
+    servedProviderId:
+      completion?.servedProviderId ?? (servedModel ? (servedModel.split('/', 1)[0] ?? null) : null),
+    servedConnectionId: completion?.servedConnectionId ?? null,
+    servedAccountKey: completion?.servedAccountKey ?? null,
     attempts: attempts.length
       ? attempts
       : servedModel
@@ -402,6 +572,7 @@ function ferryMetadata(
       responseModel !== servedModel &&
       responseModel !== servedModelId,
     ),
+    usageReported: completion ? completionUsage(completion).reported : null,
   };
 }
 function observeAttempt(state: FerryRequestState, attempt: GatewayAttemptState): void {
@@ -427,11 +598,15 @@ function ferryAttemptOptions(state: FerryRequestState): {
 }
 function setFerryHeaders(res: ServerResponse, metadata: ReturnType<typeof ferryMetadata>): void {
   res.setHeader('x-ferry-requested-model', metadata.requestedModel);
-  if (metadata.servedModel) {
-    res.setHeader('x-ferry-served-model', metadata.servedModel);
-    res.setHeader('x-ferry-served-provider', metadata.servedModel.split('/', 1)[0] ?? '');
-  }
+  if (metadata.servedModel) res.setHeader('x-ferry-served-model', metadata.servedModel);
   if (metadata.responseModel) res.setHeader('x-ferry-response-model', metadata.responseModel);
+  if (metadata.servedProviderId)
+    res.setHeader('x-ferry-served-provider', metadata.servedProviderId);
+  if (metadata.servedConnectionId)
+    res.setHeader('x-ferry-served-connection', metadata.servedConnectionId);
+  if (metadata.servedAccountKey) res.setHeader('x-ferry-served-account', metadata.servedAccountKey);
+  if (metadata.usageReported !== null)
+    res.setHeader('x-ferry-usage-reported', String(metadata.usageReported));
   res.setHeader('x-ferry-attempts', String(metadata.attempts.length));
   res.setHeader('x-ferry-trace-id', metadata.traceId);
 }
@@ -449,10 +624,13 @@ function sendFerryMetadata(
     trace_id: metadata.traceId,
     requested_model: metadata.requestedModel,
     served_model: metadata.servedModel,
-    served_provider: metadata.servedModel?.split('/', 1)[0] ?? null,
+    served_provider: metadata.servedProviderId,
+    served_connection: metadata.servedConnectionId,
+    served_account: metadata.servedAccountKey,
     attempts: metadata.attempts,
     response_model: metadata.responseModel,
     mismatch: metadata.mismatch,
+    usage_reported: metadata.usageReported,
   });
 }
 function errorBody(message: string, type = 'invalid_request_error', code: string | null = null) {
@@ -604,9 +782,8 @@ function modelFor(raw: string, key: GatewayKey): string {
     throw new Error('Unknown model');
   return alias ? `@profile:${alias}` : model;
 }
-function reasoningInput(input: GatewayRequest): { effort?: Effort } {
-  const parsed = EffortSchema.safeParse(input.reasoning_effort ?? input.reasoning?.effort);
-  return parsed.success ? { effort: parsed.data } : {};
+function reasoningInput(input: GatewayRequest): { effort?: CliEffort } {
+  return parseReasoningEffort(input.reasoning_effort ?? input.reasoning?.effort);
 }
 async function tokenEstimate(
   runtime: GatewayRuntime,
@@ -713,7 +890,16 @@ async function handleChat(
         .update(JSON.stringify(input.messages[0] ?? {}))
         .digest('hex'),
   );
-  const usage = { inputTokens: 0, cachedTokens: 0, outputTokens: 0 };
+  const recordUsage = (reported: GatewayUsageReport) => {
+    runtime.store.recordUsage(
+      key.id,
+      reported.inputTokens ?? 0,
+      reported.outputTokens ?? 0,
+      new Date().toISOString(),
+      reported.cachedTokens ?? 0,
+      reported.reported,
+    );
+  };
   try {
     if (input.stream) {
       let streamStarted = false;
@@ -743,6 +929,7 @@ async function handleChat(
         ...(input.max_tokens ? { maxTokens: input.max_tokens } : {}),
         ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
         ...reasoningInput(input),
+        ...parseServiceTier(input.service_tier),
         sessionHint,
         signal: controller.signal,
         ...ferryAttemptOptions(ferryState),
@@ -758,18 +945,17 @@ async function handleChat(
       reserved.release();
       observeCompletion(ferryState, result);
       beginStream(result);
-      usage.inputTokens = result.inputTokens;
-      usage.cachedTokens = result.cachedTokens ?? 0;
-      usage.outputTokens = result.outputTokens;
+      const usage = completionUsage(result);
       if (tools.length)
         res.write(
           `data: ${JSON.stringify(chatChunk(id, input.model, { tool_calls: tools.map((tool, index) => ({ index, id: tool.id, type: 'function', function: { name: tool.name, arguments: tool.arguments } })) }))}\n\n`,
         );
       const finishReason = tools.length ? 'tool_calls' : result.finishReason;
       res.write(
-        `data: ${JSON.stringify({ ...chatChunk(id, input.model, {}, finishReason), choices: [{ index: 0, delta: {}, finish_reason: finishReason }], usage: { prompt_tokens: result.inputTokens, prompt_tokens_details: { cached_tokens: result.cachedTokens ?? 0 }, completion_tokens: result.outputTokens, total_tokens: result.inputTokens + result.outputTokens } })}\n\n`,
+        `data: ${JSON.stringify({ ...chatChunk(id, input.model, {}, finishReason), choices: [{ index: 0, delta: {}, finish_reason: finishReason }], ...openAiUsage(usage) })}\n\n`,
       );
       res.end('data: [DONE]\n\n');
+      recordUsage(usage);
     } else {
       const result = await runtime.complete({
         key,
@@ -785,15 +971,14 @@ async function handleChat(
         ...(input.max_tokens ? { maxTokens: input.max_tokens } : {}),
         ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
         ...reasoningInput(input),
+        ...parseServiceTier(input.service_tier),
         sessionHint,
         signal: controller.signal,
         ...ferryAttemptOptions(ferryState),
       });
       reserved.release();
       observeCompletion(ferryState, result);
-      usage.inputTokens = result.inputTokens;
-      usage.cachedTokens = result.cachedTokens ?? 0;
-      usage.outputTokens = result.outputTokens;
+      const usage = completionUsage(result);
       json(
         res,
         200,
@@ -821,23 +1006,12 @@ async function handleChat(
               finish_reason: result.toolCalls?.length ? 'tool_calls' : result.finishReason,
             },
           ],
-          usage: {
-            prompt_tokens: usage.inputTokens,
-            prompt_tokens_details: { cached_tokens: usage.cachedTokens },
-            completion_tokens: usage.outputTokens,
-            total_tokens: usage.inputTokens + usage.outputTokens,
-          },
+          ...openAiUsage(usage),
         },
         ferryMetadata(ferryState, result),
       );
+      recordUsage(usage);
     }
-    runtime.store.recordUsage(
-      key.id,
-      usage.inputTokens,
-      usage.outputTokens,
-      new Date().toISOString(),
-      usage.cachedTokens,
-    );
   } catch (error) {
     reserved.release();
     const mapped = mappedFailure(error);
@@ -1015,6 +1189,7 @@ async function handleAnthropic(
         ...controls,
         ...(payload.max_tokens ? { maxTokens: Number(payload.max_tokens) } : {}),
         ...anthropicReasoningEffort(payload),
+        ...parseServiceTier(payload.service_tier),
         ...(typeof payload.temperature === 'number' ? { temperature: payload.temperature } : {}),
         sessionHint,
         signal: controller.signal,
@@ -1043,6 +1218,7 @@ async function handleAnthropic(
       reserved.release();
       observeCompletion(ferryState, result);
       beginStream(result);
+      const usage = completionUsage(result);
       if (textStarted.value) send('content_block_stop', { type: 'content_block_stop', index: 0 });
       if (result.reasoning) {
         const index = textStarted.value ? 1 : 0;
@@ -1082,21 +1258,18 @@ async function handleAnthropic(
           stop_reason: result.toolCalls?.length ? 'tool_use' : 'end_turn',
           stop_sequence: null,
         },
-        usage: {
-          input_tokens: result.inputTokens,
-          cache_read_input_tokens: result.cachedTokens ?? 0,
-          output_tokens: result.outputTokens,
-        },
+        ...anthropicUsage(usage),
       });
       sendFerryMetadata(send, ferryState, result);
       send('message_stop', { type: 'message_stop' });
       res.end();
       runtime.store.recordUsage(
         key.id,
-        result.inputTokens,
-        result.outputTokens,
+        usage.inputTokens ?? 0,
+        usage.outputTokens ?? 0,
         new Date().toISOString(),
-        result.cachedTokens,
+        usage.cachedTokens ?? 0,
+        usage.reported,
       );
     } else {
       const result = await runtime.complete({
@@ -1109,6 +1282,7 @@ async function handleAnthropic(
         ...controls,
         ...(payload.max_tokens ? { maxTokens: Number(payload.max_tokens) } : {}),
         ...anthropicReasoningEffort(payload),
+        ...parseServiceTier(payload.service_tier),
         ...(typeof payload.temperature === 'number' ? { temperature: payload.temperature } : {}),
         sessionHint,
         signal: controller.signal,
@@ -1116,12 +1290,14 @@ async function handleAnthropic(
       });
       reserved.release();
       observeCompletion(ferryState, result);
+      const usage = completionUsage(result);
       runtime.store.recordUsage(
         key.id,
-        result.inputTokens,
-        result.outputTokens,
+        usage.inputTokens ?? 0,
+        usage.outputTokens ?? 0,
         new Date().toISOString(),
-        result.cachedTokens,
+        usage.cachedTokens ?? 0,
+        usage.reported,
       );
       json(
         res,
@@ -1143,11 +1319,7 @@ async function handleAnthropic(
           ],
           stop_reason: result.toolCalls?.length ? 'tool_use' : 'end_turn',
           stop_sequence: null,
-          usage: {
-            input_tokens: result.inputTokens,
-            cache_read_input_tokens: result.cachedTokens ?? 0,
-            output_tokens: result.outputTokens,
-          },
+          ...anthropicUsage(usage),
         },
         ferryMetadata(ferryState, result),
       );
@@ -1346,6 +1518,7 @@ async function handleCanonicalProtocol(
       ...(canonical.maxTokens ? { maxTokens: canonical.maxTokens } : {}),
       ...(canonical.temperature !== undefined ? { temperature: canonical.temperature } : {}),
       ...(canonical.effort ? { effort: canonical.effort } : {}),
+      ...parseServiceTier(payload.service_tier),
       ...structuredOutputOptions(responseText.format),
       ...(typeof payload.parallel_tool_calls === 'boolean'
         ? { parallelToolCalls: payload.parallel_tool_calls }
@@ -1431,12 +1604,14 @@ async function handleCanonicalProtocol(
     observeCompletion(ferryState, result);
     if (stream) beginStream(result);
     reservation?.release();
+    const usage = completionUsage(result);
     runtime.store.recordUsage(
       key.id,
-      result.inputTokens,
-      result.outputTokens,
+      usage.inputTokens ?? 0,
+      usage.outputTokens ?? 0,
       new Date().toISOString(),
-      result.cachedTokens,
+      usage.cachedTokens ?? 0,
+      usage.reported,
     );
     const allCalls = result.toolCalls?.length ? result.toolCalls : calls;
     if (protocol === 'responses') {
@@ -1495,12 +1670,7 @@ async function handleCanonicalProtocol(
         output,
         output_text: result.text,
         parallel_tool_calls: payload.parallel_tool_calls !== false,
-        usage: {
-          input_tokens: result.inputTokens,
-          input_tokens_details: { cached_tokens: result.cachedTokens ?? 0 },
-          output_tokens: result.outputTokens,
-          total_tokens: result.inputTokens + result.outputTokens,
-        },
+        ...responsesUsage(usage),
       };
       if (!stream) {
         json(res, 200, responseBody, ferryMetadata(ferryState, result));
@@ -1619,9 +1789,9 @@ async function handleCanonicalProtocol(
           item: output.at(-1),
         });
       const final = finalizeCanonicalStream([], result.finishReason, {
-        inputTokens: result.inputTokens,
-        ...(result.cachedTokens === undefined ? {} : { cachedTokens: result.cachedTokens }),
-        outputTokens: result.outputTokens,
+        inputTokens: usage.inputTokens ?? 0,
+        ...(usage.cachedTokens === null ? {} : { cachedTokens: usage.cachedTokens }),
+        outputTokens: usage.outputTokens ?? 0,
       });
       responseSend('response.completed', {
         type: 'response.completed',
@@ -1643,17 +1813,12 @@ async function handleCanonicalProtocol(
       finishReason: allCalls.length ? 'STOP' : 'STOP',
       index: 0,
     };
-    const usageMetadata = {
-      promptTokenCount: result.inputTokens,
-      cachedContentTokenCount: result.cachedTokens ?? 0,
-      candidatesTokenCount: result.outputTokens,
-      totalTokenCount: result.inputTokens + result.outputTokens,
-    };
+    const usageFields = geminiUsage(usage);
     if (!stream) {
       json(
         res,
         200,
-        { candidates: [candidate], usageMetadata, modelVersion: originalModel },
+        { candidates: [candidate], ...usageFields, modelVersion: originalModel },
         ferryMetadata(ferryState, result),
       );
       return;
@@ -1663,12 +1828,12 @@ async function handleCanonicalProtocol(
         `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: result.text }] }, index: 0 }] })}\n\n`,
       );
     const final = finalizeCanonicalStream(deltas, result.finishReason, {
-      inputTokens: result.inputTokens,
-      ...(result.cachedTokens === undefined ? {} : { cachedTokens: result.cachedTokens }),
-      outputTokens: result.outputTokens,
+      inputTokens: usage.inputTokens ?? 0,
+      ...(usage.cachedTokens === null ? {} : { cachedTokens: usage.cachedTokens }),
+      outputTokens: usage.outputTokens ?? 0,
     });
     res.write(
-      `data: ${JSON.stringify({ candidates: [{ finishReason: 'STOP', index: 0 }], usageMetadata, modelVersion: originalModel, finishReason: final.finishReason })}\n\n`,
+      `data: ${JSON.stringify({ candidates: [{ finishReason: 'STOP', index: 0 }], ...usageFields, modelVersion: originalModel, finishReason: final.finishReason })}\n\n`,
     );
     res.end();
   } catch (error) {
