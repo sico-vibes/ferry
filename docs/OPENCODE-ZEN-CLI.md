@@ -1,5 +1,7 @@
 # OpenCode Zen through the installed CLI
 
+> This is an implementation note. For current connection-manager steps and supported controls, use [CLI connections](CLI-CONNECTIONS.md); older screen labels in this note may have changed.
+
 Ferry can use the real installed OpenCode CLI through ACP for Zen free models in
 both native Ferry chat and its Gateway API. Standard API mode remains the default.
 OpenCode Go is a separate paid provider.

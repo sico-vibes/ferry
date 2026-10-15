@@ -1,8 +1,10 @@
 # Ferry 1.0 support matrix
 
-Snapshot: 2026-10-11, `release/1.0-gateway`. This describes the local release candidate, not a
+Snapshot: 2026-10-15, `codex/cli-provider-polish`. This describes the local release candidate, not a
 published release or a guarantee of access on a particular account. The shared provider registry
 (`packages/shared/src/provider-registry.ts`) controls release states in desktop and CLI.
+
+Release checks and unfinished work for this checkout are maintained in [STATUS.md](STATUS.md).
 
 - **Verified:** supported implementation with automated fixture/adapter evidence. Account access,
   model availability and pricing are checked separately; this label does not promise a live account run.
@@ -35,13 +37,28 @@ deadlines, backpressure and policy enforcement have additional Gateway/Core fixt
 | Verified API/anonymous | `anthropic`, `anyapi`, `cerebras`, `cloudflare-workers-ai`, `deepinfra`, `deepseek`, `fireworks`, `gemini`, `groq`, `huggingface`, `hyperbolic`, `kilo`, `llm7`, `mistral`, `nebius`, `novita`, `nvidia`, `openai`, `opencode-go`, `opencode`, `openrouter`, `ovhcloud`, `sambanova`, `scaleway`, `stepfun`, `together`, `tokenrouter`, `vercel-ai-gateway`, `zai-glm` | Registry adapter-tested state. Account/model allowances and capability coverage vary. API keys and eligible anonymous access use standard transports. |
 | Beta API | `openai-compatible`, `cohere`, `inception`, `minimax`, `moonshot`, `perplexity`, `siliconflow`, `xai-api` | Custom/regional endpoints and documented catalogs; provider-specific live verification pending. |
 | Beta local | `ollama`, `lmstudio` | Keyless/authenticated discovery and execution fixtures. Server/model capability metadata is authoritative. |
+| Beta installed CLIs | `codex-cli`, `claude-code-cli`, `opencode-cli` | Genuine installed-client transports with independent native/Gateway opt-ins and per-model generation checks. Windows operator checks completed caller-tool round trips through native Ferry and Gateway for all three clients. Account capacity and supported controls vary by installed client. |
 | Beta OAuth/account | `oauth-anthropic`, `oauth-openai-codex`, `oauth-github-copilot`, `oauth-openrouter`, `oauth-kimi-coding`, `oauth-meta`, `oauth-xai`, `oauth-radius` | Supported sign-in, cancellation, refresh and Gateway adapter fixtures. API and account identities remain separate; no current account certification claim. |
 | Coming soon/unavailable | `chutes`, `gemini-cli`, `github-models`, `kiro`, `qwen-code-oauth`, `zenmux`, `oauth-kilo`, `oauth-qoder`, `oauth-cline` | Disabled; catalog entries do not authorize third-party access. |
 | Ferry Cloud | Coming soon | New setup disabled; recovery for existing Cloud-only data/credentials remains available. |
 
-OpenCode Zen's OpenCode-only free models are **Available in the OpenCode app** via the real CLI
-(`ferry run opencode --native`) or delegation. Ferry never spoofs another product's identity or renames
-tools to bypass access controls. Standard Zen API access uses the user's legitimate key and eligible models.
+OpenCode Zen's OpenCode-only free models can use the real installed CLI transport in Ferry chat,
+Ferry CLI and Gateway, after an explicit access check and the relevant surface opt-in. Finding a Go
+credential does not prove Zen entitlement. Anonymous free checks, installed credentials and a saved
+Ferry Zen key remain separate choices. Ferry never spoofs another product's identity or renames tools
+to bypass access controls. Standard Zen API access retains its own legitimate key and eligible models.
+See [CLI connections](CLI-CONNECTIONS.md) for setup and the distinction between free, included and
+metered capacity.
+
+Installed CLI transport currently supports text and caller tools. Ferry owns native tool approvals;
+Gateway returns tool requests to its calling client. Native shell/file tools, external MCP servers,
+project hooks and plugins are isolated from the transport. Unsupported images, structured output or
+explicit request controls fail validation rather than being silently ignored. Fast modes never gain
+spending authorization from a subscription opt-in. This beta cannot bound a separately billed
+Fast/priority charge with a known-price reservation, so the bridge fails closed when that guarantee is
+required; a positive Gateway key budget alone does not enable the mode. Standard speed and supported
+reasoning choices remain available. Additional account enrollment and importing native CLI conversation
+history are deferred. Quota windows are shown only when the client reports them.
 
 Auto remains free-first. Paid backup requires a positive explicit budget and known prices, and every
 request remains bounded by the key, assigned/requested profile and global spending policy. A text-only

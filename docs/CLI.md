@@ -101,6 +101,4 @@ ferry profiles chain show Auto-Free
 | `4` | `run --max-steps` reached its step boundary; session remains resumable |
 | `5` | Paid spending cap reached; no further paid call was sent |
 
-| 5 | Paid spending cap reached; no further paid call was sent |
-
 Other subcommands may return their handler's status. `--max-steps` ends cleanly at the boundary; it does not issue a cancellation request. For routing, see [ROUTING.md](ROUTING.md).

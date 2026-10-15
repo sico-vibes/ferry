@@ -1,4 +1,6 @@
-# Ferry architecture
+# Ferry architecture: original staged design
+
+> **Status note:** This document records Ferry's original Part A/Part B architecture proposal. Its mock-only and “later” stage descriptions are historical and do not describe the current checkout. For the current implementation and release evidence, see [Current status](STATUS.md), [Support matrix](SUPPORT-MATRIX.md), and the source packages in `apps/` and `packages/`.
 
 ## Principle: contract-first client
 The UI (desktop renderer, later the CLI) talks **only** to the typed `FerryClient` interface (`@ferry/client`), whose types live in `@ferry/shared` (zod).
