@@ -15,8 +15,35 @@ import {
   type SessionId,
 } from '@ferry/shared';
 import { RequestRepository } from '@ferry/storage';
+import type { FakeResponse } from '@ferry/testkit';
 import type { FerryServices } from '../src/services.js';
 import { startHarness, toolTurn, waitFor, textTurn } from './qa-w3-harness.js';
+
+/**
+ * A streamed assistant reply that reports real input/output usage on its final chunk, mirroring a
+ * provider that finishes a step by reporting tokens. Its usage event lands after the message is
+ * appended, so it exercises the "reply starts before usage is recorded" ordering directly.
+ */
+function reportedUsageTurn(text: string, inputTokens: number, outputTokens: number): FakeResponse {
+  const chunk = (delta: Record<string, unknown>, finish: string | null = null) => ({
+    id: 'chatcmpl_usage',
+    object: 'chat.completion.chunk',
+    created: 1,
+    model: 'fake',
+    choices: [{ index: 0, delta, finish_reason: finish }],
+  });
+  const words = text.match(/\S+\s*/g) ?? [text];
+  return {
+    chunks: [
+      chunk({ role: 'assistant' }),
+      ...words.map((word) => chunk({ content: word })),
+      {
+        ...chunk({}, 'stop'),
+        usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens },
+      },
+    ],
+  };
+}
 
 const MODEL_A = ModelRefSchema.parse('openai/gpt-5');
 const MODEL_B = ModelRefSchema.parse('anthropic/claude-opus-4');
@@ -265,6 +292,62 @@ describe('core session/approval consumers over public RPC', () => {
         expect(zeroUsage.totals.inputTokens).toBe(0);
         expect(zeroUsage.incomplete).toBe(false);
         expect(await h.rpc.sessions.modelUsage(zero.id)).toEqual(zeroUsage);
+      } finally {
+        await h.close();
+      }
+    },
+  );
+
+  it(
+    'labels an old conversation without retained usage as missing while a new one stays complete',
+    { timeout: 30_000 },
+    async () => {
+      const h = await startHarness();
+      try {
+        const empty = seedSession(SessionIdSchema.parse('session_new_empty'));
+        const old = seedSession(SessionIdSchema.parse('session_old_no_ledger'));
+        putSession(h.services, empty);
+        putSession(h.services, old);
+        h.services.messages.put(assistant(old.id, [textPart('an older reply')], MODEL_A));
+
+        const emptyUsage = await h.rpc.sessions.modelUsage(empty.id);
+        expect(emptyUsage.totals.requests).toBe(0);
+        expect(emptyUsage.coverage).toEqual({ since: null, missing: false });
+
+        const oldUsage = await h.rpc.sessions.modelUsage(old.id);
+        expect(oldUsage.models).toEqual([]);
+        expect(oldUsage.totals.requests).toBe(0);
+        expect(oldUsage.totals.inputTokens).toBeNull();
+        expect(oldUsage.coverage.missing).toBe(true);
+      } finally {
+        await h.close();
+      }
+    },
+  );
+
+  it(
+    'keeps a fresh fully reported send complete though its reply starts before usage is recorded',
+    { timeout: 30_000 },
+    async () => {
+      const h = await startHarness({ turns: [reportedUsageTurn('All done.', 1108, 93)] });
+      try {
+        const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+        await h.rpc.sessions.send(session.id, { text: 'Summarize the change.' });
+        await waitFor(
+          async () => (await h.rpc.sessions.modelUsage(session.id)).totals.requests === 1,
+        );
+        const usage = await h.rpc.sessions.modelUsage(session.id);
+        expect(usage.totals).toMatchObject({ requests: 1, inputTokens: 1108, outputTokens: 93 });
+        expect(usage.incomplete).toBe(false);
+        expect(usage.coverage.missing).toBe(false);
+        // The reply was appended before its usage event, so its start genuinely precedes coverage.
+        const reply = (await h.rpc.sessions.get(session.id)).messages.find(
+          (message) => message.role === 'assistant',
+        );
+        const since = usage.coverage.since;
+        expect(reply?.createdAt).toBeTruthy();
+        expect(since).not.toBeNull();
+        if (reply && since) expect(reply.createdAt < since).toBe(true);
       } finally {
         await h.close();
       }

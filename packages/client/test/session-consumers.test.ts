@@ -85,6 +85,105 @@ describe('mock session/approval consumers', () => {
     expect(detail.session.lastReplyModelRef).toBe('gemini/gemini-3.8-flash');
   });
 
+  it('records an honest unknown producer instead of a logical Gateway key', async () => {
+    const fake = createFakeClock(now);
+    const client = createMockFerryClient({ clock: fake.clock, behavior: 'test' });
+    const workspace = (await client.workspaces.list())[0];
+    if (!workspace) throw new Error('Workspace fixture missing');
+    const session = await client.sessions.create({
+      workspaceId: workspace.id,
+      title: 'Gateway run',
+    });
+    const stored = client.__state().sessions.find((entry) => entry.id === session.id);
+    if (!stored) throw new Error('Created session missing');
+    stored.modelRef = ModelRefSchema.parse('gateway/requested-key');
+
+    await client.sessions.send(session.id, { text: 'Explain the architecture' });
+    for (const step of [600, 150, 150, 150]) {
+      fake.advance(step);
+      await flush();
+    }
+
+    const usage = SessionModelUsageSchema.parse(await client.sessions.modelUsage(session.id));
+    // The logical key is never listed as the model that served the request.
+    expect(usage.models.some((model) => model.modelRef.startsWith('gateway/'))).toBe(false);
+    expect(usage.models).toHaveLength(1);
+    expect(usage.models[0]?.modelRef.startsWith('unknown/')).toBe(true);
+    // The request count survives; the unprovable attribution and tokens do not get invented.
+    expect(usage.totals.requests).toBe(1);
+    expect(usage.models[0]?.inputTokens).toBeNull();
+    expect(usage.incomplete).toBe(true);
+    expect(usage.coverage.missing).toBe(true);
+    expect((await client.sessions.get(session.id)).session.lastReplyModelRef).toBeNull();
+  });
+
+  it('labels a persisted conversation with replies but no usage ledger as missing', async () => {
+    const client = makeClient();
+    const empty = SessionModelUsageSchema.parse(
+      await client.sessions.modelUsage('session_1' as never),
+    );
+    expect(empty.totals.requests).toBe(0);
+    expect(empty.coverage).toEqual({ since: null, missing: false });
+
+    const session = await client.sessions.create({ title: 'Old chat' });
+    client
+      .__state()
+      .messages.get(session.id)
+      ?.push(
+        MessageSchema.parse({
+          id: 'message_old_reply',
+          sessionId: session.id,
+          role: 'assistant',
+          createdAt: now.toISOString(),
+          modelRef: 'cerebras/gpt-oss-120b',
+          parts: [{ type: 'text', id: 'part_old_reply', text: 'an older reply' }],
+        }),
+      );
+    const usage = SessionModelUsageSchema.parse(await client.sessions.modelUsage(session.id));
+    // Existing generation proves history the mock never retained; nothing is invented for it.
+    expect(usage.models).toEqual([]);
+    expect(usage.totals.requests).toBe(0);
+    expect(usage.totals.inputTokens).toBeNull();
+    expect(usage.coverage.missing).toBe(true);
+  });
+
+  it('keeps a fully reported fresh reply complete though its message precedes the usage row', async () => {
+    const client = makeClient();
+    const session = await client.sessions.create({ title: 'Fresh chat' });
+    const createdAt = now.toISOString();
+    client
+      .__state()
+      .messages.get(session.id)
+      ?.push(
+        MessageSchema.parse({
+          id: 'message_fresh_reply',
+          sessionId: session.id,
+          role: 'assistant',
+          createdAt,
+          modelRef: 'cerebras/gpt-oss-120b',
+          parts: [{ type: 'text', id: 'part_fresh_reply', text: 'done' }],
+        }),
+      );
+    // A normal reply is appended before its usage is recorded (message start < usage finish).
+    client.__store().recordUsage({
+      eventId: 'usage_fresh_reply',
+      sessionId: session.id,
+      modelRef: 'cerebras/gpt-oss-120b',
+      providerId: 'cerebras',
+      connectionId: null,
+      accountKey: null,
+      inputTokens: 1108,
+      outputTokens: 93,
+      cachedTokens: null,
+      reasoningTokens: null,
+      occurredAt: new Date(Date.parse(createdAt) + 5_000).toISOString(),
+    });
+    const usage = SessionModelUsageSchema.parse(await client.sessions.modelUsage(session.id));
+    expect(usage.totals).toMatchObject({ requests: 1, inputTokens: 1108, outputTokens: 93 });
+    expect(usage.incomplete).toBe(false);
+    expect(usage.coverage.missing).toBe(false);
+  });
+
   it('publishes pending approvals on append and resolve, excluding idle sessions', async () => {
     const fake = createFakeClock(now);
     const client = createMockFerryClient({

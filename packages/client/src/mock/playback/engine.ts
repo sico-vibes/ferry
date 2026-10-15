@@ -5,6 +5,7 @@ import type { MockStore } from '../types.js';
 import type { Clock } from '../clock.js';
 import type { Scenario, Step } from './script.js';
 import { emitPendingApprovals } from '../domains/approvals.js';
+import { usageAttribution } from '../usage-producer.js';
 import scenariosDefault from './scenarios/index.js';
 
 const fallback = (() => {
@@ -368,14 +369,14 @@ export function createPlaybackRunner(
       } catch (error) {
         if (!signal.aborted) throw error;
       }
-      // Retain one request per finalized reply attributed to the actual model that finished it. The
-      // mock has no provider-reported token counts, so dimensions stay unreported rather than zero.
+      // Retain one request per finalized reply attributed to the actual model that finished it. A
+      // logical Gateway key has no evidenced upstream model, so it is recorded as unknown rather than
+      // mislabelled. The mock has no provider-reported token counts, so dimensions stay unreported.
       if (completed && session.modelRef)
         store.recordUsage({
           eventId: store.nextId('usage'),
           sessionId,
-          modelRef: session.modelRef,
-          providerId: session.modelRef.split('/')[0] ?? null,
+          ...usageAttribution(session.modelRef),
           connectionId: null,
           accountKey: null,
           inputTokens: null,

@@ -20,6 +20,7 @@ import type {
 import { emitPendingApprovals } from './approvals.js';
 import type { MockDeps } from './deps.js';
 import type { MockState, MockStore } from '../types.js';
+import { honestProducer } from '../usage-producer.js';
 
 /** Chronological order (createdAt, then id) so "latest" is well-defined for id-ordered storage. */
 function orderedMessages(messages: readonly Message[]): Message[] {
@@ -40,11 +41,18 @@ function partProducingModel(part: MessagePart): ModelRef | null {
     : null;
 }
 
-/** A logical Gateway key routes a request but is never the LLM that produced a reply. */
 function honestMessageModel(message: Message): ModelRef | null {
-  const ref = message.modelRef;
-  if (!ref || ref.startsWith('gateway/')) return null;
-  return ref;
+  return honestProducer(message.modelRef);
+}
+
+/**
+ * Whether the conversation produced at least one genuine assistant reply. Used only to detect
+ * history no retained usage evidence can prove.
+ */
+function hasAssistantGeneration(messages: readonly Message[]): boolean {
+  return messages.some(
+    (message) => message.role === 'assistant' && message.parts.some(isReplyPart),
+  );
 }
 
 function isActivelyRunning(session: Session): boolean {
@@ -231,6 +239,12 @@ function sessionModelUsageFor(state: MockState, sessionId: SessionId): SessionMo
     (group) => group.requests > group.inputReported || group.requests > group.outputReported,
   );
   const unknownProvenance = [...groups.values()].some((group) => group.unknownProvenance);
+  // A reply with no retained rows at all proves conversation history the totals cannot cover. Reply
+  // start times are never compared against usage-finish times: a normal reply is appended before its
+  // usage is recorded, so that ordering is equally true of a fully captured fresh chat and is not a
+  // reliable signal. A retained row set is trusted on its own, so expired detail stays complete.
+  const uncoveredHistory =
+    hasAssistantGeneration(state.messages.get(sessionId) ?? []) && rows.length === 0;
   return SessionModelUsageSchema.parse({
     sessionId,
     totals: {
@@ -242,7 +256,10 @@ function sessionModelUsageFor(state: MockState, sessionId: SessionId): SessionMo
     },
     models,
     incomplete,
-    coverage: { since, missing: incomplete || anyBackfilled || unknownProvenance },
+    coverage: {
+      since,
+      missing: incomplete || anyBackfilled || unknownProvenance || uncoveredHistory,
+    },
   });
 }
 

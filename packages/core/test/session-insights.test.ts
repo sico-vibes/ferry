@@ -619,6 +619,96 @@ describe('sessionModelUsage', () => {
     expect(usage.incomplete).toBe(false);
   });
 
+  it('labels an old assistant chat with no retained evidence as missing without inventing totals', async () => {
+    const services = await startServices();
+    const session = makeSession('session_old_chat');
+    services.sessions.put(session);
+    services.messages.put(
+      message(session.id, 'user', [textPart('hello')], null, '2026-01-01T00:00:00.000Z'),
+    );
+    services.messages.put(
+      message(
+        session.id,
+        'assistant',
+        [textPart('an older reply')],
+        MODEL_A,
+        '2026-01-01T00:00:01.000Z',
+      ),
+    );
+    const usage = sessionModelUsage(services, session.id);
+    // The reply proves generation happened, but nothing is fabricated to represent it.
+    expect(usage.models).toEqual([]);
+    expect(usage.totals).toMatchObject({
+      requests: 0,
+      inputTokens: null,
+      outputTokens: null,
+      cachedTokens: null,
+      reasoningTokens: null,
+    });
+    expect(usage.incomplete).toBe(false);
+    expect(usage.coverage).toEqual({ since: null, missing: true });
+  });
+
+  it('keeps a new empty conversation complete with zero requests', async () => {
+    const services = await startServices();
+    const session = makeSession('session_new_empty');
+    services.sessions.put(session);
+    const usage = sessionModelUsage(services, session.id);
+    expect(usage.models).toEqual([]);
+    expect(usage.totals.requests).toBe(0);
+    expect(usage.totals.inputTokens).toBeNull();
+    expect(usage.incomplete).toBe(false);
+    expect(usage.coverage).toEqual({ since: null, missing: false });
+  });
+
+  it('does not mark a retained aggregate missing merely because request detail expired', async () => {
+    const services = await startServices();
+    const session = makeSession('session_retained_aggregate');
+    services.sessions.put(session);
+    // The durable aggregate survives although the per-request and ledger detail are gone.
+    seedUsageRow(services, {
+      sessionId: session.id,
+      modelRef: 'openai/gpt-5',
+      providerId: 'openai',
+      inputTokens: 12,
+      outputTokens: 3,
+      lastUsedAt: '2026-01-02T00:00:00.000Z',
+    });
+    services.messages.put(
+      message(session.id, 'assistant', [textPart('answer')], MODEL_A, '2026-01-01T00:00:00.000Z'),
+    );
+    const usage = sessionModelUsage(services, session.id);
+    expect(usage.totals).toMatchObject({ requests: 1, inputTokens: 12, outputTokens: 3 });
+    expect(usage.incomplete).toBe(false);
+    expect(usage.coverage).toEqual({ since: null, missing: false });
+  });
+
+  it('does not flag a fully captured chat whose reply starts before its usage is recorded', async () => {
+    const services = await startServices();
+    const session = makeSession('session_fresh_reply');
+    services.sessions.put(session);
+    // The assistant message is appended when the step starts; usage is recorded when it finishes, so
+    // a fully captured fresh chat has message.createdAt before the earliest retained ledger event.
+    services.messages.put(
+      message(session.id, 'assistant', [textPart('answer')], MODEL_A, '2026-01-01T00:00:00.000Z'),
+    );
+    new RequestRepository(services.db.client).put({
+      id: 'req_fresh_reply',
+      ts: '2026-01-01T00:00:05.000Z',
+      provider: 'openai',
+      model: 'gpt-5',
+      session_id: session.id,
+      input_tokens: 7,
+      output_tokens: 2,
+      status: 'ok',
+    });
+    const usage = sessionModelUsage(services, session.id);
+    // The retained totals are fully reported and complete; the reply-start ordering is not evidence.
+    expect(usage.totals).toMatchObject({ requests: 1, inputTokens: 7, outputTokens: 2 });
+    expect(usage.incomplete).toBe(false);
+    expect(usage.coverage).toEqual({ since: '2026-01-01T00:00:05.000Z', missing: false });
+  });
+
   it('marks coverage missing when a model could not be attributed to any provenance', async () => {
     const services = await startServices();
     const session = makeSession('session_unknown_provenance');

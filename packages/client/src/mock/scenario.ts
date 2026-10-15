@@ -2,6 +2,7 @@ import type { FerryEvents } from '../events.js';
 import type { SessionId, Message, MessagePart } from '@ferry/shared';
 import type { Clock } from './clock.js';
 import type { MockStore } from './types.js';
+import { usageAttribution } from './usage-producer.js';
 export interface ScenarioRunner {
   run(ctx: {
     sessionId: SessionId;
@@ -59,8 +60,7 @@ export const echoRunner: ScenarioRunner = {
       store.recordUsage({
         eventId: store.nextId('usage'),
         sessionId,
-        modelRef: session.modelRef,
-        providerId: session.modelRef.split('/')[0] ?? null,
+        ...usageAttribution(session.modelRef),
         connectionId: null,
         accountKey: null,
         inputTokens: null,

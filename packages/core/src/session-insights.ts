@@ -187,9 +187,19 @@ function mergeUsageRows(rows: readonly SessionModelUsageRow[]): MergedModelUsage
  * Coverage comes from the repository: `coverage.since` is the real earliest retained usage-ledger
  * event timestamp (or null without ledger evidence), never a per-model `lastUsedAt` and never
  * fabricated. `coverage.missing` is true when the retained evidence cannot prove full-lifetime
- * coverage (historical/backfilled or legacy-uncovered rows), when primary dimensions are incomplete,
- * or when a model's provenance could not be attributed. A missing session throws `not_found` without
- * leaking another conversation's usage.
+ * coverage: historical/backfilled or legacy-uncovered rows, primary dimensions that are incomplete,
+ * a model whose provenance could not be attributed, or an existing assistant generation with no
+ * retained usage aggregate at all (an older conversation that predates usage tracking). It reads only
+ * the one conversation's messages through the indexed per-session lookup, so idle sessions are never
+ * scanned, and it never invents model, token or request totals for missing history. A missing session
+ * throws `not_found` without leaking another conversation's usage.
+ *
+ * Limitation: partial history that a retained aggregate does not cover cannot be proven from the
+ * bounded per-dialog evidence. A normal assistant message is created when its step starts, while its
+ * usage event is recorded when the step finishes, so "earliest reply before the earliest retained
+ * event" is equally true of a brand-new, fully reported conversation; comparing them would falsely
+ * flag every fresh chat as missing. That ordering is therefore deliberately not used, and known
+ * ledger totals are always preserved exactly as stored.
  */
 export function sessionModelUsage(
   services: FerryServices,
@@ -212,6 +222,12 @@ export function sessionModelUsage(
     unreportedRequests: row.unreportedRequests,
   }));
   const unknownProvenance = mergedRows.some((row) => row.unknownProvenance);
+  // A reply with no retained aggregate at all proves the conversation predates usage evidence. Reply
+  // start times are never compared against usage-finish timestamps (see the limitation above), and a
+  // retained aggregate is trusted on its own, so expired request detail stays complete.
+  const uncoveredHistory =
+    hasAssistantGeneration(services.messages.listForSessions([sessionId])) &&
+    summary.rows.length === 0;
   return SessionModelUsageSchema.parse({
     sessionId,
     totals: {
@@ -225,7 +241,8 @@ export function sessionModelUsage(
     incomplete: summary.incomplete,
     coverage: {
       since: summary.coverage.since,
-      missing: summary.coverage.unknown || summary.incomplete || unknownProvenance,
+      missing:
+        summary.coverage.unknown || summary.incomplete || unknownProvenance || uncoveredHistory,
     },
   });
 }
@@ -327,6 +344,17 @@ function honestMessageModel(message: Message): ModelRef | null {
 function orderedMessages(messages: readonly Message[]): Message[] {
   return [...messages].sort(
     (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+  );
+}
+
+/**
+ * Whether the conversation produced at least one genuine assistant reply. Used only to detect
+ * history that no retained usage evidence can prove; an empty or user-only conversation was never
+ * generated and therefore has nothing uncovered.
+ */
+function hasAssistantGeneration(messages: readonly Message[]): boolean {
+  return messages.some(
+    (message) => message.role === 'assistant' && message.parts.some(isReplyPart),
   );
 }
 
