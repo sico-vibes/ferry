@@ -402,6 +402,12 @@ export interface ScoreInput {
   previousModelRef?: string | null;
   spend?: SpendState;
   spendCaps?: SpendCaps;
+  /**
+   * Admit Included-subscription installed-CLI routes for a profile that does not allow paid API
+   * spend. They are never treated as free: the caller must have validated an explicit profile
+   * `allowSubscriptionCli` opt-in, native surface opt-in and an exact-model verification receipt.
+   */
+  allowIncludedSubscription?: boolean;
   /** Extra context for cache / capability preferences. */
   preferReasoning?: boolean;
   /** Enables text-encoded tool fallback for XML/ReAct capable models. */
@@ -487,7 +493,17 @@ export function scoreModels(input: ScoreInput): ModelCandidate[] {
       (input.textToolFallbackEnabled ?? input.routing?.textToolFallbackEnabled) === true,
     );
     if ((input.estimate.requiresTools ?? true) && !toolsSupported) continue;
-    if (!providerAllowed(input.profile, provider, model, trialOptIns, input.routing)) continue;
+    if (
+      !providerAllowed(
+        input.profile,
+        provider,
+        model,
+        trialOptIns,
+        input.routing,
+        input.allowIncludedSubscription === true,
+      )
+    )
+      continue;
     if (!input.profile.tierByStep[input.step].includes(model.tier)) continue;
     const cost = isFreeForRouting(provider, model, trialOptIns)
       ? 0
@@ -747,13 +763,23 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
       !isStrictFallbackNameEligible(model, input.verifiedModelRefs ?? [])
     )
       reasons.push('model name excluded from automatic coding routes');
-    if (provider && !input.profile.paidAllowed && !isFreeForRouting(provider, model))
+    const sponsoredIncluded =
+      input.allowIncludedSubscription === true &&
+      provider !== undefined &&
+      isIncludedSubscriptionCli(provider, model);
+    if (
+      provider &&
+      !input.profile.paidAllowed &&
+      !sponsoredIncluded &&
+      !isFreeForRouting(provider, model)
+    )
       reasons.push('model not marked free for this provider plan');
     if (
       !input.profile.paidAllowed &&
       model.priceInPerM === null &&
       model.priceOutPerM === null &&
       provider &&
+      !sponsoredIncluded &&
       !isFreeForRouting(provider, model)
     )
       reasons.push('unknown pricing is not allowed for this provider plan');
@@ -799,6 +825,7 @@ export function explainModelRouting(input: ScoreInput): RoutingExclusion[] {
           model,
           input.trialOptInProviders ?? input.routing?.trialOptInProviders ?? [],
           input.routing,
+          input.allowIncludedSubscription === true,
         ) &&
         !reasons.includes('model not marked free')
       )
@@ -814,18 +841,33 @@ function providerAllowed(
   model: ModelInfo,
   trialOptInProviders: readonly string[],
   _routing?: RoutingSettings,
+  allowIncludedSubscription = false,
 ): boolean {
   if (provider.tag === 'trial' && !trialOptInProviders.includes(provider.id)) return false;
   if (isOpenCodeAppModel(model)) return false;
+  const sponsored = allowIncludedSubscription && isIncludedSubscriptionCli(provider, model);
   if (!profile.paidAllowed) {
     if (provider.freeTierUnsupported) return false;
     if (['paid', 'credits'].includes(provider.tag) && provider.id !== 'openrouter') return false;
-    if (!isFreeForRouting(provider, model, trialOptInProviders)) return false;
+    if (!isFreeForRouting(provider, model, trialOptInProviders) && !sponsored) return false;
   }
   if (profile.allowedProviders === 'all') return true;
   if (profile.allowedProviders === 'all_free')
-    return isFreeForRouting(provider, model, trialOptInProviders);
+    return isFreeForRouting(provider, model, trialOptInProviders) || sponsored;
   return profile.allowedProviders.includes(provider.id);
+}
+
+/**
+ * True when `model` is an Included-subscription route served by an installed-CLI provider. It is
+ * never `free` (never carries a zero price) and has no published price list, but it has no marginal
+ * monetary cost either. A profile that explicitly opts in (`allowSubscriptionCli`) may use it for
+ * auto routing strictly after every free route; it must never be treated as a free route itself.
+ */
+export function isIncludedSubscriptionCli(
+  provider: Pick<Provider, 'kind' | 'tag'>,
+  model: Pick<ModelInfo, 'cliCapabilities'>,
+): boolean {
+  return provider.kind === 'cli' && model.cliCapabilities?.billing === 'included_subscription';
 }
 
 export function isFreeForRouting(

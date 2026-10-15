@@ -99,6 +99,12 @@ export interface ModelGateway {
     stepKind: StepKind,
     inputTokens?: number,
     requiresTools?: boolean,
+    /**
+     * Installed-CLI funding surface whose opted-in/verified capacity joins the pool. Defaults to
+     * `native` (the native API wrapper); the Gateway owner must pass `gateway` so Gateway Auto only
+     * routes CLI capacity opted in for the gateway surface.
+     */
+    surface?: 'native' | 'gateway',
   ): ModelInfo[];
   recordHandoff(sessionId: string, reason: string): void;
   probeHeuristicCooldowns(): Promise<void>;
@@ -502,7 +508,13 @@ export function createSessionDependencies(
     async probeHeuristicCooldowns() {
       await health.recover();
     },
-    resolveCandidates(profile, stepKind, inputTokens = 1, requiresTools = true) {
+    resolveCandidates(
+      profile,
+      stepKind,
+      inputTokens = 1,
+      requiresTools = true,
+      surface = 'native',
+    ) {
       const configuredProviders = services.catalog.providers.filter(
         ({ provider, key_required }) => {
           const saved = services.providers.get(provider);
@@ -554,13 +566,35 @@ export function createSessionDependencies(
             return saved?.enabled && saved.keyStatus === 'valid';
           })
         : [];
-      const candidates = [...available, ...oauthModels];
-      const verifiedModelRefs = configuredProviders.flatMap(({ provider }) => {
-        const saved = services.providers.get(provider);
-        return saved?.modelsVerifiedAt && saved.availableModels
-          ? saved.availableModels.map((model) => model.ref)
-          : [];
-      });
+      // Installed-CLI capacity that is genuinely fundable for this profile joins the Auto candidate
+      // pool. `eligibleModels` already applies the exact-model verification receipt, effective
+      // option/capability/tool/context fit, surface opt-in and funding policy. A Long Context step is
+      // never satisfied by the explicit unknown-capacity policy placeholder: only a CLI route that
+      // actually reported a context window competes for it.
+      const cliEligible = getCliBroker(services, () => undefined)
+        .eligibleModels({
+          surface,
+          profile,
+          requiresTools,
+          inputTokens,
+        })
+        .filter((model) => stepKind !== 'long_context' || model.capacityKnown === true);
+      // Only genuinely free CLI capacity joins the primary (free) ranking, where it competes with
+      // free API routes under the premade profile chain, preferences, quality and long-context rules.
+      // Included-subscription capacity is ranked in its own band below and appended strictly after
+      // every free route, so Auto can never prefer Included simply because it came from the CLI pool.
+      const freeCli = cliEligible.filter((model) => model.free);
+      const includedCli = cliEligible.filter((model) => !model.free);
+      const candidates = [...available, ...oauthModels, ...freeCli];
+      const verifiedModelRefs = [
+        ...configuredProviders.flatMap(({ provider }) => {
+          const saved = services.providers.get(provider);
+          return saved?.modelsVerifiedAt && saved.availableModels
+            ? saved.availableModels.map((model) => model.ref)
+            : [];
+        }),
+        ...cliEligible.map((model) => model.ref),
+      ];
       const preferredModelRefs = configuredProviders.flatMap(({ provider, probe_models = [] }) => {
         const providerModels = available.filter((model) => model.providerId === provider);
         const refsById = new Map(
@@ -711,7 +745,36 @@ export function createSessionDependencies(
           );
         }
       }
-      return ordered;
+      // Included-subscription capacity is ranked in its own band (quality/long-context/tier rules
+      // still apply within it) and appended strictly after every free API/CLI route. This is what
+      // keeps global free-first ordering intact: an Included CLI route can never jump ahead of an
+      // eligible free API provider merely because it arrived through the CLI pool.
+      let includedOrdered: ModelInfo[] = [];
+      if (includedCli.length > 0) {
+        const includedByRef = new Map(includedCli.map((model) => [model.ref, model]));
+        includedOrdered = scoreModels({
+          models: includedCli,
+          providers: providers(),
+          capacity: routingCapacity,
+          profile,
+          step: stepKind,
+          estimate: { inputTokens, requiresTools },
+          preferredModelRefs,
+          verifiedModelRefs,
+          routing: routingSettings(),
+          trialOptInProviders: routingSettings().trialOptInProviders,
+          textToolFallbackEnabled: routingSettings().textToolFallbackEnabled,
+          reliability: reliability(),
+          codingObservations: codingObservations(services),
+          stats: modelRoutingStats(services),
+          random: services.random,
+          allowIncludedSubscription: true,
+        }).flatMap(({ ref }) => {
+          const model = includedByRef.get(ref);
+          return model ? [model] : [];
+        });
+      }
+      return [...ordered, ...includedOrdered];
     },
     recordHandoff(sessionId, reason) {
       services.handoffs.put({ id: newId('handoff'), sessionId, reason });

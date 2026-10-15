@@ -128,6 +128,16 @@ async function waitForCalls(calls: readonly CliBrokerRequest[], count: number): 
   }
 }
 
+/**
+ * Controlled admission/queue barrier: yield the event loop a fixed number of macrotask turns so
+ * every already-initiated `dispatch` drains its synchronous-free admission microtasks and lands in
+ * the broker's fair queue (the parked waiter is pushed synchronously once `#acquire` is reached).
+ * This replaces guessing with a wall-clock delay; it never needs the runner to be reached.
+ */
+async function settleAdmissions(): Promise<void> {
+  for (let turn = 0; turn < 2; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
 /** A settings/clock stub services object sufficient for capacity/eligibility/admission tests. */
 function stubServices(
   store: Record<string, unknown>,
@@ -402,6 +412,53 @@ it('denies a possibly-billed fast included model without monetary authorization'
       authorizeSpend: () => true,
     }).ok,
   ).toBe(true);
+  // A *free* standard generation stays non-spending, but `fast` is not assumed free: the discovery
+  // schema carries no separate evidence that the fast tier is zero-cost, so it must still be
+  // authorized rather than charged implicitly at price zero.
+  const free = modelFor('codex-cli', 'm', { billing: 'free' });
+  expect(cliManualAdmission(verified, free, 'native', { speed: 'standard' }).ok).toBe(true);
+  const freeFast = cliManualAdmission(verified, free, 'native', { speed: 'fast' });
+  expect(freeFast.ok).toBe(false);
+  expect(freeFast.statusCode).toBe(402);
+  expect(
+    cliManualAdmission(verified, free, 'native', {
+      speed: 'fast',
+      authorizeSpend: () => true,
+    }).ok,
+  ).toBe(true);
+});
+
+it('denies a would-succeed unauthorized free fast dispatch before the runner', async () => {
+  const store: Record<string, unknown> = { global: sampleSettings };
+  const services = stubServices(store, () => 1_000_000);
+  const scan = (): Promise<CliConnection> =>
+    Promise.resolve(
+      connection('codex-cli', [modelFor('codex-cli', 'model-a', { billing: 'free' })]),
+    );
+  const calls: CliBrokerRequest[] = [];
+  const runner: CliTurnRunner = (request) => {
+    if (isVerify(request)) return Promise.resolve(ready('Ready', request));
+    calls.push(request);
+    return Promise.resolve(ready('done', request));
+  };
+  const service = makeService(services, scan, () => 1_000_000);
+  // The broker is built with the default closed spending authorization.
+  const broker = new CliBroker(services, service, { runTurn: runner });
+  await service.refresh('codex-cli');
+  service.update('codex-cli', { surfaces: { native: true }, credentialMode: 'installed' });
+  expect((await broker.verify('codex-cli', 'codex-cli/model-a' as ModelRef)).ok).toBe(true);
+  await expect(
+    broker.dispatch({
+      surface: 'native',
+      modelRef: 'codex-cli/model-a' as ModelRef,
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      signal: new AbortController().signal,
+      optionOverride: { effort: null, speed: 'fast' },
+    }),
+  ).rejects.toMatchObject({ statusCode: 402 });
+  // The would-succeed generation never ran; no implicit zero-cost charge was made.
+  expect(calls).toHaveLength(0);
 });
 
 /* ------------------------------ eligible pool ---------------------------- */
@@ -444,6 +501,54 @@ it('builds the Auto funding pool: free first, included only when the profile opt
   });
   // Free ranks ahead of included; metered/unknown are never in the pool.
   expect(withSub.map((model) => model.ref)).toEqual(['codex-cli/free', 'codex-cli/included']);
+});
+
+it('routes native Auto through the eligible installed-CLI pool, free ahead of included', async () => {
+  const { h, service } = await nativeSetup({
+    configure: (connections) => {
+      connections['codex-cli'] = connection('codex-cli', [
+        modelFor('codex-cli', 'free-a', { billing: 'free' }),
+      ]);
+      connections['claude-code-cli'] = connection('claude-code-cli', [
+        modelFor('claude-code-cli', 'inc-a', { billing: 'included_subscription' }),
+      ]);
+    },
+  });
+  service.update('codex-cli', { surfaces: { native: true } });
+  service.update('claude-code-cli', { surfaces: { native: true } });
+  await service.refresh('codex-cli');
+  await service.refresh('claude-code-cli');
+  const broker = getCliBroker(h.services, () => undefined);
+  expect((await broker.verify('codex-cli', 'codex-cli/free-a' as ModelRef)).ok).toBe(true);
+  expect((await broker.verify('claude-code-cli', 'claude-code-cli/inc-a' as ModelRef)).ok).toBe(
+    true,
+  );
+
+  const base = {
+    ...builtinProfile,
+    allowedProviders: 'all' as const,
+    allowedModelRefs: undefined,
+    allowSubscriptionCli: false,
+  };
+  const refs = createSessionDependencies(h.services, () => undefined, undefined, { profile: base })
+    .gateway.resolveCandidates(base, 'plan')
+    .map((model) => model.ref);
+  // Free verified CLI capacity is eligible; the Included model is not without a profile opt-in.
+  expect(refs).toContain('codex-cli/free-a');
+  expect(refs).not.toContain('claude-code-cli/inc-a');
+
+  const withSub = { ...base, allowSubscriptionCli: true };
+  const subRefs = createSessionDependencies(h.services, () => undefined, undefined, {
+    profile: withSub,
+  })
+    .gateway.resolveCandidates(withSub, 'plan')
+    .map((model) => model.ref);
+  const freeIndex = subRefs.indexOf('codex-cli/free-a' as ModelRef);
+  const includedIndex = subRefs.indexOf('claude-code-cli/inc-a' as ModelRef);
+  expect(includedIndex).toBeGreaterThanOrEqual(0);
+  // Free CLI capacity leads the profile-approved Included capacity regardless of ranking.
+  expect(freeIndex).toBeGreaterThanOrEqual(0);
+  expect(freeIndex).toBeLessThan(includedIndex);
 });
 
 /* -------------------------- stable host emit target ---------------------- */
@@ -871,6 +976,136 @@ it('blocks a known-exhausted included account window before Verify and dispatch'
   expect(calls).toHaveLength(1);
 });
 
+it('supersedes an exhausted account window once its reported reset has elapsed', async () => {
+  const store: Record<string, unknown> = { global: sampleSettings };
+  // The injected clock starts after the window's reported reset: the cached zero snapshot is stale.
+  let now = Date.parse('2026-01-02T00:00:01.000Z');
+  const services = stubServices(store, () => now);
+  const exhausted = (): CliConnection =>
+    connection('codex-cli', [modelFor('codex-cli', 'model-a')], {
+      usage: {
+        connectionId: 'codex-cli',
+        accountKey: `codex-cli:${'a'.repeat(24)}`,
+        state: 'available',
+        source: 'cli',
+        observedAt: null,
+        staleAt: null,
+        windows: [
+          {
+            id: 'codex:primary',
+            label: 'Codex',
+            metric: 'percent',
+            windowKind: 'five_hour',
+            used: 100,
+            limit: 100,
+            remaining: 0,
+            utilization: 1,
+            resetAt: '2026-01-02T00:00:00.000Z',
+          },
+        ],
+        note: null,
+      },
+    });
+  const calls: CliBrokerRequest[] = [];
+  const runner: CliTurnRunner = (request) => {
+    if (isVerify(request)) return Promise.resolve(ready('Ready', request));
+    calls.push(request);
+    return Promise.resolve(ready('done', request));
+  };
+  const service = makeService(
+    services,
+    () => Promise.resolve(exhausted()),
+    () => now,
+  );
+  const broker = new CliBroker(services, service, { runTurn: runner });
+  await service.refresh('codex-cli');
+  service.update('codex-cli', { surfaces: { native: true } });
+  // The elapsed window no longer blocks verification either.
+  expect((await broker.verify('codex-cli', 'codex-cli/model-a' as ModelRef)).ok).toBe(true);
+  // At/after the reported reset the elapsed window no longer blocks; the real generation decides.
+  await expect(
+    broker.dispatch({
+      surface: 'native',
+      modelRef: 'codex-cli/model-a' as ModelRef,
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      signal: new AbortController().signal,
+    }),
+  ).resolves.toBeTruthy();
+  expect(calls).toHaveLength(1);
+
+  // A window whose reset is still in the future keeps blocking.
+  now = Date.parse('2026-01-01T23:59:00.000Z');
+  await service.refresh('codex-cli');
+  await expect(
+    broker.dispatch({
+      surface: 'native',
+      modelRef: 'codex-cli/model-a' as ModelRef,
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toMatchObject({ kind: 'exhausted_capacity' });
+  expect(calls).toHaveLength(1);
+});
+
+it('never blocks the replacement account on a snapshot bound to a different account', async () => {
+  const store: Record<string, unknown> = { global: sampleSettings };
+  const now = Date.parse('2026-01-01T00:00:00.000Z');
+  const services = stubServices(store, () => now);
+  const otherAccount: CliConnection = connection('codex-cli', [modelFor('codex-cli', 'model-a')], {
+    account: { state: 'signed_in', key: `codex-cli:${'b'.repeat(24)}`, label: null, plan: null },
+    usage: {
+      connectionId: 'codex-cli',
+      // The cached zero snapshot belongs to the previous account A, not the current B.
+      accountKey: `codex-cli:${'a'.repeat(24)}`,
+      state: 'available',
+      source: 'cli',
+      observedAt: null,
+      staleAt: null,
+      windows: [
+        {
+          id: 'codex:primary',
+          label: 'Codex',
+          metric: 'percent',
+          windowKind: 'five_hour',
+          used: 100,
+          limit: 100,
+          remaining: 0,
+          utilization: 1,
+          resetAt: '2026-06-02T00:00:00.000Z',
+        },
+      ],
+      note: null,
+    },
+  });
+  const calls: CliBrokerRequest[] = [];
+  const runner: CliTurnRunner = (request) => {
+    if (isVerify(request)) return Promise.resolve(ready('Ready', request));
+    calls.push(request);
+    return Promise.resolve(ready('done', request));
+  };
+  const service = makeService(
+    services,
+    () => Promise.resolve(otherAccount),
+    () => now,
+  );
+  const broker = new CliBroker(services, service, { runTurn: runner });
+  await service.refresh('codex-cli');
+  service.update('codex-cli', { surfaces: { native: true } });
+  expect((await broker.verify('codex-cli', 'codex-cli/model-a' as ModelRef)).ok).toBe(true);
+  await expect(
+    broker.dispatch({
+      surface: 'native',
+      modelRef: 'codex-cli/model-a' as ModelRef,
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      signal: new AbortController().signal,
+    }),
+  ).resolves.toBeTruthy();
+  expect(calls).toHaveLength(1);
+});
+
 /* ----------------------- queue revalidation ------------------------------ */
 
 it('rejects a queued request when the surface is opted out before it runs', async () => {
@@ -904,7 +1139,7 @@ it('rejects a queued request when the surface is opted out before it runs', asyn
   const first = broker.dispatch(request());
   await waitForCalls(calls, 1);
   const second = broker.dispatch(request());
-  await new Promise((resolve) => setTimeout(resolve, 40));
+  await settleAdmissions();
   // The operator opts the surface out while the second request is parked.
   service.update('codex-cli', { surfaces: { native: false } });
   release();
@@ -961,7 +1196,7 @@ it('rejects a queued request when the selected credential source changes before 
     const first = broker.dispatch(request());
     await waitForCalls(calls, 1);
     const second = broker.dispatch(request());
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await settleAdmissions();
     // The Go credential rotates while the second request is parked.
     await writeAuth('go-key-2');
     release();

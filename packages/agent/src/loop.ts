@@ -4380,10 +4380,26 @@ function errorInput(error: unknown, now = Date.now()): Parameters<typeof classif
     headers instanceof Headers || (headers && typeof headers === 'object')
       ? retryDelayFromHeaders(headers as Headers | Record<string, string | undefined>, now)
       : null;
+  // A shared CLI transport error carries its own `kind` (exhausted_capacity/temporary_rate_limit/
+  // authentication/timeout). Map it onto the same HTTP-shaped classification the router already
+  // applies, so native CLI failures reuse the existing quota/rate-limit/auth families — no second
+  // policy is introduced.
+  const cliKind = typeof candidate.kind === 'string' ? candidate.kind : undefined;
+  const cliStatus =
+    cliKind === 'exhausted_capacity' || cliKind === 'temporary_rate_limit'
+      ? 429
+      : cliKind === 'authentication'
+        ? 401
+        : cliKind === 'timeout'
+          ? 408
+          : undefined;
   return {
-    status: candidate.status,
-    statusCode: candidate.statusCode ?? candidate.response?.status,
-    code: candidate.code ?? candidate.data?.error?.code,
+    status: candidate.status ?? cliStatus,
+    statusCode: candidate.statusCode ?? candidate.response?.status ?? cliStatus,
+    code:
+      candidate.code ??
+      candidate.data?.error?.code ??
+      (cliKind === 'exhausted_capacity' ? 'quota_exhausted' : undefined),
     type: candidate.type ?? candidate.data?.error?.type,
     message: candidate.data?.error?.message ?? candidate.message,
     responseBody: candidate.data ? JSON.stringify(candidate.data) : candidate.responseBody,

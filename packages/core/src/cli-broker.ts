@@ -307,8 +307,11 @@ export function cliManualAdmission(
       statusCode: 400,
       message: `${model.name} did not report a context window, so only a bounded request (policy limit ${MANUAL_UNKNOWN_CAPACITY_INPUT_BOUND.toLocaleString('en-US')} input tokens) is admitted; this one is larger. Use a model with a known context, or split the request. The transport never silently drops caller context.`,
     };
-  // A possibly separately billed `fast` mode is never authorized by a Native/Included label alone.
-  const fastNeedsSpend = options.speed === 'fast' && model.billing !== 'free';
+  // A possibly separately billed `fast` mode is never authorized by a Native/Included/free label
+  // alone. The discovery schema carries no separate evidence that `fast` itself is free, so *any*
+  // `fast` dispatch requires existing monetary authorization rather than an implicit zero-cost
+  // assumption; a free *standard* generation stays non-spending.
+  const fastNeedsSpend = options.speed === 'fast';
   if (!isNonSpendingBilling(model.billing) || fastNeedsSpend) {
     if (!options.authorizeSpend?.(connection, model))
       return {
@@ -474,7 +477,10 @@ export function cliModelInfo(connection: CliConnection, model: CliModelCapabilit
     ref: model.ref,
     providerId: ProviderIdSchema.parse(connection.providerId),
     name: model.name,
-    tier: 'T1',
+    // A subscription CLI route is a general-purpose coding tier, not an API "cheap/small" T1: the
+    // built-in profiles' `tierByStep` maps plan/edit to T2/T3, so a T1 label would make every
+    // installed-CLI route invisible to Auto for the primary step.
+    tier: 'T2',
     // A real discovered context window is used verbatim; when the CLI never reported one, the value
     // is the explicit transport policy bound (not native capacity evidence), and `capacityKnown`
     // stays false so the UI shows "Not reported" rather than claiming a native window.
@@ -657,6 +663,10 @@ export class CliBroker {
     for (const connection of this.connections()) {
       if (!connection.surfaces[query.surface]) continue;
       if (allowedProviders && !allowedProviders.has(connection.providerId)) continue;
+      // Never offer capacity the account window already reports exhausted; the guard still blocks at
+      // dispatch for the actually-resolved identity, but Auto should not waste a step on it.
+      if (this.#exhaustedAccountWindow(connection)) continue;
+      const connectionDefault = this.#connectionDefault(connection.kind);
       for (const model of connection.models) {
         if (model.hidden) continue;
         if (allowedRefs && !allowedRefs.has(model.ref)) continue;
@@ -668,6 +678,20 @@ export class CliBroker {
           query.inputTokens > model.contextWindow
         )
           continue;
+        // The effective option (profile + connection model/default layers; Auto has no conversation
+        // override) must be one the discovered model actually advertises. `fast` is never assumed
+        // authorized for automatic routing, and an unsupported configured effort/control excludes
+        // the model rather than dispatching an option the CLI cannot run.
+        const modelDefault = this.#connectionModelDefault(connection.kind, model.ref);
+        const option = resolveCliOption(model, {
+          ...(query.profile.cliDefaults?.[model.ref]
+            ? { profileDefault: query.profile.cliDefaults[model.ref] }
+            : {}),
+          ...(modelDefault ? { connectionModelDefault: modelDefault } : {}),
+          ...(connectionDefault ? { connectionDefault } : {}),
+        });
+        if (option.speed === 'fast') continue;
+        if (cliOptionError(model.ref, model, option)) continue;
         if (model.billing === 'free') free.push(cliModelInfo(connection, model));
         else if (
           model.billing === 'included_subscription' &&
@@ -1154,15 +1178,35 @@ export class CliBroker {
    * usable snapshot with a genuinely exhausted window blocks; an unavailable/unknown snapshot never
    * invents exhaustion, and a free model (e.g. anonymous Zen) is unrelated to the account window.
    */
+  /**
+   * The known-exhausted account window for this connection, or null. A snapshot bound to a different
+   * account never matches; an elapsed window is superseded at its own reported reset (the persistent
+   * guard expires at the same instant), so a stale zero snapshot cannot reblock forever and no new
+   * future reset is invented.
+   */
+  #exhaustedAccountWindow(
+    connection: CliConnection,
+  ): CliConnection['usage']['windows'][number] | null {
+    const usage = connection.usage;
+    if (usage.state === 'unavailable') return null;
+    if (usage.accountKey !== null && usage.accountKey !== connection.account.key) return null;
+    const nowMs = this.#services.clock.now().getTime();
+    return (
+      usage.windows.find((window) => {
+        const usedUp =
+          (window.utilization !== null && window.utilization >= 1) ||
+          (window.remaining !== null && window.remaining <= 0);
+        if (!usedUp) return false;
+        const resetMs = window.resetAt === null ? null : Date.parse(window.resetAt);
+        if (resetMs !== null && Number.isFinite(resetMs) && nowMs >= resetMs) return false;
+        return true;
+      }) ?? null
+    );
+  }
+
   #assertAccountCapacity(connection: CliConnection, model: CliModelCapabilities): void {
     if (model.billing !== 'included_subscription') return;
-    const usage = connection.usage;
-    if (usage.state === 'unavailable') return;
-    const exhausted = usage.windows.find(
-      (window) =>
-        (window.utilization !== null && window.utilization >= 1) ||
-        (window.remaining !== null && window.remaining <= 0),
-    );
+    const exhausted = this.#exhaustedAccountWindow(connection);
     if (!exhausted) return;
     throw new CliTransportError(
       'exhausted_capacity',
