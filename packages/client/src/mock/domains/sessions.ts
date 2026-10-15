@@ -3,13 +3,248 @@ import {
   CliOptionPatchSchema,
   CliOptionSchema,
   EffortSchema,
+  ModelRefSchema,
   ReadOutputInputSchema,
   readOutputPage,
+  SessionModelUsageSchema,
   SessionSchema,
 } from '@ferry/shared';
-import type { Message, SessionId } from '@ferry/shared';
+import type {
+  Message,
+  MessagePart,
+  ModelRef,
+  Session,
+  SessionId,
+  SessionModelUsage,
+} from '@ferry/shared';
+import { emitPendingApprovals } from './approvals.js';
 import type { MockDeps } from './deps.js';
-import type { MockStore } from '../types.js';
+import type { MockState, MockStore } from '../types.js';
+
+/** Chronological order (createdAt, then id) so "latest" is well-defined for id-ordered storage. */
+function orderedMessages(messages: readonly Message[]): Message[] {
+  return [...messages].sort(
+    (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+  );
+}
+
+function isReplyPart(part: MessagePart): boolean {
+  if (part.type === 'text' || part.type === 'reasoning') return part.text.trim().length > 0;
+  if (part.type === 'tool_call') return part.output !== null;
+  return false;
+}
+
+function partProducingModel(part: MessagePart): ModelRef | null {
+  return part.type === 'text' || part.type === 'reasoning' || part.type === 'tool_call'
+    ? (part.producedBy ?? null)
+    : null;
+}
+
+/** A logical Gateway key routes a request but is never the LLM that produced a reply. */
+function honestMessageModel(message: Message): ModelRef | null {
+  const ref = message.modelRef;
+  if (!ref || ref.startsWith('gateway/')) return null;
+  return ref;
+}
+
+function isActivelyRunning(session: Session): boolean {
+  return (
+    session.inFlight === true ||
+    session.status === 'running' ||
+    session.status === 'awaiting_approval'
+  );
+}
+
+/**
+ * The session summary with `lastReplyModelRef` derived from its own retained messages. The latest
+ * eligible reply's actual producer wins; a logical Gateway key is reported as unknown. While the run
+ * is actively streaming its trailing reply the prior value is preserved.
+ */
+function withLastReply(session: Session, messages: readonly Message[]): Session {
+  const ordered = orderedMessages(messages);
+  let reply: { index: number; model: ModelRef | null } | null = null;
+  for (let index = ordered.length - 1; index >= 0; index -= 1) {
+    const message = ordered[index];
+    if (message?.role !== 'assistant') continue;
+    const parts = message.parts.filter(isReplyPart);
+    if (parts.length === 0) continue;
+    const latest = parts.at(-1);
+    reply = {
+      index,
+      model: (latest ? partProducingModel(latest) : null) ?? honestMessageModel(message),
+    };
+    break;
+  }
+  if (!reply) return session;
+  if (reply.index === ordered.length - 1 && isActivelyRunning(session)) return session;
+  return SessionSchema.parse({ ...session, lastReplyModelRef: reply.model });
+}
+
+const LEGIBLE_MOCK_KEY = /^[A-Za-z0-9][A-Za-z0-9._:@+/-]*$/;
+
+interface CanonicalMockRef {
+  modelRef: ModelRef;
+  unknownProvenance: boolean;
+}
+
+function canonicalMockRef(row: {
+  modelRef: string;
+  providerId: string | null;
+  connectionId: string | null;
+}): CanonicalMockRef {
+  const direct = ModelRefSchema.safeParse(row.modelRef);
+  if (direct.success) return { modelRef: direct.data, unknownProvenance: false };
+  const namespace = row.providerId ?? row.connectionId;
+  if (namespace) {
+    const namespaced = ModelRefSchema.safeParse(`${namespace}/${row.modelRef}`);
+    if (namespaced.success) return { modelRef: namespaced.data, unknownProvenance: false };
+  }
+  const safe = row.modelRef.replace(/[^A-Za-z0-9._:@+/-]/g, '-').replace(/^-+|-+$/g, '');
+  const token =
+    safe.length > 0 && safe.length <= 128 && LEGIBLE_MOCK_KEY.test(safe)
+      ? safe
+      : safe.slice(0, 64) || 'empty';
+  return { modelRef: ModelRefSchema.parse(`unknown/${token}`), unknownProvenance: true };
+}
+
+function sumNullable(left: number | null, right: number | null): number | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return left + right;
+}
+
+/**
+ * Aggregates the mock's retained usage ledger for one session. Rows merge only on an exact
+ * `(canonical model, provider, connection, account)` bucket; missing token dimensions stay `null`
+ * while a reported zero stays `0`, and coverage is labelled missing when evidence is incomplete.
+ */
+function sessionModelUsageFor(state: MockState, sessionId: SessionId): SessionModelUsage {
+  interface Group {
+    modelRef: ModelRef;
+    providerId: string | null;
+    connectionId: string | null;
+    accountKey: string | null;
+    requests: number;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    cachedTokens: number | null;
+    reasoningTokens: number | null;
+    inputReported: number;
+    outputReported: number;
+    cachedReported: number;
+    reasoningReported: number;
+    lastUsedAt: string | null;
+    unreportedRequests: number;
+    unknownProvenance: boolean;
+  }
+  const rows = state.sessionUsage.filter((row) => row.sessionId === sessionId);
+  const groups = new Map<string, Group>();
+  let anyBackfilled = false;
+  let since: string | null = null;
+  for (const row of rows) {
+    const canonical = canonicalMockRef(row);
+    const key = [
+      canonical.modelRef,
+      row.providerId ?? '',
+      row.connectionId ?? '',
+      row.accountKey ?? '',
+    ].join('\u0000');
+    const reported = {
+      input: row.inputTokens !== null,
+      output: row.outputTokens !== null,
+      cached: row.cachedTokens !== null,
+      reasoning: row.reasoningTokens !== null,
+    };
+    const existing = groups.get(key);
+    if (existing) {
+      existing.requests += 1;
+      existing.inputTokens = sumNullable(existing.inputTokens, row.inputTokens);
+      existing.outputTokens = sumNullable(existing.outputTokens, row.outputTokens);
+      existing.cachedTokens = sumNullable(existing.cachedTokens, row.cachedTokens);
+      existing.reasoningTokens = sumNullable(existing.reasoningTokens, row.reasoningTokens);
+      existing.inputReported += reported.input ? 1 : 0;
+      existing.outputReported += reported.output ? 1 : 0;
+      existing.cachedReported += reported.cached ? 1 : 0;
+      existing.reasoningReported += reported.reasoning ? 1 : 0;
+      existing.unreportedRequests +=
+        reported.input || reported.output || reported.cached || reported.reasoning ? 0 : 1;
+      existing.lastUsedAt =
+        existing.lastUsedAt === null || row.occurredAt > existing.lastUsedAt
+          ? row.occurredAt
+          : existing.lastUsedAt;
+      existing.unknownProvenance ||= canonical.unknownProvenance;
+    } else {
+      groups.set(key, {
+        modelRef: canonical.modelRef,
+        providerId: row.providerId,
+        connectionId: row.connectionId,
+        accountKey: row.accountKey,
+        requests: 1,
+        inputTokens: row.inputTokens,
+        outputTokens: row.outputTokens,
+        cachedTokens: row.cachedTokens,
+        reasoningTokens: row.reasoningTokens,
+        inputReported: reported.input ? 1 : 0,
+        outputReported: reported.output ? 1 : 0,
+        cachedReported: reported.cached ? 1 : 0,
+        reasoningReported: reported.reasoning ? 1 : 0,
+        lastUsedAt: row.occurredAt,
+        unreportedRequests:
+          reported.input || reported.output || reported.cached || reported.reasoning ? 0 : 1,
+        unknownProvenance: canonical.unknownProvenance,
+      });
+    }
+    anyBackfilled ||= row.backfilled === true;
+    if (since === null || row.occurredAt < since) since = row.occurredAt;
+  }
+  const models = [...groups.values()]
+    .map((group) => ({
+      modelRef: group.modelRef,
+      providerId: group.providerId,
+      connectionId: group.connectionId,
+      accountKey: group.accountKey,
+      requests: group.requests,
+      inputTokens: group.inputReported > 0 ? group.inputTokens : null,
+      outputTokens: group.outputReported > 0 ? group.outputTokens : null,
+      cachedTokens: group.cachedReported > 0 ? group.cachedTokens : null,
+      reasoningTokens: group.reasoningReported > 0 ? group.reasoningTokens : null,
+      lastUsedAt: group.lastUsedAt,
+      unreportedRequests: group.unreportedRequests,
+    }))
+    .sort((a, b) => {
+      const refOrder = a.modelRef.localeCompare(b.modelRef);
+      if (refOrder !== 0) return refOrder;
+      return (a.providerId ?? '').localeCompare(b.providerId ?? '');
+    });
+  const sum = (pick: (model: (typeof models)[number]) => number | null): number | null => {
+    let total = 0;
+    let reported = false;
+    for (const model of models) {
+      const value = pick(model);
+      if (value === null) continue;
+      reported = true;
+      total += value;
+    }
+    return reported ? total : null;
+  };
+  const incomplete = [...groups.values()].some(
+    (group) => group.requests > group.inputReported || group.requests > group.outputReported,
+  );
+  const unknownProvenance = [...groups.values()].some((group) => group.unknownProvenance);
+  return SessionModelUsageSchema.parse({
+    sessionId,
+    totals: {
+      requests: models.reduce((total, model) => total + model.requests, 0),
+      inputTokens: sum((model) => model.inputTokens),
+      outputTokens: sum((model) => model.outputTokens),
+      cachedTokens: sum((model) => model.cachedTokens),
+      reasoningTokens: sum((model) => model.reasoningTokens),
+    },
+    models,
+    incomplete,
+    coverage: { since, missing: incomplete || anyBackfilled || unknownProvenance },
+  });
+}
 
 export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryClient['sessions'] {
   const {
@@ -42,7 +277,7 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
             `${s.title} ${s.preview}`.toLocaleLowerCase().includes(q.query.toLocaleLowerCase())),
       )
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .map((s) => structuredClone(s));
+      .map((s) => structuredClone(withLastReply(s, state.messages.get(s.id) ?? [])));
   };
   return {
     list,
@@ -116,7 +351,11 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
     },
     async get(id) {
       await before();
-      return structuredClone(sessionDetail(id));
+      const detail = sessionDetail(id);
+      return structuredClone({
+        ...detail,
+        session: withLastReply(detail.session, detail.messages),
+      });
     },
     async readOutput(rawInput) {
       await before();
@@ -218,6 +457,7 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
             s.status = 'idle';
             s.inFlight = false;
             s.updatedAt = clock.now().toISOString();
+            s.lastReplyModelRef = withLastReply(s, state.messages.get(id) ?? []).lastReplyModelRef;
             updateSession(s);
           }
         })
@@ -320,6 +560,10 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
             current.status = 'idle';
             current.inFlight = false;
             current.updatedAt = clock.now().toISOString();
+            current.lastReplyModelRef = withLastReply(
+              current,
+              state.messages.get(id) ?? [],
+            ).lastReplyModelRef;
             updateSession(current);
           }
         })
@@ -358,7 +602,9 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
       const s = session(id);
       s.status = 'idle';
       s.inFlight = false;
+      s.lastReplyModelRef = withLastReply(s, state.messages.get(id) ?? []).lastReplyModelRef;
       updateSession(s);
+      emitPendingApprovals(emit, state, clock);
     },
     async rename(id, title) {
       await before();
@@ -387,19 +633,7 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
     async modelUsage(id) {
       await before();
       session(id);
-      return {
-        sessionId: id,
-        totals: {
-          requests: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          cachedTokens: 0,
-          reasoningTokens: 0,
-        },
-        models: [],
-        incomplete: false,
-        coverage: { since: null, missing: false },
-      };
+      return sessionModelUsageFor(state, id);
     },
     async updateCliOptions(id, input) {
       await before();
@@ -422,6 +656,7 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
       persist();
       syncStore();
       emit('session.removed', { id });
+      emitPendingApprovals(emit, state, clock);
     },
   };
 }

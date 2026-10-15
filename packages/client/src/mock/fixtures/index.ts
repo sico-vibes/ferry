@@ -7,7 +7,7 @@ import { createIntegrations } from './integrations.js';
 import { createTranscripts } from './transcripts.js';
 import { createSettings } from './settings.js';
 import { delegationRuns } from './delegation.js';
-import { handoffStats } from './usage.js';
+import { createSessionUsage, handoffStats } from './usage.js';
 import { sampleCheckpoint, sampleSkill, sampleTaskRecord } from '@ferry/shared/testing';
 import type { Checkpoint, TaskRecord } from '@ferry/shared';
 
@@ -83,5 +83,6 @@ export function createFixtures(now: Date) {
     optimizerStats,
     delegationRuns,
     handoffStats,
+    sessionUsage: createSessionUsage(sessions),
   };
 }

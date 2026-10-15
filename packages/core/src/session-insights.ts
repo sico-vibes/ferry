@@ -411,3 +411,26 @@ export function sessionSummariesWithLastReply(
     sessionSummaryWithLastReply(session, messagesBySession.get(session.id) ?? []),
   );
 }
+
+/**
+ * Idempotent lazy backfill for summaries that predate `lastReplyModelRef`. Only sessions whose stored
+ * value has never been computed (`undefined`) are considered, so a caller re-listing after the first
+ * pass does no message reads at all. A session with no eligible reply is recorded as an honest
+ * `null`, marking it resolved so it is never re-scanned on later lists. An already-recorded value
+ * (including `null`) and a session actively streaming a trailing reply are left untouched.
+ *
+ * Callers pass only the indexed per-session messages for the sessions that still need a value, so no
+ * unrelated conversation's transcript is ever materialized.
+ */
+export function sessionSummariesWithLastReplyBackfilled(
+  sessions: readonly Session[],
+  messagesBySession: ReadonlyMap<string, readonly Message[]>,
+): Session[] {
+  return sessions.map((session) => {
+    if (session.lastReplyModelRef !== undefined) return session;
+    const summary = sessionSummaryWithLastReply(session, messagesBySession.get(session.id) ?? []);
+    return summary.lastReplyModelRef === undefined
+      ? SessionSchema.parse({ ...summary, lastReplyModelRef: null })
+      : summary;
+  });
+}

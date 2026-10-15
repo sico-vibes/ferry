@@ -107,6 +107,7 @@ const persistenceSchema = (state: unknown) => {
     taskRecords,
     selections,
     cliVerifiedModels,
+    sessionUsage: (value.sessionUsage as MockState['sessionUsage'] | undefined) ?? [],
   } as Partial<MockState>;
 };
 
@@ -151,6 +152,7 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
     delegationRuns: [],
     selections: new Map(),
     cliVerifiedModels: new Map(),
+    sessionUsage: structuredClone(fixtures.sessionUsage),
   });
   let state = initial();
   try {
@@ -211,6 +213,11 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
     nextId(prefix) {
       const suffix = Array.from({ length: 20 }, () => rng.int(0, 35).toString(36)).join('');
       return `${prefix}_${suffix}`;
+    },
+    recordUsage(input) {
+      state.sessionUsage = [...state.sessionUsage, input];
+      syncStore();
+      persist();
     },
     startDelegation(sessionId, laneName, brief) {
       const lane = state.lanes.find((candidate) => candidate.name === laneName);

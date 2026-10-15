@@ -55,5 +55,19 @@ export const echoRunner: ScenarioRunner = {
     };
     store.messages.get(sessionId)?.push(message);
     emit('session.message', { sessionId, message });
+    if (session.modelRef)
+      store.recordUsage({
+        eventId: store.nextId('usage'),
+        sessionId,
+        modelRef: session.modelRef,
+        providerId: session.modelRef.split('/')[0] ?? null,
+        connectionId: null,
+        accountKey: null,
+        inputTokens: null,
+        outputTokens: null,
+        cachedTokens: null,
+        reasoningTokens: null,
+        occurredAt: clock.now().toISOString(),
+      });
   },
 };
