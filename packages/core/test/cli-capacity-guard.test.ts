@@ -380,6 +380,26 @@ describe('CliCapacityGuard soft blocks', () => {
     expect(guard.check(identity()).allowed).toBe(true);
   });
 
+  it('never early-unblocks a provider wait longer than 24h', () => {
+    const clock = makeClock();
+    const guard = new CliCapacityGuard({ now: clock.now });
+    const fortyEightHours = 48 * 60 * 60 * 1000;
+
+    guard.record(
+      identity(),
+      failure('temporary_rate_limit', 'slow down', { retryAfterMs: fortyEightHours }),
+    );
+    // The actual provider wait is preserved, not clamped to a 24h ceiling.
+    expect(guard.snapshot()[0]?.retryAfterMs).toBe(fortyEightHours);
+
+    clock.advance(24 * 60 * 60 * 1000);
+    expect(guard.check(identity()).allowed).toBe(false);
+    clock.advance(fortyEightHours - 24 * 60 * 60 * 1000 - 1);
+    expect(guard.check(identity()).allowed).toBe(false);
+    clock.advance(1);
+    expect(guard.check(identity()).allowed).toBe(true);
+  });
+
   it('never records cancellation, model or capability failures as capacity blocks', () => {
     const clock = makeClock();
     const guard = new CliCapacityGuard({ now: clock.now });

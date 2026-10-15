@@ -76,6 +76,8 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
     },
     async candidates(sessionId) {
       await before();
+      // Selectable installed-CLI rows: verified + opted-in + tool-capable, free routes ranked first
+      // (a manual pin may select an included/metered model; Auto funding is gated separately).
       const cliChoices = mockCliModelRows(state).filter(
         (model) => model.verified === true && model.toolCalling,
       );

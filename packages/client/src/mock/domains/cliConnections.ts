@@ -31,7 +31,8 @@ export function createCliConnectionsDomain(
         connection.models.find((candidate) => candidate.ref === modelRef) ?? connection.models[0];
       if (!model)
         return { ok: false, modelRef: null, message: `No discovered ${id} model to verify.` };
-      state.cliVerifiedModels.set(id, model.ref);
+      const verified = state.cliVerifiedModels.get(id) ?? [];
+      if (!verified.includes(model.ref)) state.cliVerifiedModels.set(id, [...verified, model.ref]);
       const updated = build(id);
       emit('cliConnections.updated', updated);
       return {

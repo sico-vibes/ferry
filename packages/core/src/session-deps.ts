@@ -31,6 +31,7 @@ import {
   QuotaObservationSchema,
   newId,
   type ModelInfo,
+  type ModelRef,
   type Profile,
   type Provider,
   type StepKind,
@@ -1178,7 +1179,7 @@ async function runNativeCliStep(
   const messages = encodeCliConversation(req.system, req.messages);
   const tools = encodeCliTools(req.tools);
   const broker = getCliBroker(services, () => undefined);
-  const { result } = await broker.dispatch({
+  const dispatch = await broker.dispatch({
     surface: 'native',
     modelRef,
     messages,
@@ -1192,13 +1193,32 @@ async function runNativeCliStep(
     ...(profileDefault ? { profileCliDefault: profileDefault } : {}),
     inputTokens: estimateCliInputTokens(req.system, messages, tools),
   });
+  const { result, connection, model, accountKey } = dispatch;
   const reportedUsage: ReportedStepUsage = {
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     cachedTokens: result.usage.cachedTokens,
     reasoningTokens: result.usage.reasoningTokens,
   };
-  return {
+  // Generation/dispatch-captured producer metadata (the Agent contract consumes this next). These
+  // fields are captured from the broker's dispatch result *before* the await resolves, never looked
+  // up from the current account afterwards, and the original requested ref (including a legacy Zen
+  // alias) is preserved separately. Built as a structural const (not an excess object literal) so it
+  // is forward-compatible with the frozen `GeneratedStep.producer` contract without a new import.
+  const producer: {
+    modelRef: ModelRef;
+    providerId: string;
+    connectionId: string;
+    accountKey: string | null;
+    requestedModelRef: ModelRef;
+  } = {
+    modelRef: model.ref,
+    providerId: model.providerId,
+    connectionId: connection.kind,
+    accountKey,
+    requestedModelRef: modelRef,
+  };
+  const step: GeneratedStep & { producer: typeof producer } = {
     ...(result.text ? { text: result.text } : {}),
     ...(result.toolCalls.length
       ? {
@@ -1213,7 +1233,9 @@ async function runNativeCliStep(
     responseModel: result.responseModel,
     finishReason: result.toolCalls.length ? 'tool-calls' : 'stop',
     reportedUsage,
+    producer,
   };
+  return step;
 }
 
 export function modelHintsFromRegistry(model: Pick<ModelInfo, 'capability'>): Partial<ModelHints> {

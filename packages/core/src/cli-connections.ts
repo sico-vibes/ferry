@@ -9,6 +9,7 @@ import {
   type CliEffort,
   type CliOptionPatch,
   type CliSpeed,
+  type CliUsageSnapshot,
   type Settings,
 } from '@ferry/shared';
 import { discoverCliConnection, discoverCliUsage, type CliUsageRefresh } from '@ferry/delegate';
@@ -41,6 +42,32 @@ type EmitEvent = (method: string, payload: unknown) => void;
 type ScanFn = (kind: CliConnectionKind) => Promise<CliConnection>;
 type UsageFn = (kind: CliConnectionKind, connection: CliConnection) => Promise<CliUsageRefresh>;
 
+/**
+ * Per-services host event target. The CLI broker/service are sometimes constructed *first* by a
+ * call site that has no host emit yet (e.g. the Gateway controller registers before the
+ * `cliConnections` domain). This stable holder lets a later explicit host registration replace that
+ * placeholder emit so future RPC updates are never dropped, while a later NoOp call can never
+ * overwrite a real target or leak a listener.
+ */
+const emitHolders = new WeakMap<FerryServices, { fn: EmitEvent }>();
+
+/** Bind a placeholder target only when none exists yet; never replaces an existing target. */
+export function bindCliEmit(services: FerryServices, emit: EmitEvent): void {
+  if (!emitHolders.has(services)) emitHolders.set(services, { fn: emit });
+}
+
+/** Explicitly (re)bind the real host event target for a services instance. */
+export function registerCliEmit(services: FerryServices, emit: EmitEvent): void {
+  const holder = emitHolders.get(services);
+  if (holder) holder.fn = emit;
+  else emitHolders.set(services, { fn: emit });
+}
+
+/** Resolve the current host event target, defaulting to an inert no-op. */
+export function cliEmitFor(services: FerryServices): EmitEvent {
+  return emitHolders.get(services)?.fn ?? (() => undefined);
+}
+
 export interface CliConnectionServiceOptions {
   /** Full install/model/account scan. Defaults to the real installed-CLI discovery. */
   scan?: ScanFn;
@@ -67,6 +94,7 @@ export function getCliConnectionService(
 ): CliConnectionService {
   let service = servicesIndex.get(services);
   if (!service) {
+    bindCliEmit(services, emit);
     service = new CliConnectionService(services, emit, {
       ...(services.cliScan ? { scan: services.cliScan } : {}),
       ...(services.cliUsage ? { usage: services.cliUsage } : {}),
@@ -144,10 +172,11 @@ export class CliConnectionService {
   readonly #scan: ScanFn;
   readonly #usage: UsageFn;
   readonly #now: () => number;
+  readonly #emit: EmitEvent;
 
   constructor(
     private readonly services: FerryServices,
-    private readonly emit: EmitEvent,
+    emit: EmitEvent,
     options: CliConnectionServiceOptions = {},
   ) {
     this.#scan =
@@ -156,6 +185,12 @@ export class CliConnectionService {
       options.usage ??
       ((kind, connection) => discoverCliUsage(connection, { environment: services.env }));
     this.#now = options.now ?? (() => Date.now());
+    // Prefer the shared holder (a real host target registered later always wins) and fall back to the
+    // constructor-supplied emit for direct construction in unit tests.
+    this.#emit = (method, payload) => {
+      const holder = emitHolders.get(services);
+      (holder?.fn ?? emit)(method, payload);
+    };
     this.#load();
   }
 
@@ -326,8 +361,29 @@ export class CliConnectionService {
       }
     }
     const connection = this.#snapshot().find((entry) => entry.kind === id) ?? placeholder(id);
-    this.emit('settings.updated', settings);
-    this.emit('cliConnections.updated', connection);
+    this.#emit('settings.updated', settings);
+    this.#emit('cliConnections.updated', connection);
+    return connection;
+  }
+
+  /**
+   * Apply a transport-observed live usage snapshot to the cached connection. The account
+   * identity/label from discovery is preserved (a usage stream never authorizes a logout), only the
+   * usage block changes, and the update is published through the same stable host target.
+   */
+  applyUsage(connectionId: CliConnectionKind, snapshot: CliUsageSnapshot): CliConnection {
+    const record = this.#records.get(connectionId);
+    const connection: CliConnection = {
+      ...(record?.connection ?? placeholder(connectionId)),
+      usage: { ...snapshot, connectionId },
+    };
+    this.#records.set(connectionId, {
+      connection,
+      modelCheckedAt: record?.modelCheckedAt ?? 0,
+      usageCheckedAt: this.#now(),
+    });
+    this.#persist();
+    this.#emitConnection(connectionId, connection);
     return connection;
   }
 
@@ -599,6 +655,6 @@ export class CliConnectionService {
   }
 
   #emitConnection(kind: CliConnectionKind, connection: CliConnection): void {
-    this.emit('cliConnections.updated', { ...connection, surfaces: this.#surfacesFor(kind) });
+    this.#emit('cliConnections.updated', { ...connection, surfaces: this.#surfacesFor(kind) });
   }
 }

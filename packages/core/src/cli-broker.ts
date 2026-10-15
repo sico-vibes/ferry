@@ -12,6 +12,7 @@ import {
   type Effort,
   type ModelInfo,
   type ModelRef,
+  type Profile,
   type Provider,
   ProviderIdSchema,
   redactKnownSecretText,
@@ -31,7 +32,19 @@ import {
   type CliTurnResult,
 } from '@ferry/delegate';
 import type { FerryServices } from './services.js';
-import { getCliConnectionService, type CliConnectionService } from './cli-connections.js';
+import {
+  bindCliEmit,
+  getCliConnectionService,
+  type CliConnectionService,
+} from './cli-connections.js';
+import { resolveOpenCodeCredential } from './cli-opencode-credentials.js';
+import {
+  CliCapacityGuard,
+  parseCliCapacityBlocks,
+  type CliCapacityBlock,
+  type CliCapacityIdentity,
+  type CliCapacityStore,
+} from './cli-capacity-guard.js';
 
 /** One caller-owned generation request routed to an installed-CLI transport. */
 export interface CliBrokerRequest {
@@ -59,6 +72,13 @@ export interface CliBrokerRequest {
   /** Explicit executable seam for offline fixtures. Never set in production. */
   executable?: string;
   executableArgs?: string[];
+  /**
+   * Capacity identity recorded against a typed transport failure and re-checked after a queue wait.
+   * Internal admission plumbing; never set by the transport.
+   */
+  capacityIdentity?: CliCapacityIdentity;
+  /** Re-run admission (guard + credential) once this caller owns the connection slot. */
+  revalidate?: () => Promise<void>;
 }
 
 export type CliTurnRunner = (request: CliBrokerRequest) => Promise<CliTurnResult>;
@@ -91,6 +111,13 @@ export interface CliDispatchResult {
   model: CliModelCapabilities;
   option: CliOption;
   result: CliTurnResult;
+  /**
+   * Opaque, non-secret account fingerprint of the credential actually selected for this generation,
+   * captured *before* the await. Never a raw key; `null` when no stable API-key identity exists.
+   */
+  accountKey: string | null;
+  /** Actual upstream provider of the selected model (`opencode`/`opencode-go`), or `null`. */
+  provider: string | null;
 }
 
 /** Bounded single-generation queue limits; one active turn per connection, small fair backlog. */
@@ -226,6 +253,19 @@ export function cliManualAdmission(
   options: {
     authorizeSpend?: (connection: CliConnection, model: CliModelCapabilities) => boolean;
     inputTokens?: number;
+    /**
+     * Effective credential mode for this request. Anonymous OpenCode access is only eligible for a
+     * free Zen model and needs no signed-in account key; every other mode needs a real account.
+     */
+    credentialMode?: 'installed' | 'anonymous' | 'ferry';
+    /**
+     * Actual resolved upstream provider of the selected model. A genuinely free OpenCode Zen model
+     * reached through its own Zen source is admitted without a signed-in account key (keyless
+     * installed/anonymous native access); a Go/other upstream or an included model is not.
+     */
+    credentialProvider?: string | null;
+    /** Effective resolved speed. A possibly separately billed `fast` requires spending authorization. */
+    speed?: 'standard' | 'fast';
   } = {},
 ): CliDispatchAdmission {
   if (!connection.surfaces[surface])
@@ -240,7 +280,17 @@ export function cliManualAdmission(
       statusCode: 400,
       message: `${model.name} is not verified on ${connection.kind}. Run Verify for this connection before sending.`,
     };
-  if (connection.account.state !== 'signed_in' || connection.account.key === null)
+  // A genuinely free OpenCode Zen model resolved through its own Zen source is admitted keyless
+  // (anonymous, or installed without a Zen key). An included/third-party upstream or a Go account
+  // never satisfies this exemption.
+  const keylessZenFree =
+    model.billing === 'free' &&
+    options.credentialProvider === 'opencode' &&
+    model.upstreamProvider === 'opencode';
+  if (
+    !keylessZenFree &&
+    (connection.account.state !== 'signed_in' || connection.account.key === null)
+  )
     return {
       ok: false,
       statusCode: 401,
@@ -257,12 +307,16 @@ export function cliManualAdmission(
       statusCode: 400,
       message: `${model.name} did not report a context window, so only a bounded request (policy limit ${MANUAL_UNKNOWN_CAPACITY_INPUT_BOUND.toLocaleString('en-US')} input tokens) is admitted; this one is larger. Use a model with a known context, or split the request. The transport never silently drops caller context.`,
     };
-  if (!isNonSpendingBilling(model.billing)) {
+  // A possibly separately billed `fast` mode is never authorized by a Native/Included label alone.
+  const fastNeedsSpend = options.speed === 'fast' && model.billing !== 'free';
+  if (!isNonSpendingBilling(model.billing) || fastNeedsSpend) {
     if (!options.authorizeSpend?.(connection, model))
       return {
         ok: false,
         statusCode: 402,
-        message: `${model.name} is billed as ${model.billing}; dispatching it needs an existing monetary spending authorization and a known price budget. No zero-cost charge was assumed.`,
+        message: fastNeedsSpend
+          ? `${model.name} fast mode may be billed separately; dispatching it needs an existing monetary spending authorization. No zero-cost charge was assumed.`
+          : `${model.name} is billed as ${model.billing}; dispatching it needs an existing monetary spending authorization and a known price budget. No zero-cost charge was assumed.`,
       };
   }
   return { ok: true, statusCode: 200, message: '' };
@@ -430,8 +484,9 @@ export function cliModelInfo(connection: CliConnection, model: CliModelCapabilit
     toolCalling: model.toolCalling,
     reasoning: model.efforts.length > 0,
     reasoningEfforts: knownReasoningEfforts(model),
-    // Installed-CLI subscription capacity is never a synthetic free route.
-    free: false,
+    // `free` reflects the actual discovered billing class: only a genuinely zero-cost model is free.
+    // An included subscription (e.g. OpenCode Go) and metered/unknown billing are never `free`.
+    free: model.billing === 'free',
     priceInPerM: null,
     priceOutPerM: null,
     transport: kindTransport[connection.kind],
@@ -503,6 +558,26 @@ function isNonSpendingBilling(billing: CliModelCapabilities['billing']): boolean
  * bounded fair queue, and runs the real bounded verification generation. The transport stays a seam
  * so offline tests never spawn a CLI.
  */
+/** Resolved, non-secret credential identity for one dispatch/verify. Never persisted wholesale. */
+interface ResolvedCliCredential {
+  mode: 'installed' | 'anonymous' | 'ferry';
+  provider: string | null;
+  credentialProvider: string | null;
+  accountKey: string | null;
+  /** Memory-only secret; populated only when Ferry supplies the credential itself. */
+  apiKey?: string;
+}
+
+/** Persisted capacity blocks live under a dedicated settings key and are validated on read. */
+function createCapacityStore(services: FerryServices): CliCapacityStore {
+  return {
+    load: () => parseCliCapacityBlocks(services.settings.get('cli-capacity')),
+    save: (blocks) => {
+      services.settings.put('cli-capacity', blocks);
+    },
+  };
+}
+
 export class CliBroker {
   readonly #queues = new Map<CliConnectionKind, QueueSlot>();
   readonly #connectionService: CliConnectionService;
@@ -510,6 +585,10 @@ export class CliBroker {
   readonly #run: CliTurnRunner;
   /** Existing spending authorization for a metered/unknown-billing verification. Defaults closed. */
   readonly #authorizeSpend: (connection: CliConnection, model: CliModelCapabilities) => boolean;
+  /** Persistent, identity-scoped capacity circuit guard shared by native and Gateway dispatch. */
+  readonly #capacity: CliCapacityGuard;
+  /** Last-seen account fingerprint per (connection, upstream) scope, for correct-scope clearing. */
+  readonly #accountScopes = new Map<string, string | null>();
 
   constructor(
     services: FerryServices,
@@ -517,12 +596,18 @@ export class CliBroker {
     options: {
       runTurn?: CliTurnRunner;
       authorizeSpend?: (connection: CliConnection, model: CliModelCapabilities) => boolean;
+      /** Injectable capacity storage (tests); defaults to the persisted settings block. */
+      capacityStore?: CliCapacityStore;
     } = {},
   ) {
     this.#services = services;
     this.#connectionService = connectionService;
     this.#run = options.runTurn ?? defaultCliRunner;
     this.#authorizeSpend = options.authorizeSpend ?? (() => false);
+    this.#capacity = new CliCapacityGuard({
+      now: () => services.clock.now().getTime(),
+      store: options.capacityStore ?? createCapacityStore(services),
+    });
   }
 
   /** Immediate cached connection snapshot with verification receipts revalidated against changes. */
@@ -544,6 +629,79 @@ export class CliBroker {
           .filter((model) => !model.hidden)
           .map((model) => cliModelInfo(connection, model)),
       );
+  }
+
+  /**
+   * Shared funding-eligibility pool for installed-CLI routing (native Auto and, when its owner wires
+   * it, Gateway Auto). A row is eligible only when the target surface is opted in, the exact model
+   * carries a successful verification receipt, its effective capability/options are compatible, and
+   * its *actual billing* is fundable: genuinely free models always, included-subscription models only
+   * when the profile opts in via `allowSubscriptionCli`. Metered/unknown models are never in the pool
+   * — they need an explicit bounded monetary authorization at manual dispatch. Free routes are ranked
+   * ahead of included ones independent of the quality preset.
+   */
+  eligibleModels(query: {
+    surface: 'native' | 'gateway';
+    profile: Profile;
+    requiresTools?: boolean;
+    inputTokens?: number;
+  }): ModelInfo[] {
+    const allowedRefs = query.profile.allowedModelRefs
+      ? new Set<string>(query.profile.allowedModelRefs)
+      : null;
+    const allowedProviders = Array.isArray(query.profile.allowedProviders)
+      ? new Set<string>(query.profile.allowedProviders)
+      : null;
+    const free: ModelInfo[] = [];
+    const included: ModelInfo[] = [];
+    for (const connection of this.connections()) {
+      if (!connection.surfaces[query.surface]) continue;
+      if (allowedProviders && !allowedProviders.has(connection.providerId)) continue;
+      for (const model of connection.models) {
+        if (model.hidden) continue;
+        if (allowedRefs && !allowedRefs.has(model.ref)) continue;
+        if (!isCliModelVerified(connection, model.ref)) continue;
+        if (query.requiresTools && !model.toolCalling) continue;
+        if (
+          query.inputTokens !== undefined &&
+          model.contextWindow != null &&
+          query.inputTokens > model.contextWindow
+        )
+          continue;
+        if (model.billing === 'free') free.push(cliModelInfo(connection, model));
+        else if (
+          model.billing === 'included_subscription' &&
+          query.profile.allowSubscriptionCli === true
+        )
+          included.push(cliModelInfo(connection, model));
+      }
+    }
+    return [...free, ...included];
+  }
+
+  /**
+   * Selectable installed-CLI models for a surface: opted-in, verified and (optionally) tool-capable,
+   * regardless of funding. This is the manual picker pool (a user may explicitly pin an included or
+   * metered model, which dispatch then authorizes); free routes are ranked first. Auto routing uses
+   * `eligibleModels` instead, which additionally requires fundable billing.
+   */
+  selectableModels(
+    surface: 'native' | 'gateway',
+    options: { requiresTools?: boolean } = {},
+  ): ModelInfo[] {
+    const free: ModelInfo[] = [];
+    const rest: ModelInfo[] = [];
+    for (const connection of this.connections()) {
+      if (!connection.surfaces[surface]) continue;
+      for (const model of connection.models) {
+        if (model.hidden) continue;
+        if (!isCliModelVerified(connection, model.ref)) continue;
+        if (options.requiresTools && !model.toolCalling) continue;
+        const info = cliModelInfo(connection, model);
+        (model.billing === 'free' ? free : rest).push(info);
+      }
+    }
+    return [...free, ...rest];
   }
 
   /** Resolve one discovered model row by ref, or undefined when unknown. */
@@ -571,6 +729,9 @@ export class CliBroker {
     const release = await this.#acquire(kind, request.signal, deadlineAt);
     let bound: { signal: AbortSignal; dispose: () => void } | undefined;
     try {
+      // Admission recheck after the queue wait: a profile/credential/account change while parked must
+      // never dispatch against stale evidence. Runs only once this caller owns the connection slot.
+      if (request.revalidate) await request.revalidate();
       request.signal.throwIfAborted();
       const remainingMs = deadlineAt === undefined ? undefined : deadlineAt - Date.now();
       if (remainingMs !== undefined && remainingMs <= 0)
@@ -582,7 +743,9 @@ export class CliBroker {
         ...(remainingMs === undefined ? {} : { timeoutMs: remainingMs }),
       });
     } catch (error) {
-      throw this.#classify(error, request.connection);
+      const classified = this.#classify(error, request.connection);
+      if (request.capacityIdentity) this.#recordCapacity(request.capacityIdentity, classified);
+      throw classified;
     } finally {
       bound?.dispose();
       release();
@@ -602,35 +765,72 @@ export class CliBroker {
         `Unknown installed-CLI model: ${input.modelRef}`,
       );
     const { connection, model } = resolved;
+    // Resolve the actual selected credential (provider-specific fingerprint) before any dispatch, and
+    // validate it against the stored verification receipt plus the account-window/guard admission.
+    const credential = await this.#resolveCredential(connection, model, input.apiKey);
+    const option = this.#resolveDispatchOption(input, connection, model);
+    // An explicit option the discovered model does not advertise is rejected before any prompt.
+    const optionError = cliOptionError(model.ref, model, option);
+    if (optionError) throw new CliTransportError('unsupported_capability', optionError);
+    // Admission (surface opt-in, verification, account identity, billing/fast authorization) is the
+    // outer gate; the receipt-evidence and account-window/guard checks refine it afterwards.
     const admission = cliManualAdmission(connection, model, input.surface, {
       authorizeSpend: this.#authorizeSpend,
+      credentialMode: credential.mode,
+      credentialProvider: credential.provider,
+      speed: option.speed,
       ...(input.inputTokens === undefined ? {} : { inputTokens: input.inputTokens }),
     });
     if (!admission.ok)
       throw new CliTransportError(
         this.#transportKindForStatus(admission.statusCode),
         admission.message,
-        { statusCode: admission.statusCode, accountKey: connection.account.key },
+        { statusCode: admission.statusCode, accountKey: credential.accountKey },
       );
-    const connectionModelDefault = this.#connectionModelDefault(connection.kind, model.ref);
-    const connectionDefault = this.#connectionDefault(connection.kind);
-    const option = resolveCliOption(model, {
-      ...(input.profileCliDefault ? { profileDefault: input.profileCliDefault } : {}),
-      ...(connectionModelDefault ? { connectionModelDefault } : {}),
-      ...(connectionDefault ? { connectionDefault } : {}),
-      ...(input.optionOverride ? { conversation: input.optionOverride } : {}),
-    });
-    // An explicit option the discovered model does not advertise is rejected before any prompt.
-    const optionError = cliOptionError(model.ref, model, option);
-    if (optionError) throw new CliTransportError('unsupported_capability', optionError);
-    const credentialMode = this.#credentialMode(connection.kind);
-    const credentialProvider = this.#credentialProvider(connection.kind);
-    if (credentialMode === 'ferry' && !input.apiKey)
-      throw new CliTransportError(
-        'authentication',
-        'Ferry credential mode requires the selected saved key; refusing to substitute another credential.',
-        { accountKey: connection.account.key },
-      );
+    this.#assertReceiptEvidence(connection, model, credential);
+    this.#assertAdmissible(connection, model, credential);
+    const identity = this.#capacityIdentity(connection, model, credential);
+    const capturedDigest = this.#admissionDigest(connection, model, credential, option);
+    // Re-check the *current* shared state after the queue wait: surface opt-in, proof, credential
+    // evidence, effective options, account windows and the guard. Any change rejects before the
+    // runner, so a parked caller never runs a stale key/source/model.
+    const revalidate = async () => {
+      const current = this.model(input.modelRef);
+      if (!current)
+        throw new CliTransportError(
+          'unavailable_model',
+          `The installed-CLI model ${input.modelRef} is no longer available. Send again.`,
+        );
+      const freshConnection = current.connection;
+      const freshModel = current.model;
+      if (!freshConnection.surfaces[input.surface])
+        throw new CliTransportError(
+          'unsupported_capability',
+          `${freshConnection.kind} was opted out of the ${input.surface} surface while this request was queued.`,
+        );
+      if (!isCliModelVerified(freshConnection, freshModel.ref))
+        throw new CliTransportError(
+          'authentication',
+          `${freshModel.name} is no longer verified for this credential. Run Verify again.`,
+        );
+      const fresh = await this.#resolveCredential(freshConnection, freshModel, input.apiKey);
+      this.#assertReceiptEvidence(freshConnection, freshModel, fresh);
+      if (fresh.accountKey !== credential.accountKey)
+        throw new CliTransportError(
+          'authentication',
+          'The CLI credential changed while this request was queued. Send again with the current credential.',
+          { accountKey: fresh.accountKey },
+        );
+      const freshOption = this.#resolveDispatchOption(input, freshConnection, freshModel);
+      const freshError = cliOptionError(freshModel.ref, freshModel, freshOption);
+      if (freshError) throw new CliTransportError('unsupported_capability', freshError);
+      if (this.#admissionDigest(freshConnection, freshModel, fresh, freshOption) !== capturedDigest)
+        throw new CliTransportError(
+          'authentication',
+          'The CLI route changed while this request was queued. Send again.',
+        );
+      this.#assertAdmissible(freshConnection, freshModel, fresh);
+    };
     const result = await this.run({
       connection,
       model,
@@ -640,15 +840,33 @@ export class CliBroker {
       signal: input.signal,
       environment: this.#services.env,
       ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
-      credentialMode,
-      ...(credentialProvider ? { credentialProvider } : {}),
-      ...(input.apiKey ? { apiKey: input.apiKey } : {}),
+      credentialMode: credential.mode,
+      ...(credential.credentialProvider
+        ? { credentialProvider: credential.credentialProvider }
+        : {}),
+      ...(credential.apiKey !== undefined
+        ? { apiKey: credential.apiKey }
+        : input.apiKey
+          ? { apiKey: input.apiKey }
+          : {}),
+      capacityIdentity: identity,
+      revalidate,
+      onUsageSnapshot: (snapshot) => {
+        this.#connectionService.applyUsage(connection.kind, snapshot);
+      },
       ...(input.onText ? { onText: input.onText } : {}),
       ...(input.onProgress ? { onProgress: input.onProgress } : {}),
       ...(input.executable ? { executable: input.executable } : {}),
       ...(input.executableArgs ? { executableArgs: input.executableArgs } : {}),
     });
-    return { connection, model, option, result };
+    return {
+      connection,
+      model,
+      option,
+      result,
+      accountKey: credential.accountKey,
+      provider: credential.provider,
+    };
   }
 
   /**
@@ -686,18 +904,41 @@ export class CliBroker {
         modelRef: model.ref,
         message: `Verifying ${model.name} would spend on ${model.billing} billing; existing spending authorization is required and was not supplied.`,
       };
-    const credentialMode = this.#credentialMode(connection.kind);
-    // Ferry credential mode needs the selected saved key; without it, refuse rather than silently
-    // falling back to the anonymous or installed credential.
-    if (credentialMode === 'ferry')
+    // Resolve the actual selected credential before dispatching the verification generation. A ferry
+    // mode with no saved key (or an unsupported cross-provider offer) rejects here with a typed,
+    // redacted error rather than silently substituting another credential.
+    let credential: ResolvedCliCredential;
+    try {
+      credential = await this.#resolveCredential(connection, model);
+    } catch (error) {
       return {
         ok: false,
         modelRef: model.ref,
         message:
-          'Ferry credential verification needs a selected saved key; no generation was dispatched and no other credential was substituted.',
+          error instanceof Error
+            ? redactKnownSecretText(error.message)
+            : 'The credential could not be resolved; no generation was dispatched.',
       };
+    }
+    const identity = this.#capacityIdentity(connection, model, credential);
+    this.#syncCapacityAccount(connection.kind, identity);
+    // A currently known-exhausted included account window blocks even Verify, so verification is not
+    // a back door that silently consumes overage/credits. The guard's unknown-reset block is NOT
+    // applied here: with no snapshot evidence, an explicit real generation is the successful check
+    // that clears it. A failure is still recorded by `run`.
+    try {
+      this.#assertAccountCapacity(connection, model);
+    } catch (error) {
+      return {
+        ok: false,
+        modelRef: model.ref,
+        message:
+          error instanceof Error
+            ? redactKnownSecretText(error.message)
+            : 'The account window is exhausted; no generation was dispatched.',
+      };
+    }
     const receiptKey = this.#modelReceiptKey(connection, model);
-    const credentialProvider = this.#credentialProvider(connection.kind);
     const controller = new AbortController();
     const timer = setTimeout(() => {
       controller.abort(new CliTransportError('timeout', 'CLI verification timed out'));
@@ -712,12 +953,17 @@ export class CliBroker {
         signal: controller.signal,
         environment: this.#services.env,
         timeoutMs: CLI_VERIFY_TIMEOUT_MS,
-        credentialMode,
-        ...(credentialProvider ? { credentialProvider } : {}),
+        credentialMode: credential.mode,
+        ...(credential.credentialProvider
+          ? { credentialProvider: credential.credentialProvider }
+          : {}),
+        ...(credential.apiKey !== undefined ? { apiKey: credential.apiKey } : {}),
+        capacityIdentity: identity,
       });
       if (!result.text.trim())
         throw new CliTransportError('provider_error', 'The CLI returned no text for verification');
-      // A credential/account change during the run invalidates the receipt it would have set.
+      // A credential/account/capability change during the run invalidates the receipt it would have
+      // set. Both the synchronous cache key and the freshly resolved credential evidence are checked.
       const current = this.connections().find((entry) => entry.kind === kind);
       if (!current || this.#modelReceiptKey(current, model) !== receiptKey)
         return {
@@ -725,11 +971,22 @@ export class CliBroker {
           modelRef: model.ref,
           message: 'The CLI credential or account changed during verification. Check it again.',
         };
+      const after = await this.#resolveCredential(current, model).catch(() => null);
+      if (after?.accountKey !== credential.accountKey)
+        return {
+          ok: false,
+          modelRef: model.ref,
+          message: 'The CLI credential or account changed during verification. Check it again.',
+        };
+      // A successful real generation is an explicit successful check: clear this scope's exhausted
+      // block (unknown-reset exhaustion only unblocks on a real success or account change).
+      this.#capacity.verifiedRefresh(identity);
       const checkedAt = new Date().toISOString();
-      // Accumulate: a successful check of a new model never forgets earlier verified models.
+      // Accumulate: a successful check of a new model never forgets earlier verified models. Each
+      // receipt binds the actual resolved credential fingerprint for that model's own upstream.
       const modelReceipts: Record<ModelRef, CliModelReceipt> = {
         ...(current.verify.modelReceipts ?? {}),
-        [model.ref]: { checkedAt, receiptKey },
+        [model.ref]: { checkedAt, receiptKey, credentialKey: credential.accountKey },
       };
       this.#connectionService.applyVerification(kind, {
         state: 'verified',
@@ -779,6 +1036,256 @@ export class CliBroker {
     }
   }
 
+  /**
+   * Resolve the actual selected credential identity before verify/dispatch. For a real OpenCode
+   * model (one that reports an upstream provider) this delegates to the reviewed provider-specific
+   * resolver, so Zen, Go and any other provider keep independent fingerprints. Codex/Claude always
+   * use their installed sign-in; an OpenCode model that reports no upstream provider falls back to
+   * the stored connection selection so legacy/undiscovered fixtures stay dispatchable.
+   */
+  async #resolveCredential(
+    connection: CliConnection,
+    model: CliModelCapabilities,
+    fallbackApiKey?: string,
+  ): Promise<ResolvedCliCredential> {
+    if (connection.kind !== 'opencode-cli')
+      return {
+        mode: 'installed',
+        provider: null,
+        credentialProvider: null,
+        accountKey: connection.account.key,
+      };
+    const provider = model.upstreamProvider?.trim() ?? '';
+    if (provider) {
+      // Anonymous/Ferry modes and the Go offer are Zen-specific preferences. A non-Zen upstream
+      // (e.g. OpenCode Go) keeps its own installed source, so resolve it as `installed` instead of
+      // letting a Zen-only preference reject or mis-attribute that provider's credential.
+      const mode = this.#credentialMode('opencode-cli');
+      const offer = this.#credentialProvider('opencode-cli');
+      const zenSpecific =
+        provider !== 'opencode' && (mode !== 'installed' || (offer !== null && offer !== provider));
+      const evidence = await resolveOpenCodeCredential(
+        zenSpecific ? this.#installedView() : this.#services,
+        model,
+      );
+      return {
+        mode: evidence.mode,
+        provider: evidence.provider,
+        credentialProvider: evidence.credentialProvider,
+        accountKey: evidence.accountKey,
+        ...(evidence.apiKey !== undefined ? { apiKey: evidence.apiKey } : {}),
+      };
+    }
+    const mode = this.#credentialMode('opencode-cli');
+    const credentialProvider = this.#credentialProvider('opencode-cli');
+    if (mode === 'ferry' && !fallbackApiKey)
+      throw new CliTransportError(
+        'authentication',
+        'Ferry credential mode requires the selected saved key; refusing to substitute another credential.',
+        { accountKey: connection.account.key },
+      );
+    return {
+      mode,
+      provider: null,
+      credentialProvider,
+      accountKey: connection.account.key,
+      ...(fallbackApiKey ? { apiKey: fallbackApiKey } : {}),
+    };
+  }
+
+  /**
+   * A read-through settings view that forces the OpenCode connection selection to `installed`, used
+   * to resolve a non-Zen upstream's own installed credential without editing the shared resolver.
+   */
+  #installedView(): FerryServices {
+    const settings = this.#services.settings;
+    const global = settings.get('global');
+    if (typeof global !== 'object' || global === null) return this.#services;
+    const record = (global as { cliConnections?: Record<string, unknown> }).cliConnections?.[
+      'opencode-cli'
+    ];
+    const cliConnections = {
+      ...(global as { cliConnections?: Record<string, unknown> }).cliConnections,
+      'opencode-cli': {
+        ...(typeof record === 'object' && record !== null ? record : {}),
+        credentialMode: 'installed',
+        credentialProvider: null,
+      },
+    };
+    const overridden = { ...(global as Record<string, unknown>), cliConnections };
+    return {
+      ...this.#services,
+      settings: {
+        get: (key: string) => (key === 'global' ? overridden : settings.get(key)),
+        put: settings.put.bind(settings),
+      },
+    } as unknown as FerryServices;
+  }
+
+  /**
+   * Reject a dispatch/verify when the model's stored verification receipt is not bound to the
+   * currently resolved credential evidence (or is not evidence-bound at all). This is the
+   * synchronous-safe half of receipt validation: the cached list stays fast, and the actual selected
+   * evidence is compared here before every generation.
+   */
+  #assertReceiptEvidence(
+    connection: CliConnection,
+    model: CliModelCapabilities,
+    credential: ResolvedCliCredential,
+  ): void {
+    const receipt = connection.verify.modelReceipts?.[model.ref];
+    if (receipt?.credentialKey === undefined)
+      throw new CliTransportError(
+        'authentication',
+        `${model.name} was verified without a bound credential fingerprint. Run Verify for this model again before sending.`,
+        { accountKey: credential.accountKey },
+      );
+    // A `null` bound key means "no stable API-key identity" (native OAuth/unknown); two nulls match.
+    if (receipt.credentialKey !== credential.accountKey)
+      throw new CliTransportError(
+        'authentication',
+        `The credential or account for ${model.name} changed since it was verified. Run Verify again; no stale credential was used.`,
+        { accountKey: credential.accountKey },
+      );
+  }
+
+  /**
+   * Block a known-exhausted *included* account window before any generation (Verify included). Only a
+   * usable snapshot with a genuinely exhausted window blocks; an unavailable/unknown snapshot never
+   * invents exhaustion, and a free model (e.g. anonymous Zen) is unrelated to the account window.
+   */
+  #assertAccountCapacity(connection: CliConnection, model: CliModelCapabilities): void {
+    if (model.billing !== 'included_subscription') return;
+    const usage = connection.usage;
+    if (usage.state === 'unavailable') return;
+    const exhausted = usage.windows.find(
+      (window) =>
+        (window.utilization !== null && window.utilization >= 1) ||
+        (window.remaining !== null && window.remaining <= 0),
+    );
+    if (!exhausted) return;
+    throw new CliTransportError(
+      'exhausted_capacity',
+      `${model.name} is blocked: the ${connection.kind} account window "${exhausted.label}" is exhausted${exhausted.resetAt ? ` and resets at ${exhausted.resetAt}` : ''}. Refreshing usage with new usable evidence is required; the transport did not consume overage or credits.`,
+      { resetAt: exhausted.resetAt, accountKey: connection.account.key },
+    );
+  }
+
+  /** Resolve the effective CLI option for a dispatch from the current connection/profile layers. */
+  #resolveDispatchOption(
+    input: CliDispatchInput,
+    connection: CliConnection,
+    model: CliModelCapabilities,
+  ): CliOption {
+    const connectionModelDefault = this.#connectionModelDefault(connection.kind, model.ref);
+    const connectionDefault = this.#connectionDefault(connection.kind);
+    return resolveCliOption(model, {
+      ...(input.profileCliDefault ? { profileDefault: input.profileCliDefault } : {}),
+      ...(connectionModelDefault ? { connectionModelDefault } : {}),
+      ...(connectionDefault ? { connectionDefault } : {}),
+      ...(input.optionOverride ? { conversation: input.optionOverride } : {}),
+    });
+  }
+
+  /**
+   * Nonsecret digest of the structural admission identity for one dispatch: model/upstream,
+   * synchronous receipt evidence, effective option and resolved credential. Comparing the digest
+   * before and after a queue wait rejects any opt-out/capability/option/credential change.
+   */
+  #admissionDigest(
+    connection: CliConnection,
+    model: CliModelCapabilities,
+    credential: ResolvedCliCredential,
+    option: CliOption,
+  ): string {
+    return createHash('sha256')
+      .update(
+        JSON.stringify([
+          connection.kind,
+          connection.surfaces.native,
+          connection.surfaces.gateway,
+          model.ref,
+          model.upstreamProvider,
+          this.#modelReceiptKey(connection, model),
+          option.effort,
+          option.speed,
+          credential.accountKey,
+          credential.provider,
+          credential.mode,
+          credential.credentialProvider,
+        ]),
+      )
+      .digest('hex');
+  }
+
+  /** Combined admission pre-check: known account-window exhaustion plus the persistent guard. */
+  #assertAdmissible(
+    connection: CliConnection,
+    model: CliModelCapabilities,
+    credential: ResolvedCliCredential,
+  ): void {
+    this.#assertAccountCapacity(connection, model);
+    const identity = this.#capacityIdentity(connection, model, credential);
+    this.#syncCapacityAccount(connection.kind, identity);
+    this.#assertCapacityAllowed(identity, connection);
+  }
+
+  /** Identity account + actual selected upstream + native bucket used for capacity scoping. */
+  #capacityIdentity(
+    connection: CliConnection,
+    model: CliModelCapabilities,
+    credential: ResolvedCliCredential,
+  ): CliCapacityIdentity {
+    const upstreamProvider =
+      connection.kind === 'opencode-cli'
+        ? (credential.provider ?? model.upstreamProvider ?? null)
+        : null;
+    return {
+      connectionId: connection.kind,
+      accountKey: credential.accountKey,
+      upstreamProvider,
+      bucketId: null,
+    };
+  }
+
+  /**
+   * Clear capacity blocks for the *correct old scope* when the resolved account changes. Scoped by
+   * connection + upstream provider so a Zen account change never clears a Go block.
+   */
+  #syncCapacityAccount(kind: CliConnectionKind, identity: CliCapacityIdentity): void {
+    const scope = `${kind}\u0000${identity.upstreamProvider ?? ''}`;
+    const previous = this.#accountScopes.get(scope);
+    if (previous === undefined) {
+      this.#accountScopes.set(scope, identity.accountKey);
+      return;
+    }
+    if (previous === identity.accountKey) return;
+    this.#accountScopes.set(scope, identity.accountKey);
+    this.#capacity.accountChanged(kind, previous, identity.accountKey);
+  }
+
+  /** Throw a typed, redacted error when the current identity is inside an active capacity block. */
+  #assertCapacityAllowed(identity: CliCapacityIdentity, connection: CliConnection): void {
+    const decision = this.#capacity.check(identity);
+    if (decision.allowed || !decision.block) return;
+    const block = decision.block;
+    throw new CliTransportError(block.kind, block.reason, {
+      accountKey: block.identity.accountKey ?? connection.account.key,
+      bucketId: block.identity.bucketId ?? null,
+      resetAt: block.resetAt,
+      retryAfterMs: block.retryAfterMs,
+    });
+  }
+
+  #recordCapacity(identity: CliCapacityIdentity, error: CliTransportError): void {
+    this.#capacity.record(identity, error);
+  }
+
+  /** Read-only snapshot of active capacity blocks (diagnostics/tests). Never exposes secrets. */
+  capacityBlocks(): readonly CliCapacityBlock[] {
+    return this.#capacity.snapshot();
+  }
+
   /** Resolve the credential mode the current settings select (OpenCode specific; others installed). */
   #credentialMode(kind: CliConnectionKind): 'installed' | 'anonymous' | 'ferry' {
     if (kind !== 'opencode-cli') return 'installed';
@@ -820,6 +1327,9 @@ export class CliBroker {
           // Effective unavailable-control reasons, so a change in what the bridge can actually run
           // invalidates the receipt even when the raw advertised token list is unchanged.
           unsupportedEffortsFor(model),
+          // Actual selected upstream provider, so a Zen model's receipt is bound independently of a
+          // Go model's on the same OpenCode connection (one connection, several credential buckets).
+          model.upstreamProvider,
           this.#credentialMode(connection.kind),
           this.#credentialProvider(connection.kind),
         ]),
@@ -1085,6 +1595,10 @@ export function getCliBroker(
 ): CliBroker {
   let broker = brokerIndex.get(services);
   if (!broker) {
+    // Bind a placeholder emit only when no target exists; a real host registration performed later
+    // (e.g. by the `cliConnections` domain) still wins, so NoOp-first construction never drops RPC
+    // updates and a later NoOp call never overwrites the real target.
+    bindCliEmit(services, emit);
     broker = new CliBroker(
       services,
       getCliConnectionService(services, emit),

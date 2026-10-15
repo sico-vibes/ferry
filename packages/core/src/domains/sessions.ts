@@ -784,17 +784,18 @@ export function register(host: CoreHost, services: FerryServices): void {
             const cliBroker = getCliBroker(services, (method, payload) => {
               host.emit(method, payload);
             });
-            const cliConnections = cliBroker.connections();
+            // Native Auto pool: free verified CLI capacity is always eligible; included-subscription
+            // capacity only when the profile opts in; metered/unknown never. A manual pin always
+            // reaches the runner (dispatch re-checks admission), independent of the Auto switch.
+            const autoPool = cliBroker.eligibleModels({
+              surface: 'native',
+              profile,
+              requiresTools: true,
+            });
+            const autoRefs = new Set(autoPool.map((model) => model.ref));
             for (const cliModel of cliBroker.models()) {
-              const connection = cliConnections.find(
-                (entry) => entry.kind === cliModel.cliConnectionId,
-              );
               const isPinned = session.pinnedModelRef === cliModel.ref;
-              const autoEligible =
-                profile.allowSubscriptionCli === true &&
-                cliModel.verified === true &&
-                connection?.surfaces.native === true;
-              if (isPinned || autoEligible) availableModels.push(cliModel);
+              if (isPinned || autoRefs.has(cliModel.ref)) availableModels.push(cliModel);
             }
             const preflightCapacity = preflight.capacity();
             const verifiedModelRefs = preflightCapacity.providers.flatMap((provider) =>

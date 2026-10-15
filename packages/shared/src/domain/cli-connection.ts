@@ -82,6 +82,14 @@ export type CliAccount = z.infer<typeof CliAccountSchema>;
 export const CliModelReceiptSchema = z.object({
   checkedAt: z.iso.datetime(),
   receiptKey: z.string().min(1).max(128).nullable(),
+  /**
+   * Opaque, non-secret fingerprint of the credential/account actually resolved for this model at
+   * verification time (the selected provider's credential evidence, e.g. an OpenCode provider-
+   * specific account key). Dispatch re-resolves the credential and rejects when it differs, so a
+   * same-connection credential rotation for one upstream can never reuse another's proof. Never
+   * contains key material. Optional for receipts written before this field existed.
+   */
+  credentialKey: z.string().min(1).max(256).nullable().optional(),
 });
 export type CliModelReceipt = z.infer<typeof CliModelReceiptSchema>;
 

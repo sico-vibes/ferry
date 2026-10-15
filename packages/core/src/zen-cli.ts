@@ -5,8 +5,24 @@ import type { FerryServices } from './services.js';
 import { getProviderHealth } from './provider-health.js';
 
 export function zenCliMode(services: Pick<FerryServices, 'settings'>): boolean {
-  const stored = services.settings.get('global') as { opencodeZenTransport?: unknown } | undefined;
-  return stored?.opencodeZenTransport === 'cli';
+  const stored = services.settings.get('global') as
+    | {
+        opencodeZenTransport?: unknown;
+        zenCliMigratedToShared?: unknown;
+        cliConnections?: Record<string, { native?: boolean; gateway?: boolean }>;
+      }
+    | undefined;
+  if (stored?.opencodeZenTransport !== 'cli') return false;
+  // Once the legacy opt-in has been migrated to the shared record, an explicit shared opt-out wins:
+  // the old CLI flag can no longer override an independent, explicit false native/gateway choice.
+  const shared = stored.cliConnections?.['opencode-cli'];
+  if (
+    stored.zenCliMigratedToShared === true &&
+    shared?.native === false &&
+    shared.gateway === false
+  )
+    return false;
+  return true;
 }
 function useFerryKey(services: Pick<FerryServices, 'settings'>): boolean {
   const stored = services.settings.get('global') as

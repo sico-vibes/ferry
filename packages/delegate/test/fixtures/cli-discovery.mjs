@@ -151,6 +151,8 @@ if (args[0] === 'auth' && args[1] === 'status') {
     providerID: 'opencode-go',
     name: 'DeepSeek V4.1 Flash',
     cost: { input: 0, output: 0 },
+    // Reported native capacity; the parser uses these verbatim and never fabricates a window.
+    limit: { context: 200000, output: 64000 },
     capabilities: { toolcall: true, reasoning: true },
     variants: {
       low: { reasoningEffort: 'low' },

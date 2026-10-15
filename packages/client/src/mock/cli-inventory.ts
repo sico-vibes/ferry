@@ -112,7 +112,27 @@ function modelsFor(kind: CliConnectionKind): CliModelCapabilities[] {
         hidden: false,
       },
     ];
+  // One OpenCode connection holds an anonymous free Zen model and an included Go model at once, each
+  // with its own actual billing and credential bucket.
   return [
+    {
+      ref: 'opencode-cli/opencode/deepseek-v4.1-flash-free' as ModelRef,
+      connectionId: kind,
+      providerId: kind,
+      upstreamId: 'opencode/deepseek-v4.1-flash-free',
+      upstreamProvider: 'opencode',
+      name: 'DeepSeek V4.1 Flash (Free)',
+      efforts: ['low', 'high'],
+      defaultEffort: null,
+      speeds: ['standard'],
+      defaultSpeed: 'standard',
+      modalities: ['text'],
+      toolCalling: true,
+      contextWindow: 128_000,
+      maxOutput: 32_000,
+      billing: 'free',
+      hidden: false,
+    },
     {
       ref: 'opencode-cli/opencode-go/deepseek-v4.1-flash' as ModelRef,
       connectionId: kind,
@@ -138,19 +158,25 @@ function modelsFor(kind: CliConnectionKind): CliModelCapabilities[] {
 export function buildMockCliConnection(state: MockState, kind: CliConnectionKind): CliConnection {
   const saved = state.settings.cliConnections[kind];
   const surfaces = { native: saved?.native ?? false, gateway: saved?.gateway ?? false };
-  const verifiedRef = state.cliVerifiedModels.get(kind) as ModelRef | undefined;
-  const verify: CliConnection['verify'] = verifiedRef
-    ? {
-        state: 'verified',
-        modelRef: verifiedRef,
-        checkedAt: '2026-10-05T10:00:00.000Z',
-        message: 'Verified with a scripted mock generation.',
-        receiptKey: 'mock-receipt',
-        modelReceipts: {
-          [verifiedRef]: { checkedAt: '2026-10-05T10:00:00.000Z', receiptKey: 'mock-receipt' },
-        },
-      }
-    : { state: 'unverified', modelRef: null, checkedAt: null, message: null };
+  // Accumulated per-model receipts: verifying a new model never forgets earlier verified models.
+  const verifiedRefs = (state.cliVerifiedModels.get(kind) ?? []) as ModelRef[];
+  const modelReceipts = Object.fromEntries(
+    verifiedRefs.map((ref) => [
+      ref,
+      { checkedAt: '2026-10-05T10:00:00.000Z', receiptKey: 'mock-receipt' },
+    ]),
+  );
+  const verify: CliConnection['verify'] =
+    verifiedRefs.length > 0
+      ? {
+          state: 'verified',
+          modelRef: verifiedRefs[verifiedRefs.length - 1] ?? null,
+          checkedAt: '2026-10-05T10:00:00.000Z',
+          message: 'Verified with a scripted mock generation.',
+          receiptKey: 'mock-receipt',
+          modelReceipts,
+        }
+      : { state: 'unverified', modelRef: null, checkedAt: null, message: null };
   const base: CliConnection = {
     id: kind,
     kind,
@@ -271,7 +297,7 @@ function toModelInfo(connection: CliConnection, model: CliModelCapabilities): Mo
     capacityKnown,
     toolCalling: model.toolCalling,
     reasoning: model.efforts.length > 0,
-    free: false,
+    free: model.billing === 'free',
     priceInPerM: null,
     priceOutPerM: null,
     transport: TRANSPORT[connection.kind],

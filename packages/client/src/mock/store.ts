@@ -83,7 +83,7 @@ const persistenceSchema = (state: unknown) => {
   );
   const selections = new Map(value.selections as [string, string][]);
   const cliVerifiedModels = new Map(
-    (value.cliVerifiedModels as [string, string][] | undefined) ?? [],
+    (value.cliVerifiedModels as [string, string[]][] | undefined) ?? [],
   );
   return {
     ...value,

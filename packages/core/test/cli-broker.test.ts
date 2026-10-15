@@ -107,6 +107,7 @@ function harness(
         store[key] = value;
       },
     },
+    clock: { now: () => new Date(1_000_000) },
     env: {},
   } as unknown as FerryServices;
   const scan =

@@ -782,12 +782,26 @@ function opencodeBilling(providerId: string, cost: unknown): CliBilling {
   return 'unknown';
 }
 
+/** A reported positive integer capacity, or `null` when absent/invalid (never fabricated). */
+function reportedCapacity(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
+}
+
 function opencodeCapabilities(
   kind: CliConnectionKind,
   providerId: string,
   id: string,
   raw: Record<string, unknown>,
 ): CliModelCapabilities {
+  // Parse ONLY a genuinely reported `limit.context` / `limit.output` as native capacity. When the
+  // CLI does not report them the fields stay absent (unknown), so Auto LongContext never trusts a
+  // policy placeholder as a real window.
+  const limit =
+    typeof raw.limit === 'object' && raw.limit !== null
+      ? (raw.limit as { context?: unknown; output?: unknown })
+      : undefined;
+  const contextWindow = reportedCapacity(limit?.context);
+  const maxOutput = reportedCapacity(limit?.output);
   const variants = raw.variants;
   // Native variants are keyed by the option name (e.g. `low`/`high`/`max`); some carry a
   // `reasoningEffort` value and others only a thinking budget, so preserve the map keys too.
@@ -821,6 +835,8 @@ function opencodeCapabilities(
     defaultSpeed: 'standard',
     modalities: ['text'],
     toolCalling: capabilities?.toolcall === true,
+    ...(contextWindow === null ? {} : { contextWindow }),
+    ...(maxOutput === null ? {} : { maxOutput }),
     billing: opencodeBilling(providerId, raw.cost),
     hidden: false,
   };

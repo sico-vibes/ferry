@@ -1,4 +1,5 @@
 import type { CliTransportError, CliTransportErrorKind } from '@ferry/delegate';
+import { z } from 'zod';
 import type { CliConnectionKind } from '@ferry/shared';
 
 export type CliCapacityBlockKind =
@@ -25,6 +26,61 @@ export interface CliCapacityStore {
   save(blocks: readonly CliCapacityBlock[]): void;
 }
 
+const CliCapacityIdentitySchema = z.object({
+  connectionId: z.enum(['codex-cli', 'claude-code-cli', 'opencode-cli']),
+  accountKey: z.string().max(256).nullable(),
+  upstreamProvider: z.string().max(256).nullable(),
+  bucketId: z.string().max(256).nullable().optional(),
+});
+
+const CliCapacityBlockKindSchema = z.enum([
+  'exhausted_capacity',
+  'temporary_rate_limit',
+  'authentication',
+  'timeout',
+]);
+
+/**
+ * Persisted form of one capacity block. Only non-secret identity (an opaque account fingerprint and
+ * a provider/bucket name) is stored; no key material, token or credential is ever persisted.
+ */
+export const CliCapacityBlockSchema = z.object({
+  identity: CliCapacityIdentitySchema,
+  kind: CliCapacityBlockKindSchema,
+  reason: z.string().max(1_000),
+  blockedAt: z.iso.datetime(),
+  resetAt: z.iso.datetime().nullable(),
+  retryAfterMs: z.number().nullable(),
+});
+export type PersistedCliCapacityBlock = z.infer<typeof CliCapacityBlockSchema>;
+
+/**
+ * Parse persisted blocks defensively. A malformed element is dropped rather than trusted, so a
+ * corrupted settings value can never resurrect a stale or fabricated block.
+ */
+export function parseCliCapacityBlocks(raw: unknown): CliCapacityBlock[] {
+  if (!Array.isArray(raw)) return [];
+  const blocks: CliCapacityBlock[] = [];
+  for (const value of raw) {
+    const parsed = CliCapacityBlockSchema.safeParse(value);
+    if (parsed.success)
+      blocks.push({
+        identity: {
+          connectionId: parsed.data.identity.connectionId,
+          accountKey: parsed.data.identity.accountKey,
+          upstreamProvider: parsed.data.identity.upstreamProvider,
+          bucketId: parsed.data.identity.bucketId ?? null,
+        },
+        kind: parsed.data.kind,
+        reason: parsed.data.reason,
+        blockedAt: parsed.data.blockedAt,
+        resetAt: parsed.data.resetAt,
+        retryAfterMs: parsed.data.retryAfterMs,
+      });
+  }
+  return blocks;
+}
+
 export interface CliCapacityGuardOptions {
   now: () => number;
   store?: CliCapacityStore;
@@ -36,9 +92,6 @@ export interface CliCapacityDecision {
 }
 
 const DEFAULT_COOLDOWN_MS = 1_000;
-// Defensible ceiling for a transient soft cooldown: keep a provider-reported retryAfter intact up to
-// 24h instead of shortening it, so a genuinely long rate-limit is never retried early.
-const MAX_SOFT_COOLDOWN_MS = 86_400_000;
 const SAFE_MARGIN_MS = 250;
 const MAX_BLOCKS = 256;
 const SCOPE_SEPARATOR = '\u0000';
@@ -82,10 +135,10 @@ function normalizeResetAt(value: string | null, nowMs: number): string | null {
 }
 
 function normalizeRetryAfterMs(kind: CliCapacityBlockKind, value: number | null): number | null {
-  if (kind === 'temporary_rate_limit') {
-    const requested = positiveFinite(value) ? value : DEFAULT_COOLDOWN_MS;
-    return Math.min(requested, MAX_SOFT_COOLDOWN_MS);
-  }
+  // A provider-reported retry wait is preserved verbatim — never shortened to a local ceiling. An
+  // unknown/invalid hint falls back to the small default; the caller still chooses whether to inline
+  // wait (via `shortWaitMs`) or fall back, but the block itself never early-unblocks.
+  if (kind === 'temporary_rate_limit') return positiveFinite(value) ? value : DEFAULT_COOLDOWN_MS;
   if (kind === 'timeout') return DEFAULT_COOLDOWN_MS;
   return null;
 }

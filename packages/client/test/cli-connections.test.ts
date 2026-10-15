@@ -5,6 +5,7 @@ import {
   CliConnectionSettingsPatchSchema,
   ProviderIdSchema,
   SessionModelUsageSchema,
+  type ModelRef,
 } from '@ferry/shared';
 import { createMockFerryClient } from '../src/index.js';
 
@@ -49,10 +50,18 @@ it('keeps CLI opt-ins after an unrelated settings update', async () => {
 it('mirrors real OpenCode Go and Claude control evidence', async () => {
   const client = createMockFerryClient();
   const connections = await client.cliConnections.list();
-  const opencodeModel = connections.find((entry) => entry.kind === 'opencode-cli')?.models[0];
-  expect(opencodeModel?.ref).toBe('opencode-cli/opencode-go/deepseek-v4.1-flash');
-  expect(opencodeModel?.efforts).toEqual(['low', 'high', 'max']);
-  expect(opencodeModel?.billing).toBe('included_subscription');
+  const opencodeModels = connections.find((entry) => entry.kind === 'opencode-cli')?.models ?? [];
+  const goModel = opencodeModels.find(
+    (model) => model.ref === 'opencode-cli/opencode-go/deepseek-v4.1-flash',
+  );
+  expect(goModel?.efforts).toEqual(['low', 'high', 'max']);
+  expect(goModel?.billing).toBe('included_subscription');
+  // The same connection also exposes an anonymous free Zen model with its own actual billing.
+  const freeZen = opencodeModels.find(
+    (model) => model.ref === 'opencode-cli/opencode/deepseek-v4.1-flash-free',
+  );
+  expect(freeZen?.billing).toBe('free');
+  expect(freeZen?.upstreamProvider).toBe('opencode');
   const claude = connections.find((entry) => entry.kind === 'claude-code-cli');
   expect(claude?.usage.state).toBe('available');
   expect(claude?.usage.source).toBe('claude control get_usage');
@@ -110,6 +119,39 @@ it('discovers CLI models naturally from verify and surface opt-ins', async () =>
       (candidate) => candidate.ref === 'codex-cli/gpt-5.1-codex',
     ),
   ).toBe(true);
+});
+
+it('derives CLI providers/models from reactive inventory and accumulates per-model proof', async () => {
+  const client = createMockFerryClient();
+  // A default-off connection contributes no CLI provider row.
+  expect((await client.providers.list()).some((provider) => provider.id === 'codex-cli')).toBe(
+    false,
+  );
+  await client.cliConnections.update('codex-cli', { surfaces: { native: true } });
+  await client.cliConnections.update('opencode-cli', { surfaces: { native: true } });
+  await client.cliConnections.verify('codex-cli');
+  await client.cliConnections.verify(
+    'opencode-cli',
+    'opencode-cli/opencode/deepseek-v4.1-flash-free' as ModelRef,
+  );
+  await client.cliConnections.verify(
+    'opencode-cli',
+    'opencode-cli/opencode-go/deepseek-v4.1-flash' as ModelRef,
+  );
+  expect((await client.providers.list()).some((provider) => provider.id === 'codex-cli')).toBe(
+    true,
+  );
+  const models = await client.models.list(ProviderIdSchema.parse('opencode-cli'));
+  const free = models.find(
+    (model) => model.ref === 'opencode-cli/opencode/deepseek-v4.1-flash-free',
+  );
+  const go = models.find((model) => model.ref === 'opencode-cli/opencode-go/deepseek-v4.1-flash');
+  // `free` reflects actual billing: free Zen is free, included Go is not.
+  expect(free?.free).toBe(true);
+  expect(go?.free).toBe(false);
+  // Verifying the second model did not forget the first (accumulated per-model proof).
+  expect(free?.verified).toBe(true);
+  expect(go?.verified).toBe(true);
 });
 
 it('exposes session model usage and pending approvals schemas', async () => {

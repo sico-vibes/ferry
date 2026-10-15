@@ -802,6 +802,11 @@ it('migrates the legacy Zen CLI opt-in once and preserves an explicit shared rec
     gateway: true,
     credentialMode: 'ferry',
   });
+  // The legacy Go offer was a mistake: ferry mode uses the saved Zen key itself (offer = null).
+  expect(
+    (after.cliConnections['opencode-cli'] as { credentialProvider?: string | null })
+      .credentialProvider,
+  ).toBeNull();
   // An explicit shared false afterwards is never overwritten and the migration does not run again.
   const explicit = {
     ...sampleSettings,

@@ -242,7 +242,9 @@ export function migrateLegacyZenCliConnection(settings: SettingsRepository): voi
         native: true,
         gateway: true,
         credentialMode: data.opencodeZenCliUseFerryKey ? 'ferry' : 'installed',
-        credentialProvider: data.opencodeZenCliUseFerryKey ? 'opencode-go' : null,
+        // Ferry mode uses the saved OpenCode Zen key itself (`opencode`), not an offered Go provider
+        // credential; the legacy Go offer was a migration mistake the resolver rejects.
+        credentialProvider: null,
       }),
     };
   }

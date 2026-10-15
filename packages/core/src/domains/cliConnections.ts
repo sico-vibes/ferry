@@ -5,13 +5,17 @@ import {
 } from '@ferry/shared';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
-import { getCliConnectionService } from '../cli-connections.js';
+import { getCliConnectionService, registerCliEmit } from '../cli-connections.js';
 import { getCliBroker } from '../cli-broker.js';
 
 export function register(host: CoreHost, services: FerryServices): void {
   const emit = (method: string, payload: unknown) => {
     host.emit(method, payload);
   };
+  // This domain is registered after the Gateway controller (which constructs the broker with an inert
+  // emit). Registering here upgrades the shared target to the real host emit so discovery, verification
+  // and live usage updates reach RPC subscribers instead of being silently dropped.
+  registerCliEmit(services, emit);
   const service = getCliConnectionService(services, emit);
   const broker = getCliBroker(services, emit);
   host.registerDomain('cliConnections', {

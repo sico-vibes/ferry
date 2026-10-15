@@ -206,7 +206,13 @@ export function register(host: CoreHost, services: FerryServices): void {
         .filter((model) => services.providers.get(model.providerId)?.enabled)
         .map((model) => ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }))
         .filter((model) => modelSupportsTools(model));
-      const choices = [...enabled, ...oauthModels];
+      // Selectable installed-CLI models: opted-in + verified + tool-capable, free routes first. The
+      // session profile still gates *Auto* funding (broker.eligibleModels), but a manual pin may
+      // explicitly select an included/metered model, which dispatch then authorizes.
+      const cliChoices = getCliBroker(services, emit).selectableModels('native', {
+        requiresTools: true,
+      });
+      const choices = [...enabled, ...oauthModels, ...cliChoices];
       const gatewayChoices = (getGatewayController(services)?.listKeys() ?? [])
         .filter((key) => !key.revokedAt)
         .map((key) =>

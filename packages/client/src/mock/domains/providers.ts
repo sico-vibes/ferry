@@ -12,6 +12,9 @@ import type { ProviderKey } from '@ferry/shared';
 import type { FerryClient } from '../../ferry-client.js';
 import type { MockDeps } from './deps.js';
 import type { MockStore } from '../types.js';
+import { mockCliProviderRows, MOCK_CLI_KINDS } from '../cli-inventory.js';
+
+const CLI_KIND_IDS = new Set<string>(MOCK_CLI_KINDS);
 
 export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryClient['providers'] {
   const { state, rng, before, persist, emit } = deps;
@@ -210,7 +213,10 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
     },
     async list() {
       await before();
-      return structuredClone(state.providers);
+      // Installed-CLI providers come from the live connection inventory (opt-in/verify react), so
+      // the static fixture rows for the CLI kinds are replaced rather than duplicated.
+      const base = state.providers.filter((provider) => !CLI_KIND_IDS.has(provider.id));
+      return structuredClone([...base, ...mockCliProviderRows(state)]);
     },
     async listKeys(id) {
       await before();
