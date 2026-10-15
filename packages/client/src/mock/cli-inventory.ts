@@ -3,6 +3,8 @@ import {
   isCliModelVerified,
   type CliConnection,
   type CliConnectionKind,
+  type CliConnectionVerifyResult,
+  type CliCredentialSource,
   type CliModelCapabilities,
   type CliUsageSnapshot,
   type ModelInfo,
@@ -16,6 +18,10 @@ export const MOCK_CLI_KINDS: readonly CliConnectionKind[] = [
   'claude-code-cli',
   'opencode-cli',
 ];
+
+const OPENCODE_CLI_KIND: CliConnectionKind = 'opencode-cli';
+/** Persisted legacy Zen model refs use the API-shaped `opencode/<id>` prefix. */
+const ZEN_LEGACY_PREFIX = 'opencode/';
 
 const TRANSPORT: Record<CliConnectionKind, NonNullable<ModelInfo['transport']>> = {
   'codex-cli': 'codex_cli',
@@ -154,12 +160,46 @@ function modelsFor(kind: CliConnectionKind): CliModelCapabilities[] {
   ];
 }
 
+/**
+ * Scripted verification receipts live in `state.cliVerifiedModels`. They carry, as a leading sentinel
+ * entry, the credential-source signature they were recorded under, so changing the source (credential
+ * mode/provider or the legacy Ferry-key opt-in) stops the connection from reporting them — without a
+ * second proof store and without touching provider API keys or API verification.
+ */
+const SOURCE_SENTINEL_PREFIX = '\u0000mock-source:';
+
+/** The credential-source signature the current settings select for one connection. */
+function mockSourceSignature(state: MockState, kind: CliConnectionKind): string {
+  if (kind !== OPENCODE_CLI_KIND) return 'installed';
+  const saved = state.settings.cliConnections[OPENCODE_CLI_KIND];
+  const mode = saved?.credentialMode ?? 'installed';
+  const provider = saved?.credentialProvider ?? '';
+  const ferryKey = state.settings.opencodeZenCliUseFerryKey ? 'ferry-key' : 'no-ferry-key';
+  return `${mode}|${provider}|${ferryKey}`;
+}
+
+function recordedSourceSignature(entries: readonly string[]): string | null {
+  const sentinel = entries.find((entry) => entry.startsWith(SOURCE_SENTINEL_PREFIX));
+  return sentinel ? sentinel.slice(SOURCE_SENTINEL_PREFIX.length) : null;
+}
+
+/**
+ * Verified refs for one connection, honouring the recorded source signature. An entry set with no
+ * recorded signature (a receipt written before source binding) is treated as current.
+ */
+function verifiedRefsFor(state: MockState, kind: CliConnectionKind): ModelRef[] {
+  const entries = state.cliVerifiedModels.get(kind) ?? [];
+  const recorded = recordedSourceSignature(entries);
+  if (recorded !== null && recorded !== mockSourceSignature(state, kind)) return [];
+  return entries.filter((entry) => !entry.startsWith(SOURCE_SENTINEL_PREFIX)) as ModelRef[];
+}
+
 /** Build the scripted mock connection for one installed-CLI kind from the current store state. */
 export function buildMockCliConnection(state: MockState, kind: CliConnectionKind): CliConnection {
   const saved = state.settings.cliConnections[kind];
   const surfaces = { native: saved?.native ?? false, gateway: saved?.gateway ?? false };
   // Accumulated per-model receipts: verifying a new model never forgets earlier verified models.
-  const verifiedRefs = (state.cliVerifiedModels.get(kind) ?? []) as ModelRef[];
+  const verifiedRefs = verifiedRefsFor(state, kind);
   const modelReceipts = Object.fromEntries(
     verifiedRefs.map((ref) => [
       ref,
@@ -351,4 +391,175 @@ export function mockCliProviderRows(state: MockState): Provider[] {
       },
     ];
   });
+}
+
+/** The canonical installed-CLI ref for one legacy OpenCode Zen upstream model id. */
+export function canonicalZenRef(id: string): ModelRef {
+  return `${OPENCODE_CLI_KIND}/opencode/${id}` as ModelRef;
+}
+
+/** The bare upstream id of a persisted legacy `opencode/<id>` ref, or null when it is not an alias. */
+export function legacyZenAliasId(ref: string): string | null {
+  if (!ref.startsWith(ZEN_LEGACY_PREFIX)) return null;
+  const id = ref.slice(ZEN_LEGACY_PREFIX.length).trim();
+  return id.length > 0 && !id.includes(' ') ? id : null;
+}
+
+/**
+ * Whether the legacy Zen CLI transport selects one surface. Mirrors the shared rule: a generic
+ * OpenCode CLI opt-in for another upstream (e.g. Go) never reroutes a standard Zen API ref.
+ */
+export function mockZenCliSurfaceSelected(
+  state: MockState,
+  surface: 'native' | 'gateway' = 'native',
+): boolean {
+  const settings = state.settings;
+  if (settings.opencodeZenTransport !== 'cli') return false;
+  const shared = settings.cliConnections[OPENCODE_CLI_KIND];
+  if (settings.zenCliMigratedToShared) return shared?.[surface] ?? false;
+  if (shared && (Object.hasOwn(shared, 'native') || Object.hasOwn(shared, 'gateway')))
+    return shared[surface];
+  return true;
+}
+
+/** Whether the Zen CLI transport is selected for either surface. */
+export function mockZenCliTransportSelected(state: MockState): boolean {
+  return mockZenCliSurfaceSelected(state, 'native') || mockZenCliSurfaceSelected(state, 'gateway');
+}
+
+/**
+ * Resolve one ref to a discovered canonical CLI model of `kind`. A persisted legacy `opencode/<id>`
+ * alias resolves to `opencode-cli/opencode/<id>` only for the OpenCode connection and only while the
+ * Zen CLI transport is selected, so a standard Zen API ref is never silently rerouted.
+ */
+export function resolveMockCliModel(
+  state: MockState,
+  kind: CliConnectionKind,
+  ref: string,
+): CliModelCapabilities | undefined {
+  const discovered = buildMockCliConnection(state, kind).models.filter((model) => !model.hidden);
+  const direct = discovered.find((model) => model.ref === ref);
+  if (direct) return direct;
+  if (kind !== OPENCODE_CLI_KIND || !mockZenCliTransportSelected(state)) return undefined;
+  const aliasId = legacyZenAliasId(ref);
+  if (aliasId === null) return undefined;
+  const canonical = canonicalZenRef(aliasId);
+  return discovered.find((model) => model.ref === canonical);
+}
+
+/** Resolve a ref across every installed-CLI kind to its discovered canonical model, or undefined. */
+export function resolveMockCliModelRef(
+  state: MockState,
+  ref: string,
+): CliModelCapabilities | undefined {
+  for (const kind of MOCK_CLI_KINDS) {
+    const model = resolveMockCliModel(state, kind, ref);
+    if (model) return model;
+  }
+  return undefined;
+}
+
+/**
+ * Record one successful scripted verification against the shared per-model receipt store and return
+ * the updated connection. Refs recorded under a different credential source are dropped rather than
+ * carried over, and provider API keys/API verification are never touched.
+ */
+export function recordMockCliVerification(
+  state: MockState,
+  kind: CliConnectionKind,
+  modelRef: ModelRef,
+): CliConnection {
+  const entries = state.cliVerifiedModels.get(kind) ?? [];
+  const signature = mockSourceSignature(state, kind);
+  const recorded = recordedSourceSignature(entries);
+  const sourceBound = recorded === null || recorded === signature;
+  const priorRefs = entries.filter(
+    (entry) => !entry.startsWith(SOURCE_SENTINEL_PREFIX),
+  ) as ModelRef[];
+  const refs = sourceBound ? priorRefs : [];
+  const next = refs.includes(modelRef) ? refs : [...refs, modelRef];
+  state.cliVerifiedModels.set(kind, [`${SOURCE_SENTINEL_PREFIX}${signature}`, ...next]);
+  return buildMockCliConnection(state, kind);
+}
+
+/**
+ * The single shared mock verification used by both the `cliConnections` domain and the Zen facade.
+ * An explicit unknown/non-discovered target fails instead of silently verifying another model; a
+ * missing target verifies the first non-spending discovered model, matching the shared broker.
+ */
+export function verifyMockCliConnection(
+  state: MockState,
+  kind: CliConnectionKind,
+  requestedRef?: ModelRef,
+): CliConnectionVerifyResult {
+  const connection = buildMockCliConnection(state, kind);
+  const discovered = connection.models.filter((model) => !model.hidden);
+  const resolved =
+    requestedRef === undefined ? undefined : resolveMockCliModel(state, kind, requestedRef);
+  const target =
+    resolved ??
+    (requestedRef === undefined
+      ? (discovered.find((model) => model.billing !== 'metered' && model.billing !== 'unknown') ??
+        discovered[0])
+      : undefined);
+  if (!target) {
+    return {
+      ok: false,
+      modelRef: requestedRef ?? null,
+      message:
+        requestedRef === undefined
+          ? `No discoverable ${kind} model is available to verify.`
+          : `Model ${requestedRef} is not discovered for ${kind}.`,
+    };
+  }
+  recordMockCliVerification(state, kind, target.ref);
+  return {
+    ok: true,
+    modelRef: target.ref,
+    message: `Verified ${target.name} with a scripted mock generation.`,
+  };
+}
+
+/**
+ * Validation message for an explicit CLI option patch against a discovered model's capabilities, or
+ * null when every explicit value is supported. Mirrors the shared `cliOptionError`: absent fields and
+ * an explicit null effort are accepted, advertised-but-unrunnable controls are rejected.
+ */
+export function mockCliOptionError(
+  modelRef: string,
+  model: Pick<CliModelCapabilities, 'efforts' | 'speeds' | 'unsupportedEfforts'>,
+  patch: { effort?: string | null | undefined; speed?: 'standard' | 'fast' | undefined },
+): string | null {
+  if (patch.effort != null) {
+    const reason = unsupportedEfforts(model as CliModelCapabilities)[patch.effort];
+    if (reason) return `${patch.effort} is unavailable for ${modelRef}: ${reason}`;
+    if (!model.efforts.includes(patch.effort))
+      return `${patch.effort} is not a supported effort for ${modelRef}.`;
+  }
+  if (patch.speed !== undefined && !model.speeds.includes(patch.speed))
+    return `${patch.speed} is not a supported speed for ${modelRef}.`;
+  return null;
+}
+
+/** The mock's discovered credential source, mirroring the frozen Core facade. */
+export function mockZenCliCredentialSource(
+  state: MockState,
+  connection: CliConnection,
+): CliCredentialSource {
+  const saved = state.settings.cliConnections[OPENCODE_CLI_KIND];
+  const mode =
+    saved?.credentialMode === 'anonymous' || saved?.credentialMode === 'ferry'
+      ? saved.credentialMode
+      : 'installed';
+  const offer =
+    typeof saved?.credentialProvider === 'string' && saved.credentialProvider.trim()
+      ? saved.credentialProvider.trim()
+      : null;
+  if (mode === 'anonymous') return 'anonymous';
+  if (mode === 'ferry') return 'ferry';
+  if (offer === 'opencode-go') return 'opencode_go';
+  if (connection.account.label === 'OpenCode Go') return 'opencode_go';
+  if (connection.account.state === 'signed_in' && connection.account.key !== null)
+    return 'opencode';
+  return 'anonymous';
 }

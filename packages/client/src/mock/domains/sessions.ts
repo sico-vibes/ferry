@@ -21,6 +21,7 @@ import { emitPendingApprovals } from './approvals.js';
 import type { MockDeps } from './deps.js';
 import type { MockState, MockStore } from '../types.js';
 import { honestProducer } from '../usage-producer.js';
+import { mockCliOptionError, resolveMockCliModelRef } from '../cli-inventory.js';
 
 /** Chronological order (createdAt, then id) so "latest" is well-defined for id-ordered storage. */
 function orderedMessages(messages: readonly Message[]): Message[] {
@@ -656,11 +657,21 @@ export function createSessionsDomain(_store: MockStore, deps: MockDeps): FerryCl
       await before();
       const s = session(id);
       const parsed = CliOptionPatchSchema.parse(input.options);
+      // Resolve the target through the discovered canonical CLI capabilities (including a persisted
+      // legacy Zen alias while the Zen CLI transport is selected) and validate explicit values
+      // against them. The caller's original ref is always stored, never silently rewritten; a ref
+      // that is not a discovered CLI model keeps the previous lenient storage.
+      const discovered = resolveMockCliModelRef(state, input.modelRef);
+      if (discovered) {
+        const error = mockCliOptionError(input.modelRef, discovered, parsed);
+        if (error) throw new Error(error);
+      }
+      const current = s.cliOptions?.[input.modelRef];
       s.cliOptions = {
         ...(s.cliOptions ?? {}),
         [input.modelRef]: CliOptionSchema.parse({
-          ...(s.cliOptions?.[input.modelRef] ?? {}),
-          ...parsed,
+          effort: 'effort' in parsed ? (parsed.effort ?? null) : (current?.effort ?? null),
+          speed: parsed.speed ?? current?.speed ?? 'standard',
         }),
       };
       return updateSession(s);

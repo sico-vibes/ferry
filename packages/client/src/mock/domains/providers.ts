@@ -8,11 +8,19 @@ import {
   providerDefinition,
   type ProbeResult,
 } from '@ferry/shared';
-import type { ProviderKey } from '@ferry/shared';
+import type { CliModelCapabilities, ProviderKey } from '@ferry/shared';
+import { isCliModelVerified } from '@ferry/shared';
 import type { FerryClient } from '../../ferry-client.js';
 import type { MockDeps } from './deps.js';
 import type { MockStore } from '../types.js';
-import { mockCliProviderRows, MOCK_CLI_KINDS } from '../cli-inventory.js';
+import {
+  buildMockCliConnection,
+  mockCliProviderRows,
+  mockZenCliCredentialSource,
+  resolveMockCliModel,
+  verifyMockCliConnection,
+  MOCK_CLI_KINDS,
+} from '../cli-inventory.js';
 
 const CLI_KIND_IDS = new Set<string>(MOCK_CLI_KINDS);
 
@@ -46,39 +54,65 @@ export function createProvidersDomain(_store: MockStore, deps: MockDeps): FerryC
   return {
     async zenCliStatus() {
       await before();
+      // Thin facade over the shared cached CLI connection: the discovery/credential evidence and the
+      // accumulated per-model receipts are the same ones `cliConnections` exposes. A Go credential or
+      // discovery alone never counts as proof.
+      const connection = buildMockCliConnection(state, 'opencode-cli');
       return {
-        available: true,
-        version: 'Preview',
-        executable: 'opencode',
-        credentialSource: 'opencode',
-        freeModels: state.models
-          .filter((model) => model.providerId === 'opencode' && model.free)
+        available: connection.install.installed,
+        version: connection.install.version,
+        executable: connection.install.executable,
+        credentialSource: mockZenCliCredentialSource(state, connection),
+        verifiedModels: connection.models
+          .filter((model) => model.billing === 'free' && isCliModelVerified(connection, model.ref))
+          .map((model) => model.ref),
+        freeModels: connection.models
+          .filter(
+            (model) =>
+              model.billing === 'free' && model.upstreamProvider === 'opencode' && !model.hidden,
+          )
           .map((model) => ({ ref: model.ref, name: model.name })),
-        verifiedModels:
-          state.providers
-            .find((provider) => provider.id === 'opencode')
-            ?.availableModels?.filter((model) => model.cliAccessVerified)
-            .map((model) => model.ref) ?? [],
       };
     },
     async verifyZenCli(ref) {
       await before();
-      const provider = state.providers.find((provider) => provider.id === 'opencode');
-      const model = state.models.find(
-        (model) =>
-          model.providerId === 'opencode' && model.free && (ref === undefined || model.ref === ref),
-      );
-      if (!provider || !model) throw new Error('No free Zen model available in this preview');
-      model.cliAccessVerified = true;
-      model.transport = state.settings.opencodeZenTransport === 'cli' ? 'opencode_cli' : 'api';
-      provider.enabled = true;
-      provider.availableModels = state.models.filter((model) => model.providerId === provider.id);
-      persist();
-      emit('provider.updated', provider);
+      const connection = buildMockCliConnection(state, 'opencode-cli');
+      const isFreeZen = (model: CliModelCapabilities) =>
+        model.billing === 'free' && model.upstreamProvider === 'opencode' && !model.hidden;
+      // A legacy `opencode/<id>` ref resolves to its discovered canonical model only while the Zen CLI
+      // transport is selected; an explicit unknown or non-free target fails instead of verifying a
+      // different model, and a standard Zen API ref is never silently rerouted.
+      const requested =
+        ref === undefined ? undefined : resolveMockCliModel(state, 'opencode-cli', ref);
+      if (ref !== undefined && (requested === undefined || !isFreeZen(requested)))
+        return {
+          ok: false,
+          modelRef: ref,
+          message:
+            'The requested model is not a discovered free Zen model. Refresh detection and choose an available free model.',
+        };
+      const target =
+        requested !== undefined && isFreeZen(requested)
+          ? requested
+          : connection.models.find(isFreeZen);
+      if (!target)
+        return {
+          ok: false,
+          modelRef: ref ?? null,
+          message:
+            'No free Zen model is discovered for the installed OpenCode CLI yet. Refresh detection and retry.',
+        };
+      const result = verifyMockCliConnection(state, 'opencode-cli', target.ref);
+      // The receipt lives on the shared connection; verification never enables a surface on its own.
+      emit('cliConnections.updated', buildMockCliConnection(state, 'opencode-cli'));
+      const provider = state.providers.find((entry) => entry.id === 'opencode');
+      if (provider) emit('provider.updated', provider);
+      // Preserve the caller's requested ref (a legacy pin, profile or key entry) while the underlying
+      // proof and canonical model stay canonical.
       return {
-        ok: true,
-        modelRef: model.ref,
-        message: 'Preview: free generation verified through OpenCode CLI.',
+        ok: result.ok,
+        modelRef: ref ?? result.modelRef ?? target.ref,
+        message: result.message,
       };
     },
     startChecks: (rawOptions) => {

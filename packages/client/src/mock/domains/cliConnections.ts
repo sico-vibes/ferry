@@ -2,7 +2,11 @@ import type { CliConnectionKind, CliConnectionSettings } from '@ferry/shared';
 import type { FerryClient } from '../../ferry-client.js';
 import type { MockDeps } from './deps.js';
 import type { MockStore } from '../types.js';
-import { buildMockCliConnection, MOCK_CLI_KINDS } from '../cli-inventory.js';
+import {
+  buildMockCliConnection,
+  verifyMockCliConnection,
+  MOCK_CLI_KINDS,
+} from '../cli-inventory.js';
 
 export function createCliConnectionsDomain(
   _store: MockStore,
@@ -26,20 +30,11 @@ export function createCliConnectionsDomain(
     },
     async verify(id, modelRef) {
       await before();
-      const connection = build(id);
-      const model =
-        connection.models.find((candidate) => candidate.ref === modelRef) ?? connection.models[0];
-      if (!model)
-        return { ok: false, modelRef: null, message: `No discovered ${id} model to verify.` };
-      const verified = state.cliVerifiedModels.get(id) ?? [];
-      if (!verified.includes(model.ref)) state.cliVerifiedModels.set(id, [...verified, model.ref]);
-      const updated = build(id);
-      emit('cliConnections.updated', updated);
-      return {
-        ok: true,
-        modelRef: model.ref,
-        message: `Verified ${model.name} with a scripted mock generation.`,
-      };
+      // One shared verification path: the receipt is recorded in the same per-model store the Zen
+      // facade reads, bound to the current credential source.
+      const result = verifyMockCliConnection(state, id, modelRef);
+      emit('cliConnections.updated', build(id));
+      return result;
     },
     async update(id, patch) {
       await before();
