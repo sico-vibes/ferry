@@ -16,6 +16,7 @@ import {
   type ModelHints,
   type ReportedStepUsage,
   type StepGeneratorInput,
+  type StepProducer,
 } from '@ferry/agent';
 import type { RawCallObservation } from '@ferry/providers';
 import type { Message, MessagePart, TraceContext } from '@ferry/shared';
@@ -31,7 +32,6 @@ import {
   QuotaObservationSchema,
   newId,
   type ModelInfo,
-  type ModelRef,
   type Profile,
   type Provider,
   type StepKind,
@@ -1200,25 +1200,16 @@ async function runNativeCliStep(
     cachedTokens: result.usage.cachedTokens,
     reasoningTokens: result.usage.reasoningTokens,
   };
-  // Generation/dispatch-captured producer metadata (the Agent contract consumes this next). These
-  // fields are captured from the broker's dispatch result *before* the await resolves, never looked
-  // up from the current account afterwards, and the original requested ref (including a legacy Zen
-  // alias) is preserved separately. Built as a structural const (not an excess object literal) so it
-  // is forward-compatible with the frozen `GeneratedStep.producer` contract without a new import.
-  const producer: {
-    modelRef: ModelRef;
-    providerId: string;
-    connectionId: string;
-    accountKey: string | null;
-    requestedModelRef: ModelRef;
-  } = {
+  // Preserve the producer captured by dispatch, including its original requested alias. Looking up
+  // the connection after generation would attribute the reply to an account that may have changed.
+  const producer: StepProducer = {
     modelRef: model.ref,
-    providerId: model.providerId,
+    providerId: ProviderIdSchema.parse(model.providerId),
     connectionId: connection.kind,
     accountKey,
     requestedModelRef: modelRef,
   };
-  const step: GeneratedStep & { producer: typeof producer } = {
+  const step: GeneratedStep = {
     ...(result.text ? { text: result.text } : {}),
     ...(result.toolCalls.length
       ? {
