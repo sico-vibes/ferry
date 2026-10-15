@@ -791,19 +791,33 @@ export class WorkspaceRepository extends JsonRepository<Workspace> {
     super(client, 'workspaces', mirror);
   }
 }
+/**
+ * Guarded JSON session extraction for recovery blobs. A malformed or legacy row extracts to NULL,
+ * so it can never match a session id: corrupt JSON neither crashes deletion nor removes content
+ * that has no session attribution (for example shared workspace blobs).
+ */
+const OPTIMIZER_BLOB_SESSION_EXPR =
+  "CASE WHEN json_valid(data_json) THEN json_extract(data_json,'$.sessionId') END";
 export class SessionRepository extends JsonRepository<Session> {
   constructor(client: Database.Database, mirror?: StorageMirror) {
     super(client, 'sessions', mirror);
     this.db = client;
   }
   private readonly db: Database.Database;
-  /** Deleting a session removes its usage aggregate/ledger and detaches retained requests. */
+  /**
+   * Deleting a session removes its usage aggregate/ledger, detaches retained requests and removes
+   * only the recovery blobs attributed to it. Blobs for other sessions, and blobs with no session
+   * attribution, are preserved. All steps share one transaction so a failure rolls back the delete.
+   */
   override delete(id: string): boolean {
     return this.db.transaction(() => {
       const removed = super.delete(id);
       this.db.prepare('UPDATE requests SET session_id=NULL WHERE session_id=?').run(id);
       this.db.prepare('DELETE FROM session_model_usage WHERE session_id=?').run(id);
       this.db.prepare('DELETE FROM usage_event_keys WHERE session_id=?').run(id);
+      this.db
+        .prepare(`DELETE FROM optimizer_blobs WHERE ${OPTIMIZER_BLOB_SESSION_EXPR} = ?`)
+        .run(id);
       return removed;
     })();
   }
