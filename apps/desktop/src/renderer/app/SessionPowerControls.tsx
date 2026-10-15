@@ -718,7 +718,10 @@ export function ComposerModelChip({
     queryKey: ['settings'],
     queryFn: () => client.settings.get(),
     enabled:
-      open || optionsOpen || models.some((item) => item.ref === modelRef && item.cliCapabilities),
+      open ||
+      optionsOpen ||
+      modelRef?.startsWith('opencode/') === true ||
+      models.some((item) => item.ref === modelRef && item.cliCapabilities),
   });
   const cliNativeReady = (model: ModelInfo) => {
     if (!model.cliConnectionId) return true;
@@ -780,12 +783,23 @@ export function ComposerModelChip({
   const autoRef = visibleCandidates[0]?.ref;
   const autoInfo = models.find((model) => model.ref === autoRef);
   const autoModel = autoInfo?.name ?? (modelName || 'picks per message');
-  const pinnedModel = models.find((model) => model.ref === modelRef);
+  const modelForRef = (ref: string | null | undefined) =>
+    models.find((model) => model.ref === ref) ??
+    (transportSettings?.opencodeZenTransport === 'cli'
+      ? models.find(
+          (model) =>
+            model.cliConnectionId === 'opencode-cli' &&
+            model.cliCapabilities?.upstreamProvider === 'opencode' &&
+            model.cliCapabilities.upstreamId === ref,
+        )
+      : undefined);
+  const pinnedModel = modelForRef(modelRef);
   const servedModel = models.find((model) => model.ref === servedModelRef);
   useEffect(() => {
     setOptionsModelRef(null);
   }, [modelRef]);
-  const optionsModel = models.find((model) => model.ref === (optionsModelRef ?? modelRef));
+  const optionsRef = optionsModelRef ?? modelRef;
+  const optionsModel = modelForRef(optionsRef);
   const sessionOptions = useQuery({
     queryKey: sessionId ? keys.session(sessionId) : ['cli-options-draft'],
     queryFn: () => (sessionId ? client.sessions.get(sessionId) : Promise.resolve(null)),
@@ -801,9 +815,13 @@ export function ComposerModelChip({
   const optionLayers = {
     conversation:
       cliOptions ??
+      (optionsRef ? sessionOptions.data?.session.cliOptions?.[optionsRef] : undefined) ??
       (optionsModel ? sessionOptions.data?.session.cliOptions?.[optionsModel.ref] : undefined),
     profile: optionsModel
-      ? profiles.find((profile) => profile.id === activeProfileId)?.cliDefaults?.[optionsModel.ref]
+      ? ((optionsRef
+          ? profiles.find((profile) => profile.id === activeProfileId)?.cliDefaults?.[optionsRef]
+          : undefined) ??
+        profiles.find((profile) => profile.id === activeProfileId)?.cliDefaults?.[optionsModel.ref])
       : undefined,
     connectionModel: modelDefaults
       ? {
@@ -835,7 +853,7 @@ export function ComposerModelChip({
       if (onCliOptionsChange) onCliOptionsChange(options);
       else if (sessionId && optionsModel) {
         const session = await client.sessions.updateCliOptions(sessionId, {
-          modelRef: optionsModel.ref,
+          modelRef: optionsRef ?? optionsModel.ref,
           options,
         });
         cache.setQueryData<SessionDetail>(keys.session(sessionId), (previous) =>
@@ -1204,7 +1222,7 @@ export function ComposerModelChip({
                           renderList={(children) => <>{children}</>}
                           renderItem={(model) => {
                             const candidate = candidateByRef.get(model.ref);
-                            const selected = mode === 'manual' && model.ref === modelRef;
+                            const selected = mode === 'manual' && model.ref === pinnedModel?.ref;
                             return (
                               <ModelCommand.Item
                                 className="model-candidate"

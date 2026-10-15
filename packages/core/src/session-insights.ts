@@ -226,8 +226,8 @@ export function sessionModelUsage(
   // start times are never compared against usage-finish timestamps (see the limitation above), and a
   // retained aggregate is trusted on its own, so expired request detail stays complete.
   const uncoveredHistory =
-    hasAssistantGeneration(services.messages.listForSessions([sessionId])) &&
-    summary.rows.length === 0;
+    summary.rows.length === 0 &&
+    hasAssistantGeneration(services.messages.listForSessions([sessionId]));
   return SessionModelUsageSchema.parse({
     sessionId,
     totals: {

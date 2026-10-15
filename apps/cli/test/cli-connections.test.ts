@@ -20,6 +20,7 @@ import {
   mergeCliOptionDraft,
   nativeCapMetadata,
   resolveCliOptions,
+  resolveCliModelRoute,
   safeVerificationModel,
 } from '../src/cli-connections.js';
 import { connectUpdatePatch, runCli } from '../src/main.js';
@@ -43,6 +44,22 @@ function model(overrides: Partial<CliModelCapabilities> = {}): CliModelCapabilit
     ...overrides,
   };
 }
+
+it('resolves a saved Zen ref only for explicitly selected CLI transport', () => {
+  const zen = model({
+    ref: 'opencode-cli/opencode/zen-fixture' as CliModelCapabilities['ref'],
+    connectionId: 'opencode-cli',
+    providerId: 'opencode-cli',
+    upstreamProvider: 'opencode',
+    upstreamId: 'opencode/zen-fixture',
+    billing: 'free',
+  });
+  const installed = connection('opencode-cli', { models: [zen] });
+  expect(resolveCliModelRoute([installed], zen.ref)?.model.ref).toBe(zen.ref);
+  expect(resolveCliModelRoute([installed], zen.upstreamId)).toBeUndefined();
+  expect(resolveCliModelRoute([installed], zen.upstreamId, true)?.model.ref).toBe(zen.ref);
+  expect(resolveCliModelRoute([installed], 'opencode/different-model', true)).toBeUndefined();
+});
 
 function connection(
   kind: CliConnectionKind,

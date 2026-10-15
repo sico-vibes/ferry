@@ -78,6 +78,40 @@ export function ZenCliConnection() {
       setChecking(false);
     }
   };
+  const detect = async () => {
+    setChecking(true);
+    setMessage('Detecting the installed OpenCode client…');
+    try {
+      const inventory = await client.cliConnections.refresh('opencode-cli');
+      await invalidate();
+      await refetch();
+      setMessage(
+        inventory.find((item) => item.kind === 'opencode-cli')?.install.installed
+          ? 'Detection complete. Verify a free model to check access.'
+          : 'OpenCode was not detected. Install the CLI, then detect again.',
+      );
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : 'Could not detect OpenCode. Retry.');
+    } finally {
+      setChecking(false);
+    }
+  };
+  const offerGoCredential = async (enabled: boolean) => {
+    setChecking(true);
+    try {
+      await client.cliConnections.update('opencode-cli', {
+        credentialProvider: enabled ? 'opencode-go' : null,
+      });
+      await invalidate();
+      setMessage('Credential source changed. Verify CLI access again.');
+    } catch (cause) {
+      setMessage(
+        cause instanceof Error ? cause.message : 'Could not change the credential source.',
+      );
+    } finally {
+      setChecking(false);
+    }
+  };
   const verify = async () => {
     setChecking(true);
     setMessage('Waiting for OpenCode to generate one tiny free response…');
@@ -159,7 +193,7 @@ export function ZenCliConnection() {
           size="sm"
           disabled={isFetching || checking}
           onClick={() => {
-            void refetch();
+            void detect();
           }}
         >
           Detect again
@@ -189,6 +223,19 @@ export function ZenCliConnection() {
             Choose the credential used for the access check. Changing it requires verification
             again; a stored Go key does not itself prove Zen access.
           </p>
+          {credentialMode === 'installed' && data?.credentialSource === 'opencode_go' && (
+            <label className="flex items-center justify-between gap-3 text-ui-meta">
+              <span>Offer the installed Go credential for the Zen check</span>
+              <UiV2.Switch
+                aria-label="Offer OpenCode Go credential to Zen"
+                checked={connection?.credentialProvider === 'opencode-go'}
+                disabled={checking}
+                onCheckedChange={(enabled) => {
+                  void offerGoCredential(enabled);
+                }}
+              />
+            </label>
+          )}
           <label className="grid gap-2 text-ui-meta">
             Free model to verify
             <select

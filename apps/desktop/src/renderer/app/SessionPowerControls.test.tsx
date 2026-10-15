@@ -12,7 +12,7 @@ import { keys } from '../data/queries';
 import { useUI } from '../state/ui';
 import { CommandPalette, ComposerModelChip } from './SessionPowerControls';
 import { Composer } from '@ferry/ui';
-import { ModelInfoSchema, ProviderSchema } from '@ferry/shared';
+import { ModelInfoSchema } from '@ferry/shared';
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 
@@ -43,6 +43,44 @@ function renderChip(client: ReturnType<typeof createMockFerryClient>, chip: Reac
 }
 
 describe('ComposerModelChip', () => {
+  it('displays a saved Zen CLI alias and exposes its canonical model options without changing the pin', async () => {
+    const client = createMockFerryClient({ behavior: 'test' });
+    const base = (await client.models.list())[0];
+    const connection = (await client.cliConnections.list()).find(
+      (item) => item.id === 'opencode-cli',
+    );
+    const capability = connection?.models.find((item) => item.upstreamProvider === 'opencode');
+    if (!base || !capability) throw new Error('Missing Zen CLI fixture');
+    await client.settings.update({ opencodeZenTransport: 'cli' });
+    const model = ModelInfoSchema.parse({
+      ...base,
+      ref: capability.ref,
+      providerId: 'opencode-cli',
+      name: 'Saved Zen model',
+      cliConnectionId: 'opencode-cli',
+      cliCapabilities: capability,
+    });
+    vi.spyOn(client.models, 'page').mockResolvedValue({ items: [model], total: 1 });
+    const select = vi.fn();
+    const changeOptions = vi.fn();
+    renderChip(
+      client,
+      <ComposerModelChip
+        sessionId={null}
+        modelName=""
+        modelRef={capability.upstreamId as typeof model.ref}
+        mode="manual"
+        onModelSelect={select}
+        onCliOptionsChange={changeOptions}
+      />,
+    );
+    await screen.findByRole('button', { name: 'Saved Zen model' });
+    const options = await screen.findByRole('button', { name: 'Saved Zen model CLI options' });
+    fireEvent.click(options);
+    await screen.findByRole('combobox', { name: 'CLI reasoning effort' });
+    expect(select).not.toHaveBeenCalled();
+  });
+
   it('keeps a bound previous optimized profile identifiable and selects the managed profile by ID', async () => {
     const client = createMockFerryClient({ behavior: 'test' });
     const base = (await client.profiles.list())[0];
@@ -100,46 +138,16 @@ describe('ComposerModelChip', () => {
       const client = createMockFerryClient({ behavior: 'test' });
       const store = client.__store();
       const base = store.models[0];
-      const provider = store.providers[0];
       const connection = (await client.cliConnections.list()).find((row) => row.id === 'codex-cli');
       const capabilities = connection?.models[0];
-      if (!base || !provider || !connection || !capabilities)
-        throw new Error('Missing CLI fixtures');
-      await client.cliConnections.update('codex-cli', { defaultOptions: { effort: 'high' } });
-      const model = ModelInfoSchema.parse({
-        ...base,
-        ref: capabilities.ref,
-        providerId: 'codex-cli',
-        name: capabilities.name,
-        free: false,
-        transport: 'codex_cli',
-        cliConnectionId: 'codex-cli',
-        cliCapabilities: capabilities,
+      if (!base || !connection || !capabilities) throw new Error('Missing CLI fixtures');
+      await client.cliConnections.update('codex-cli', {
+        surfaces: { native: true },
+        defaultOptions: { effort: 'high' },
       });
-      store.models.push(model);
-      store.providers.push(
-        ProviderSchema.parse({
-          ...provider,
-          id: 'codex-cli',
-          name: 'Codex CLI',
-          kind: 'cli',
-          tag: 'subscription_cli',
-          keyStatus: 'not_applicable',
-          enabled: true,
-        }),
-      );
-      vi.spyOn(client.cliConnections, 'list').mockResolvedValue([
-        {
-          ...connection,
-          surfaces: { native: true, gateway: false },
-          verify: {
-            state: 'verified',
-            modelRef: model.ref,
-            checkedAt: '2026-10-13T10:00:00.000Z',
-            message: null,
-          },
-        },
-      ]);
+      expect((await client.cliConnections.verify('codex-cli', capabilities.ref)).ok).toBe(true);
+      const model = (await client.models.list()).find((item) => item.ref === capabilities.ref);
+      if (!model) throw new Error('Verified model was not listed');
       const select = vi.fn();
       const options = vi.fn();
       renderChip(

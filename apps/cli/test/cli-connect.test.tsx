@@ -454,7 +454,7 @@ describe('chat CLI model selection', () => {
     app.unmount();
   });
 
-  it('persists fast and states it needs spending approval without pre-authorizing', async () => {
+  it('explains the beta Fast billing limit without persisting an unusable option', async () => {
     const codex = verifiedNative(
       'codex-cli',
       cliModel('codex-cli', { speeds: ['standard', 'fast'] }),
@@ -470,10 +470,8 @@ describe('chat CLI model selection', () => {
     await key(app, '\x1b');
     await frame(app, 'Enter sends');
     await key(app, '/speed fast\r');
-    await vi.waitFor(() => {
-      expect(fake.cliOptionCalls.some((call) => call.options.speed === 'fast')).toBe(true);
-    });
-    expect(app.lastFrame()).toContain('Additional charges need spending approval');
+    await frame(app, 'Fast mode is unavailable in this beta');
+    expect(fake.cliOptionCalls.some((call) => call.options.speed === 'fast')).toBe(false);
     expect(fake.selectedRefs).toContain('codex-cli/test-model');
     app.unmount();
   });

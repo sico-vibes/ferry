@@ -393,6 +393,42 @@ it('a free CLI model outranks an opted-in Included CLI model', async () => {
 
 /* ----------------------- manual Included, no approval -------------------- */
 
+it('Auto uses an approved Included connection when no free capacity is available', async () => {
+  const calls: CliBrokerRequest[] = [];
+  const h = await startCliAuto({
+    connections: {
+      'codex-cli': connection('codex-cli', [modelFor('codex-cli', 'included-only')]),
+      'claude-code-cli': connection('claude-code-cli', []),
+      'opencode-cli': connection('opencode-cli', []),
+    },
+    onCall: (request) => calls.push(request),
+    respond: (request) => ready('approved subscription answer', request),
+  });
+  const ref = 'codex-cli/included-only' as ModelRef;
+  await optInAndVerify(h, 'codex-cli', [ref]);
+  const profile = {
+    ...autoFreeProfile,
+    id: ProfileIdSchema.parse('profile_test_included_only_auto'),
+    name: 'Approved subscription fallback',
+    builtin: false,
+    allowSubscriptionCli: true,
+  };
+  await h.rpc.profiles.save(profile);
+  const session = await h.rpc.sessions.create({
+    workspaceId: h.workspaceId,
+    profileId: profile.id,
+  });
+  await h.rpc.sessions.send(session.id, { text: 'Say hello' });
+  await waitIdle(h, session.id);
+  expect(calls.map((call) => call.model.ref)).toEqual([ref]);
+  const detail = await h.rpc.sessions.get(session.id);
+  const parts = detail.messages.flatMap((message) => message.parts);
+  expect(parts.filter((part) => part.type === 'approval_request')).toEqual([]);
+  expect(
+    parts.some((part) => part.type === 'text' && part.text === 'approved subscription answer'),
+  ).toBe(true);
+});
+
 it('an explicit manual Included selection dispatches without a paid approval', async () => {
   const calls: CliBrokerRequest[] = [];
   const h = await startCliAuto({

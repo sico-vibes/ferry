@@ -58,7 +58,7 @@ it('shows installed-client effort values and preserves the reported default, inc
   expect(screen.queryByRole('switch', { name: 'CLI fast mode' })).toBeNull();
 });
 
-it('hides unsupported effort controls and keeps an advertised fast mode off until selected', async () => {
+it('hides unsupported effort controls and explains why advertised fast mode is unavailable', async () => {
   const model = await modelWithOptions([], true);
   const change = vi.fn();
   render(
@@ -75,8 +75,10 @@ it('hides unsupported effort controls and keeps an advertised fast mode off unti
   expect(screen.queryByRole('combobox', { name: 'CLI reasoning effort' })).toBeNull();
   const fast = screen.getByRole('switch', { name: 'CLI fast mode' });
   expect(fast.getAttribute('aria-checked')).toBe('false');
+  expect((fast as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText(/Fast mode is unavailable in this beta/)).toBeTruthy();
   fireEvent.click(fast);
-  expect(change).toHaveBeenCalledWith({ effort: null, speed: 'fast' });
+  expect(change).not.toHaveBeenCalled();
 });
 
 it('displays a stale effort override without substituting another value', async () => {

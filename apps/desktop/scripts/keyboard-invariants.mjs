@@ -108,6 +108,12 @@ export async function keyboardJourneys(browser, url, options) {
     assert.equal(page.url(), conversationUrl, 'Opening usage navigated away from the conversation');
     await page.keyboard.press('Escape');
     await page.getByRole('dialog', { name: 'Conversation usage' }).waitFor({ state: 'hidden' });
+    // Dialog teardown restores focus asynchronously after its content is removed.
+    await page.waitForFunction(
+      (element) => element === document.activeElement,
+      await modelUsage.elementHandle(),
+      { timeout: 2000 },
+    );
     assert.equal(
       await modelUsage.evaluate((element) => element === document.activeElement),
       true,

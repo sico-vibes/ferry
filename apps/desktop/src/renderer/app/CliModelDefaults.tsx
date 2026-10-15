@@ -103,22 +103,26 @@ export function CliModelDefaults({
             value={options.speed}
             disabled={disabled}
             onChange={(event) => {
+              if (event.target.value !== 'standard') return;
               onChange({
                 ...defaults,
                 [model.ref]: {
                   ...options,
-                  speed: event.target.value === 'fast' ? 'fast' : 'standard',
+                  speed: 'standard',
                 },
               });
             }}
           >
             <option value="standard">Standard</option>
-            <option value="fast" disabled={!capabilities.speeds.includes('fast')}>
-              {capabilities.speeds.includes('fast')
-                ? 'Fast · spending permissions apply'
-                : 'Unavailable · Fast'}
+            <option value="fast" disabled>
+              Unavailable · Fast
             </option>
           </select>
+          {capabilities.speeds.includes('fast') && (
+            <small>
+              Fast mode requires bounded billing support, which is unavailable in this beta.
+            </small>
+          )}
         </label>
       )}
     </div>

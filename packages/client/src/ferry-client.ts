@@ -250,7 +250,9 @@ export interface FerryClient {
       verifiedModels: string[];
       freeModels: { ref: string; name: string }[];
     }>;
-    verifyZenCli(modelRef?: string): Promise<{ ok: boolean; modelRef: string; message: string }>;
+    verifyZenCli(
+      modelRef?: string,
+    ): Promise<{ ok: boolean; modelRef: string | null; message: string }>;
     startChecks(options?: import('@ferry/shared').ProviderCheckOptions): Promise<{ id: string }>;
     checkProgress(id?: string): Promise<import('@ferry/shared').ProviderCheckProgress>;
     cancelChecks(id: string): Promise<import('@ferry/shared').ProviderCheckProgress>;

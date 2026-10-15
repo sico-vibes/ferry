@@ -6,7 +6,6 @@ import { ModelRefSchema, redactKnownSecretText } from '@ferry/shared';
 import type {
   CliBilling,
   CliConnection,
-  CliConnectionKind,
   CliConnectionSettings,
   CliModelCapabilities,
   CliOption,
@@ -47,9 +46,9 @@ import {
   decodeCliModelValue,
   findCliModel,
   findConnection,
-  isCliConnectionKind,
   mergeCliOptionDraft,
   resolveCliModelStatus,
+  resolveCliModelRoute,
   resolveCliOptions,
   type CliOptionLayers,
 } from './cli-connections.js';
@@ -102,6 +101,7 @@ export function Chat({
   const cliOptionOverrides = useRef<Record<string, Partial<CliOption>>>({});
   const cliOptionRequest = useRef(0);
   const [cliSettings, setCliSettings] = useState<Record<string, CliConnectionSettings>>({});
+  const [zenCliAliases, setZenCliAliases] = useState(false);
   const [cliBilling, setCliBilling] = useState<CliBilling | null>(null);
   const [cliSpeed, setCliSpeed] = useState<CliSpeed | null>(null);
   const [cliEffort, setCliEffort] = useState<string | null>(null);
@@ -194,6 +194,7 @@ export function Chat({
         setHealth(providers);
         setCloudEmail(cloud.auth.signedIn ? cloud.auth.email : null);
         setCliSettings(settings.cliConnections);
+        setZenCliAliases(settings.opencodeZenTransport === 'cli');
       })
       .catch(showError);
     const off = [
@@ -434,6 +435,7 @@ export function Chat({
     cliOptionOverrides.current = { ...(detail.session.cliOptions ?? {}) };
     setCliInventory(connections);
     setCliSettings(settings.cliConnections);
+    setZenCliAliases(settings.opencodeZenTransport === 'cli');
     setProject(projects.find((row) => row.id === detail.session.workspaceId) ?? null);
     const profile = profiles.find((row) => row.id === detail.session.profileId);
     setActiveProfile(profile);
@@ -448,6 +450,7 @@ export function Chat({
       settings.cliConnections,
       profile,
       activeRef ? cliOptionOverrides.current[activeRef] : undefined,
+      settings.opencodeZenTransport === 'cli',
     );
     setCliModelRef(status?.ref ?? null);
     setCliBilling(status?.billing ?? null);
@@ -490,12 +493,9 @@ export function Chat({
     if (name === '/profile') options = profileOptions(await client.profiles.list());
     if (name === '/effort') {
       const activeRef = model === 'auto' ? servedModel : model;
-      const connection = activeRef
-        ? findConnection(cliInventory, activeRef.split('/')[0] as CliConnectionKind)
-        : undefined;
-      const cliModel = findCliModel(connection, activeRef ?? '');
-      if (connection && cliModel) {
-        options = cliEffortOptionRows(cliModel);
+      const active = activeCli();
+      if (active) {
+        options = cliEffortOptionRows(active.model);
       } else {
         options = effortOptions((await client.models.list()).find((row) => row.ref === activeRef));
       }
@@ -539,20 +539,21 @@ export function Chat({
   } | null {
     const activeRef = model === 'auto' ? servedModel : model;
     if (!activeRef) return null;
-    const kind = activeRef.split('/')[0];
-    if (!kind || !isCliConnectionKind(kind)) return null;
-    const connection = findConnection(cliInventory, kind);
-    const cliModel = findCliModel(connection, activeRef);
-    return connection && cliModel ? { connection, model: cliModel, ref: activeRef } : null;
+    const route = resolveCliModelRoute(cliInventory, activeRef, zenCliAliases);
+    return route ? { ...route, ref: activeRef } : null;
   }
   function cliLayersFor(ref: string): CliOptionLayers {
-    const kind = ref.split('/')[0];
-    const saved = kind && isCliConnectionKind(kind) ? cliSettings[kind] : undefined;
+    const route = resolveCliModelRoute(cliInventory, ref, zenCliAliases);
+    const saved = route ? cliSettings[route.connection.kind] : undefined;
     const refKey = ref as CliModelCapabilities['ref'];
     return {
-      conversation: cliOptionOverrides.current[ref],
-      profile: activeProfile?.cliDefaults?.[refKey],
-      connection: connectionOptionLayer(saved, refKey),
+      conversation:
+        cliOptionOverrides.current[ref] ??
+        (route ? cliOptionOverrides.current[route.model.ref] : undefined),
+      profile:
+        activeProfile?.cliDefaults?.[refKey] ??
+        (route ? activeProfile?.cliDefaults?.[route.model.ref] : undefined),
+      connection: connectionOptionLayer(saved, route?.model.ref ?? refKey),
     };
   }
   async function persistCliOptions(ref: string, patch: Partial<CliOption>) {
@@ -609,14 +610,16 @@ export function Chat({
       notice(`Fast is not advertised by ${active.model.name}.`);
       return;
     }
+    if (value === 'fast') {
+      notice(
+        'Fast mode is unavailable in this beta: its separately billed charge cannot be bounded.',
+      );
+      return;
+    }
     await createSession();
     await persistCliOptions(active.ref, { speed: value });
     setCliSpeed(value);
-    notice(
-      value === 'fast'
-        ? 'Fast requested. Additional charges need spending approval; Ferry did not pre-authorize spending.'
-        : 'Speed set to Standard.',
-    );
+    notice('Speed set to Standard.');
   }
   function openCliOptions(connection: CliConnection, cliModel: CliModelCapabilities, ref: string) {
     // Reopening the current model keeps its compatible conversation/profile/connection choices;

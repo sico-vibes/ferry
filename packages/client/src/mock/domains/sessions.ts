@@ -244,7 +244,7 @@ function sessionModelUsageFor(state: MockState, sessionId: SessionId): SessionMo
   // usage is recorded, so that ordering is equally true of a fully captured fresh chat and is not a
   // reliable signal. A retained row set is trusted on its own, so expired detail stays complete.
   const uncoveredHistory =
-    hasAssistantGeneration(state.messages.get(sessionId) ?? []) && rows.length === 0;
+    rows.length === 0 && hasAssistantGeneration(state.messages.get(sessionId) ?? []);
   return SessionModelUsageSchema.parse({
     sessionId,
     totals: {

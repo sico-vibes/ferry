@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ProviderLogo, UiV2 } from '@ferry/ui';
+import { isCliModelVerified } from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
 
@@ -11,14 +12,31 @@ export function ZenSetupPrompt({ compact = false }: { compact?: boolean }) {
     queryFn: () => client.providers.list(),
   });
   const zen = providers.find((provider) => ['opencode', 'opencode-zen'].includes(provider.id));
+  const { data: connections = [] } = useQuery({
+    queryKey: ['cli-connections'],
+    queryFn: () => client.cliConnections.list(),
+    staleTime: 60_000,
+  });
+  const cliReady = connections.some(
+    (connection) =>
+      connection.kind === 'opencode-cli' &&
+      connection.surfaces.native &&
+      connection.models.some(
+        (model) =>
+          model.upstreamProvider === 'opencode' &&
+          model.billing === 'free' &&
+          isCliModelVerified(connection, model.ref),
+      ),
+  );
   const [open, setOpen] = useState(false);
   if (
     !zen ||
     (!open &&
-      zen.enabled &&
-      ['valid', 'not_applicable'].includes(zen.keyStatus) &&
-      zen.health !== 'down' &&
-      !zen.freeTierUnsupported)
+      (cliReady ||
+        (zen.enabled &&
+          ['valid', 'not_applicable'].includes(zen.keyStatus) &&
+          zen.health !== 'down' &&
+          !zen.freeTierUnsupported)))
   )
     return null;
   return (

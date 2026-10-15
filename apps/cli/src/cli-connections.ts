@@ -120,6 +120,26 @@ export function findCliModel(
   return connection?.models.find((model) => model.ref === ref);
 }
 
+/** Resolve a saved Zen alias only when the user selected Zen's CLI transport. */
+export function resolveCliModelRoute(
+  connections: readonly CliConnection[],
+  ref: string,
+  zenCliAliases = false,
+): { connection: CliConnection; model: CliModelCapabilities } | undefined {
+  for (const connection of connections) {
+    const model = connection.models.find(
+      (candidate) =>
+        candidate.ref === ref ||
+        (zenCliAliases &&
+          connection.kind === 'opencode-cli' &&
+          candidate.upstreamProvider === 'opencode' &&
+          candidate.upstreamId === ref),
+    );
+    if (model) return { connection, model };
+  }
+  return undefined;
+}
+
 /* ------------------------------------------------------------------ optional native caps */
 
 export interface NativeCapMetadata {
@@ -197,12 +217,20 @@ export function cliEffortOptionRows(model: CliModelCapabilities): PickerOption[]
   return rows;
 }
 
-/** `fast` is only offered when the CLI genuinely advertises it. */
+/** Advertised Fast remains visible, with the beta's bounded-billing limitation explained. */
 export function cliSpeedOptionRows(model: CliModelCapabilities): PickerOption[] {
   return [
     { value: 'standard', label: 'Standard', description: 'Default' },
     ...(model.speeds.includes('fast')
-      ? [{ value: 'fast', label: 'Fast', description: 'CLI fast mode; needs explicit permission' }]
+      ? [
+          {
+            value: 'fast',
+            label: 'Fast',
+            disabled: true,
+            reason:
+              'Fast mode is unavailable in this beta: its separately billed charge cannot be bounded.',
+          },
+        ]
       : []),
   ];
 }
@@ -316,18 +344,17 @@ export function resolveCliModelStatus(
   settings: Readonly<Record<string, CliConnectionSettings>>,
   profile: Profile | undefined,
   conversation: Partial<CliOption> | undefined,
+  zenCliAliases = false,
 ): CliModelStatus | null {
   if (!ref) return null;
-  const kind = ref.split('/')[0];
-  if (!kind || !isCliConnectionKind(kind)) return null;
-  const connection = findConnection(connections, kind);
-  const model = findCliModel(connection, ref);
-  if (!connection || !model) return null;
+  const route = resolveCliModelRoute(connections, ref, zenCliAliases);
+  if (!route) return null;
+  const { connection, model } = route;
   const refKey = ref as CliModelCapabilities['ref'];
-  const connectionLayer = connectionOptionLayer(settings[kind], refKey);
+  const connectionLayer = connectionOptionLayer(settings[connection.kind], model.ref);
   const resolved = resolveCliOptions(model, {
     conversation,
-    profile: profile?.cliDefaults?.[refKey],
+    profile: profile?.cliDefaults?.[refKey] ?? profile?.cliDefaults?.[model.ref],
     connection: connectionLayer,
   });
   return { ref, billing: model.billing, effort: resolved.effort, speed: resolved.speed };

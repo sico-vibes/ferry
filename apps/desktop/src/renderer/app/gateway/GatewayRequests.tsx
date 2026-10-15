@@ -1,10 +1,25 @@
 import { useState, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Select, SkeletonTable, UiV2 } from '@ferry/ui';
-import type { GatewayHistoryQuery } from '@ferry/shared';
+import type { GatewayHistoryQuery, GatewayRequestRecord } from '@ferry/shared';
 import { useFerryClient } from '../../data/client';
 import { formatTokens } from '../modelFacts';
 import { costText, durationText, relativeTime } from './gatewayView';
+import { cliConnectionNames } from '../InstalledCliConnections';
+
+type UsageDimension = 'inputTokens' | 'outputTokens' | 'cachedTokens' | 'reasoningTokens';
+const connectionNames: Readonly<Record<string, string | undefined>> = cliConnectionNames;
+
+function reportedTokens(record: GatewayRequestRecord, dimension: UsageDimension): number | null {
+  if (record.usageReported === false || record.status === 'error') return null;
+  if (record.reportedUsage) return record.reportedUsage[dimension];
+  return dimension === 'reasoningTokens' ? null : (record[dimension] ?? null);
+}
+
+function usageText(record: GatewayRequestRecord, dimension: UsageDimension, compact = false) {
+  const value = reportedTokens(record, dimension);
+  return value === null ? 'Not reported' : compact ? formatTokens(value) : String(value);
+}
 
 export function GatewayRequests() {
   const client = useFerryClient();
@@ -147,9 +162,7 @@ export function GatewayRequests() {
                   <td>{row.servedModel ?? row.modelRef ?? row.requestedModel}</td>
                   <td>{row.outcome ?? (row.status === 'ok' ? 'completed' : 'failed')}</td>
                   <td>
-                    {row.usageReported === false || row.status === 'error'
-                      ? 'Not reported by upstream'
-                      : `${formatTokens(row.inputTokens)} / ${formatTokens(row.outputTokens)}`}
+                    {usageText(row, 'inputTokens', true)} / {usageText(row, 'outputTokens', true)}
                   </td>
                   <td>{durationText(row.firstResponseMs)}</td>
                   <td>{durationText(row.latencyMs)}</td>
@@ -226,14 +239,23 @@ export function GatewayRequests() {
                   ['Requested', record.requestedModel],
                   ['Served', record.servedModel ?? record.modelRef ?? 'No serving model'],
                   ['Provider', record.providerId ?? 'No successful provider'],
+                  ...(record.servedConnectionId
+                    ? [
+                        [
+                          'Connection',
+                          connectionNames[record.servedConnectionId] ?? record.servedConnectionId,
+                        ],
+                      ]
+                    : []),
                   ['Outcome', record.outcome ?? record.status],
                   ['Correlation ID', record.traceId ?? record.id],
                   [
                     'Input / output / cached',
-                    record.usageReported === false
-                      ? 'Not reported. A conservative token estimate remains enforced for this key.'
-                      : `${String(record.inputTokens)} / ${String(record.outputTokens)} / ${String(record.cachedTokens ?? 0)}`,
+                    `${usageText(record, 'inputTokens')} / ${usageText(record, 'outputTokens')} / ${usageText(record, 'cachedTokens')}`,
                   ],
+                  ...(reportedTokens(record, 'reasoningTokens') !== null
+                    ? [['Reasoning tokens', usageText(record, 'reasoningTokens')]]
+                    : []),
                   ['Queue time', durationText(record.queueWaitMs)],
                   [
                     'Cost',
@@ -246,6 +268,12 @@ export function GatewayRequests() {
                   </div>
                 ))}
               </dl>
+              {record.usageReported === false && (
+                <p className="v2-gateway-help">
+                  The upstream did not report usage. A conservative token estimate remains enforced
+                  for this key.
+                </p>
+              )}
               <h3>Attempted routes</h3>
               <ol className="grid gap-3">
                 {(record.attempts ?? []).map((attempt, index) => (

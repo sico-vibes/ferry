@@ -44,7 +44,7 @@ export function CliOptionsPanel({
               value: 'speed',
               label: `Speed: ${options.speed === 'fast' ? 'Fast' : 'Standard'}`,
               description: model.speeds.includes('fast')
-                ? 'Fast is advertised by this CLI'
+                ? 'Fast is advertised, but bounded billing is unavailable in this beta'
                 : 'Fast is not advertised by this CLI',
             },
             { value: 'done', label: 'Done' },

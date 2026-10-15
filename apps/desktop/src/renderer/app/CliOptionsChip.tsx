@@ -112,10 +112,10 @@ export function CliOptionsChip({
               <span>Fast mode</span>
               <UiV2.Switch
                 checked={value.speed === 'fast'}
-                disabled={busy}
+                disabled={busy || value.speed !== 'fast'}
                 aria-label="CLI fast mode"
                 onCheckedChange={(enabled) => {
-                  onChange({ ...value, speed: enabled ? 'fast' : 'standard' });
+                  if (!enabled) onChange({ ...value, speed: 'standard' });
                 }}
               />
             </label>
@@ -124,7 +124,13 @@ export function CliOptionsChip({
               Standard speed · Fast mode is not advertised by this client.
             </p>
           )}
-          {value.speed === 'fast' && !capabilities.speeds.includes('fast') && (
+          {capabilities.speeds.includes('fast') && (
+            <p className="cli-options-description">
+              Fast mode is unavailable in this beta because Ferry cannot bound its separately billed
+              charge. Standard speed remains available.
+            </p>
+          )}
+          {value.speed === 'fast' && (
             <div className="grid gap-2">
               <p className="cli-options-description" role="status">
                 The saved Fast setting is unavailable for this model.
@@ -142,8 +148,8 @@ export function CliOptionsChip({
             </div>
           )}
           <p className="cli-options-description">
-            Subscription and metered limits still apply. Separately billed options follow your
-            spending permissions.
+            Subscription limits still apply. Enabling a connection does not authorize separately
+            billed usage.
           </p>
           <UiV2.Button
             size="sm"

@@ -18,7 +18,7 @@ const secondModel = 'openai/gpt-oss-120b';
 const fake = new FakeOpenAIServer({
   models: [
     { id: firstModel, supported_parameters: ['tools'] },
-    { id: secondModel, supported_parameters: ['tools'] },
+    { id: secondModel, supported_parameters: ['tools', 'reasoning_effort'] },
   ],
   responses: [],
 });
@@ -434,6 +434,11 @@ try {
       assert.equal(response.status, 200, await response.clone().text());
       const text = await response.text();
       assert.ok(text.includes(`${format}-reply`), text);
+      assert.equal(
+        chatRequests().at(-1)?.body?.reasoning_effort,
+        format === 'messages' ? 'low' : 'high',
+        'Advertised reasoning controls must reach the upstream request',
+      );
       if (stream)
         assert.ok(
           text.includes(
