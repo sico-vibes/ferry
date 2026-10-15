@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile as writeRaw } from 'node:fs/promises';
+import { getEventListeners } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -15,6 +16,19 @@ async function tempRoot(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ferry-qa-ws-'));
   roots.push(root);
   return root;
+}
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 afterEach(async () => {
   await Promise.all(
@@ -460,6 +474,60 @@ describe('QA workspace: command runner', () => {
     expect(result.timedOut).toBe(true);
     expect(Date.now() - started).toBeLessThan(20_000);
   }, 120_000);
+
+  it.each([false, true])(
+    'reaps the timed-out command tree: descendant PID dies and its heartbeat stops (pty=%s)',
+    async (usePty) => {
+      const root = await tempRoot();
+      await writeRaw(
+        path.join(root, 'beat.mjs'),
+        "import { appendFileSync, writeFileSync } from 'node:fs';\nwriteFileSync('child.pid', String(process.pid));\nsetInterval(() => appendFileSync('beats.txt', 'x'), 40);\n",
+        'utf8',
+      );
+      const jail = new WorkspaceJail(root);
+      const started = Date.now();
+      const result = await runCommand(
+        jail,
+        { command: 'node beat.mjs', timeoutMs: 5_000, pty: usePty },
+        () => undefined,
+      );
+      expect(result.timedOut).toBe(true);
+      expect(Date.now() - started).toBeLessThan(20_000);
+      const childPid = Number(await readFile(path.join(root, 'child.pid'), 'utf8'));
+      expect(Number.isSafeInteger(childPid)).toBe(true);
+      const deathDeadline = Date.now() + 5_000;
+      while (processIsAlive(childPid) && Date.now() < deathDeadline) await sleep(50);
+      expect(processIsAlive(childPid)).toBe(false);
+      const beats = path.join(root, 'beats.txt');
+      const first = (await readFile(beats)).length;
+      await sleep(400);
+      const second = (await readFile(beats)).length;
+      expect(second).toBe(first);
+    },
+    120_000,
+  );
+
+  it.each([false, true])(
+    'removes abort listeners once a timed-out command has settled (pty=%s)',
+    async (usePty) => {
+      const root = await tempRoot();
+      await writeRaw(path.join(root, 'sleep.mjs'), 'setTimeout(() => {}, 60_000);\n', 'utf8');
+      const jail = new WorkspaceJail(root);
+      const controller = new AbortController();
+      const result = await runCommand(
+        jail,
+        { command: 'node sleep.mjs', timeoutMs: 400, pty: usePty },
+        () => undefined,
+        controller.signal,
+      );
+      expect(result.timedOut).toBe(true);
+      expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+      expect(() => {
+        controller.abort();
+      }).not.toThrow();
+    },
+    120_000,
+  );
 });
 
 describe('QA workspace: checkpoints', () => {

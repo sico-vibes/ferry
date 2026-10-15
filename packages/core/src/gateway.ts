@@ -1,6 +1,6 @@
 import { providerBaseUrl } from './provider-endpoints.js';
 import { isOpenCodeAppModel } from '@ferry/shared';
-import { zenModel, zenCliMode, zenFerryKey, ZEN_CLI_BASE_URL } from './zen-cli.js';
+import { zenModel, zenCliMode } from './zen-cli.js';
 import { oauthModelCatalog, streamOAuthChat } from '@ferry/oauth';
 import { reserveSpend, BudgetError } from './spending.js';
 import { withGatewayDeadlines, GatewayTimeoutError } from './gateway-deadlines.js';
@@ -46,7 +46,13 @@ import {
 import { randomBytes } from 'node:crypto';
 import type { CliCallerTool, CliConversationMessage } from '@ferry/delegate';
 import { CliTransportError, isCliTransportError } from '@ferry/delegate';
-import { getCliBroker, resolveCliOption } from './cli-broker.js';
+import {
+  canonicalZenRef,
+  cliModelInfo,
+  getCliBroker,
+  legacyZenAliasId,
+  resolveCliOption,
+} from './cli-broker.js';
 import { shortWaitMs } from './cli-capacity-guard.js';
 import type { CliConnection, CliModelCapabilities, CliOption } from '@ferry/shared';
 import type { FerryServices } from './services.js';
@@ -193,6 +199,14 @@ function unsupportedCli(message: string): Error {
     code: 'unsupported_request',
     statusCode: 400,
   });
+}
+
+/**
+ * A cryptographically unique, client-facing completion id. Never a timestamp-only value (which two
+ * completions in the same millisecond would share) and never a caller-supplied ref that can repeat.
+ */
+function gatewayCompletionId(prefix: string): string {
+  return `${prefix}_${randomBytes(12).toString('hex')}`;
 }
 
 /** Convert OpenAI-style caller tools into the transport's caller tools (text-only schema). */
@@ -414,7 +428,7 @@ async function routeCliCompletion(
       ],
     });
     return {
-      id: `gw-cli-${String(Date.now())}`,
+      id: gatewayCompletionId('gw-cli'),
       model: model.ref,
       responseModel: result.responseModel,
       text: result.text,
@@ -592,6 +606,83 @@ export function createGatewayController(
       })
       .map((model) => model.ref);
   };
+  // The Zen CLI transport is selected for the Gateway surface only when the accepted Zen opt-in says
+  // so; a generic OpenCode CLI opt-in (Go/general use) must never make `opencode/<id>` a CLI alias.
+  const gatewayZenCli = () => zenCliMode(services, 'gateway');
+  /**
+   * Resolve a persisted legacy `opencode/<id>` allowlist entry to the discovered canonical
+   * `opencode-cli/opencode/<id>` route, but only when the Zen CLI transport is selected for the
+   * Gateway surface. Any other ref (or when not selected) is returned unchanged, so an API-selected
+   * Zen ref stays a legitimate API ref and no new route is invented.
+   */
+  const canonicalizeAllowedRef = (ref: string): string => {
+    const id = legacyZenAliasId(ref);
+    return id !== null && gatewayZenCli() ? canonicalZenRef(id) : ref;
+  };
+  /**
+   * True when an allowlist selects a candidate, accepting a legacy Zen alias of the *same* discovered
+   * canonical Zen model. Any other alias, provider or model stays unmatched (blocked).
+   */
+  const allowlistSelectsModel = (allowed: readonly string[], model: ModelInfo): boolean => {
+    if (!allowed.length) return true;
+    if (allowed.includes(model.ref)) return true;
+    const caps = model.cliCapabilities;
+    return (
+      gatewayZenCli() && caps?.upstreamProvider === 'opencode' && allowed.includes(caps.upstreamId)
+    );
+  };
+  /**
+   * The shared router matches profile `allowedModelRefs` against canonical refs only. When the Zen CLI
+   * transport is selected, expand each legacy `opencode/<id>` entry to its discovered canonical
+   * `opencode-cli/opencode/<id>` so the same saved profile keeps selecting the same route. An
+   * undiscovered alias is left as-is (it matches nothing), so no route is invented.
+   */
+  const expandZenAliases = (profile: Profile): Profile => {
+    const refs = profile.allowedModelRefs;
+    if (!refs?.length || !gatewayZenCli()) return profile;
+    const expanded = new Set<string>(refs);
+    for (const ref of refs) {
+      const id = legacyZenAliasId(ref);
+      if (id === null) continue;
+      const canonical = canonicalZenRef(id);
+      if (getCliBroker(services, () => undefined).model(canonical)) expanded.add(canonical);
+    }
+    return expanded.size === refs.length
+      ? profile
+      : { ...profile, allowedModelRefs: [...expanded] as ModelRef[] };
+  };
+  /**
+   * The saved profile CLI default for one exact discovered CLI route.
+   *
+   * A saved Zen profile default may keep its original legacy `opencode/<id>` ref, so it is honored:
+   * the exact requested ref (a direct legacy-alias request) wins, then the discovered canonical ref,
+   * then — only when the Zen CLI transport is selected for this surface — the same route's legacy
+   * alias (the Auto fallback). It never names another model/provider's default and never rewrites the
+   * saved ref. Explicit request controls are layered above this by `resolveCliOption`.
+   */
+  const profileCliDefaultFor = (
+    profileRecord: Profile | undefined,
+    canonicalRef: ModelRef,
+    model: CliModelCapabilities,
+    requestedRef?: ModelRef,
+  ): CliOption | undefined => {
+    const defaults = profileRecord?.cliDefaults;
+    if (!defaults) return undefined;
+    if (requestedRef !== undefined && requestedRef !== canonicalRef) {
+      const requested = defaults[requestedRef];
+      if (requested) return requested;
+    }
+    const canonical = defaults[canonicalRef];
+    if (canonical) return canonical;
+    if (gatewayZenCli() && model.upstreamProvider === 'opencode') {
+      const alias = model.upstreamId;
+      if (legacyZenAliasId(alias) !== null) {
+        const aliased = defaults[alias as ModelRef];
+        if (aliased) return aliased;
+      }
+    }
+    return undefined;
+  };
   const routeableCandidates = async (
     key: GatewayKey,
     profileName: string,
@@ -605,10 +696,25 @@ export function createGatewayController(
       const candidates = [...availableModels()];
       const byRef = new Map(candidates.map((model) => [model.ref, model]));
       const visible = new Set(allModels(candidates));
-      return allowedConcrete.flatMap((ref) => {
-        const model = byRef.get(ref as (typeof candidates)[number]['ref']);
-        return model && visible.has(model.ref) ? [model] : [];
-      });
+      const broker = getCliBroker(services, () => undefined);
+      // A picked-only key routes strictly inside its list. A legacy `opencode/<id>` entry resolves to
+      // the discovered canonical CLI route when Zen CLI is selected, else stays the API ref.
+      const picked: ModelInfo[] = [];
+      const seen = new Set<string>();
+      for (const ref of allowedConcrete) {
+        const canonical = canonicalizeAllowedRef(ref);
+        const api = byRef.get(canonical as (typeof candidates)[number]['ref']);
+        let model: ModelInfo | undefined = api && visible.has(api.ref) ? api : undefined;
+        if (!model) {
+          const cli = broker.model(canonical as ModelRef);
+          if (cli?.connection.surfaces.gateway) model = cliModelInfo(cli.connection, cli.model);
+        }
+        if (model && !seen.has(model.ref)) {
+          seen.add(model.ref);
+          picked.push(model);
+        }
+      }
+      return picked;
     }
     const allProfiles = [...BUILTIN_PROFILES];
     const custom = services.settings.get('profiles');
@@ -630,10 +736,11 @@ export function createGatewayController(
         }
       : undefined;
     if (!selected) return [];
-    const effective =
+    const effective = expandZenAliases(
       selected.id === 'profile_builtin_auto_free' && key.paidBackup && (key.budgetUsd ?? 0) > 0
         ? { ...selected, paidAllowed: true, allowedProviders: 'all' as const }
-        : selected;
+        : selected,
+    );
     const runtimeDeps = await import('./session-deps.js');
     const requestDeps = runtimeDeps.createSessionDependencies(services, () => undefined);
     const eligible = requestDeps.gateway.resolveCandidates(
@@ -643,14 +750,42 @@ export function createGatewayController(
       requiresTools,
       'gateway',
     );
-    return allowedConcrete.length
-      ? allowedConcrete.flatMap((ref) => {
-          const model = eligible.find((item) => item.ref === ref);
-          return model ? [model] : [];
-        })
-      : eligible;
+    if (!allowedConcrete.length) return eligible;
+    const matched: ModelInfo[] = [];
+    const matchedRefs = new Set<string>();
+    for (const ref of allowedConcrete) {
+      const canonical = canonicalizeAllowedRef(ref);
+      const model =
+        eligible.find((item) => item.ref === canonical) ??
+        eligible.find((item) => allowlistSelectsModel([ref], item));
+      if (model && !matchedRefs.has(model.ref)) {
+        matchedRefs.add(model.ref);
+        matched.push(model);
+      }
+    }
+    return matched;
   };
   const runtime: GatewayRuntime = {
+    normalizeModel(key, requestedRef) {
+      // Admission normalization for an explicit concrete ref. Only when the Zen CLI transport is
+      // selected for the Gateway surface, and the requested ref is exactly the discovered canonical
+      // `opencode-cli/opencode/<id>` route or its legacy `opencode/<id>` alias, map it to the ref this
+      // key's deduplicated `models()` listing admits. Everything else (API-selected Zen, an unknown or
+      // other alias, a disabled surface, another provider/model) is returned unchanged.
+      if (!gatewayZenCli()) return requestedRef;
+      const resolved = getCliBroker(services, () => undefined).model(requestedRef as ModelRef);
+      if (!resolved) return requestedRef;
+      if (resolved.connection.kind !== 'opencode-cli') return requestedRef;
+      if (resolved.model.upstreamProvider !== 'opencode') return requestedRef;
+      if (!resolved.connection.surfaces.gateway) return requestedRef;
+      const canonical = resolved.model.ref;
+      const alias = resolved.model.upstreamId;
+      if (requestedRef !== canonical && requestedRef !== alias) return requestedRef;
+      // The listing exposes the alias only for a key that allows the legacy ref and not the canonical.
+      const admitsAlias =
+        key.allowedModels.includes(alias) && !key.allowedModels.includes(canonical);
+      return admitsAlias ? alias : canonical;
+    },
     async inputTokenBound(key, model) {
       const requested = model.startsWith('@profile:')
         ? model.slice('@profile:'.length)
@@ -818,29 +953,58 @@ export function createGatewayController(
       const eligible = (await routeableCandidates(key, profileName)).filter((model) =>
         assigned.has(model.ref),
       );
-      // Gateway-eligible installed-CLI models are explicit direct-connection refs. They are listed
-      // (and pass the explicit-model admission check) once the Gateway surface is opted in; the
-      // broker then enforces verification, identity and billing before any dispatch. They never
-      // enter profile/Auto routing.
-      const cliRefs = getCliBroker(services, () => undefined)
+      const broker = getCliBroker(services, () => undefined);
+      const gatewayConnections = broker
         .connections()
-        .filter((connection) => connection.surfaces.gateway)
-        .flatMap((connection) =>
-          connection.models.filter((model) => !model.hidden).map((model) => model.ref),
-        )
-        .filter((ref) => !key.allowedModels.length || key.allowedModels.includes(ref));
+        .filter((connection) => connection.surfaces.gateway);
+      // A saved legacy `opencode/<id>` key entry selects the same canonical Zen route when the Zen CLI
+      // transport is selected. List the ref the key actually uses (the alias) so an explicit alias
+      // request validates, and never list the alias plus the canonical as two rows for one route.
+      const listedOverrides = new Map<string, string>();
+      for (const connection of gatewayConnections)
+        for (const model of connection.models)
+          if (
+            !model.hidden &&
+            gatewayZenCli() &&
+            model.upstreamProvider === 'opencode' &&
+            key.allowedModels.includes(model.upstreamId) &&
+            !key.allowedModels.includes(model.ref)
+          )
+            listedOverrides.set(model.ref, model.upstreamId);
+      const listedRef = (ref: string): string => listedOverrides.get(ref) ?? ref;
+      // Gateway-eligible installed-CLI models are direct-connection refs. They are listed here (and
+      // pass the explicit-model admission check) once the Gateway surface is opted in; the broker then
+      // enforces verification, identity and billing before any dispatch. They are not exclusive to
+      // explicit selection: the shared resolver also returns eligible CLI routes for Auto.
+      const cliRefs = gatewayConnections.flatMap((connection) =>
+        connection.models
+          .filter(
+            (model) =>
+              !model.hidden &&
+              (key.allowedModels.length === 0 ||
+                key.allowedModels.includes(model.ref) ||
+                // A saved legacy `opencode/<id>` entry selects the same canonical Zen route when the
+                // Zen CLI transport is selected for the Gateway surface. No other alias matches.
+                (gatewayZenCli() &&
+                  model.upstreamProvider === 'opencode' &&
+                  key.allowedModels.includes(model.upstreamId))),
+          )
+          .map((model) => model.ref),
+      );
       const concreteAllowlist = key.allowedModels.filter(
         (model) => model.includes('/') && !model.startsWith('ferry/'),
       );
       if (key.profile === 'none' && concreteAllowlist.length > 0)
-        return [...new Set([...eligible.map((model) => model.ref), ...cliRefs])];
+        return [
+          ...new Set([...eligible.map((model) => listedRef(model.ref)), ...cliRefs.map(listedRef)]),
+        ];
       const hasLogicalAllowlist = key.allowedModels.some(
         (model) => !model.includes('/') && !model.startsWith('ferry/'),
       );
       const concreteModels = eligible.filter((model) =>
-        !concreteAllowlist.length && !hasLogicalAllowlist
-          ? true
-          : concreteAllowlist.includes(model.ref),
+        !concreteAllowlist.length
+          ? !hasLogicalAllowlist
+          : allowlistSelectsModel(concreteAllowlist, model),
       );
       const settings = routingSettings(services);
       const catalogMappings = services.catalog.logicalModels ?? [];
@@ -857,7 +1021,11 @@ export function createGatewayController(
         return resolved.length > 0;
       });
       return [
-        ...new Set([...concreteModels.map((model) => model.ref), ...availableLogical, ...cliRefs]),
+        ...new Set([
+          ...concreteModels.map((model) => listedRef(model.ref)),
+          ...availableLogical,
+          ...cliRefs.map(listedRef),
+        ]),
       ];
     },
     async complete(input) {
@@ -968,6 +1136,9 @@ export function createGatewayController(
           servedProviderId: result.servedProviderId ?? servedProviderId,
           servedConnectionId: result.servedConnectionId ?? null,
           servedAccountKey: result.servedAccountKey ?? null,
+          // The exact standard-API quota event id (absent/null for installed-CLI routes) so a native
+          // consumer can re-record the same event with session attribution instead of double counting.
+          upstreamUsageId: result.upstreamUsageId ?? null,
           status: 'ok',
           inputTokens: result.inputTokens ?? 0,
           outputTokens: result.outputTokens ?? 0,
@@ -1048,7 +1219,20 @@ export function createGatewayController(
     if (!input.model.startsWith('@profile:')) {
       const cli = getCliBroker(services, () => undefined).model(input.model as ModelRef);
       if (cli) {
-        const profileCliDefault = selectedProfileRecord?.cliDefaults?.[cli.model.ref];
+        // Prefer the original requested ref (a legacy `opencode/<id>` may have been normalized to the
+        // admitted canonical ref for transport admission) so an exact saved alias default still wins.
+        const requestedDefaultsRef =
+          input.requestedModel !== undefined &&
+          !input.requestedModel.startsWith('ferry/') &&
+          !input.requestedModel.startsWith('@profile:')
+            ? (input.requestedModel as ModelRef)
+            : (input.model as ModelRef);
+        const profileCliDefault = profileCliDefaultFor(
+          selectedProfileRecord,
+          cli.model.ref,
+          cli.model,
+          requestedDefaultsRef,
+        );
         return await routeCliCompletion(services, input, cli, {
           ...(profileCliDefault ? { profileCliDefault } : {}),
         });
@@ -1113,7 +1297,7 @@ export function createGatewayController(
       (model) =>
         keyEligible.has(model.ref) &&
         requestedEligible.has(model.ref) &&
-        (!hasConcreteAllowlist(input.key) || input.key.allowedModels.includes(model.ref)),
+        (!hasConcreteAllowlist(input.key) || allowlistSelectsModel(input.key.allowedModels, model)),
     );
     if (input.requestedModel === 'ferry/auto-free') {
       const providers = requestDeps.providers();
@@ -1283,7 +1467,11 @@ export function createGatewayController(
       lastAttemptHistory.push({ model: resolved.model.ref, status: 'started' });
       input.onAttempt?.({ servedModel: resolved.model.ref, attempts: [...lastAttemptHistory] });
       try {
-        const profileCliDefault = selectedProfileRecord?.cliDefaults?.[resolved.model.ref];
+        const profileCliDefault = profileCliDefaultFor(
+          selectedProfileRecord,
+          resolved.model.ref,
+          resolved.model,
+        );
         const completion = await routeCliCompletion(services, input, resolved, {
           ...(profileCliDefault ? { profileCliDefault } : {}),
           onAttempt: () => undefined,
@@ -1397,8 +1585,10 @@ export function createGatewayController(
         });
         continue;
       }
-      const cliTransport = providerId === 'opencode' && model.free && zenCliMode(services);
-      const entries = cliTransport ? [] : services.providerKeyEntries.list(providerId);
+      // Every standard-API route is dispatched through the API adapters. The obsolete synthetic
+      // `ZEN_CLI_BASE_URL`/`zenFerryKey` transport is removed: installed-CLI (including Zen CLI)
+      // routes dispatch through the shared broker above, and an API-selected Zen model stays API.
+      const entries = services.providerKeyEntries.list(providerId);
       if (!entries.length && !health.tracker.available(providerId, model.ref, providerId)) continue;
       const stickyKeyId = stickyRoutes.get(input.sessionHint)?.providerKeyId;
       const preferredKeyId =
@@ -1418,13 +1608,11 @@ export function createGatewayController(
       );
       const oauth = oauthModelCatalog.some((entry) => entry.ref === model.ref);
       const legacyKeyRef = services.providerKeys.get(providerId)?.keyringRef;
-      const key = cliTransport
-        ? await zenFerryKey(services)
-        : providerKey
-          ? await services.secrets.get(providerKey.keyringRef)
-          : services.providerKeyEntries.list(providerId).length === 0 && legacyKeyRef
-            ? await services.secrets.get(legacyKeyRef)
-            : undefined;
+      const key = providerKey
+        ? await services.secrets.get(providerKey.keyringRef)
+        : services.providerKeyEntries.list(providerId).length === 0 && legacyKeyRef
+          ? await services.secrets.get(legacyKeyRef)
+          : undefined;
       input.signal.throwIfAborted();
       if (!key && !permitsKeylessProvider(services, providerId) && !oauth) {
         lastError = Object.assign(
@@ -1433,10 +1621,7 @@ export function createGatewayController(
         );
         continue;
       }
-      const baseUrl =
-        providerId === 'opencode' && model.free && zenCliMode(services)
-          ? ZEN_CLI_BASE_URL
-          : providerBaseUrl(services, providerId);
+      const baseUrl = providerBaseUrl(services, providerId);
       const attemptStarted = Date.now();
       const attempts = lastAttemptHistory;
       attempts.push({ model: model.ref, status: 'started' });
@@ -1669,8 +1854,11 @@ export function createGatewayController(
                   },
                   model,
                 );
+        // The exact, nonsecret standard-API quota usage event id. Prefer the spend reservation's id;
+        // otherwise use a unique per-request id (never a timestamp-only key that could collide).
+        const upstreamUsageId = reservation?.id ?? `gateway:${ledgerRequestId}`;
         services.quota.recordUsage({
-          id: reservation?.id ?? `gateway:${input.key.id}:${timestamp}`,
+          id: upstreamUsageId,
           costUsd: chargedUsd,
           providerId,
           modelRef: model.ref,
@@ -1700,9 +1888,10 @@ export function createGatewayController(
         };
         input.onAttempt?.({ servedModel: model.ref, attempts: [...attempts] });
         return {
-          id: `gw-${String(Date.now())}`,
+          id: gatewayCompletionId('gw'),
           model: model.ref,
           ...result,
+          upstreamUsageId,
           ...(input.traceId ? { traceId: input.traceId } : {}),
           attempts,
         };

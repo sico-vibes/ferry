@@ -421,6 +421,14 @@ export class QuotaEngine {
     this.scheduleResets();
     this.scheduleEmit();
   }
+  /**
+   * Exact in-memory lookup of one recorded usage event by id. O(1) map access: no snapshot scan, no
+   * SQL and no second ledger. Lets a consumer carry a Gateway-charged event's cost metadata onto the
+   * native conversation re-record without inventing or double-charging.
+   */
+  getUsage(id: string): UsageRecord | undefined {
+    return this.records.get(id);
+  }
   queryUsage(query: UsageQuery = {}): UsageRecord[] {
     return this.allRecords().filter(
       (record) =>

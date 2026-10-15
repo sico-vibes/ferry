@@ -45,6 +45,12 @@ export const GatewayRequestRecordSchema = z.object({
   servedProviderId: z.string().nullable().optional(),
   servedConnectionId: z.string().nullable().optional(),
   servedAccountKey: z.string().nullable().optional(),
+  /**
+   * Nonsecret id of the exact standard-API quota usage event this completion recorded. Absent/null
+   * for installed-CLI routes, which record no standard-API quota event. A native consumer can
+   * re-record that same id with session attribution without double counting.
+   */
+  upstreamUsageId: z.string().nullable().optional(),
   status: z.enum(['ok', 'error']),
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),

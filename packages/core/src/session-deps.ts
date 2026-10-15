@@ -17,6 +17,7 @@ import type { CliCallerTool, CliConversationMessage } from '@ferry/delegate';
 import { ProviderKeyRotation, resolveProviderRequestOverrides } from '@ferry/providers';
 import {
   ProviderIdSchema,
+  ModelRefSchema,
   oauthProviderId,
   providerDefinition,
   ProviderSchema,
@@ -24,7 +25,9 @@ import {
   UsageRecordSchema,
   QuotaObservationSchema,
   newId,
+  type GatewayRequestRecord,
   type ModelInfo,
+  type ModelRef,
   type Profile,
   type Provider,
   type StepKind,
@@ -134,6 +137,9 @@ export function createSessionDependencies(
   const health = getProviderHealth(services);
   const providerHeaders: Record<string, Record<string, string>> = {};
   let lastGatewayServedModel: string | null = null;
+  // The exact API quota event id the Gateway already recorded for the generation in flight. Cleared
+  // before every dispatch so a cancelled/later step can never re-record another step's event.
+  let pendingUpstreamUsageId: string | null = null;
   let gatewayToken: string | undefined;
   const providerKeyRotation = new ProviderKeyRotation();
   const selectedProviderKeys = new Map<string, { providerId: string; keyId: string }>();
@@ -293,7 +299,36 @@ export function createSessionDependencies(
       .safeParse(services.settings.get('routing-reliability')).data ?? [];
   const usage: UsageSink = {
     record(raw) {
-      services.quota.recordUsage(UsageRecordSchema.parse(raw));
+      const parsed = UsageRecordSchema.parse(raw);
+      if (pendingUpstreamUsageId === null) {
+        services.quota.recordUsage(parsed);
+        return;
+      }
+      // A native-through-Gateway API generation was already charged and recorded once by the Gateway
+      // (same event id). Re-record that EXACT id with this conversation's session/actual-producer
+      // attribution so the global provider event stays a single row while the conversation records its
+      // own event.
+      const upstreamUsageId = pendingUpstreamUsageId;
+      pendingUpstreamUsageId = null;
+      const existing = services.quota.getUsage(upstreamUsageId);
+      // The Gateway's record is the sole authority for cost/plan/headers. Drop the conversation's
+      // recomputed cost, plan and cost-estimate headers BEFORE carrying over the retained values, so a
+      // pruned/missing original leaves them absent/unknown rather than inheriting an invented estimate.
+      const {
+        costUsd: _inventedCost,
+        planUnits: _inventedPlan,
+        headers: _inventedHeaders,
+        ...rest
+      } = parsed;
+      services.quota.recordUsage(
+        UsageRecordSchema.parse({
+          ...rest,
+          id: upstreamUsageId,
+          ...(existing?.costUsd === undefined ? {} : { costUsd: existing.costUsd }),
+          ...(existing?.planUnits === undefined ? {} : { planUnits: existing.planUnits }),
+          ...(existing?.headers === undefined ? {} : { headers: existing.headers }),
+        }),
+      );
       // QuotaEngine subscribers publish the authoritative quota.update summary.
     },
   };
@@ -770,6 +805,10 @@ export function createSessionDependencies(
     },
     async streamStep(req, signal) {
       const providerId = req.model.providerId;
+      // Every step starts with no pending correlation, whatever branch it takes: a completed Gateway
+      // generation whose usage consumer never ran can never lend its API event id to a later direct
+      // (or Gateway) generation.
+      pendingUpstreamUsageId = null;
       // A discovered installed-CLI model dispatches through the shared Core broker on the native
       // surface. Its original system/messages/tools/delta/progress/signal are preserved verbatim.
       if (req.model.cliConnectionId) return await runNativeCliStep(services, req, context.profile);
@@ -805,19 +844,46 @@ export function createSessionDependencies(
         providerBaseUrls.gateway = `http://127.0.0.1:${String(status.port)}/v1`;
         providerHeaders.gateway = { 'x-ferry-internal-token': gatewayToken };
         const sessionId = traceContext?.sessionId ?? '';
+        // Per-generation evidence: the Gateway mints a fresh `x-ferry-trace-id` for exactly this one
+        // internal request. Capture it from our own transport response (never an upstream header) so
+        // the recorded completed outcome can be correlated by exact trace id + key id after the stream
+        // finishes. Scoping the capture to this generation means an interleaved key or a cancelled
+        // turn can never reuse another generation's evidence.
+        const evidence: { traceId: string | null } = { traceId: null };
+        const gatewayFetch: typeof globalThis.fetch = async (input, init) => {
+          const response = await providerFetch(input, init);
+          const requestUrl =
+            typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+          if (requestUrl.includes('/v1/chat/completions')) {
+            const traceId = response.headers.get('x-ferry-trace-id');
+            if (traceId) evidence.traceId = traceId;
+          }
+          return response;
+        };
         const generator = createStepGenerator(
           {
             apiKeys,
             providerBaseUrls,
             providerHeaders,
-            providerFetch,
+            providerFetch: gatewayFetch,
             emit,
             onObservation: observe,
           },
           req.model,
           sessionId,
         );
-        return await generator({ ...req, signal });
+        const generated = await generator({ ...req, signal });
+        const attribution = gatewayStepAttribution(
+          controller.requests(),
+          key.id,
+          evidence.traceId,
+          req.model.ref,
+        );
+        // Retain the exact API event id (if any) only for the usage record the agent loop is about to
+        // emit for THIS step; it is consumed once and never reused.
+        pendingUpstreamUsageId = attribution.upstreamUsageId;
+        const { upstreamUsageId: _upstreamUsageId, ...step } = attribution;
+        return { ...generated, ...step };
       }
       if (oauthModelCatalog.some((model) => model.providerId === providerId))
         return await streamOAuthStep(services.secrets, { ...req, signal });
@@ -1284,6 +1350,56 @@ async function runNativeCliStep(
     producer,
   };
   return step;
+}
+
+/**
+ * Pure half of Gateway step attribution: given the bounded `requests()` snapshot and this
+ * generation's exact trace id + key id, derive the actual producer, authoritative reported usage, and
+ * the exact API quota event id the Gateway already recorded (if any).
+ *
+ * Correlation is by the exact trace id the Gateway minted for this generation's request plus the key
+ * id. When no completed outcome is retained (older record, mismatch, out of retention, or a
+ * non-completed outcome), the producer is absent (honest unknown) and every usage dimension stays
+ * `null` rather than being guessed from the standard-API SDK's parsed stream.
+ *
+ * An outcome that explicitly reports no usage (`usageReported === false`) contributes no reported
+ * tokens: legacy/coalesced API zeros are not real reported usage and stay `null`. A real reported zero
+ * (a CLI route with `usageReported === true`) is preserved as `0`.
+ */
+export function gatewayStepAttribution(
+  requests: readonly GatewayRequestRecord[],
+  keyId: string,
+  traceId: string | null,
+  requestedModelRef: ModelRef,
+): { producer?: StepProducer; reportedUsage: ReportedStepUsage; upstreamUsageId: string | null } {
+  const record = traceId
+    ? requests.find((entry) => entry.traceId === traceId && entry.keyId === keyId)
+    : undefined;
+  const completed = record?.outcome === 'completed' ? record : undefined;
+  const servedModel = ModelRefSchema.safeParse(
+    completed ? (completed.servedModel ?? completed.modelRef) : null,
+  );
+  const servedProviderId = ProviderIdSchema.safeParse(completed?.servedProviderId);
+  const producer: StepProducer | undefined =
+    completed && servedModel.success && servedProviderId.success
+      ? {
+          modelRef: servedModel.data,
+          providerId: servedProviderId.data,
+          connectionId: completed.servedConnectionId ?? null,
+          accountKey: completed.servedAccountKey ?? null,
+          requestedModelRef,
+        }
+      : undefined;
+  // Never surface an explicit "not reported" outcome's coalesced zeros as real tokens.
+  const reported = completed?.usageReported === false ? undefined : completed?.reportedUsage;
+  const reportedUsage: ReportedStepUsage = {
+    inputTokens: reported?.inputTokens ?? null,
+    outputTokens: reported?.outputTokens ?? null,
+    cachedTokens: reported?.cachedTokens ?? null,
+    reasoningTokens: reported?.reasoningTokens ?? null,
+  };
+  const upstreamUsageId = completed?.upstreamUsageId ?? null;
+  return { ...(producer ? { producer } : {}), reportedUsage, upstreamUsageId };
 }
 
 export function modelHintsFromRegistry(model: Pick<ModelInfo, 'capability'>): Partial<ModelHints> {

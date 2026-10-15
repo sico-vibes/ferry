@@ -1566,4 +1566,55 @@ describe('Ferry gateway', () => {
     const body = (await unreported.json()) as { usage: Record<string, unknown> };
     expect(body.usage).not.toHaveProperty('completion_tokens_details');
   }, 30_000);
+
+  it('admits a normalized concrete ref uniformly across Chat, Responses, Anthropic and Gemini', async () => {
+    const originalModels = runtime.models.bind(runtime);
+    runtime.models = (key) =>
+      key.profile === 'none' && key.allowedModels.length > 0
+        ? key.allowedModels
+        : ['openai/gpt-test', 'gpt-test-logical', 'opencode-cli/opencode/big-pickle'];
+    runtime.normalizeModel = (_key, requestedRef) =>
+      requestedRef === 'opencode/big-pickle' ? 'opencode-cli/opencode/big-pickle' : requestedRef;
+    const base = await server();
+    const headers = {
+      authorization: `Bearer ${created.secret}`,
+      'x-api-key': created.secret,
+      'content-type': 'application/json',
+    };
+    try {
+      const requests = [
+        [
+          '/v1/chat/completions',
+          { model: 'opencode/big-pickle', messages: [{ role: 'user', content: 'hi' }] },
+        ],
+        ['/v1/responses', { model: 'opencode/big-pickle', input: 'hi' }],
+        [
+          '/v1/messages',
+          {
+            model: 'opencode/big-pickle',
+            max_tokens: 8,
+            messages: [{ role: 'user', content: 'hi' }],
+          },
+        ],
+        [
+          '/v1beta/models/opencode%2Fbig-pickle:generateContent',
+          { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] },
+        ],
+      ] as const;
+      for (const [path, payload] of requests) {
+        const response = await fetch(`${base}${path}`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload),
+        });
+        expect(response.status, path).toBe(200);
+        await response.text();
+        // The admitted (normalized) ref is dispatched; the raw requested ref is preserved separately.
+        expect(received.at(-1)?.model, path).toBe('opencode-cli/opencode/big-pickle');
+      }
+    } finally {
+      runtime.models = originalModels;
+      delete runtime.normalizeModel;
+    }
+  }, 30_000);
 });

@@ -108,6 +108,11 @@ export interface GatewayCompletion {
   servedProviderId?: string | null;
   servedConnectionId?: string | null;
   servedAccountKey?: string | null;
+  /**
+   * Nonsecret id of the exact standard-API quota usage event this completion recorded, or absent/null
+   * for an installed-CLI route (which records no standard-API quota event).
+   */
+  upstreamUsageId?: string | null;
 }
 export interface GatewayAttempt {
   model: string;
@@ -165,6 +170,14 @@ export interface GatewayRuntime {
   store: GatewayStore;
   inputTokenBound?(key: GatewayKey, model: string): Promise<number>;
   unavailable?(key: GatewayKey): { code: string; statusCode: number; message: string };
+  /**
+   * Optional synchronous admission normalization for one explicit concrete requested ref. Core may
+   * map a legacy alias to the exact reference this key's deduplicated `models()` listing admits, so an
+   * old client keeps working without widening the key's policy. It must return the requested ref
+   * unchanged when no exact discovered same-route mapping applies (default behavior is identity), and
+   * must never map an API-selected, unknown, other-provider or unrelated model.
+   */
+  normalizeModel?(key: GatewayKey, requestedRef: string): string;
   rejected?(input: {
     key: GatewayKey;
     at: string;
@@ -766,20 +779,32 @@ function anthropicTools(raw: unknown): unknown[] | undefined {
       : [];
   });
 }
-function modelFor(raw: string, key: GatewayKey): string {
+/**
+ * Core-owned admission normalization for one explicit concrete ref. A legacy alias is mapped to the
+ * exact reference this key's deduplicated `models()` listing admits; profile/alias requests and an
+ * absent hook are returned unchanged.
+ */
+function admitModelRef(runtime: GatewayRuntime, key: GatewayKey, raw: string): string {
+  if (raw.startsWith('ferry/')) return raw;
+  return runtime.normalizeModel?.(key, raw) ?? raw;
+}
+function modelFor(raw: string, key: GatewayKey, admittedRef: string = raw): string {
   const alias =
     raw === 'ferry/auto'
       ? key.profile
       : (aliases[raw] ??
         (raw.startsWith('ferry/profile_') ? raw.slice('ferry/'.length) : undefined));
-  const model = raw.startsWith('ferry/') ? (alias ? `@profile:${alias}` : '') : raw;
-  if (
-    !model ||
-    (key.allowedModels.length > 0 &&
-      !key.allowedModels.includes(raw) &&
-      !(alias && key.allowedModels.every((ref) => ref.includes('/') && !ref.startsWith('ferry/'))))
-  )
-    throw new Error('Unknown model');
+  const model = raw.startsWith('ferry/') ? (alias ? `@profile:${alias}` : '') : admittedRef;
+  const allowed =
+    key.allowedModels.length === 0 ||
+    key.allowedModels.includes(raw) ||
+    // The normalized admitted ref is the reference this key's deduplicated listing exposes, so a
+    // canonical request against a legacy-only key (and vice versa) is admitted without widening it.
+    key.allowedModels.includes(admittedRef) ||
+    Boolean(
+      alias && key.allowedModels.every((ref) => ref.includes('/') && !ref.startsWith('ferry/')),
+    );
+  if (!model || !allowed) throw new Error('Unknown model');
   return alias ? `@profile:${alias}` : model;
 }
 function reasoningInput(input: GatewayRequest): { effort?: CliEffort } {
@@ -838,7 +863,7 @@ async function handleChat(
   }
   let model: string;
   try {
-    model = modelFor(input.model, key);
+    model = modelFor(input.model, key, admitModelRef(runtime, key, input.model));
   } catch {
     json(res, 404, errorBody(`Unknown model: ${input.model}`, 'model_not_found'));
     return;
@@ -1046,7 +1071,7 @@ async function handleAnthropic(
   const originalModel = payload.model;
   let model: string;
   try {
-    model = modelFor(originalModel, key);
+    model = modelFor(originalModel, key, admitModelRef(runtime, key, originalModel));
   } catch {
     json(res, 404, anthropicError(`Unknown model: ${originalModel}`, 'not_found_error'));
     return;
@@ -1416,7 +1441,7 @@ async function handleCanonicalProtocol(
     protocol === 'responses' ? canonical.model : (routeModel ?? canonical.model);
   let model: string;
   try {
-    model = modelFor(originalModel, key);
+    model = modelFor(originalModel, key, admitModelRef(runtime, key, originalModel));
   } catch {
     protocolError(res, protocol, 404, `Unknown model: ${originalModel}`);
     return;

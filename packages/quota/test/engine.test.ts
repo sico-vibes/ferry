@@ -239,6 +239,41 @@ describe('QuotaEngine', () => {
     db.close();
   });
 
+  it('looks up one retained usage event by exact id, upserting in place', () => {
+    const engine = new QuotaEngine({
+      now: () => new Date('2026-06-01T10:00:00Z'),
+      catalog: { providers: [provider], models: [] },
+    });
+    // Unknown id is undefined (an exact miss, no snapshot scan).
+    expect(engine.getUsage('missing')).toBeUndefined();
+    // A retained event keeps its genuinely absent nullable dimensions absent (never coerced to 0).
+    engine.recordUsage(usage('e1', '2026-06-01T09:59:00Z', { inputTokens: 0, outputTokens: 3 }));
+    const first = engine.getUsage('e1');
+    expect(first).toMatchObject({ id: 'e1', inputTokens: 0, outputTokens: 3 });
+    expect(first?.cachedTokens).toBeUndefined();
+    expect(first?.reasoningTokens).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(first, 'cachedTokens')).toBe(false);
+    // Re-recording the same id updates the retained metadata rather than adding a second event.
+    engine.recordUsage(
+      usage('e1', '2026-06-01T09:59:00Z', {
+        inputTokens: 7,
+        outputTokens: 4,
+        cachedTokens: 2,
+        costUsd: 0.5,
+        sessionId: 's1',
+      }),
+    );
+    expect(engine.getUsage('e1')).toMatchObject({
+      inputTokens: 7,
+      outputTokens: 4,
+      cachedTokens: 2,
+      costUsd: 0.5,
+      sessionId: 's1',
+    });
+    expect(engine.queryUsage().filter((record) => record.id === 'e1')).toHaveLength(1);
+    engine.dispose();
+  });
+
   it('learns an observed 429 ceiling from usage and holds it at zero remaining', () => {
     const engine = new QuotaEngine({
       now: () => new Date('2026-06-01T10:00:00Z'),
