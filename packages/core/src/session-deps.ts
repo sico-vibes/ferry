@@ -1,12 +1,5 @@
 import { providerBaseUrl } from './provider-endpoints.js';
-import {
-  zenCliFetch,
-  zenModel,
-  zenProvider,
-  zenCliMode,
-  zenFerryKey,
-  ZEN_CLI_BASE_URL,
-} from './zen-cli.js';
+import { zenModel, zenProvider } from './zen-cli.js';
 import { isOpenCodeAppModel } from '@ferry/shared';
 import {
   createStepGenerator,
@@ -138,7 +131,6 @@ export function createSessionDependencies(
   associateObservationKey: (providerId: string, keyId: string) => void;
 } {
   const apiKeys: Record<string, string> = {};
-  let providerProgress: (() => void) | undefined;
   const health = getProviderHealth(services);
   const providerHeaders: Record<string, Record<string, string>> = {};
   let lastGatewayServedModel: string | null = null;
@@ -305,21 +297,18 @@ export function createSessionDependencies(
       // QuotaEngine subscribers publish the authoritative quota.update summary.
     },
   };
-  const providerFetch: typeof globalThis.fetch = zenCliFetch(
-    services,
-    async (input, init) => {
-      const response = await globalThis.fetch(input, init);
-      const requestUrl =
-        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      if (requestUrl.includes('/v1/chat/completions'))
-        lastGatewayServedModel = response.headers.get('x-ferry-served-model');
-      return response;
-    },
-    undefined,
-    () => {
-      providerProgress?.();
-    },
-  );
+  // Installed-CLI generations never travel through this API-shaped fetch: they dispatch through the
+  // shared broker (see `runNativeCliStep`/the legacy alias entry below). Only standard API traffic
+  // reaches it, so there is no synthetic CLI interception left to keep in sync with the broker.
+  const providerFetch: typeof globalThis.fetch = async (input, init) => {
+    const response = await globalThis.fetch(input, init);
+    const requestUrl =
+      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (requestUrl.includes('/v1/chat/completions'))
+      lastGatewayServedModel = response.headers.get('x-ferry-served-model');
+    return response;
+  };
+
   const observe = (observation: RawCallObservation) => {
     const turnId = traceContext?.turnId;
     if (turnId) {
@@ -784,6 +773,15 @@ export function createSessionDependencies(
       // A discovered installed-CLI model dispatches through the shared Core broker on the native
       // surface. Its original system/messages/tools/delta/progress/signal are preserved verbatim.
       if (req.model.cliConnectionId) return await runNativeCliStep(services, req, context.profile);
+      // Legacy Zen alias entry: an old persisted `opencode/<id>` free-model ref resolves to the
+      // discovered canonical `opencode-cli/opencode/<id>` and dispatches through the same shared
+      // broker path. When no canonical model is discovered the ref is left to the standard API path;
+      // no model is substituted.
+      if (providerId === 'opencode' && req.model.free) {
+        const alias = getCliBroker(services, () => undefined).model(req.model.ref);
+        if (alias && alias.model.ref !== req.model.ref)
+          return await runNativeCliStep(services, req, context.profile);
+      }
       if (services.providers.get(providerId)?.enabled === false)
         throw Object.assign(
           new Error(`${providerId} is disabled or paused. Choose another provider or resume it.`),
@@ -829,8 +827,8 @@ export function createSessionDependencies(
           new Error(`Provider or model is temporarily unavailable: ${req.model.ref}`),
           { statusCode: 503 },
         );
-      const cliTransport = providerId === 'opencode' && req.model.free && zenCliMode(services);
-      const entries = cliTransport ? [] : services.providerKeyEntries.list(providerId);
+      // Installed-CLI generations are dispatched above; only standard API credentials are read here.
+      const entries = services.providerKeyEntries.list(providerId);
       const stickyRoutes = z
         .record(
           z.string(),
@@ -871,13 +869,11 @@ export function createSessionDependencies(
       if (selectedKey) selectedProviderKeys.set(sessionId, { providerId, keyId: selectedKey.id });
       else selectedProviderKeys.delete(sessionId);
       const legacyKeyRef = services.providerKeys.get(providerId)?.keyringRef;
-      const key = cliTransport
-        ? await zenFerryKey(services)
-        : selectedKey
-          ? await services.secrets.get(selectedKey.keyringRef)
-          : entries.length === 0 && legacyKeyRef
-            ? await services.secrets.get(legacyKeyRef)
-            : undefined;
+      const key = selectedKey
+        ? await services.secrets.get(selectedKey.keyringRef)
+        : entries.length === 0 && legacyKeyRef
+          ? await services.secrets.get(legacyKeyRef)
+          : undefined;
       if (!key && entries.length > 0 && !permitsKeylessProvider(services, providerId))
         throw Object.assign(new Error(`All configured keys for ${providerId} are unavailable.`), {
           statusCode: 429,
@@ -885,10 +881,7 @@ export function createSessionDependencies(
       if (key) apiKeys[providerId] = key;
       else Reflect.deleteProperty(apiKeys, providerId);
       if (providerId === 'opencode') {
-        const base =
-          zenCliMode(services) && req.model.free
-            ? ZEN_CLI_BASE_URL
-            : providerBaseUrl(services, providerId);
+        const base = providerBaseUrl(services, providerId);
         if (base) providerBaseUrls[providerId] = base;
         else Reflect.deleteProperty(providerBaseUrls, providerId);
       }
@@ -1100,8 +1093,9 @@ export function createSessionDependencies(
     },
   };
   return {
-    setProviderProgress(progress) {
-      providerProgress = progress;
+    setProviderProgress() {
+      // Installed-CLI progress and queue waits are reported by the shared broker directly; the
+      // standard API step generator has no progress hook, so this compatibility seam is inert.
     },
     gateway,
     usage,

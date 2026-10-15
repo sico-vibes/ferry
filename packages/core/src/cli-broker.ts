@@ -124,6 +124,77 @@ export interface CliDispatchResult {
 export const CLI_QUEUE_LIMIT = 8;
 export const CLI_VERIFY_TIMEOUT_MS = 30_000;
 
+/** Persisted legacy Zen model refs use the API-shaped `opencode/<id>` prefix. */
+const ZEN_LEGACY_PREFIX = 'opencode/';
+/** The installed OpenCode connection kind whose canonical refs the legacy aliases resolve to. */
+const OPENCODE_CLI_KIND: CliConnectionKind = 'opencode-cli';
+
+/** The canonical installed-CLI ref for one OpenCode Zen upstream model id. */
+export function canonicalZenRef(id: string): ModelRef {
+  return `${OPENCODE_CLI_KIND}/opencode/${id}` as ModelRef;
+}
+
+/**
+ * The bare upstream id of a persisted legacy `opencode/<id>` Zen ref, or `null` when the ref is not
+ * a legacy Zen alias (a canonical `opencode-cli/...` ref, another provider, or malformed).
+ */
+export function legacyZenAliasId(ref: string): string | null {
+  if (!ref.startsWith(ZEN_LEGACY_PREFIX)) return null;
+  const id = ref.slice(ZEN_LEGACY_PREFIX.length).trim();
+  return id.length > 0 && !id.includes(' ') ? id : null;
+}
+
+/**
+ * Whether the persisted legacy Zen CLI transport selects one surface. This is the *Zen* CLI choice
+ * (`opencodeZenTransport: 'cli'`), deliberately distinct from a generic OpenCode CLI surface opt-in
+ * (e.g. enabled for Go/general use): enabling the shared OpenCode CLI for another upstream must never
+ * reroute a standard Zen API ref. Before the one-time migration an explicit per-surface shared record
+ * still wins over the legacy flag; a missing record falls back to the legacy flag.
+ */
+export function zenCliSurfaceSelected(
+  services: Pick<FerryServices, 'settings'>,
+  surface: 'native' | 'gateway' = 'native',
+): boolean {
+  const stored = services.settings.get('global') as
+    | {
+        opencodeZenTransport?: unknown;
+        zenCliMigratedToShared?: unknown;
+        cliConnections?: Record<string, { native?: boolean; gateway?: boolean }>;
+      }
+    | undefined;
+  if (stored?.opencodeZenTransport !== 'cli') return false;
+  const shared = stored.cliConnections?.['opencode-cli'];
+  if (stored.zenCliMigratedToShared === true) return shared?.[surface] === true;
+  // An explicit pre-migration per-surface opt-out is authoritative too; the legacy flag only fills in
+  // a surface the shared record never mentioned.
+  if (shared && (Object.hasOwn(shared, 'native') || Object.hasOwn(shared, 'gateway')))
+    return shared[surface] === true;
+  return true;
+}
+
+/**
+ * The persisted legacy `opencode/<id>` alias of a discovered canonical Zen model, or `null` for any
+ * other provider/upstream. Used so a saved profile/key allowlist written before the canonical refs
+ * still selects the model.
+ */
+function legacyZenAliasOf(model: Pick<CliModelCapabilities, 'upstreamProvider' | 'upstreamId'>) {
+  return model.upstreamProvider === 'opencode' ? (model.upstreamId as ModelRef) : null;
+}
+
+/**
+ * Whether a saved allowlist selects one discovered model, accepting both the canonical ref and the
+ * legacy `opencode/<id>` alias so an existing profile or key allowlist keeps working unchanged.
+ */
+function allowlistSelects(
+  allowedRefs: ReadonlySet<string> | null,
+  model: CliModelCapabilities,
+): boolean {
+  if (!allowedRefs) return true;
+  if (allowedRefs.has(model.ref)) return true;
+  const alias = legacyZenAliasOf(model);
+  return alias !== null && allowedRefs.has(alias);
+}
+
 const kindTransport: Record<CliConnectionKind, ModelInfo['transport']> = {
   'codex-cli': 'codex_cli',
   'claude-code-cli': 'claude_code_cli',
@@ -663,13 +734,16 @@ export class CliBroker {
     for (const connection of this.connections()) {
       if (!connection.surfaces[query.surface]) continue;
       if (allowedProviders && !allowedProviders.has(connection.providerId)) continue;
-      // Never offer capacity the account window already reports exhausted; the guard still blocks at
-      // dispatch for the actually-resolved identity, but Auto should not waste a step on it.
-      if (this.#exhaustedAccountWindow(connection)) continue;
+      // A known-exhausted account subscription window excludes only the *included-subscription*
+      // models it actually applies to; it never hides an unrelated anonymous/keyless free Zen model
+      // that shares the same installed-CLI connection. The persistent actual-identity guard still
+      // blocks the exhausted bucket at dispatch.
+      const exhaustedAccountWindow = this.#exhaustedAccountWindow(connection);
       const connectionDefault = this.#connectionDefault(connection.kind);
       for (const model of connection.models) {
         if (model.hidden) continue;
-        if (allowedRefs && !allowedRefs.has(model.ref)) continue;
+        if (exhaustedAccountWindow && model.billing === 'included_subscription') continue;
+        if (!allowlistSelects(allowedRefs, model)) continue;
         if (!isCliModelVerified(connection, model.ref)) continue;
         if (query.requiresTools && !model.toolCalling) continue;
         if (
@@ -728,13 +802,40 @@ export class CliBroker {
     return [...free, ...rest];
   }
 
-  /** Resolve one discovered model row by ref, or undefined when unknown. */
+  /**
+   * Resolve one discovered model row by ref, or undefined when unknown. A persisted legacy
+   * `opencode/<id>` Zen ref resolves to the discovered canonical `opencode-cli/opencode/<id>` when
+   * the installed-CLI transport is selected, so an old pin/profile/key entry keeps working without
+   * being recreated. Only a genuinely discovered canonical model is returned: no ref is invented and
+   * no other upstream is substituted.
+   */
   model(ref: ModelRef): { connection: CliConnection; model: CliModelCapabilities } | undefined {
-    for (const connection of this.connections()) {
+    const connections = this.connections();
+    for (const connection of connections) {
       const model = connection.models.find((candidate) => candidate.ref === ref);
       if (model) return { connection, model };
     }
+    const aliasId = legacyZenAliasId(ref);
+    if (aliasId === null || !this.#zenCliTransportSelected()) return undefined;
+    const canonical = canonicalZenRef(aliasId);
+    for (const connection of connections) {
+      const model = connection.models.find((candidate) => candidate.ref === canonical);
+      if (model) return { connection, model };
+    }
     return undefined;
+  }
+
+  /**
+   * True when the *Zen* CLI transport is selected for either surface. The lookup stays
+   * surface-neutral; exact surface admission is enforced independently at dispatch. A generic shared
+   * OpenCode CLI surface opt-in (e.g. for Go) is not enough, so a standard Zen API ref is never
+   * silently rerouted through the CLI merely because the canonical Zen model was also discovered.
+   */
+  #zenCliTransportSelected(): boolean {
+    return (
+      zenCliSurfaceSelected(this.#services, 'native') ||
+      zenCliSurfaceSelected(this.#services, 'gateway')
+    );
   }
 
   /**
@@ -902,10 +1003,14 @@ export class CliBroker {
     const connection = this.connections().find((entry) => entry.kind === kind);
     if (!connection) return { ok: false, modelRef: null, message: `Unknown connection ${kind}.` };
     const discovered = connection.models.filter((candidate) => !candidate.hidden);
+    // A legacy `opencode/<id>` ref resolves to its discovered canonical model, exactly as dispatch
+    // does, so an old verification/pin keeps working without being recreated.
+    const alias = modelRef === undefined ? undefined : this.model(modelRef);
     const requested =
       modelRef === undefined
         ? undefined
-        : discovered.find((candidate) => candidate.ref === modelRef);
+        : (discovered.find((candidate) => candidate.ref === modelRef) ??
+          (alias?.connection.kind === kind ? alias.model : undefined));
     if (modelRef !== undefined && !requested)
       return {
         ok: false,

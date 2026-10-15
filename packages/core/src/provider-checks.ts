@@ -17,7 +17,7 @@ import { withGatewayDeadlines } from './gateway-deadlines.js';
 import { createSessionDependencies } from './session-deps.js';
 import { reserveSpend } from './spending.js';
 import { providerBaseUrl } from './provider-endpoints.js';
-import { zenCliMode, zenModel, ZEN_CLI_BASE_URL } from './zen-cli.js';
+import { zenModel } from './zen-cli.js';
 
 /** One shared check run per Core. Results contain synthetic-request metadata only. */
 export function createProviderChecks(
@@ -167,10 +167,10 @@ export function createProviderChecks(
               ))
           )
             throw new Error('Connection policy changed; free checks stopped.');
-          const baseUrl =
-            provider.id === 'opencode' && model.free && zenCliMode(services)
-              ? ZEN_CLI_BASE_URL
-              : providerBaseUrl(services, provider.id);
+          // A provider check measures the *standard API* path for this provider. Installed-CLI
+          // verification is a separate, broker-owned check (`verifyZenCli`), so a free Zen model in
+          // CLI mode is never routed through a synthetic CLI base URL here.
+          const baseUrl = providerBaseUrl(services, provider.id);
           if (paid) {
             // All concurrent workers share one operation ceiling through atomic reservations.
             reservation = reserveSpend(services, {
@@ -221,9 +221,7 @@ export function createProviderChecks(
           );
           const saved = services.providers.get(provider.id);
           if (
-            (provider.id === 'opencode' && model.free && zenCliMode(services)
-              ? ZEN_CLI_BASE_URL
-              : providerBaseUrl(services, provider.id)) !== baseUrl ||
+            providerBaseUrl(services, provider.id) !== baseUrl ||
             saved?.enabled === false ||
             (ref && (await services.secrets.get(ref)) !== secret)
           )

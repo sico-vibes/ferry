@@ -1,34 +1,50 @@
-import { detectZenCli, runZenAcp, type ZenAcpInput } from '@ferry/delegate';
-import { isOpenCodeAppModel, type ModelInfo, type Provider } from '@ferry/shared';
+import {
+  isCliModelVerified,
+  ModelRefSchema,
+  type CliConnection,
+  type ModelInfo,
+  type Provider,
+} from '@ferry/shared';
 import { z } from 'zod';
 import type { FerryServices } from './services.js';
-import { getProviderHealth } from './provider-health.js';
+import { getCliBroker, zenCliSurfaceSelected } from './cli-broker.js';
 
-export function zenCliMode(services: Pick<FerryServices, 'settings'>): boolean {
-  const stored = services.settings.get('global') as
-    | {
-        opencodeZenTransport?: unknown;
-        zenCliMigratedToShared?: unknown;
-        cliConnections?: Record<string, { native?: boolean; gateway?: boolean }>;
-      }
-    | undefined;
-  if (stored?.opencodeZenTransport !== 'cli') return false;
-  // Once the legacy opt-in has been migrated to the shared record, an explicit shared opt-out wins:
-  // the old CLI flag can no longer override an independent, explicit false native/gateway choice.
-  const shared = stored.cliConnections?.['opencode-cli'];
-  if (
-    stored.zenCliMigratedToShared === true &&
-    shared?.native === false &&
-    shared.gateway === false
-  )
-    return false;
-  return true;
+/**
+ * Installed-CLI compatibility hooks for the legacy Zen opt-in.
+ *
+ * The canonical `opencode-cli/opencode/<id>` route served by the shared `CliBroker` is the single
+ * installed-CLI route. The legacy `opencodeZenTransport: 'cli'` flag and the old persisted
+ * `opencode/<id>` model refs are kept working as *aliases*: they resolve to the discovered canonical
+ * route in the broker and never create a second CLI row, a second credential source or a paid
+ * fallback.
+ */
+
+/**
+ * Whether the installed OpenCode CLI transport is selected for one surface.
+ *
+ * Before the one-time shared migration the legacy flag applied to both surfaces. Afterwards the
+ * shared per-surface record is authoritative, so an explicit `native: false` can never be bypassed by
+ * the old flag for the native surface (nor `gateway: false` for the gateway surface). Defaults to
+ * `native`, the surface the legacy flag originally enabled.
+ */
+export function zenCliMode(
+  services: Pick<FerryServices, 'settings'>,
+  surface: 'native' | 'gateway' = 'native',
+): boolean {
+  return zenCliSurfaceSelected(services, surface);
 }
+
 function useFerryKey(services: Pick<FerryServices, 'settings'>): boolean {
   const stored = services.settings.get('global') as
     { opencodeZenCliUseFerryKey?: unknown } | undefined;
   return stored?.opencodeZenCliUseFerryKey === true;
 }
+
+/**
+ * The saved Ferry Zen key, memory-only, when the legacy Ferry-key opt-in is on. Used by the legacy
+ * gateway/native API fallback paths that still accept it; the shared broker resolves its own
+ * credential evidence and never reads this itself.
+ */
 export async function zenFerryKey(services: FerryServices): Promise<string | undefined> {
   if (!useFerryKey(services)) return undefined;
   const entries = services.providerKeyEntries.list('opencode');
@@ -37,45 +53,49 @@ export async function zenFerryKey(services: FerryServices): Promise<string | und
     (entries.length === 0 ? services.providerKeys.get('opencode')?.keyringRef : undefined);
   return ref ? services.secrets.get(ref) : undefined;
 }
-export function zenModel(services: Pick<FerryServices, 'settings'>, model: ModelInfo): ModelInfo {
-  if (model.providerId !== 'opencode') return model;
-  const cli = zenCliMode(services) && model.free;
-  return {
-    ...model,
-    transport: cli ? 'opencode_cli' : 'api',
-    ...(cli
-      ? {
-          inputModalities: ['text'],
-          ...(model.capability
-            ? { capability: { ...model.capability, vision: false, parallelToolCalls: false } }
-            : {}),
-        }
-      : {}),
-  };
+
+/**
+ * Compatibility hook: an OpenCode API model is never rewritten into an installed-CLI route. The
+ * single CLI route is the discovered canonical `opencode-cli/opencode/<id>` row; keeping the API ref
+ * an API ref is what prevents the same Zen model from being listed twice as a CLI route.
+ */
+export function zenModel(_services: Pick<FerryServices, 'settings'>, model: ModelInfo): ModelInfo {
+  return model;
 }
+
+/** Compatibility hook kept for callers; the API provider row stays a truthful API provider. */
 export function zenProvider(
-  services: Pick<FerryServices, 'settings' | 'models'>,
+  _services: Pick<FerryServices, 'settings' | 'models'>,
   provider: Provider,
 ): Provider {
-  if (provider.id !== 'opencode' || !zenCliMode(services)) return provider;
-  const models = services.models.list('opencode').map((model) => zenModel(services, model));
-  const usable = models.some((model) => model.free && !isOpenCodeAppModel(model));
-  return {
-    ...provider,
-    keyRequired: usable ? false : provider.keyRequired,
-    keyStatus: usable ? 'not_applicable' : provider.keyStatus,
-    freeTierUnsupported: usable ? false : provider.freeTierUnsupported,
-    billingEnabled: false,
-    availableModels: models,
-  };
+  return provider;
 }
-export function hasZenCliAccess(services: Pick<FerryServices, 'settings' | 'models'>): boolean {
-  return (
-    zenCliMode(services) &&
-    services.models.list('opencode').some((model) => model.free && model.cliAccessVerified === true)
+
+/**
+ * True when the shared OpenCode CLI connection carries a real per-model verification receipt for a
+ * genuinely free Zen model. Discovery alone never counts; this is the plugin point that lets a
+ * free-tier-restricted API provider still surface its verified CLI route.
+ */
+export function hasZenCliAccess(services: FerryServices): boolean {
+  const connection = openCodeConnection(services);
+  if (!connection) return false;
+  return connection.models.some(
+    (model) =>
+      model.billing === 'free' &&
+      model.upstreamProvider === 'opencode' &&
+      isCliModelVerified(connection, model.ref),
   );
 }
+
+function openCodeConnection(services: FerryServices): CliConnection | undefined {
+  return getCliBroker(services, () => undefined)
+    .connections()
+    .find((connection) => connection.kind === 'opencode-cli');
+}
+
+/** The virtual address is intercepted locally by the legacy API fallback; never reachable upstream. */
 export const ZEN_CLI_BASE_URL = 'http://ferry-opencode-cli.invalid/v1';
+
 const toolSchema = z.object({
   type: z.literal('function'),
   function: z.object({
@@ -167,226 +187,121 @@ export function zenConversation(raw: unknown) {
   return { request, tools, prompt };
 }
 
-/** The virtual address is intercepted locally; it can never reach upstream/DNS. */
-export function zenCliFetch(
-  services: FerryServices,
-  fallback: typeof fetch,
-  run: (input: ZenAcpInput) => ReturnType<typeof runZenAcp> = runZenAcp,
-  onProgress?: () => void,
-): typeof fetch {
-  return async (input, init) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    if (new URL(url).hostname !== 'ferry-opencode-cli.invalid') return fallback(input, init);
-    try {
-      if (new URL(url).pathname !== '/v1/chat/completions')
-        throw new Error('Unsupported Zen CLI endpoint');
-      if (!zenCliMode(services)) throw new Error('Zen CLI mode is disabled');
-      const raw: unknown =
-        typeof init?.body === 'string'
-          ? JSON.parse(init.body)
-          : input instanceof Request
-            ? await input.json()
-            : undefined;
-      const { request, tools, prompt } = zenConversation(raw);
-      const model = services.models
-        .list('opencode')
-        .find((model) => model.ref === `opencode/${request.model}` || model.ref === request.model);
-      if (!model?.free || isOpenCodeAppModel(zenModel(services, model)))
-        throw new Error(
-          'Verify this free model through OpenCode CLI before using it. No paid fallback was used.',
-        );
-      const headers = new Headers(
-        init?.headers ?? (input instanceof Request ? input.headers : undefined),
-      );
-      const key = headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-      const signal =
-        init?.signal ??
-        (input instanceof Request ? input.signal : undefined) ??
-        new AbortController().signal;
-      const encoder = new TextEncoder();
-      const id = `chatcmpl-ferry-cli-${crypto.randomUUID()}`;
-      let cancel: (() => void) | undefined;
-      const body = new ReadableStream<Uint8Array>({
-        start(stream) {
-          const controller = new AbortController();
-          const abort = () => {
-            controller.abort(signal.reason);
-          };
-          signal.addEventListener('abort', abort, { once: true });
-          if (signal.aborted) abort();
-          cancel = () => {
-            controller.abort(new Error('Zen CLI stream closed'));
-          };
-          const send = (
-            delta: Record<string, unknown>,
-            finish: string | null = null,
-            usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number },
-          ) => {
-            if (!controller.signal.aborted)
-              stream.enqueue(
-                encoder.encode(
-                  `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: request.model, choices: [{ index: 0, delta, finish_reason: finish }], ...(usage ? { usage } : {}) })}\n\n`,
-                ),
-              );
-          };
-          send({ role: 'assistant', content: '' });
-          void run({
-            model: model.ref,
-            prompt,
-            tools,
-            ...(key && useFerryKey(services) ? { apiKey: key } : {}),
-            signal: controller.signal,
-            environment: services.env,
-            ...(onProgress ? { onProgress } : {}),
-            onText: (content) => {
-              send({ content });
-            },
-          })
-            .then((result) => {
-              if (controller.signal.aborted) {
-                stream.error(controller.signal.reason);
-                return;
-              }
-              if (
-                (request.tool_choice === 'required' || typeof request.tool_choice === 'object') &&
-                !result.toolCalls.length
-              )
-                throw new Error('OpenCode did not return the required caller tool');
-              for (const [index, call] of result.toolCalls.entries())
-                send({
-                  tool_calls: [
-                    {
-                      index,
-                      id: call.id,
-                      type: 'function',
-                      function: { name: call.name, arguments: JSON.stringify(call.arguments) },
-                    },
-                  ],
-                });
-              send({}, result.toolCalls.length ? 'tool_calls' : 'stop', {
-                prompt_tokens: result.inputTokens,
-                completion_tokens: result.outputTokens,
-                total_tokens: result.inputTokens + result.outputTokens,
-              });
-              stream.enqueue(encoder.encode('data: [DONE]\n\n'));
-              stream.close();
-            })
-            .catch((error: unknown) => {
-              stream.error(error);
-            })
-            .finally(() => {
-              signal.removeEventListener('abort', abort);
-            });
-        },
-        cancel() {
-          cancel?.();
-        },
-      });
-      return new Response(body, {
-        headers: { 'content-type': 'text/event-stream', 'x-ferry-transport': 'opencode-cli' },
-      });
-    } catch {
-      return new Response(
-        JSON.stringify({
-          error: {
-            message:
-              'Zen CLI request is unavailable or unsupported. Verify CLI access and use a text/tool request.',
-            type: 'zen_cli_unavailable',
-          },
-        }),
-        { status: 400, headers: { 'content-type': 'application/json' } },
-      );
-    }
-  };
+export interface ZenCliStatus {
+  available: boolean;
+  version: string | null;
+  executable: string | null;
+  credentialSource: 'opencode' | 'opencode_go' | 'ferry' | 'anonymous';
+  verifiedModels: string[];
+  freeModels: { ref: string; name: string }[];
 }
 
-export async function zenCliStatus(services: FerryServices) {
-  const key = await zenFerryKey(services);
-  return {
-    ...(await detectZenCli(useFerryKey(services) ? key : undefined, services.env)),
-    verifiedModels: services.models
-      .list('opencode')
-      .filter((model) => model.cliAccessVerified)
-      .map((model) => model.ref),
-    freeModels: services.catalog.models
-      .filter((model) => model.providerId === 'opencode' && model.free)
-      .map((model) => ({ ref: model.ref, name: model.name })),
-  };
+function openCodeCredentialSource(
+  services: FerryServices,
+  connection: CliConnection | undefined,
+): ZenCliStatus['credentialSource'] {
+  const stored = services.settings.get('global') as
+    | {
+        cliConnections?: Record<string, { credentialMode?: unknown; credentialProvider?: unknown }>;
+      }
+    | undefined;
+  const record = stored?.cliConnections?.['opencode-cli'];
+  const mode =
+    record?.credentialMode === 'anonymous' || record?.credentialMode === 'ferry'
+      ? record.credentialMode
+      : 'installed';
+  const offer =
+    typeof record?.credentialProvider === 'string' && record.credentialProvider.trim()
+      ? record.credentialProvider.trim()
+      : null;
+  if (mode === 'anonymous') return 'anonymous';
+  // Ferry mode reports its own source; whether the key is actually readable is decided by the
+  // verification itself, never by a second credential probe here.
+  if (mode === 'ferry') return 'ferry';
+  // An explicit installed-Go offer is the only supported cross-provider credential.
+  if (offer === 'opencode-go') return 'opencode_go';
+  // Installed mode: reuse the shared discovery evidence, never a second auth-store read.
+  if (connection?.account.label === 'OpenCode Go') return 'opencode_go';
+  if (connection?.account.state === 'signed_in' && connection.account.key !== null)
+    return 'opencode';
+  return 'anonymous';
 }
-export async function verifyZenCli(services: FerryServices, modelRef?: string) {
-  const model =
-    services.models
-      .list('opencode')
-      .find((model) => model.free && (modelRef === undefined || model.ref === modelRef)) ??
-    services.catalog.models.find(
-      (model) =>
-        model.providerId === 'opencode' &&
-        model.free &&
-        (modelRef === undefined || model.ref === modelRef),
-    );
-  if (!model) throw new Error('No free Zen model available to verify. Discover models first.');
-  const key = await zenFerryKey(services);
-  const savedKeyMode = useFerryKey(services);
-  const started = Date.now();
-  try {
-    const result = await runZenAcp({
-      model: model.ref,
-      prompt: 'Reply with exactly Ready. Do not use tools.',
-      ...(key && useFerryKey(services) ? { apiKey: key } : {}),
-      signal: AbortSignal.timeout(30_000),
-      environment: services.env,
-    });
-    if (!result.text.trim()) throw new Error('No generation returned');
-    if (savedKeyMode !== useFerryKey(services) || key !== (await zenFerryKey(services)))
-      return {
-        ok: false,
-        modelRef: model.ref,
-        message: 'The CLI credential source changed during verification. Check it again.',
-      };
-    getProviderHealth(services).record({
-      providerId: 'opencode',
-      modelRef: model.ref,
-      keyId: 'opencode',
-      success: true,
-      latencyMs: Date.now() - started,
-    });
-    services.cooldowns.delete('opencode');
-    services.models.put('opencode', { ...model, cliAccessVerified: true });
-    services.models.replace(
-      'opencode',
-      services.models
-        .list('opencode')
-        .map((item) => (item.ref === model.ref ? { ...item, cliAccessVerified: true } : item)),
-    );
-    const provider = services.providers.get('opencode');
-    if (provider)
-      services.providers.put({
-        ...provider,
-        enabled: true,
-        health: 'ok',
-        cooldownUntil: null,
-        pausedReason: null,
-        availableModels: services.models.list('opencode'),
-        excludedModelRefs: provider.excludedModelRefs?.filter((ref) => ref !== model.ref),
-      });
-    return {
-      ok: true,
-      modelRef: model.ref,
-      message: 'Free generation verified through the installed OpenCode CLI.',
-    };
-  } catch {
-    if (savedKeyMode === useFerryKey(services) && key === (await zenFerryKey(services)))
-      services.models.replace(
-        'opencode',
-        services.models
-          .list('opencode')
-          .map((item) => (item.ref === model.ref ? { ...item, cliAccessVerified: false } : item)),
-      );
+
+/**
+ * Thin facade over the shared cached OpenCode connection. It never runs detection or a generation
+ * itself: `available`/`version`/`executable` and the verified models come from the cached broker
+ * snapshot, and `freeModels` contains only its discovered free Zen models in canonical CLI refs. Go credential
+ * detection and Zen generation proof stay separate: a Go credential never appears in
+ * `verifiedModels` without a real Zen generation.
+ */
+export function zenCliStatus(services: FerryServices): Promise<ZenCliStatus> {
+  const connection = openCodeConnection(services);
+  const verifiedModels = connection
+    ? connection.models
+        .filter((model) => model.billing === 'free' && isCliModelVerified(connection, model.ref))
+        .map((model) => model.ref)
+    : [];
+  const freeModels = (connection?.models ?? [])
+    .filter(
+      (model) => model.billing === 'free' && model.upstreamProvider === 'opencode' && !model.hidden,
+    )
+    .map((model) => ({ ref: model.ref, name: model.name }));
+  return Promise.resolve({
+    available: connection?.install.installed ?? false,
+    version: connection?.install.version ?? null,
+    executable: connection?.install.executable ?? null,
+    credentialSource: openCodeCredentialSource(services, connection),
+    verifiedModels,
+    freeModels,
+  });
+}
+
+/**
+ * Thin facade over the shared broker verification. The requested ref may be a canonical
+ * `opencode-cli/opencode/<id>` or a legacy `opencode/<id>` alias; either resolves to the discovered
+ * canonical model. The real generation, credential resolution, per-model receipt and redacted error
+ * all come from the broker, so the API path and the CLI path share exactly one verification.
+ */
+export async function verifyZenCli(
+  services: FerryServices,
+  modelRef?: string,
+): Promise<{ ok: boolean; modelRef: string | null; message: string }> {
+  const broker = getCliBroker(services, () => undefined);
+  const connection = openCodeConnection(services);
+  const freeZen = (connection?.models ?? []).filter(
+    (model) => model.billing === 'free' && model.upstreamProvider === 'opencode' && !model.hidden,
+  );
+  const requestedModel =
+    modelRef === undefined ? undefined : broker.model(ModelRefSchema.parse(modelRef))?.model;
+  if (
+    modelRef !== undefined &&
+    (requestedModel?.billing !== 'free' ||
+      requestedModel.upstreamProvider !== 'opencode' ||
+      requestedModel.hidden)
+  )
     return {
       ok: false,
-      modelRef: model.ref,
+      modelRef,
       message:
-        'OpenCode CLI could not verify this free model. Run opencode auth login, check the CLI version, then retry. The direct API key was not marked invalid.',
+        'The requested model is not a discovered free Zen model. Refresh detection and choose an available free model.',
     };
-  }
+  const target =
+    requestedModel?.billing === 'free' && requestedModel.upstreamProvider === 'opencode'
+      ? requestedModel
+      : freeZen[0];
+  if (!target)
+    return {
+      ok: false,
+      modelRef: modelRef ?? null,
+      message:
+        'No free Zen model is discovered for the installed OpenCode CLI yet. Refresh detection and retry.',
+    };
+  const result = await broker.verify('opencode-cli', target.ref);
+  // Preserve the caller's requested ref (a legacy pin, profile or key entry) while the underlying
+  // proof and producer stay canonical.
+  return {
+    ok: result.ok,
+    modelRef: modelRef ?? result.modelRef ?? target.ref,
+    message: result.message,
+  };
 }

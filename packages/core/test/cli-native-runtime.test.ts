@@ -605,12 +605,43 @@ it('an explicit shared native/gateway false wins over the migrated legacy CLI fl
     () => 1_000_000,
   );
   expect(zenCliMode(sharedOff)).toBe(false);
-  // Before migration (or with an opted-in shared record) the legacy flag still works.
+  // Before the one-time migration the legacy flag still selects both surfaces.
   const legacy = stubServices(
-    { global: { ...sampleSettings, opencodeZenTransport: 'cli' } },
+    {
+      global: {
+        ...sampleSettings,
+        opencodeZenTransport: 'cli',
+        zenCliMigratedToShared: false,
+        cliConnections: {},
+      },
+    },
     () => 1_000_000,
   );
   expect(zenCliMode(legacy)).toBe(true);
+  expect(zenCliMode(legacy, 'gateway')).toBe(true);
+  // Surface-aware after migration: an explicit gateway-only opt-in never enables the native surface.
+  const gatewayOnly = stubServices(
+    {
+      global: {
+        ...sampleSettings,
+        opencodeZenTransport: 'cli',
+        zenCliMigratedToShared: true,
+        cliConnections: {
+          'opencode-cli': {
+            native: false,
+            gateway: true,
+            credentialMode: 'installed',
+            credentialProvider: null,
+            defaultOptions: { effort: null, speed: 'standard' },
+            modelDefaults: {},
+          },
+        },
+      },
+    },
+    () => 1_000_000,
+  );
+  expect(zenCliMode(gatewayOnly)).toBe(false);
+  expect(zenCliMode(gatewayOnly, 'gateway')).toBe(true);
 });
 
 /* ------------------------- credential-bound dispatch --------------------- */
