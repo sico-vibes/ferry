@@ -649,7 +649,7 @@ function ChatRow({
         <UiV2.TooltipContent side="right">
           {modelName
             ? `Last reply: ${modelName} · ${connectionName ?? ''}`
-            : 'No model has replied · conversation usage'}
+            : 'Reply model not recorded · conversation usage'}
         </UiV2.TooltipContent>
       </UiV2.Tooltip>
       <button

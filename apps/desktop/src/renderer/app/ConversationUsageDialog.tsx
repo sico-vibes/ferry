@@ -66,7 +66,7 @@ export function ConversationUsageDialog({
       <div className="conversation-usage-summary">
         <strong>{session.title}</strong>
         <span>{projectName ?? 'No project'}</span>
-        <span>Last reply: {last?.name ?? session.lastReplyModelRef ?? 'No model has replied'}</span>
+        <span>Last reply: {last?.name ?? session.lastReplyModelRef ?? 'Model not recorded'}</span>
       </div>
       {usage.isPending ? (
         <p role="status">Loading conversation usage…</p>

@@ -171,7 +171,20 @@ async function checkScreen({ theme, viewport, deviceScaleFactor, screen }) {
   });
   const page = await context.newPage();
   const pageErrors = [];
+  const consoleMessages = [];
+  const failedRequests = [];
+  const pendingRequests = new Set();
   page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    if (['error', 'warning'].includes(message.type()))
+      consoleMessages.push({ type: message.type(), text: message.text() });
+  });
+  page.on('request', (request) => pendingRequests.add(request.url()));
+  page.on('requestfinished', (request) => pendingRequests.delete(request.url()));
+  page.on('requestfailed', (request) => {
+    pendingRequests.delete(request.url());
+    failedRequests.push({ url: request.url(), error: request.failure()?.errorText });
+  });
   try {
     await page.goto(
       new URL(`${screen.path}${screen.path.includes('?') ? '&' : '?'}theme=${theme}`, served.url)
@@ -395,6 +408,20 @@ async function checkScreen({ theme, viewport, deviceScaleFactor, screen }) {
   } catch (error) {
     const label = `${screen.name}-${theme}-${String(viewport.width)}-${deviceScaleFactor * 100}pct`;
     console.error(`UI setup failed: ${label} at ${page.url()}`, pageErrors);
+    const startup = await page
+      .evaluate(() => ({
+        readyState: document.readyState,
+        html: document.documentElement.outerHTML,
+        resources: performance.getEntriesByType('resource').map((entry) => ({
+          name: entry.name,
+          duration: entry.duration,
+        })),
+      }))
+      .catch(() => null);
+    await writeFile(
+      join(outputDirectory, `failure-${label}.json`),
+      `${JSON.stringify({ pageErrors, consoleMessages, failedRequests, pendingRequests: [...pendingRequests], startup }, null, 2)}\n`,
+    );
     report.push({
       screen: label,
       problems: [`UI setup failed: ${error instanceof Error ? error.message : String(error)}`],
