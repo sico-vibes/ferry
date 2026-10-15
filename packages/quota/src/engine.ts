@@ -7,6 +7,7 @@ import {
 } from 'cockatiel';
 import type {
   CapacitySummary,
+  ModelRef,
   ProviderHealth,
   QuotaObservation,
   QuotaWindow,
@@ -14,7 +15,7 @@ import type {
   Provider,
   ProviderLimits as HonestProviderLimits,
 } from '@ferry/shared';
-import { ProviderErrorKindSchema } from '@ferry/shared';
+import { CliAccountKeySchema, ModelRefSchema, ProviderErrorKindSchema } from '@ferry/shared';
 import { newId } from '@ferry/shared';
 import { ProviderLimitsSchema, type Catalog, type ProviderLimits } from '@ferry/catalog';
 import { QuotaObservationRepository, RequestRepository } from '@ferry/storage';
@@ -31,6 +32,48 @@ const confidence: Record<Source, QuotaWindow['confidence']> = {
   catalog: 'estimated',
 };
 const rank: Record<Source, number> = { catalog: 0, learned: 1, header: 2, endpoint: 3 };
+
+/**
+ * Namespaced request-metadata key under which the originally requested logical model ref is retained
+ * in the request's `headers_json`. Provider headers are preserved alongside it, so restart can restore
+ * both the CLI provenance and the pre-routing alias without a schema migration.
+ */
+export const REQUESTED_MODEL_REF_HEADER = 'ferry.requestedModelRef';
+
+/** Keeps only a well-formed opaque CLI account key; malformed metadata (which could be a raw secret) is dropped. */
+export function sanitizeAccountKey(value: unknown): string | null {
+  const parsed = CliAccountKeySchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Keeps only a plausible connection id; anything else is treated as unknown provenance. */
+export function sanitizeConnectionId(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : null;
+}
+
+/** Validates the originally requested logical model ref; an unparseable alias is dropped. */
+export function sanitizeRequestedModelRef(value: unknown): ModelRef | null {
+  const parsed = ModelRefSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Provider headers without the namespaced requested-model key, or undefined when nothing remains. */
+function providerHeadersOnly(
+  headers: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (headers === undefined) return undefined;
+  const { [REQUESTED_MODEL_REF_HEADER]: _requested, ...rest } = headers;
+  return Object.keys(rest).length ? rest : undefined;
+}
+
+/** Retained request headers with the requested-model ref namespaced in, or the headers unchanged. */
+function withRequestedModelRef(
+  headers: Record<string, unknown> | undefined,
+  requestedModelRef: ModelRef | null,
+): Record<string, unknown> | undefined {
+  if (requestedModelRef === null) return headers;
+  return { ...(headers ?? {}), [REQUESTED_MODEL_REF_HEADER]: requestedModelRef };
+}
 
 export interface ProactiveQuotaSignal {
   signal: 'hard' | 'soft' | 'none';
@@ -241,7 +284,21 @@ export class QuotaEngine {
     const text = (value: unknown): string => (typeof value === 'string' ? value : '');
     const nullableText = (value: unknown): string | null =>
       typeof value === 'string' ? value : null;
+    // A NULL column means the dimension was never reported; a stored 0 is a reported zero. Both must
+    // survive the round trip, so an absent dimension is omitted instead of fabricated as 0.
+    const dimension = (value: unknown): number | undefined =>
+      value === null || value === undefined ? undefined : Number(value);
     const errorKind = ProviderErrorKindSchema.safeParse(row.error_kind);
+    const storedHeaders = this.storedHeaders(row);
+    const requested = ModelRefSchema.safeParse(storedHeaders?.[REQUESTED_MODEL_REF_HEADER]);
+    const providerHeaders = storedHeaders ? providerHeadersOnly(storedHeaders) : undefined;
+    const inputTokens = dimension(row.input_tokens);
+    const outputTokens = dimension(row.output_tokens);
+    const cachedTokens = dimension(row.cached_tokens);
+    const reasoningTokens = dimension(row.reasoning_tokens);
+    const costUsd = dimension(row.cost_usd);
+    const planUnits = dimension(row.plan_units);
+    const latencyMs = dimension(row.latency_ms);
     return {
       id: text(row.id),
       providerId: text(row.provider) as UsageRecord['providerId'],
@@ -251,16 +308,33 @@ export class QuotaEngine {
       taskId: nullableText(row.task_id),
       stepId: nullableText(row.step_id),
       stepKind: nullableText(row.step_kind),
-      inputTokens: Number(row.input_tokens ?? 0),
-      outputTokens: Number(row.output_tokens ?? 0),
-      cachedTokens: Number(row.cached_tokens ?? 0),
-      reasoningTokens: Number(row.reasoning_tokens ?? 0),
-      costUsd: Number(row.cost_usd ?? 0),
-      planUnits: Number(row.plan_units ?? 0),
+      connectionId: sanitizeConnectionId(row.connection_id),
+      accountKey: sanitizeAccountKey(row.account_key),
+      ...(requested.success ? { requestedModelRef: requested.data } : {}),
+      ...(inputTokens === undefined ? {} : { inputTokens }),
+      ...(outputTokens === undefined ? {} : { outputTokens }),
+      ...(cachedTokens === undefined ? {} : { cachedTokens }),
+      ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+      ...(costUsd === undefined ? {} : { costUsd }),
+      ...(planUnits === undefined ? {} : { planUnits }),
       status: text(row.status),
       errorKind: errorKind.success ? errorKind.data : null,
-      latencyMs: row.latency_ms == null ? undefined : Number(row.latency_ms),
+      ...(latencyMs === undefined ? {} : { latencyMs }),
+      ...(providerHeaders === undefined ? {} : { headers: providerHeaders }),
     };
+  }
+  /** Parses the retained `headers_json` blob; a malformed or non-object value reads as no headers. */
+  private storedHeaders(row: Record<string, unknown>): Record<string, unknown> | undefined {
+    const raw = row.headers_json;
+    if (typeof raw !== 'string' || raw.length === 0) return undefined;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : undefined;
+    } catch {
+      return undefined;
+    }
   }
   private normalizeCatalogWindow(
     providerId: string,
@@ -293,8 +367,19 @@ export class QuotaEngine {
   }
   recordUsage(input: UsageRecord): void {
     this.windowCache.delete(input.providerId);
-    const record = {
-      ...input,
+    // CLI provenance is opaque metadata, never credentials: a malformed account key is dropped rather
+    // than stored, so raw key material can never reach the durable request row.
+    const connectionId = sanitizeConnectionId(input.connectionId);
+    const accountKey = sanitizeAccountKey(input.accountKey);
+    const requestedModelRef = sanitizeRequestedModelRef(input.requestedModelRef);
+    const { requestedModelRef: _requestedModelRef, headers: rawHeaders, ...rest } = input;
+    const providerHeaders = providerHeadersOnly(rawHeaders);
+    const record: UsageRecord = {
+      ...rest,
+      connectionId,
+      accountKey,
+      ...(requestedModelRef === null ? {} : { requestedModelRef }),
+      ...(providerHeaders === undefined ? {} : { headers: providerHeaders }),
       ...(input.inputTokens === undefined ? {} : { inputTokens: Math.max(0, input.inputTokens) }),
       ...(input.outputTokens === undefined
         ? {}
@@ -309,6 +394,7 @@ export class QuotaEngine {
       ...(input.planUnits === undefined ? {} : { planUnits: Math.max(0, input.planUnits) }),
     };
     this.records.set(record.id, record);
+    const storedHeaders = withRequestedModelRef(providerHeaders, requestedModelRef);
     this.requestRepo?.put({
       id: record.id,
       ts: record.occurredAt,
@@ -327,7 +413,9 @@ export class QuotaEngine {
       status: record.status,
       error_kind: record.errorKind ?? null,
       latency_ms: record.latencyMs ?? null,
-      headers: record.headers ?? null,
+      connection_id: connectionId,
+      account_key: accountKey,
+      ...(storedHeaders === undefined ? {} : { headers: storedHeaders }),
     });
     if (record.stepKind) this.updateAverage(record);
     this.scheduleResets();
