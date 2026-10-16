@@ -1,7 +1,8 @@
 # Ferry 1.0 support matrix
 
-Snapshot: 2026-10-15, `codex/cli-provider-polish`. This describes the local release candidate, not a
-published release or a guarantee of access on a particular account. The shared provider registry
+Snapshot: 2026-10-16, implementation merged into `main` through [PR #6](https://github.com/sico-vibes/ferry/pull/6).
+These labels describe implementation evidence; publication and downloads are tracked in [STATUS.md](STATUS.md)
+and [GitHub Releases](https://github.com/sico-vibes/ferry/releases). Account access is checked separately. The shared provider registry
 (`packages/shared/src/provider-registry.ts`) controls release states in desktop and CLI.
 
 Release checks and unfinished work for this checkout are maintained in [STATUS.md](STATUS.md).
