@@ -23,13 +23,17 @@ import {
   ModelRefSchema,
   ProviderIdSchema,
   RoutingSettingsSchema,
+  CliEffortSchema,
   formatRunReport,
+  type CliConnectionKind,
+  type CliConnectionSettingsPatch,
   type RunReport,
   type MessagePart,
   type Profile,
   type Provider,
   type Session,
 } from '@ferry/shared';
+import { connectionSummaryLine, isCliConnectionKind } from './cli-connections.js';
 
 /* Event handlers intentionally return promises to the event emitter; the parser narrows argv flags. */
 /* eslint-disable @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/return-await, @typescript-eslint/consistent-type-definitions, @typescript-eslint/restrict-template-expressions */
@@ -468,6 +472,8 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     if (command === 'models' && flags.positionals[1] === 'map')
       return await modelMapCommand(client, flags.positionals.slice(2), json);
     if (command === 'models') throw new CliError(2, 'Usage: ferry models map list|set|remove');
+    if (command === 'connect')
+      return await connectCommand(client, flags.positionals.slice(1), flags.values, json);
     if (command === 'oauth')
       return await oauth(
         client,
@@ -697,6 +703,7 @@ export async function main(): Promise<void> {
         '  providers routing <provider>                  Show or set provider priority and weight',
         '  providers overrides <provider>                Show effective provider request overrides',
         '  models map list|set|remove                     Manage logical model mappings and aliases',
+        '  connect list|refresh|verify|update             Manage installed CLI connections and opt-ins',
         '  profiles affinity <profile> [soft|strict]      Show or set profile account affinity',
       ].join('\n'),
     },
@@ -737,6 +744,7 @@ const CLI_COMMANDS = new Set([
   'init',
   'models',
   'status',
+  'connect',
 ]);
 
 export async function gatewayCommand(
@@ -1156,6 +1164,105 @@ export async function providerOverridesCommand(
   return 0;
 }
 
+export async function connectCommand(
+  client: FerryClient,
+  args: string[],
+  flags: Record<string, string | boolean>,
+  json: boolean,
+): Promise<number> {
+  const [action, id] = args;
+  if (action === undefined || action === 'list') {
+    const connections = await client.cliConnections.list();
+    writeResult(
+      json,
+      connections,
+      connections.map((connection) => connectionSummaryLine(connection)).join('\n') + '\n',
+    );
+    return 0;
+  }
+  if (action === 'refresh') {
+    let kind: CliConnectionKind | undefined;
+    if (id !== undefined) {
+      if (!isCliConnectionKind(id)) throw new CliError(2, `Unknown installed CLI: ${id}`);
+      kind = id;
+    }
+    const connections = kind
+      ? await client.cliConnections.refresh(kind)
+      : await client.cliConnections.refresh();
+    writeResult(
+      json,
+      connections,
+      connections.map((connection) => connectionSummaryLine(connection)).join('\n') + '\n',
+    );
+    return 0;
+  }
+  if (action === 'verify') {
+    if (!id || !isCliConnectionKind(id))
+      throw new CliError(
+        2,
+        'Usage: ferry connect verify <codex-cli|claude-code-cli|opencode-cli> [--model <ref>]',
+      );
+    const model = stringFlag(flags.model);
+    if (model && !ModelRefSchema.safeParse(model).success)
+      throw new CliError(2, 'Invalid --model. Use a provider/model reference.');
+    const result = await client.cliConnections.verify(
+      id,
+      model ? ModelRefSchema.parse(model) : undefined,
+    );
+    writeResult(
+      json,
+      result,
+      result.ok ? `${result.message}\n` : `Verification unavailable: ${result.message}\n`,
+    );
+    return result.ok ? 0 : 1;
+  }
+  if (action === 'update') {
+    if (!id || !isCliConnectionKind(id)) throw new CliError(2, connectUsage());
+    const patch = connectUpdatePatch(flags);
+    if (Object.keys(patch).length === 0) throw new CliError(2, connectUsage());
+    const connection = await client.cliConnections.update(id, patch);
+    writeResult(json, connection, `${connectionSummaryLine(connection)}\n`);
+    return 0;
+  }
+  throw new CliError(2, connectUsage());
+}
+
+function connectUsage(): string {
+  return 'Usage: ferry connect list|refresh [kind]|verify <kind> [--model <ref>]|update <kind> [--native true|false] [--gateway true|false] [--effort <token>] [--speed standard|fast]';
+}
+
+function parseNativeBoolean(name: string, value: string | boolean): boolean {
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  throw new CliError(2, `Use --${name} true|false.`);
+}
+
+export function connectUpdatePatch(
+  flags: Record<string, string | boolean>,
+): CliConnectionSettingsPatch {
+  const patch: CliConnectionSettingsPatch = {};
+  const surfaces: { native?: boolean; gateway?: boolean } = {};
+  if (flags.native !== undefined) surfaces.native = parseNativeBoolean('native', flags.native);
+  if (flags.gateway !== undefined) surfaces.gateway = parseNativeBoolean('gateway', flags.gateway);
+  if (Object.keys(surfaces).length) patch.surfaces = surfaces;
+  const defaultOptions: { effort?: string | null; speed?: 'standard' | 'fast' } = {};
+  if (flags.effort !== undefined) {
+    const raw = stringFlag(flags.effort);
+    if (raw === undefined || raw === '' || raw === 'default') defaultOptions.effort = null;
+    else if (!CliEffortSchema.safeParse(raw).success)
+      throw new CliError(2, `Invalid --effort ${raw}. Use a raw CLI effort token.`);
+    else defaultOptions.effort = raw;
+  }
+  if (flags.speed !== undefined) {
+    const raw = stringFlag(flags.speed);
+    if (raw !== 'standard' && raw !== 'fast')
+      throw new CliError(2, 'Invalid --speed. Use standard or fast.');
+    defaultOptions.speed = raw;
+  }
+  if (Object.keys(defaultOptions).length) patch.defaultOptions = defaultOptions;
+  return patch;
+}
+
 function commandHelp(positionals: string[]): string {
   const key = positionals.slice(0, 3).join(' ');
   const helps: Record<string, string> = {
@@ -1178,6 +1285,8 @@ function commandHelp(positionals: string[]): string {
       'Usage: ferry profiles list|use|roles|chain|affinity ...\nInspect and configure routing profiles.\n',
     'models map':
       'Usage: ferry models map list|set <logical-name> <provider> <upstream-id>|remove <logical-name> <provider>\nManage logical model mappings and Gateway aliases.\n',
+    connect:
+      'Usage: ferry connect list|refresh [kind]|verify <kind> [--model <ref>]|update <kind> [--native true|false] [--gateway true|false] [--effort <token>] [--speed standard|fast]\nInspect installed CLI connections, refresh discovery, verify generation, and persist opt-ins.\n',
   };
   return (
     helps[key] ?? helps[positionals.slice(0, 2).join(' ')] ?? 'Usage: ferry <command> --help\n'
@@ -1222,6 +1331,8 @@ const VALUE_FLAGS = new Set([
   'weight',
   'affinity',
   'email',
+  'effort',
+  'speed',
 ]);
 function readFlags(argv: string[]): Flags {
   const positionals: string[] = [];

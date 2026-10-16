@@ -1,78 +1,44 @@
-# Ferry status
+# Current status and release evidence
 
-Last updated: 2026-10-11. Ferry is a Windows-first desktop + CLI coding agent: local core over JSON-RPC,
-SQLite storage, free-first provider routing with quota tracking and handoffs, workspace tools with
-checkpoints, measured token optimizers, delegation to Codex / OpenCode / Claude / ACP agents, a local
-OpenAI/Anthropic-compatible Gateway, and subscription OAuth (opt-in). Public beta channel on GitHub
-Releases (`v0.9.0-beta.N`, auto-published on every merge to `main`; installed apps auto-update).
+Snapshot: 2026-10-16, PR [#6](https://github.com/sico-vibes/ferry/pull/6) is open on `codex/cli-provider-polish`; the latest locally validated source revision is `98ddecc`. It has not been merged to `main` or released. The independent local integration gate, production desktop build, packaged CLI e2e, runtime tests, and installer smoke have passed. The earlier hosted run failed on both platforms; the accepted local corrections now await a fresh hosted rerun. See the [support matrix](SUPPORT-MATRIX.md) for provider and client label scope.
 
-## Where we are
+## Verified in this checkout
 
-1. **1.0 Gateway release preparation (`release/1.0-gateway`):** phases A–C implemented;
-   phase D adds four-client wire certification, isolated installer/portable and lifecycle validation,
-   DPI/keyboard/accessibility coverage, and the [support matrix](SUPPORT-MATRIX.md). Work is local
-   and awaits orchestrator review; this does not declare a published 1.0 release. Fixture verification
-   is separate from live installed-client/account certification, which remains opt-in.
-1. **Original master plan: complete** (integrated on `main` 2026-09-30; milestones below).
-2. **v0.10 upgrade waves: first batch on `main`** (`41eb69c`, beta `v0.9.0-beta.10`): P0/P2, P1, U1, U5, U2. P3/P6 parked (see below).
-3. **UI remake v2: complete on `main`** (2026-10-02, `a649d0a`): UI-0 foundation, UI-1 shell/Home/Session/drawer (user-approved at checkpoint C-UI, with seamless tone-based separation), UI-2 Library/Models/Settings/Onboarding/Review/palette/states, UI-3 legacy cleanup + polish. Gates: check 63/63, e2e 5/5 phases, 20/20 web flows, screenshots `design/screenshots/v2/` (both themes, 1440 and 1024). Remaining v0.10 work is listed below.
-5. **1.1 reliability + UX (`release/1.1-reliability`, 2026-10-09): implemented, gates green locally.** v1-G routing reliability (pace short limits, owner model, first-token timeout, never fail finished work, run report), v1-H failure ledger + provider auto-pause after 5 failed requests, v1-I requirement checklist + `check_page`, v1-J Caveman input compression and reply styles, v1-K Ferry Bench + nightly live conformance, v1-UI settings audit + skeleton loaders, v1-UX Claude-style chat (activity rows, window-edge scrollbar, mid-turn messages, context strip), flat grouped Settings, What's new, `ui:invariants` CI gate.
-4. **v0.11 (`docs/plans/v0.11-fixes-and-gateway.md`): complete.** Wave F, N1–N5, CLI parity with v0.11 settings, and shared free-model classification are integrated. `v0.9.0-beta.36` (`24b4851`) is the first green release since N3–N5; N1/N2 integration and the final main-green fixes are included. CLI parity (`e8c60ce`) and free consistency (`826d3a8`) landed after beta.36 on `feat/cli-parity`.
+- **Installed CLI connections:** Codex CLI, Claude Code, and OpenCode support native Ferry chat, Ferry CLI, and Gateway through explicit opt-ins. All three completed caller-tool/read/result rounds through native Ferry and Gateway; the installed client returns tool calls to Ferry for native execution under Ferry permissions, while Gateway returns calls to the external API client to execute and provide results. These operator checks use the current signed-in account and are not CI guarantees.
+- **CLI fixture and package coverage:** the packaged CLI suite passed Anthropic Messages/Responses JSON and SSE, tool frames, direct/profile routing, 429 failover, Gateway profile/no-profile and stopped/revoked cases, and a many-file responsiveness case at 2,383 ms. The separate final packaged CLI run passed all scenarios. Earlier fixture correction now verifies low/high reasoning effort at the upstream boundary.
+- **Free-first routing and billing controls:** fixture tests cover included-capacity opt-in, quota attribution and unknown quota values; a CoreHost real-RPC test confirms Auto can select an Included-only CLI model. Discovery only offers installed CLI-discovered free Zen models for verification, and an explicitly requested metered/unknown Zen model fails instead of being replaced. A positive Gateway budget alone does not enable separately billed Fast/priority without a known-price reservation.
+- **Gateway and usage accounting:** independent reviews passed alias admission and legacy profile effort defaults, exact upstream usage-ID deduplication with charged-cost preservation, per-dispatch quota reset, and unknown-cost retention. The Gateway assigns unique client-facing completion IDs independently of upstream `usageId`, preventing simultaneous API responses from collapsing separately billed usage events. Native-via-Gateway round trips for all three clients recorded two provider/conversation usage events per path with the actual model, account, and Gateway pin preserved.
+- **Usage history and recovery:** history attribution identifies the producer when known and does not count a logical Gateway key as an LLM. Missing aggregates are marked as missing coverage; incomplete older history is not estimated from timestamps. Explicit conversation deletion transactionally removes attributable optimizer recovery blobs; pre-existing orphan rows are not proactively swept.
+- **Zen and UI behavior:** `opencode-cli/opencode/big-pickle` passed native and Gateway caller-tool/result rounds in explicit anonymous mode in the tested environment. The UI matrix passed 708 screens and 12 keyboard journeys; Mock Zen shared-facade parity passed its independent checks. These results apply to the named tested paths, not every model or account.
+- **Windows runtime and packaging:** the independent Windows strict check passed 128 tests with one baseline skip across two tasks. The production desktop build and final packaged CLI e2e passed; the many-file responsiveness case completed in 2,383 ms. Runtime coverage includes Windows environment casing, bounded process-tree cleanup, PTY/timer disposal, and preventing command replay after execution starts.
+- **Final local release checks:** the independent gate passed 67/67 tasks: Core 584 tests in 64 files, Desktop 249, CLI 179, root 12, no-BOM for 1,365 files, and Prettier. The installer/update/CLI/uninstall/portable smoke passed all 10 checks and preserved settings, sessions, custom profiles, and a retrievable Gateway key. Its first attempt failed only because the smoke script expected an obsolete model-picker footer; the script's expected text was updated to the current footer, with no product code or assertion weakened.
+- **Runtime test corrections:** the Workspace page-check worker passed 67/67 tasks, including 141 Workspace tests with one baseline skip and 19 focused tests; root QA verified its snapshot assertions remain immutable. The updated test uses a fresh blank page, target page size, and explicit session/frame/loader lifecycle; it rejects downloads or missing loaders and ignores untagged events. The PowerShell worker adds installer-aligned `spawnSync` coverage and stderr phase markers while keeping the Unicode assertion and 45-second timeout unchanged. Both corrections pass the independent root check (67/67; Core 584/64, Desktop 249, CLI 179, root 12, no-BOM 1,365, Prettier). Neither local pass proves the original hosted timeout's cause.
+- **Hosted release safeguards:** CI and beta workflows now run two real runtime preflights before their full mandatory gates, without retries, skips, or prewarming; beta tags are pinned to `github.sha`.
 
-## Current state
+Evidence is local to this checkout and may be under ignored `.dev/` logs: `cli-runtime-final-independent-check.log`, `cli-runtime-final-desktop-build.log`, `cli-runtime-final-packaged-cli.log`, `cli-runtime-final-install-smoke.log`, `cli-page-check-final-review-run/result.json`, and prior CI run `38826645740` at `e616f5d`. Logs are supporting evidence, not release artifacts; do not copy credentials or raw provider output into documentation.
 
-| Area | State | Detail |
-|---|---|---|
-| v0.11 | Complete | Wave F and N1–N5 integrated; CLI parity and free-model consistency are on `main`. No v0.11 work remains. |
-| v0.12 UI | S + U released (beta.38); T, M, H, G implemented 2026-10-05, awaiting user review | `docs/plans/v0.12-ui-and-updates.md` (UI pass record); preview with `pnpm preview:web` |
-| 1.0 release | Local implementation on `release/1.0-gateway`, awaiting orchestrator review | Four client protocols, provider checks, persistent policies/history, CLI parity and isolated Windows release checks; see `SUPPORT-MATRIX.md`. |
-| Parked work | P3/P6 | `wave/p3-caching` is parked. Renumber its migrations against the current storage migration list before resuming. |
+## Work still in progress
 
-## Milestones (original plan)
+- The earlier hosted rerun (workflow `38826645740`, commit `e616f5d`) failed on both platforms: Linux and Windows each timed out in `Workspace/page-check.test.ts` after 22 seconds; Windows also timed out in the original PowerShell Unicode test after 45 seconds with `code=null`, `SIGTERM`, `killed=true`, and empty output despite closed stdin. The new EOF regression passed but took 39.675 seconds and did not resolve the Unicode timeout. These are historical results for the earlier test paths; their hosted root causes remain unproven.
+- The accepted browser-tool correction and PowerShell test-harness correction pass locally. The browser-tool change is included in the refreshed desktop and CLI builds; the production PowerShell encoding helper is unchanged. PR #6 remains open; a green hosted rerun, merge, and beta publication are still pending. Do not describe the candidate as release-ready or released until those steps complete.
 
-| Milestone | Result | Evidence |
-|---|---|---|
-| M1 real free models finish tasks | ✅ 6/8 live evals on free tiers | `.dev/evals-archive`, `docs/OPTIMIZERS.md` |
-| M2 cross-provider handoff in the UI | ✅ live handoff chain | `design/screenshots/app/m2-live-handoff.png` |
-| M3 optimizer savings | ✅ 304,550 → 69,489 tokens on 23 realistic outputs (correctness-checked); live parity 6/8 vs 6/8 | `pnpm bench:optimizers`, `docs/OPTIMIZERS.md` |
-| M4 real delegations | ✅ Codex rework/accept + reject/restore, OpenCode accept, Claude accept | `scripts/live-delegation.mjs` |
-| M5 CLI | ✅ local engine default, `ferry status`, gateway commands | CLI tests |
-| B6.6 paid guardrails | ✅ confirmation (incl. zero/unknown-price billable), caps gate every candidate incl. handoffs, hard stop, spend vs caps | `design/screenshots/app/paid-*.png` |
-| B10 hardening | ✅ crash-resume + reconnect, DB salvage, offline mode, chaos; security review fixes (`docs/SECURITY-REVIEW.md`); perf budget + axe gate; catalog:check | e2e phases, `docs/PERFORMANCE.md` |
-| B11 release | ✅ unsigned NSIS + portable, auto-update beta channel, CLI on PATH; clean-VM install smoke workflow green (install, hello, CLI status, upgrade keeps data, default/opt-in uninstall, PATH) after fixing 8.3 short-path handoff and silent `/ADD_TO_PATH` / `/REMOVE_DATA` flags | `.github/workflows/beta.yml`, `install-smoke.yml` |
+## Confirmed documentation issues and fixes
 
-Quality gates on `main`: `pnpm check` (63 tasks) + desktop e2e in 5 isolated phases (web UI flows;
-real domains: core flows, crash resume, paid guardrails; Electron core smoke); GitHub CI on Windows +
-Ubuntu.
+- The previous status page described an older Part A mock-only stage and stale beta milestones as the current state. This page replaces those claims with the current branch and evidence boundary.
+- The CLI reference had a duplicated paid-cap exit-code row; the duplicate was removed.
+- The packaged CLI e2e fixture mismatch described above was corrected in the implementation branch. The test now checks the requested reasoning effort at the upstream boundary; it does not weaken the source behavior.
+- The first installer smoke attempt expected an obsolete model-picker footer. The smoke script now checks the current footer text; all 10 installer/update/CLI/uninstall/portable checks passed without weakening product assertions.
 
-## Remaining v0.10 work (docs/plans/v0.10-upgrade.md)
+## Known limits
 
-| Item | State | Branch / worktree |
-|---|---|---|
-| RP1 reasoning-exposure matrix | ✅ on main | `docs/research/reasoning-matrix.md` |
-| P0 perf baseline + budgets, P2 no polling | ✅ on main | `wave/perf-a` |
-| U1 structured agent events (migration 0003) | ✅ on main | `wave/u1-events` |
-| U5 thinking + tool-call timeline (+ paged "show full output", `sessions.readOutput`) | ✅ on main | `wave/u5-timeline` |
-| P1 pagination / Show more / virtualization (+ paid billing metadata for paged models) | ✅ on main | `wave/perf-b` |
-| U2 command palette + keybindings | ✅ on main | `wave/u2-palette` |
-| P3 caching + P6 storage/memory | ⏸ parked: check 63/63 green, but real-domains core flows failed (model picker option never "stable"); bisected to its `renderer/data/events.tsx` handlers. Picker changes were reverted and rebuilt in UI-1. On resume, rebase against the current picker and renumber its migration to `0005` (`0004` is `provider_key_entries`) | `wave/p3-caching` |
-| P4 lighter startup/bundle, P5 render hygiene, P7 smaller install | Not started | — |
-| U3 speed/honesty pass, U4 delegate safety (min versions, CODEX_HOME symlink) | Not started | — |
-| U6 subscription-CLI models + traits picker, U7 plan cards + plan mode | Not started | — |
-| Wave 3 (U8 worktree per thread, U9 per-turn checkpoints, U10 diff review, U11 git actions) | Not started | — |
-| Wave 4 (U12 rich CLI transports, U13 terminals, U14 sidebar shelves, U15 reconnect contract) | Not started | — |
+- **Pre-existing recovery-output orphans remain.** Full original tool output and session metadata persist in local SQLite until explicit conversation deletion. Deletion now transactionally removes matching blobs with a valid session ID while preserving unrelated and unattributed content. This is separate from request/telemetry retention. Blobs orphaned by older deletions are not proactively purged; there is no startup sweep or TTL. See [session deletion](../packages/storage/src/index.ts), [session tools](../packages/core/src/domains/sessions.ts), and [delegation](../packages/core/src/domains/delegation.ts).
+- Installed CLI bridges support text and caller-tool handoffs. Unsupported images, structured output, or explicit request controls are rejected when the bridge cannot enforce them. Native CLI shell/file tools, plugins, project hooks, and external MCP servers are isolated from Ferry's transport.
+- This beta cannot bound separately billed installed-CLI Fast/priority charges with a known-price reservation. When that billing guarantee is required, the bridge fails closed; a positive Gateway key budget alone does not enable Fast/priority mode. Standard speed and supported reasoning choices remain available.
+- Account capacity, model availability, quota reset data, and provider prices depend on upstream services. Unknown quota is reported as unavailable data; it does not mean automatic exhaustion or prove capacity is available. Included subscription capacity is not labeled free, and paid fallback still requires explicit authorization under the active profile and budget policy.
+- Usage history depends on retained evidence. Ferry marks a conversation with replies but no retained usage aggregate as missing coverage and does not infer totals for older partial history whose coverage cannot be proven. A fully captured conversation remains complete. Timestamp order alone cannot prove that an older partial conversation includes every usage record.
+- Installed clients use their current accounts. Ferry does not import their prior conversation histories. Additional account enrollment and broader history import are deferred.
+- Regular automated tests use fixtures, `MemorySecretStore`, and disposable local data. Opt-in live checks reuse the user's current signed-in CLI account while Ferry uses isolated test data. Keep credentials in the client-owned store; never copy, print, or expose credentials or sensitive provider output in logs or documentation. Live checks are operator evidence, not regular CI jobs.
 
-Integration rule: merge green lane branches on an integration branch in `C:\dev\ferry`, run all gates,
-fast-forward `main` only when green; migrations are numbered uniquely (0003 agent events, 0004 provider key
-entries) and must ship in all build targets.
+## Updating this record
 
-## Known gaps
-
-- Legacy palette tokens remain in a few components after the partial UI-3 cleanup.
-- Packaged time-to-interactive remains above the 2 s target on cold CI runners (advisory warning; fails above 10 s).
-- grep and checkpoint snapshots on a 50k-file repo are slow on this laptop with Defender real-time
-  scanning (see `docs/PERFORMANCE.md`).
-- Gemini is not signed in on the dev machine, so ACP Gemini delegation is untested live.
-- P3/P6 caching and storage work remains parked on `wave/p3-caching`.
-- Catalog prices, provider availability, and free-tier limits change outside Ferry's control. Free-tier coverage needs ongoing upkeep as providers change terms and model access.
-- Code signing is deferred (the unsigned beta is a documented, accepted risk in `docs/SECURITY.md`).
+After a feature or fix lands, record only accepted changes from the current checkout. Include the branch/commit, the exact checks that passed, where evidence can be inspected, remaining work, and any user-visible limits. Separate fixture or source verification from live account checks; do not infer release readiness from a plan, an individual worker report, model discovery, or a successful key check. Keep provider/client scope in [SUPPORT-MATRIX.md](SUPPORT-MATRIX.md), setup in [CLI connections](CLI-CONNECTIONS.md), and link here rather than copying changing release status into other guides.

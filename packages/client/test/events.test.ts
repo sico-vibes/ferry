@@ -150,6 +150,35 @@ const samples = {
     latencyMs: 840,
     error: null,
   },
+  'approvals.pending.updated': { entries: [], updatedAt: '2026-10-05T10:00:00.000Z' },
+  'cliConnections.updated': {
+    id: 'codex-cli',
+    kind: 'codex-cli',
+    providerId: 'codex-cli',
+    upstreamLabel: 'ChatGPT',
+    install: {
+      installed: true,
+      executable: 'codex',
+      version: '0.162.1',
+      installHint: 'Install Codex CLI.',
+    },
+    account: { state: 'not_checked', key: null, label: null, plan: null },
+    verify: { state: 'unverified', modelRef: null, checkedAt: null, message: null },
+    surfaces: { native: false, gateway: false },
+    models: [],
+    usage: {
+      connectionId: 'codex-cli',
+      accountKey: null,
+      state: 'unavailable',
+      source: 'cli',
+      observedAt: null,
+      staleAt: null,
+      windows: [],
+      note: null,
+    },
+    lastChecked: null,
+    discoveryMessage: null,
+  },
 } as const;
 
 describe('Ferry event schemas', () => {

@@ -1,20 +1,14 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { WorkspaceJail } from './fs.js';
-import {
-  PAGE_SNAPSHOT_EXPRESSION,
-  parseConsoleEvent,
-  parseLogEvent,
-  parseExceptionEvent,
-  parseFailedRequest,
-  parsePageSnapshot,
-} from './page-check-results.js';
+import { capturePageWidths, type PageEventListener } from './page-check-navigation.js';
+
+const CHECK_PAGE_DEADLINE_MS = 22_000;
 
 export const CheckPageSchema = z.object({
   target: z.string().min(1),
@@ -84,32 +78,37 @@ export async function findBrowser(): Promise<string | null> {
   return null;
 }
 
-type EventListener = (method: string, params: unknown) => void;
 class DevTools {
   private nextId = 0;
   private readonly pending = new Map<
     number,
     { resolve: (result: Record<string, unknown>) => void; reject: (error: Error) => void }
   >();
-  listener: EventListener | undefined;
+  listener: PageEventListener | undefined;
   private constructor(
     private readonly socket: WebSocket,
     private readonly signal: AbortSignal,
   ) {
     socket.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as {
+      let message: {
         id?: number;
         result?: Record<string, unknown>;
         error?: { message: string };
         method?: string;
         params?: unknown;
+        sessionId?: string;
       };
+      try {
+        message = JSON.parse(String(event.data)) as typeof message;
+      } catch {
+        return;
+      }
       if (message.id !== undefined) {
         const call = this.pending.get(message.id);
         this.pending.delete(message.id);
         if (message.error) call?.reject(new Error(message.error.message));
         else call?.resolve(message.result ?? {});
-      } else if (message.method) this.listener?.(message.method, message.params);
+      } else if (message.method) this.listener?.(message.method, message.params, message.sessionId);
     });
     const fail = () => {
       for (const call of this.pending.values())
@@ -132,7 +131,14 @@ class DevTools {
   }
   static async connect(url: string, signal: AbortSignal): Promise<DevTools> {
     signal.throwIfAborted();
-    const socket = new WebSocket(url);
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(url);
+    } catch (error) {
+      throw error instanceof Error
+        ? error
+        : new Error('check_page could not open the browser socket');
+    }
     const client = new DevTools(socket, signal);
     await new Promise<void>((resolve, reject) => {
       const abort = () => {
@@ -171,7 +177,16 @@ class DevTools {
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+      try {
+        this.socket.send(
+          JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }),
+        );
+      } catch (error) {
+        this.pending.delete(id);
+        reject(
+          error instanceof Error ? error : new Error('check_page could not send a browser command'),
+        );
+      }
     });
   }
   close() {
@@ -227,18 +242,12 @@ export async function checkPage(
       unavailable: 'check_page unavailable: no Chromium-based browser found',
       screenshots: [] as string[],
     };
-  const signal = AbortSignal.any([options.signal, AbortSignal.timeout(22_000)]);
+  const deadline = AbortSignal.timeout(CHECK_PAGE_DEADLINE_MS);
+  const signal = AbortSignal.any([options.signal, deadline]);
   const profile = await mkdtemp(path.join(tmpdir(), 'ferry-page-check-'));
   let child: ChildProcess | undefined;
   let cdp: DevTools | undefined;
-  const screenshots: string[] = [];
-  const pages: (ReturnType<typeof parsePageSnapshot> & {
-    width: number;
-    console: { level: string; text: string }[];
-    exceptions: string[];
-    failedRequests: ReturnType<typeof parseFailedRequest>[];
-    screenshot?: string;
-  })[] = [];
+  let stage = 'browser startup';
   try {
     child = spawn(
       browser,
@@ -275,7 +284,9 @@ export async function checkPage(
       if (port && route) endpoint = `ws://127.0.0.1:${port}${route}`;
       else await delay(50, undefined, { signal });
     }
+    stage = 'devtools connect';
     cdp = await DevTools.connect(endpoint, signal);
+    stage = 'target setup';
     const created = await cdp.command('Target.createTarget', { url: 'about:blank' });
     const attached = await cdp.command('Target.attachToTarget', {
       targetId: created.targetId,
@@ -286,95 +297,42 @@ export async function checkPage(
     await cdp.command('Runtime.enable', {}, sessionId);
     await cdp.command('Network.enable', {}, sessionId);
     await cdp.command('Log.enable', {}, sessionId);
-    for (const width of args.widths) {
-      const console: { level: string; text: string }[] = [];
-      const exceptions: string[] = [];
-      const failedRequests: ReturnType<typeof parseFailedRequest>[] = [];
-      const requests = new Map<string, string>();
-      const navigationState = { loaded: false };
-      cdp.listener = (method, params) => {
-        if (method === 'Page.loadEventFired') navigationState.loaded = true;
-        else if (method === 'Runtime.consoleAPICalled') {
-          const entry = parseConsoleEvent(params);
-          if (entry) console.push(entry);
-        } else if (method === 'Log.entryAdded') {
-          const entry = parseLogEvent(params);
-          if (entry) console.push(entry);
-        } else if (method === 'Runtime.exceptionThrown') {
-          const entry = parseExceptionEvent(params);
-          if (entry) exceptions.push(entry);
-        } else if (method === 'Network.requestWillBeSent') {
-          const event = z
-            .object({ requestId: z.string(), request: z.object({ url: z.string() }) })
-            .parse(params);
-          requests.set(event.requestId, event.request.url);
-        } else if (method === 'Network.responseReceived') {
-          const event = z
-            .object({
-              type: z.string(),
-              response: z.object({ url: z.string(), status: z.number() }),
-            })
-            .parse(params);
-          if (event.response.status >= 400)
-            failedRequests.push(
-              parseFailedRequest(event.response.url, {
-                type: event.type,
-                errorText: `HTTP ${String(event.response.status)}`,
-              }),
-            );
-        } else if (method === 'Network.loadingFailed') {
-          const event = z.object({ requestId: z.string() }).parse(params);
-          failedRequests.push(
-            parseFailedRequest(requests.get(event.requestId) ?? '(unknown)', params),
-          );
-        }
-      };
-      await cdp.command(
-        'Emulation.setDeviceMetricsOverride',
-        { width, height: 900, deviceScaleFactor: 1, mobile: false },
-        sessionId,
-      );
-      const navigation = await cdp.command('Page.navigate', { url }, sessionId);
-      if (typeof navigation.errorText === 'string')
-        throw new Error(`check_page navigation failed: ${navigation.errorText}`);
-      while (!navigationState.loaded) await delay(25, undefined, { signal });
-      await delay(args.waitMs, undefined, { signal });
-      const evaluated = await cdp.command(
-        'Runtime.evaluate',
-        { expression: PAGE_SNAPSHOT_EXPRESSION, returnByValue: true },
-        sessionId,
-      );
-      const snapshot = parsePageSnapshot(
-        z.object({ value: z.unknown() }).parse(evaluated.result).value,
-      );
-      let screenshot: string | undefined;
-      if (args.screenshot) {
-        const directory = path.join(
-          options.dataDir,
-          'sessions',
-          path.basename(options.sessionId),
-          'page-check',
-        );
-        await mkdir(directory, { recursive: true });
-        screenshot = path.join(directory, `${randomUUID()}-${String(width)}.png`);
-        const shot = await cdp.command(
-          'Page.captureScreenshot',
-          { format: 'png', captureBeyondViewport: false },
-          sessionId,
-        );
-        await writeFile(screenshot, Buffer.from(z.string().parse(shot.data), 'base64'));
-        screenshots.push(screenshot);
-      }
-      pages.push({
-        width,
-        ...snapshot,
-        console,
-        exceptions,
-        failedRequests,
-        ...(screenshot ? { screenshot } : {}),
-      });
-    }
+    await cdp.command('Page.setLifecycleEventsEnabled', { enabled: true }, sessionId);
+    const frameTree = await cdp.command('Page.getFrameTree', {}, sessionId);
+    const mainFrameId = z
+      .object({ frameTree: z.object({ frame: z.object({ id: z.string() }) }) })
+      .parse(frameTree).frameTree.frame.id;
+    stage = 'page capture';
+    const screenshotDirectory = path.join(
+      options.dataDir,
+      'sessions',
+      path.basename(options.sessionId),
+      'page-check',
+    );
+    const { pages, screenshots } = await capturePageWidths({
+      client: cdp,
+      sessionId,
+      mainFrameId,
+      url,
+      widths: args.widths,
+      waitMs: args.waitMs,
+      screenshot: args.screenshot,
+      screenshotDirectory,
+      signal,
+      onStage: (next) => {
+        stage = next;
+      },
+    });
     return { target: args.target, pages, screenshots };
+  } catch (error) {
+    // Keep the tool deadline distinguishable from a caller abort, and say which
+    // stage stalled instead of surfacing an opaque AbortError.
+    if (!options.signal.aborted && deadline.aborted)
+      throw new Error(
+        `check_page timed out after ${String(CHECK_PAGE_DEADLINE_MS)}ms during ${stage}`,
+        { cause: error },
+      );
+    throw error;
   } finally {
     cdp?.close();
     if (child) await stopBrowser(child);

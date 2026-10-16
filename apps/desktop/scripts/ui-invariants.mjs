@@ -24,6 +24,13 @@ const screens = [
   { name: 'home', path: '/' },
   { name: 'models', path: '/models' },
   { name: 'model-catalog', path: '/models/catalog' },
+  { name: 'model-details', path: '/models/catalog', modelDetails: true },
+  { name: 'provider-verification', path: '/models', integrationTooltip: true },
+  { name: 'installed-cli-connections', path: '/models', inspectCliConnections: true },
+  { name: 'cli-sign-in-instructions', path: '/models', cliSignIn: true },
+  { name: 'cli-verified-connection', path: '/models', connectedCli: true },
+  { name: 'cli-subscription-picker', path: '/models', connectedCli: true, cliPicker: true },
+  { name: 'cli-model-options', path: '/models', connectedCli: true, cliOptions: true },
   { name: 'provider-endpoint', path: '/models', endpoint: true },
   { name: 'model-picker', path: '/', modelPicker: true },
   { name: 'command-palette', path: '/', palette: true },
@@ -47,6 +54,12 @@ const screens = [
   { name: 'onboarding-paid-backup', path: '/onboarding', step: 2, paidBackup: true },
   { name: 'onboarding-paid-verification', path: '/onboarding', step: 5, paidBackup: true },
   { name: 'chat', path: '/?speed=0', openFirstChat: true },
+  {
+    name: 'conversation-model-usage',
+    path: '/?speed=0',
+    openFirstChat: true,
+    conversationUsage: true,
+  },
   ...['Plan', 'Changes', 'Terminal'].map((drawer) => ({
     name: `drawer-${drawer.toLowerCase()}`,
     path: '/?speed=0',
@@ -78,10 +91,10 @@ const screens = [
   },
   { name: 'providers-paid-checks', path: '/models', paidChecks: true },
   {
-    name: 'settings-delegation-clients',
+    name: 'settings-delegation-connections',
     path: '/settings',
     section: 'Delegation',
-    inspectClients: true,
+    openConnectionManager: true,
   },
   ...['About', 'Data & privacy'].map((section) => ({
     name: `settings-${section === 'About' ? 'about' : 'data'}-diagnostics`,
@@ -157,156 +170,273 @@ async function checkScreen({ theme, viewport, deviceScaleFactor, screen }) {
     colorScheme: theme === 'light' ? 'light' : 'dark',
   });
   const page = await context.newPage();
-  await page.goto(
-    new URL(`${screen.path}${screen.path.includes('?') ? '&' : '?'}theme=${theme}`, served.url)
-      .href,
-  );
-  if (screen.step !== undefined) {
-    await page
-      .getByRole('heading', { name: 'What will you use Ferry for?', exact: true })
-      .waitFor({ timeout: 30000 });
-    const titles = [
-      'What will you use Ferry for?',
-      'Connect a provider',
-      'Use Auto',
-      'Check readiness',
-      'Create a named key',
-      'Connect and verify',
-    ];
-    for (let step = 0; step < screen.step; step++) {
+  const pageErrors = [];
+  const consoleMessages = [];
+  const failedRequests = [];
+  const pendingRequests = new Set();
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    if (['error', 'warning'].includes(message.type()))
+      consoleMessages.push({ type: message.type(), text: message.text() });
+  });
+  page.on('request', (request) => pendingRequests.add(request.url()));
+  page.on('requestfinished', (request) => pendingRequests.delete(request.url()));
+  page.on('requestfailed', (request) => {
+    pendingRequests.delete(request.url());
+    failedRequests.push({ url: request.url(), error: request.failure()?.errorText });
+  });
+  try {
+    await page.goto(
+      new URL(`${screen.path}${screen.path.includes('?') ? '&' : '?'}theme=${theme}`, served.url)
+        .href,
+    );
+    if (screen.step !== undefined) {
       await page
-        .getByRole('button', {
-          name: step === 4 ? 'Create key and continue' : 'Continue',
-          exact: true,
-        })
-        .click();
-      await page
-        .getByRole('heading', { name: titles[step + 1], exact: true })
+        .getByRole('heading', { name: 'What will you use Ferry for?', exact: true })
         .waitFor({ timeout: 30000 });
-      if (screen.paidBackup && screen.step > 2 && step + 1 === 2) {
+      const titles = [
+        'What will you use Ferry for?',
+        'Connect a provider',
+        'Use Auto',
+        'Check readiness',
+        'Create a named key',
+        'Connect and verify',
+      ];
+      for (let step = 0; step < screen.step; step++) {
+        await page
+          .getByRole('button', {
+            name: step === 4 ? 'Create key and continue' : 'Continue',
+            exact: true,
+          })
+          .click();
+        await page
+          .getByRole('heading', { name: titles[step + 1], exact: true })
+          .waitFor({ timeout: 30000 });
+        if (screen.paidBackup && screen.step > 2 && step + 1 === 2) {
+          await page.getByRole('switch', { name: 'Enable paid backup' }).click();
+          await page.getByRole('textbox', { name: 'Monthly spending limit (USD)' }).fill('5');
+        }
+      }
+      if (screen.paidBackup && screen.step === 2) {
         await page.getByRole('switch', { name: 'Enable paid backup' }).click();
         await page.getByRole('textbox', { name: 'Monthly spending limit (USD)' }).fill('5');
       }
-    }
-    if (screen.paidBackup && screen.step === 2) {
-      await page.getByRole('switch', { name: 'Enable paid backup' }).click();
-      await page.getByRole('textbox', { name: 'Monthly spending limit (USD)' }).fill('5');
-    }
-    if (screen.method) {
-      await page.getByRole('combobox', { name: 'Connection method' }).click();
-      await page.getByRole('option', { name: screen.method, exact: true }).click();
-    }
-    await page.evaluate(() => {
-      for (const element of document.querySelectorAll(
-        '.page-scroll-canvas,.onboarding-page,.onboarding-content',
-      ))
-        element.scrollTop = 0;
-    });
-  } else await page.locator('.v2-sidebar').first().waitFor({ timeout: 30_000 });
-  if (screen.tab) await page.getByRole('tab', { name: screen.tab, exact: true }).click();
-  if (screen.endpoint) {
-    await page
-      .locator('#provider-openai-compatible')
-      .getByRole('button', { name: 'Manage key', exact: true })
-      .click();
-    await page.getByRole('textbox', { name: 'Provider base URL' }).fill('http://localhost:8080/v1');
-  }
-  if (screen.modelPicker) await page.locator('.v2-composer-chip[aria-controls]').click();
-  if (screen.palette) await page.keyboard.press('Control+k');
-  if (screen.paidChecks) {
-    await page.getByText('Paid checks', { exact: true }).click();
-    await page.getByRole('button', { name: 'Check paid API providers' }).scrollIntoViewIfNeeded();
-  }
-  if (screen.providerCheck) {
-    await page.getByRole('button', { name: 'Check free providers', exact: true }).click();
-    await page
-      .getByRole('heading', { name: 'Preview: Optimized for this device', exact: true })
-      .waitFor();
-    await page
-      .getByRole('button', { name: 'Apply recommendations', exact: true })
-      .scrollIntoViewIfNeeded();
-  }
-  if (screen.paidBackup && screen.step === 5) {
-    await page.getByRole('button', { name: 'Send verification request' }).scrollIntoViewIfNeeded();
-  }
-  if (screen.requestDetails) {
-    await page.getByRole('tab', { name: 'Keys', exact: true }).click();
-    await page.getByRole('button', { name: 'Create key', exact: true }).click();
-    await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Screenshot fixture');
-    await page.getByRole('dialog').getByRole('button', { name: 'Create key', exact: true }).click();
-    await page.getByRole('button', { name: 'Done', exact: true }).click();
-    await page.getByRole('tab', { name: 'Connect', exact: true }).click();
-    await page.getByRole('button', { name: 'Send verification request' }).click();
-    await page.getByText(/Fixture request completed/).waitFor();
-    await page.getByRole('tab', { name: 'Requests', exact: true }).click();
-    await page.getByRole('button', { name: 'Screenshot fixture', exact: true }).click();
-    await page.getByRole('heading', { name: 'Request details' }).waitFor();
-  }
-  if (screen.openFirstChat) {
-    // The web build has no saved chats: start one and let the scripted reply play.
-    const composer = page.getByRole('textbox').first();
-    await composer.fill('Find and fix the flaky retry test, then run the suite.');
-    await composer.press('Enter');
-    await page.locator('.transcript-message').nth(1).waitFor({ timeout: 30_000 });
-    await page.waitForTimeout(4_000);
-  }
-  if (screen.section) {
-    await page.locator('.v2-settings-nav').waitFor({ timeout: 15_000 });
-    await page.locator('.v2-settings-nav button', { hasText: screen.section }).first().click();
-    if (screen.advanced)
+      if (screen.method) {
+        await page.getByRole('combobox', { name: 'Connection method' }).click();
+        await page.getByRole('option', { name: screen.method, exact: true }).click();
+      }
+      await page.evaluate(() => {
+        for (const element of document.querySelectorAll(
+          '.page-scroll-canvas,.onboarding-page,.onboarding-content',
+        ))
+          element.scrollTop = 0;
+      });
+    } else await page.locator('.v2-sidebar').first().waitFor({ timeout: 30_000 });
+    if (screen.tab) await page.getByRole('tab', { name: screen.tab, exact: true }).click();
+    if (screen.endpoint) {
       await page
-        .locator('.v2-settings-content details > summary')
-        .filter({ hasText: /^Advanced$/ })
+        .locator('#provider-openai-compatible')
+        .getByRole('button', { name: 'Manage key', exact: true })
+        .click();
+      await page
+        .getByRole('textbox', { name: 'Provider base URL' })
+        .fill('http://localhost:8080/v1');
+    }
+    if (screen.modelPicker) await page.locator('.v2-composer-chip[aria-controls]').click();
+    if (screen.modelDetails) {
+      await page.locator('.model-table-name-button').first().click();
+      await page.locator('.model-table-details').waitFor();
+    }
+    if (screen.integrationTooltip) {
+      await page
+        .getByRole('img', { name: /^Verified integration\./ })
+        .first()
+        .hover();
+      await page.getByRole('tooltip').waitFor();
+    }
+    if (screen.inspectCliConnections || screen.cliSignIn) {
+      const connections = page.getByRole('region', { name: 'Installed CLIs', exact: true });
+      await connections.getByRole('switch', { name: 'Use Codex CLI in Ferry' }).waitFor();
+      await connections.scrollIntoViewIfNeeded();
+      if (screen.cliSignIn) {
+        await connections.getByRole('button', { name: 'Sign-in instructions' }).first().click();
+        await page.getByRole('dialog', { name: 'Sign in to Codex CLI' }).waitFor();
+      }
+    }
+    if (screen.connectedCli) {
+      const connections = page.getByRole('region', { name: 'Installed CLIs', exact: true });
+      const native = connections.getByRole('switch', { name: 'Use Codex CLI in Ferry' });
+      await native.waitFor();
+      await connections
+        .getByRole('button', { name: 'Verify connection', exact: true })
         .first()
         .click();
-    if (screen.inspectClients) {
-      await page.getByRole('button', { name: 'Check client sign-ins' }).click();
-      await page.getByText(/Installed and signed in/).waitFor();
-      await page.getByRole('list', { name: 'Coding CLIs', exact: true }).scrollIntoViewIfNeeded();
-    }
-    if (screen.diagnostics) {
-      const exportButton = page.getByRole('button', {
-        name: 'Export sanitized diagnostics',
-      });
-      await exportButton.scrollIntoViewIfNeeded();
-      await exportButton.click();
-      await page.getByText(/Exported Ferry/).waitFor();
-    }
-  }
-  if (screen.drawer) {
-    await page.keyboard.press('Control+.');
-    await page.getByRole('tab', { name: screen.drawer, exact: true }).click();
-  }
-  await page.evaluate(() => document.fonts.ready);
-  await page.waitForTimeout(600);
-  const label = `${screen.name}-${theme}-${String(viewport.width)}-${deviceScaleFactor * 100}pct`;
-  await page.screenshot({ path: join(outputDirectory, `${label}.png`) });
-  await copyFile(join(outputDirectory, `${label}.png`), join(phaseShots, `${label}.png`));
-  const problems = await page.evaluate(findViolations);
-  const axe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
-  report.push({
-    screen: label,
-    problems,
-    axe: axe.violations.map((violation) => ({
-      id: violation.id,
-      impact: violation.impact,
-      nodes: violation.nodes.length,
-      targets: violation.nodes.slice(0, 3).map((node) => node.target.join(' ')),
-    })),
-  });
-  for (const violation of axe.violations)
-    if (violation.impact === 'serious' || violation.impact === 'critical')
-      problems.push(
-        `accessibility: ${violation.id} on ${violation.nodes
-          .slice(0, 3)
-          .map((node) => node.target.join(' '))
-          .join(', ')}`,
+      await connections.getByText('1 model generation verified', { exact: true }).waitFor();
+      await native.click();
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector('[aria-label="Use Codex CLI in Ferry"]')
+            ?.getAttribute('aria-checked') === 'true',
       );
-  if (problems.length) {
-    failures += problems.length;
-    console.error(`✗ ${label}\n  ${problems.join('\n  ')}`);
-  } else console.log(`✓ ${label}`);
-  await context.close();
+      if (screen.cliPicker || screen.cliOptions) {
+        await page.getByRole('button', { name: 'New chat', exact: true }).click();
+        await page.locator('.v2-composer-chip[aria-controls]').click();
+        await page.getByRole('combobox', { name: 'Model access' }).selectOption('subscription');
+        const model = page.getByRole('option', { name: /GPT-5.1 Codex/ });
+        await model.waitFor();
+        if (screen.cliOptions) {
+          await model.click();
+          await page.getByRole('combobox', { name: 'CLI reasoning effort' }).waitFor();
+        } else {
+          await model.hover();
+        }
+      } else {
+        await connections.scrollIntoViewIfNeeded();
+      }
+    }
+    if (screen.palette) await page.keyboard.press('Control+k');
+    if (screen.paidChecks) {
+      await page.getByText('Paid checks', { exact: true }).click();
+      await page.getByRole('button', { name: 'Check paid API providers' }).scrollIntoViewIfNeeded();
+    }
+    if (screen.providerCheck) {
+      await page.getByRole('button', { name: 'Check free providers', exact: true }).click();
+      await page
+        .getByRole('heading', { name: 'Preview: Optimized for this device', exact: true })
+        .waitFor();
+      await page
+        .getByRole('button', { name: 'Apply recommendations', exact: true })
+        .scrollIntoViewIfNeeded();
+    }
+    if (screen.paidBackup && screen.step === 5) {
+      await page
+        .getByRole('button', { name: 'Send verification request' })
+        .scrollIntoViewIfNeeded();
+    }
+    if (screen.requestDetails) {
+      await page.getByRole('tab', { name: 'Keys', exact: true }).click();
+      await page.getByRole('button', { name: 'Create key', exact: true }).click();
+      await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Screenshot fixture');
+      await page
+        .getByRole('dialog')
+        .getByRole('button', { name: 'Create key', exact: true })
+        .click();
+      await page.getByRole('button', { name: 'Done', exact: true }).click();
+      await page.getByRole('tab', { name: 'Connect', exact: true }).click();
+      await page.getByRole('button', { name: 'Send verification request' }).click();
+      await page.getByText(/Fixture request completed/).waitFor();
+      await page.getByRole('tab', { name: 'Requests', exact: true }).click();
+      await page.getByRole('button', { name: 'Screenshot fixture', exact: true }).click();
+      await page.getByRole('heading', { name: 'Request details' }).waitFor();
+    }
+    if (screen.openFirstChat) {
+      // The web build has no saved chats: start one and let the scripted reply play.
+      const composer = page.getByRole('textbox').first();
+      await composer.fill('Find and fix the flaky retry test, then run the suite.');
+      await composer.press('Enter');
+      await page.locator('.transcript-message').nth(1).waitFor({ timeout: 30_000 });
+      await page.waitForTimeout(4_000);
+    }
+    if (screen.conversationUsage) {
+      await page
+        .getByRole('button', { name: /^Model usage for / })
+        .first()
+        .click();
+      await page.getByRole('dialog', { name: 'Conversation usage' }).waitFor();
+      await page
+        .getByText('Loading conversation usage…', { exact: true })
+        .waitFor({ state: 'hidden' });
+    }
+    if (screen.section) {
+      await page.locator('.v2-settings-nav').waitFor({ timeout: 15_000 });
+      await page.locator('.v2-settings-nav button', { hasText: screen.section }).first().click();
+      if (screen.advanced)
+        await page
+          .locator('.v2-settings-content details > summary')
+          .filter({ hasText: /^Advanced$/ })
+          .first()
+          .click();
+      if (screen.openConnectionManager) {
+        await page.getByRole('button', { name: 'Manage CLI connections', exact: true }).click();
+        await page
+          .getByRole('region', { name: 'Installed CLIs', exact: true })
+          .scrollIntoViewIfNeeded();
+      }
+      if (screen.diagnostics) {
+        const exportButton = page.getByRole('button', {
+          name: 'Export sanitized diagnostics',
+        });
+        await exportButton.scrollIntoViewIfNeeded();
+        await exportButton.click();
+        await page.getByText(/Exported Ferry/).waitFor();
+      }
+    }
+    if (screen.drawer) {
+      await page.keyboard.press('Control+.');
+      await page.getByRole('tab', { name: screen.drawer, exact: true }).click();
+    }
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(600);
+    const label = `${screen.name}-${theme}-${String(viewport.width)}-${deviceScaleFactor * 100}pct`;
+    await page.screenshot({ path: join(outputDirectory, `${label}.png`) });
+    await copyFile(join(outputDirectory, `${label}.png`), join(phaseShots, `${label}.png`));
+    const problems = await page.evaluate(findViolations);
+    const axe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+    report.push({
+      screen: label,
+      problems,
+      axe: axe.violations.map((violation) => ({
+        id: violation.id,
+        impact: violation.impact,
+        nodes: violation.nodes.length,
+        targets: violation.nodes.slice(0, 3).map((node) => node.target.join(' ')),
+      })),
+    });
+    for (const violation of axe.violations)
+      if (violation.impact === 'serious' || violation.impact === 'critical')
+        problems.push(
+          `accessibility: ${violation.id} on ${violation.nodes
+            .slice(0, 3)
+            .map((node) => node.target.join(' '))
+            .join(', ')}`,
+        );
+    if (problems.length) {
+      failures += problems.length;
+      console.error(`✗ ${label}\n  ${problems.join('\n  ')}`);
+    } else console.log(`✓ ${label}`);
+  } catch (error) {
+    const label = `${screen.name}-${theme}-${String(viewport.width)}-${deviceScaleFactor * 100}pct`;
+    console.error(`UI setup failed: ${label} at ${page.url()}`, pageErrors);
+    const startup = await page
+      .evaluate(() => ({
+        readyState: document.readyState,
+        html: document.documentElement.outerHTML,
+        resources: performance.getEntriesByType('resource').map((entry) => ({
+          name: entry.name,
+          duration: entry.duration,
+        })),
+      }))
+      .catch(() => null);
+    await writeFile(
+      join(outputDirectory, `failure-${label}.json`),
+      `${JSON.stringify({ pageErrors, consoleMessages, failedRequests, pendingRequests: [...pendingRequests], startup }, null, 2)}\n`,
+    );
+    report.push({
+      screen: label,
+      problems: [`UI setup failed: ${error instanceof Error ? error.message : String(error)}`],
+      axe: [],
+      pageErrors,
+    });
+    await page
+      .screenshot({ path: join(outputDirectory, `failure-${label}.png`) })
+      .catch((captureError) =>
+        console.error('Could not capture the failed UI state', captureError),
+      );
+    throw error;
+  } finally {
+    await context.close();
+  }
 }
 try {
   // Isolated contexts permit a bounded three-worker matrix without sharing fixture state.
@@ -325,12 +455,12 @@ try {
         );
       }
 } finally {
+  await writeFile(join(outputDirectory, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   await browser.close();
   await new Promise((resolve, reject) =>
     served.server.close((error) => (error ? reject(error) : resolve())),
   );
 }
-await writeFile(join(outputDirectory, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
 if (failures) {
   console.error(`${String(failures)} UI invariant violation(s). Screenshots: ${outputDirectory}`);
   process.exit(1);

@@ -9,9 +9,9 @@ inside a selected workspace, invoke local providers and MCP tools, and launch
 delegated CLIs. Malicious workspace content, crafted commands, hostile links,
 compromised provider responses, and unexpected child-process output are in scope.
 
-This checkout contains both the Part A mock UI and evolving engine packages. The
-security controls below describe the implemented code paths; they do not imply
-that every UI domain is connected to a production service.
+Ferry is an engine-backed Electron desktop app with a local CLI. This checklist
+describes controls in the current code paths; it is not a substitute for the
+current release status and verification record in [STATUS](STATUS.md).
 
 ## Desktop and IPC checklist
 
@@ -23,10 +23,10 @@ that every UI domain is connected to a production service.
 | CSP | `script-src 'self'`, no `unsafe-eval`, no loopback WebSocket allowance in production, object/frame/form restrictions; inline styles remain enabled for Monaco and runtime component styles |
 | New windows and navigation | New windows denied; navigation and redirects are allowed only to the exact renderer URL; external HTTP(S) links go through a host allowlist or a user confirmation dialog |
 | Renderer permissions | All permission requests denied; camera, microphone, geolocation, and notifications are not needed |
-| IPC handlers | `ferry:open-folder`, `ferry:engine-status`, `ferry:connect-core`, and `ferry:theme`; arguments use shared Zod schemas; sender frame must match the renderer URL |
-| Preload bridge | `realDomainsFromEnvironment`, `openFolder`, `updateTheme`, `connectCore`, `getEngineStatus`, `onEngineRestarting`, and `onEngineConnected`, plus read-only `platform` and `versions`; no generic channel or invoke bridge |
+| IPC handlers | Named host operations validate arguments with schemas and check that the sender frame matches the trusted renderer URL. See `apps/desktop/src/main/index.ts` and `apps/desktop/src/main/security.test.ts`. |
+| Preload bridge | Exposes named host operations and the typed Ferry RPC client through a transferred `MessagePort`; there is no generic IPC channel or arbitrary invoke bridge. See `apps/desktop/src/preload/index.ts`. |
 | Core MessagePort | 256-bit random per-connection token, single use in the main process, and source/origin checked in the renderer |
-| File paths to renderer | Only the directory selected by the native open-folder dialog is returned; core paths and process details stay on the main/core boundary |
+| File paths and process details | Named app-info and engine-status operations expose the app data directory and core PID/status. Workspace tools remain behind Core's typed RPC and workspace jail. |
 
 ## Core and workspace controls
 
@@ -55,6 +55,7 @@ that every UI domain is connected to a production service.
   clients report that the desktop core owns the lock but its channel is
   unavailable.
 - Stdio transport behavior is unchanged.
+- Core's local SQLite database contains session records and may contain full original tool output retained for optimizer recovery. Explicit conversation deletion removes matching blobs with a valid session ID. Request/telemetry retention has a separate scope; orphaned recovery blobs from older deletions are not proactively swept. See the [remaining recovery-data limit](STATUS.md#known-limits).
 - Workspace file tools deny credential paths, including `.env`, `.env.local`, and
   other `.env.*` variants. Listing and grep paths apply the same protection.
 - Destructive commands and shell indirection are classified for approval in

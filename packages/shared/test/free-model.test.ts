@@ -220,6 +220,37 @@ describe('isModelFreeForPlan', () => {
     expect(isModelFreeForPlan({ id: ProviderIdSchema.parse(id), tag }, model(id))).toBe(false);
   });
 
+  it('recognizes the discovered funding class of an installed-CLI provider', () => {
+    const cli = {
+      id: ProviderIdSchema.parse('codex-cli'),
+      tag: 'subscription_cli' as const,
+      kind: 'cli' as const,
+    };
+    // A genuinely free CLI route is free for routing by its discovered evidence, even though it has
+    // no monetary price list.
+    expect(
+      isModelFreeForPlan(
+        cli,
+        model('codex-cli', { free: true, priceInPerM: null, priceOutPerM: null }),
+      ),
+    ).toBe(true);
+    // Included-subscription and metered CLI routes stay `free: false`, so they are never treated as
+    // free and can never be used by an API-free profile without an explicit opt-in.
+    expect(
+      isModelFreeForPlan(
+        cli,
+        model('codex-cli', { free: false, priceInPerM: null, priceOutPerM: null }),
+      ),
+    ).toBe(false);
+    // The same evidence outside a CLI provider keeps the existing API pricing rules.
+    expect(
+      isModelFreeForPlan(
+        { id: ProviderIdSchema.parse('groq'), tag: 'legit' as const },
+        model('groq', { free: true, priceInPerM: null, priceOutPerM: null }),
+      ),
+    ).toBe(false);
+  });
+
   it('requires explicit trial opt-in', () => {
     const provider = { id: ProviderIdSchema.parse('cerebras'), tag: 'trial' } as const;
     const entry = model('cerebras');

@@ -157,7 +157,7 @@ try {
       // First render waits for the engine to start in a fresh data folder; CI runners are slower.
       await waitFor('›', 120_000);
       child.write('/model\r');
-      await waitFor('options · ↑/↓ navigate');
+      await waitFor('options · Tab filter · ↑/↓ navigate · Enter select · Esc close');
       // Auto and No profile precede the one verified fake model.
       child.write('\x1b[B');
       await waitFor('› No profile');

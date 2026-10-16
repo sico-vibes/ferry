@@ -1,4 +1,5 @@
 import type { ModelCandidate, ModelInfo, Provider } from '@ferry/shared';
+import { isOpenCodeAppModel } from '@ferry/shared';
 import { dataUseStatus, ProviderLogo } from '@ferry/ui';
 import {
   contextSegments,
@@ -8,6 +9,8 @@ import {
   parameterCount,
   priceLabel,
 } from './modelFacts';
+
+const checkedDate = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
 
 function Meter({ label, value, tone }: { label: string; value: number; tone: 'good' | 'info' }) {
   return (
@@ -47,8 +50,8 @@ export function ModelDetailsCard({
     model.quality !== undefined &&
     (model.qualitySources?.length ?? 0) > 0;
   const facts: [string, string][] = [
-    ['Context', formatTokens(model.contextWindow)],
-    ['Max output', formatTokens(model.maxOutput)],
+    ['Context', model.capacityKnown === false ? 'Not reported' : formatTokens(model.contextWindow)],
+    ['Max output', model.capacityKnown === false ? 'Not reported' : formatTokens(model.maxOutput)],
     ...(params ? ([['Parameters', params]] as [string, string][]) : []),
     ...(released ? ([['Released', released]] as [string, string][]) : []),
     ...(knowledge ? ([['Knowledge', knowledge]] as [string, string][]) : []),
@@ -56,6 +59,17 @@ export function ModelDetailsCard({
       ? []
       : ([['Weights', model.openWeights ? 'Open' : 'Closed']] as [string, string][])),
     ...(modalities ? ([['Input', modalities]] as [string, string][]) : []),
+    ...(model.verifiedAt && Number.isFinite(Date.parse(model.verifiedAt))
+      ? ([['Last checked', checkedDate.format(new Date(model.verifiedAt))]] as [string, string][])
+      : []),
+    ...(qualityKnown
+      ? ([
+          [
+            'Quality evidence',
+            `${String(Math.round((model.quality ?? 0) * 100))}% · ${model.qualitySources?.join(', ') ?? ''}`,
+          ],
+        ] as [string, string][])
+      : []),
   ];
   const capabilities = [
     model.toolCalling ? 'Tool calling' : null,
@@ -78,11 +92,26 @@ export function ModelDetailsCard({
         </span>
       </header>
       {model.description && <p className="v2-model-details-description">{model.description}</p>}
+      {isOpenCodeAppModel(model) && (
+        <p className="v2-model-details-note">
+          Verify this free model through the installed OpenCode CLI or your Zen API connection.{' '}
+          <a
+            href="https://opencode.ai/docs/"
+            target="_blank"
+            rel="noreferrer"
+            className="text-link underline"
+          >
+            OpenCode setup
+          </a>
+        </p>
+      )}
       <div className="v2-model-meters">
         {qualityKnown && (
           <Meter label="Coding quality" tone="good" value={Math.round((model.quality ?? 0) * 10)} />
         )}
-        <Meter label="Context" tone="info" value={contextSegments(model.contextWindow)} />
+        {model.capacityKnown !== false && (
+          <Meter label="Context" tone="info" value={contextSegments(model.contextWindow)} />
+        )}
       </div>
       <dl className="v2-model-facts">
         {facts.map(([label, value]) => (

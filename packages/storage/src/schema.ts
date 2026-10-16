@@ -63,6 +63,55 @@ export const requests = sqliteTable('requests', {
   errorKind: text('error_kind'),
   latencyMs: integer('latency_ms'),
   headersJson: text('headers_json'),
+  connectionId: text('connection_id'),
+  accountKey: text('account_key'),
+});
+export const sessionModelUsage = sqliteTable(
+  'session_model_usage',
+  {
+    sessionId: text('session_id').notNull(),
+    modelRef: text('model_ref').notNull(),
+    providerId: text('provider_id').notNull().default(''),
+    connectionId: text('connection_id').notNull().default(''),
+    accountKey: text('account_key').notNull().default(''),
+    provenanceKnown: integer('provenance_known').notNull(),
+    requests: integer('requests').notNull(),
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    cachedTokens: integer('cached_tokens'),
+    reasoningTokens: integer('reasoning_tokens'),
+    inputReported: integer('input_reported').notNull(),
+    outputReported: integer('output_reported').notNull(),
+    cachedReported: integer('cached_reported').notNull(),
+    reasoningReported: integer('reasoning_reported').notNull(),
+    unreportedRequests: integer('unreported_requests').notNull(),
+    lastUsedAt: text('last_used_at').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [
+        table.sessionId,
+        table.modelRef,
+        table.providerId,
+        table.connectionId,
+        table.accountKey,
+      ],
+    }),
+  ],
+);
+export const usageEventKeys = sqliteTable('usage_event_keys', {
+  eventId: text('event_id').primaryKey(),
+  sessionId: text('session_id'),
+  modelRef: text('model_ref'),
+  providerId: text('provider_id'),
+  connectionId: text('connection_id'),
+  accountKey: text('account_key'),
+  inputTokens: integer('input_tokens'),
+  outputTokens: integer('output_tokens'),
+  cachedTokens: integer('cached_tokens'),
+  reasoningTokens: integer('reasoning_tokens'),
+  lastUsedAt: text('last_used_at').notNull(),
+  backfilled: integer('backfilled'),
 });
 export const quotaWindows = aggregate('quota_windows');
 export const quotaObservations = aggregate('quota_observations');

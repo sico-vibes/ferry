@@ -11,7 +11,7 @@
         "$TURBO_ROOT$/tsconfig.base.json"
       ]
     },
-    "test": { "outputs": [] },
+    "test": { "dependsOn": ["^typecheck"], "outputs": [] },
     "build": { "dependsOn": ["^build"], "outputs": ["dist/**", "out/**"] },
     "dev": { "cache": false, "persistent": true }
   }

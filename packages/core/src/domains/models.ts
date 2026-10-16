@@ -6,10 +6,12 @@ import {
   SessionIdSchema,
   SessionSchema,
   newId,
+  isCliModelVerified,
   isOpenCodeAppModel,
+  type ModelInfo,
 } from '@ferry/shared';
 import { oauthModelCatalog } from '@ferry/oauth';
-import { zenModel, zenProvider, hasZenCliAccess } from '../zen-cli.js';
+import { zenModel, zenProvider, zenCliMode, hasZenCliAccess } from '../zen-cli.js';
 import { modelSupportsTools } from '@ferry/router';
 import type { CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
@@ -17,6 +19,7 @@ import { hasUsableProviderKey } from '../services.js';
 import { getModelDiscovery, type ModelDiscovery } from './model-discovery.js';
 import { preserveCatalogBillingMetadata } from '../model-billing-metadata.js';
 import { getGatewayController } from '../gateway.js';
+import { cliOptionError, getCliBroker } from '../cli-broker.js';
 import { z } from 'zod';
 
 const ModelListQuerySchema = z.object({
@@ -72,12 +75,46 @@ function cachedProviderModels(
   });
 }
 
+const CLI_CONNECTION_IDS = new Set(['codex-cli', 'claude-code-cli', 'opencode-cli']);
+
+/**
+ * Collapse a persisted legacy `opencode/<id>` API row onto the discovered canonical
+ * `opencode-cli/opencode/<id>` CLI row so the same Zen model is never listed as two routes. This
+ * applies only when the *Zen CLI transport* is actually selected: a standard Zen API row is a
+ * legitimate distinct choice and must never disappear merely because the canonical CLI model was
+ * also discovered (e.g. the shared OpenCode CLI enabled for Go). The canonical row is authoritative
+ * while the CLI route is active; the legacy ref remains resolvable in the broker for saved pins,
+ * profiles and key allowlists.
+ */
+function dedupeZenCliRoutes(services: FerryServices, models: ModelInfo[]): ModelInfo[] {
+  if (!(zenCliMode(services, 'native') || zenCliMode(services, 'gateway'))) return models;
+  const canonical = new Set<string>(
+    models.filter((model) => model.cliConnectionId === 'opencode-cli').map((model) => model.ref),
+  );
+  if (canonical.size === 0) return models;
+  return models.filter((model) => {
+    if (model.cliConnectionId) return true;
+    if (model.providerId !== 'opencode' || !model.ref.startsWith('opencode/')) return true;
+    return !canonical.has(`opencode-cli/opencode/${model.ref.slice('opencode/'.length)}`);
+  });
+}
+
 export function register(host: CoreHost, services: FerryServices): void {
   const providerForModel = (id: string) => {
     const saved = services.providers.get(id);
     return saved ? zenProvider(services, saved) : undefined;
   };
   const modelDiscovery = getModelDiscovery(host, services);
+  const emit = (method: string, payload: unknown) => {
+    host.emit(method, payload);
+  };
+  // CLI inventory is cached discovery only; it never blocks on a probe from the request path.
+  const cliModels = (providerId?: string) =>
+    providerId !== undefined && !CLI_CONNECTION_IDS.has(providerId)
+      ? []
+      : getCliBroker(services, emit)
+          .models()
+          .filter((model) => providerId === undefined || model.providerId === providerId);
   const failingModels = () =>
     new Set(
       services.requestFailures
@@ -104,14 +141,20 @@ export function register(host: CoreHost, services: FerryServices): void {
         .filter((model) => services.providers.get(model.providerId)?.enabled)
         .filter((model) => providerId === undefined || model.providerId === providerId)
         .map((model) => ModelInfoSchema.parse({ ...model, verified: false, verifiedAt: null }));
-      return preserveCatalogBillingMetadata(
-        [...cachedModels, ...oauthModels].map((model) =>
+      return dedupeZenCliRoutes(services, [
+        ...preserveCatalogBillingMetadata(
+          [...cachedModels, ...oauthModels].map((model) =>
+            ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }),
+          ),
+          services.catalog.models,
+          providerForModel,
+          (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
+        ),
+        // Installed-CLI models keep their discovered capability metadata and verification state.
+        ...cliModels(providerId).map((model) =>
           ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }),
         ),
-        services.catalog.models,
-        providerForModel,
-        (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
-      );
+      ]);
     },
     page(rawQuery?: unknown) {
       const { offset, limit, query, filters, sort } = ModelListQuerySchema.parse(rawQuery ?? {});
@@ -123,14 +166,19 @@ export function register(host: CoreHost, services: FerryServices): void {
         .map((model) => ModelInfoSchema.parse({ ...model, verified: false, verifiedAt: null }));
 
       const needle = query.toLocaleLowerCase();
-      const listedModels = preserveCatalogBillingMetadata(
-        [...cachedModels, ...oauthModels].map((model) =>
+      const listedModels = dedupeZenCliRoutes(services, [
+        ...preserveCatalogBillingMetadata(
+          [...cachedModels, ...oauthModels].map((model) =>
+            ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }),
+          ),
+          services.catalog.models,
+          providerForModel,
+          (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
+        ),
+        ...cliModels(providerId).map((model) =>
           ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }),
         ),
-        services.catalog.models,
-        providerForModel,
-        (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
-      );
+      ]);
       const filtered = listedModels
         .filter((model) => providerId === undefined || model.providerId === providerId)
         .filter((model) => filters.tier === undefined || model.tier === filters.tier)
@@ -181,7 +229,13 @@ export function register(host: CoreHost, services: FerryServices): void {
         .filter((model) => services.providers.get(model.providerId)?.enabled)
         .map((model) => ModelInfoSchema.parse({ ...model, failing: failing.has(model.ref) }))
         .filter((model) => modelSupportsTools(model));
-      const choices = [...enabled, ...oauthModels];
+      // Selectable installed-CLI models: opted-in + verified + tool-capable, free routes first. The
+      // session profile still gates *Auto* funding (broker.eligibleModels), but a manual pin may
+      // explicitly select an included/metered model, which dispatch then authorizes.
+      const cliChoices = getCliBroker(services, emit).selectableModels('native', {
+        requiresTools: true,
+      });
+      const choices = [...enabled, ...oauthModels, ...cliChoices];
       const gatewayChoices = (getGatewayController(services)?.listKeys() ?? [])
         .filter((key) => !key.revokedAt)
         .map((key) =>
@@ -232,25 +286,58 @@ export function register(host: CoreHost, services: FerryServices): void {
           const key = getGatewayController(services)?.key(keyId);
           if (!key) throw new Error(`Unknown or revoked Gateway key: ${keyId}`);
         } else {
-          const known =
-            services.catalog.providers
-              .flatMap(({ provider }) => services.models.list(provider))
-              .find((model) => model.ref === modelRef) ??
-            services.catalog.models.find((model) => model.ref === modelRef);
-          if (known && isOpenCodeAppModel(zenModel(services, known)))
-            throw new Error('Available in the OpenCode app. Use ferry run opencode --native.');
-          const available =
-            services.catalog.models.some((model) => model.ref === modelRef) ||
-            services.catalog.providers.some(({ provider }) =>
-              services.models.list(provider).some((model) => model.ref === modelRef),
-            ) ||
-            oauthModelCatalog.some((model) => model.ref === modelRef);
-          if (!available) throw new Error(`Unknown model: ${modelRef}`);
+          // An installed-CLI model (including a persisted legacy `opencode/<id>` alias) is a real
+          // selectable target once discovered, even though it is not in the API catalog. Selection
+          // requires the native surface opted in and a real per-model verification receipt; dispatch
+          // re-checks both. Resolving the alias never substitutes a different model.
+          const cli = getCliBroker(services, emit).model(modelRef);
+          if (cli) {
+            if (!cli.connection.surfaces.native)
+              throw new Error(
+                `${cli.connection.kind} native surface is not enabled. Enable Native in Providers & keys before selecting ${modelRef}.`,
+              );
+            if (!isCliModelVerified(cli.connection, cli.model.ref))
+              throw new Error(
+                `${cli.model.name} is not verified on ${cli.connection.kind}. Run Verify for this model before selecting it.`,
+              );
+          } else {
+            const known =
+              services.catalog.providers
+                .flatMap(({ provider }) => services.models.list(provider))
+                .find((model) => model.ref === modelRef) ??
+              services.catalog.models.find((model) => model.ref === modelRef);
+            if (known && isOpenCodeAppModel(zenModel(services, known)))
+              throw new Error('Available in the OpenCode app. Use ferry run opencode --native.');
+            const available =
+              services.catalog.models.some((model) => model.ref === modelRef) ||
+              services.catalog.providers.some(({ provider }) =>
+                services.models.list(provider).some((model) => model.ref === modelRef),
+              ) ||
+              oauthModelCatalog.some((model) => model.ref === modelRef);
+            if (!available) throw new Error(`Unknown model: ${modelRef}`);
+          }
+        }
+      }
+      // Reset incompatible stored CLI options for the newly selected CLI model so a model change
+      // never dispatches an option the model no longer advertises.
+      let cliOptions = session.cliOptions;
+      if (modelRef !== 'auto') {
+        const discoveredModel = getCliBroker(services, emit).model(modelRef);
+        const existing = cliOptions?.[modelRef];
+        if (
+          discoveredModel &&
+          existing &&
+          cliOptionError(modelRef, discoveredModel.model, existing)
+        ) {
+          const next = { ...(cliOptions ?? {}) };
+          Reflect.deleteProperty(next, modelRef);
+          cliOptions = next;
         }
       }
       const updated = SessionSchema.parse({
         ...session,
         pinnedModelRef: modelRef === 'auto' ? null : modelRef,
+        ...(cliOptions === session.cliOptions ? {} : { cliOptions }),
         updatedAt: services.clock.now().toISOString(),
       });
       const previousModel = session.pinnedModelRef ?? 'auto';

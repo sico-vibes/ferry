@@ -10,6 +10,7 @@ import { BUILTIN_PROFILES } from '@ferry/router';
 import { rpcDomainError, type CoreHost } from '../host.js';
 import type { FerryServices } from '../services.js';
 import { importBenchCoding } from '../coding-quality.js';
+import { applyOptimizedProfile, undoOptimizedProfile } from '../managed-profiles.js';
 
 const savedProfiles = (services: FerryServices) => {
   const value = services.settings.get('profiles');
@@ -114,6 +115,15 @@ export function register(host: CoreHost, services: FerryServices): void {
       const updated = SettingsSchema.parse({ ...current, activeProfileId: id });
       services.settings.put('global', updated);
       host.emit('settings.updated', updated);
+    },
+    applyOptimized(rawProfile: unknown) {
+      const result = applyOptimizedProfile(services, rawProfile);
+      host.emit('settings.updated', result.settings);
+      return { profile: result.profile, undoId: result.undoId };
+    },
+    undoOptimized(rawUndoId: unknown) {
+      const result = undoOptimizedProfile(services, rawUndoId);
+      host.emit('settings.updated', result.settings);
     },
   });
 }

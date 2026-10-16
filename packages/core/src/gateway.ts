@@ -1,6 +1,6 @@
 import { providerBaseUrl } from './provider-endpoints.js';
 import { isOpenCodeAppModel } from '@ferry/shared';
-import { zenModel, zenCliMode, zenFerryKey, ZEN_CLI_BASE_URL } from './zen-cli.js';
+import { zenModel, zenCliMode } from './zen-cli.js';
 import { oauthModelCatalog, streamOAuthChat } from '@ferry/oauth';
 import { reserveSpend, BudgetError } from './spending.js';
 import { withGatewayDeadlines, GatewayTimeoutError } from './gateway-deadlines.js';
@@ -20,11 +20,16 @@ import {
 } from '@ferry/router';
 import {
   DIRECT_PROFILE_ID,
+  EffortSchema,
   ProfileSchema,
   RoutingSettingsSchema,
   providerDefinition,
+  type CliOptionLayer,
   type GatewayRequestRecord,
   type GatewayRoutingExplanation,
+  type ModelInfo,
+  type ModelRef,
+  type Profile,
 } from '@ferry/shared';
 import { gatewayHistory, gatewayRequest, gatewayUsageSummary } from './gateway-history.js';
 import {
@@ -36,8 +41,20 @@ import {
   type GatewayMessage,
   type GatewayAttempt,
   type GatewayAttemptState,
+  type GatewayCompletion,
 } from '@ferry/gateway';
 import { randomBytes } from 'node:crypto';
+import type { CliCallerTool, CliConversationMessage } from '@ferry/delegate';
+import { CliTransportError, isCliTransportError } from '@ferry/delegate';
+import {
+  canonicalZenRef,
+  cliModelInfo,
+  getCliBroker,
+  legacyZenAliasId,
+  resolveCliOption,
+} from './cli-broker.js';
+import { shortWaitMs } from './cli-capacity-guard.js';
+import type { CliConnection, CliModelCapabilities, CliOption } from '@ferry/shared';
 import type { FerryServices } from './services.js';
 import { recordRequestFailure, recordRequestSuccess, ledgerKind } from './request-failures.js';
 import {
@@ -164,6 +181,296 @@ export function toGatewayModelMessages(messages: GatewayMessage[]): ModelMessage
     return [];
   });
 }
+function gatewayCliCode(kind: CliTransportError['kind']): string {
+  switch (kind) {
+    case 'authentication':
+      return 'upstream_credentials';
+    case 'exhausted_capacity':
+      return 'quota_exhausted';
+    case 'timeout':
+      return 'request_timeout';
+    default:
+      return 'unsupported_request';
+  }
+}
+
+function unsupportedCli(message: string): Error {
+  return Object.assign(new Error(message), {
+    code: 'unsupported_request',
+    statusCode: 400,
+  });
+}
+
+/**
+ * A cryptographically unique, client-facing completion id. Never a timestamp-only value (which two
+ * completions in the same millisecond would share) and never a caller-supplied ref that can repeat.
+ */
+function gatewayCompletionId(prefix: string): string {
+  return `${prefix}_${randomBytes(12).toString('hex')}`;
+}
+
+/** Convert OpenAI-style caller tools into the transport's caller tools (text-only schema). */
+export function toCliCallerTools(tools: readonly unknown[] | undefined): CliCallerTool[] {
+  return (tools ?? []).flatMap((raw) => {
+    if (!raw || typeof raw !== 'object') return [];
+    const item = raw as Record<string, unknown>;
+    if (item.type !== 'function' || !item.function || typeof item.function !== 'object') return [];
+    const fn = item.function as Record<string, unknown>;
+    if (typeof fn.name !== 'string' || !fn.name) return [];
+    return [
+      {
+        name: fn.name,
+        ...(typeof fn.description === 'string' ? { description: fn.description } : {}),
+        parameters:
+          fn.parameters && typeof fn.parameters === 'object'
+            ? (fn.parameters as Record<string, unknown>)
+            : {},
+      },
+    ];
+  });
+}
+
+/**
+ * Convert caller messages into the CLI conversation. Text only for the beta; any image part is
+ * rejected before a CLI process is spawned so nothing silently loses content.
+ */
+export function toCliGatewayMessages(
+  messages: readonly GatewayMessage[],
+): CliConversationMessage[] {
+  const conversation: CliConversationMessage[] = [];
+  for (const message of messages) {
+    const role = message.role === 'developer' ? 'developer' : message.role;
+    if (Array.isArray(message.content)) {
+      const text = message.content
+        .map((part) => {
+          if (!part || typeof part !== 'object') return '';
+          const record = part as Record<string, unknown>;
+          if ('image' in record || 'image_url' in record || record.type === 'image_url')
+            throw unsupportedCli(
+              'Installed-CLI routes support text only. Remove image input or use the standard API.',
+            );
+          return typeof record.text === 'string' ? record.text : '';
+        })
+        .join('');
+      if (role === 'assistant') {
+        if (message.tool_calls?.length)
+          conversation.push({
+            role: 'assistant',
+            content: text || null,
+            tool_calls: message.tool_calls.map((call) => ({
+              id: call.id,
+              type: 'function' as const,
+              function: { name: call.function.name, arguments: call.function.arguments },
+            })),
+          });
+        else if (text) conversation.push({ role: 'assistant', content: text });
+        continue;
+      }
+      if (role === 'tool')
+        conversation.push({
+          role: 'tool',
+          content: text,
+          ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
+        });
+      else if (text && (role === 'user' || role === 'system' || role === 'developer'))
+        conversation.push({ role, content: text });
+      continue;
+    }
+    const content = typeof message.content === 'string' ? message.content : '';
+    if (message.role === 'assistant' && message.tool_calls?.length) {
+      conversation.push({
+        role: 'assistant',
+        content: content || null,
+        tool_calls: message.tool_calls.map((call) => ({
+          id: call.id,
+          type: 'function' as const,
+          function: { name: call.function.name, arguments: call.function.arguments },
+        })),
+      });
+    } else if (message.role === 'tool') {
+      conversation.push({
+        role: 'tool',
+        content,
+        ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
+      });
+    } else if (
+      message.role === 'user' ||
+      message.role === 'system' ||
+      message.role === 'developer' ||
+      message.role === 'assistant'
+    ) {
+      if (content) conversation.push({ role: message.role, content });
+    }
+  }
+  return conversation;
+}
+
+/**
+ * Gateway-surface installed-CLI dispatch. Text and the CLI's real function tool calls stream to the
+ * caller; the caller executes the tools and sends the original results on the next request. The
+ * producer/account/connection are captured from the broker's dispatch *before* the await resolves, and
+ * usage dimensions stay nullable (never a fabricated `0`). A CLI turn is one call: never spliced.
+ */
+interface CliRouteOptions {
+  /** Profile `cliDefaults[ref]`, applied below an explicit request override. */
+  profileCliDefault?: CliOption | undefined;
+  /** Attempt-state sink. When omitted, the transport's own `onAttempt` is used. */
+  onAttempt?: ((state: GatewayAttemptState) => void) | undefined;
+}
+
+async function routeCliCompletion(
+  services: FerryServices,
+  input: Parameters<GatewayRuntime['complete']>[0],
+  cli: { connection: CliConnection; model: CliModelCapabilities },
+  options: CliRouteOptions = {},
+): Promise<GatewayCompletion> {
+  if (input.jsonMode || input.structuredOutput)
+    throw unsupportedCli(
+      'Installed-CLI routes support text and caller tools only. Structured output needs the standard API.',
+    );
+  if (
+    input.toolChoice !== undefined &&
+    input.toolChoice !== 'auto' &&
+    input.toolChoice !== 'none' &&
+    input.toolChoice !== 'required'
+  )
+    throw unsupportedCli('Installed-CLI routes support tool_choice auto, none or required only.');
+  // The bridge cannot set sampling controls on the native CLI. An explicit value is rejected rather
+  // than silently dropped; `parallel_tool_calls: true` is accepted because caller tools run serially.
+  if (input.temperature !== undefined)
+    throw unsupportedCli('Installed-CLI routes do not accept a temperature control.');
+  // A separately-billed fast/priority tier cannot be dispatched safely in this beta: the installed-CLI
+  // bridge exposes no known-price or reservation seam to bound the charge, and the shared broker's
+  // spending authorization is closed by default. Reject explicitly before generation rather than
+  // guessing a zero cost or claiming an authorization this path cannot actually confer.
+  if (input.serviceTier === 'fast')
+    throw unsupportedCli(
+      'Fast/priority installed-CLI speed is not supported in this beta: Ferry cannot bound its separately-billed charge with a known price or spending reservation, so it will not be dispatched. Use the standard speed (the default).',
+    );
+  // Build the complete effective option through the single shared resolver so a `service_tier` that
+  // only changes speed never resets the profile's effort default, and an absent field inherits.
+  const conversation: CliOptionLayer = {
+    ...(input.effort !== undefined ? { effort: input.effort } : {}),
+    ...(input.serviceTier !== undefined ? { speed: 'standard' as const } : {}),
+  };
+  const globalSettings = services.settings.get('global') as
+    | {
+        cliConnections?: Record<
+          string,
+          { defaultOptions?: CliOption; modelDefaults?: Record<string, CliOptionLayer> }
+        >;
+      }
+    | undefined;
+  const connectionSettings = globalSettings?.cliConnections?.[cli.connection.kind];
+  const effectiveOption = resolveCliOption(cli.model, {
+    ...(options.profileCliDefault ? { profileDefault: options.profileCliDefault } : {}),
+    ...(connectionSettings?.modelDefaults?.[cli.model.ref]
+      ? { connectionModelDefault: connectionSettings.modelDefaults[cli.model.ref] }
+      : {}),
+    ...(connectionSettings?.defaultOptions
+      ? { connectionDefault: connectionSettings.defaultOptions }
+      : {}),
+    ...(Object.keys(conversation).length ? { conversation } : {}),
+  });
+  const tools = input.toolChoice === 'none' ? [] : toCliCallerTools(input.tools);
+  const messages = toCliGatewayMessages(input.messages);
+  const broker = getCliBroker(services, () => undefined);
+  const reportAttempt =
+    options.onAttempt ??
+    ((state: GatewayAttemptState) => {
+      input.onAttempt?.(state);
+    });
+  const startedAt = Date.now();
+  reportAttempt({
+    servedModel: cli.model.ref,
+    attempts: [{ model: cli.model.ref, status: 'started' }],
+  });
+  try {
+    const dispatch = await broker.dispatch({
+      surface: 'gateway',
+      modelRef: cli.model.ref,
+      messages,
+      tools,
+      signal: input.signal,
+      optionOverride: effectiveOption,
+      onText: (delta) => {
+        void input.onText?.(delta);
+      },
+      inputTokens: Math.ceil(JSON.stringify(input.messages).length / 4),
+    });
+    const { result, connection, model } = dispatch;
+    for (const call of result.toolCalls)
+      await input.onToolCall?.({
+        id: call.id,
+        name: call.name,
+        arguments: JSON.stringify(call.arguments),
+      });
+    const usage = result.usage;
+    const usageReported =
+      usage.inputTokens !== null ||
+      usage.outputTokens !== null ||
+      usage.cachedTokens !== null ||
+      usage.reasoningTokens !== null;
+    reportAttempt({
+      servedModel: model.ref,
+      attempts: [
+        {
+          model: model.ref,
+          status: 'served',
+          durationMs: Date.now() - startedAt,
+          ...(usage.inputTokens === null ? {} : { inputTokens: usage.inputTokens }),
+          ...(usage.outputTokens === null ? {} : { outputTokens: usage.outputTokens }),
+          ...(usage.cachedTokens === null ? {} : { cachedTokens: usage.cachedTokens }),
+          providerId: connection.providerId,
+          connectionId: connection.kind,
+          accountKey: dispatch.accountKey,
+        },
+      ],
+    });
+    return {
+      id: gatewayCompletionId('gw-cli'),
+      model: model.ref,
+      responseModel: result.responseModel,
+      text: result.text,
+      ...(result.toolCalls.length
+        ? {
+            toolCalls: result.toolCalls.map((call) => ({
+              id: call.id,
+              name: call.name,
+              arguments: JSON.stringify(call.arguments),
+            })),
+          }
+        : {}),
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      ...(usage.cachedTokens === null ? {} : { cachedTokens: usage.cachedTokens }),
+      ...(usage.reasoningTokens === null ? {} : { reasoningTokens: usage.reasoningTokens }),
+      usageReported,
+      // The serving Ferry provider identity is the CLI connection/kind, never the credential-source
+      // provider (`dispatch.provider`, e.g. `opencode-go`/`opencode`). Keeping `model.providerId`
+      // (opencode-cli) matches the native CLI producer contract, so the same CLI route aggregates one
+      // provider bucket regardless of invocation surface; `upstreamProvider` describes the upstream
+      // separately. The opaque credential fingerprint is still captured from dispatch.
+      servedProviderId: model.providerId,
+      servedConnectionId: connection.kind,
+      servedAccountKey: dispatch.accountKey,
+      finishReason: result.toolCalls.length ? 'tool_calls' : 'stop',
+    };
+  } catch (error) {
+    if (isCliTransportError(error))
+      throw Object.assign(new Error(error.message), {
+        statusCode: error.kind === 'unsupported_capability' ? 400 : error.statusCode,
+        code: gatewayCliCode(error.kind),
+        cliKind: error.kind,
+        retryAfterMs: error.retryAfterMs,
+        bucketId: error.bucketId,
+        resetAt: error.resetAt,
+        accountKey: error.accountKey,
+      });
+    throw error;
+  }
+}
+
 function compressedMessages(messages: GatewayMessage[], enabled: boolean): GatewayMessage[] {
   if (!enabled) return messages;
   return messages.map((message) => {
@@ -299,6 +606,83 @@ export function createGatewayController(
       })
       .map((model) => model.ref);
   };
+  // The Zen CLI transport is selected for the Gateway surface only when the accepted Zen opt-in says
+  // so; a generic OpenCode CLI opt-in (Go/general use) must never make `opencode/<id>` a CLI alias.
+  const gatewayZenCli = () => zenCliMode(services, 'gateway');
+  /**
+   * Resolve a persisted legacy `opencode/<id>` allowlist entry to the discovered canonical
+   * `opencode-cli/opencode/<id>` route, but only when the Zen CLI transport is selected for the
+   * Gateway surface. Any other ref (or when not selected) is returned unchanged, so an API-selected
+   * Zen ref stays a legitimate API ref and no new route is invented.
+   */
+  const canonicalizeAllowedRef = (ref: string): string => {
+    const id = legacyZenAliasId(ref);
+    return id !== null && gatewayZenCli() ? canonicalZenRef(id) : ref;
+  };
+  /**
+   * True when an allowlist selects a candidate, accepting a legacy Zen alias of the *same* discovered
+   * canonical Zen model. Any other alias, provider or model stays unmatched (blocked).
+   */
+  const allowlistSelectsModel = (allowed: readonly string[], model: ModelInfo): boolean => {
+    if (!allowed.length) return true;
+    if (allowed.includes(model.ref)) return true;
+    const caps = model.cliCapabilities;
+    return (
+      gatewayZenCli() && caps?.upstreamProvider === 'opencode' && allowed.includes(caps.upstreamId)
+    );
+  };
+  /**
+   * The shared router matches profile `allowedModelRefs` against canonical refs only. When the Zen CLI
+   * transport is selected, expand each legacy `opencode/<id>` entry to its discovered canonical
+   * `opencode-cli/opencode/<id>` so the same saved profile keeps selecting the same route. An
+   * undiscovered alias is left as-is (it matches nothing), so no route is invented.
+   */
+  const expandZenAliases = (profile: Profile): Profile => {
+    const refs = profile.allowedModelRefs;
+    if (!refs?.length || !gatewayZenCli()) return profile;
+    const expanded = new Set<string>(refs);
+    for (const ref of refs) {
+      const id = legacyZenAliasId(ref);
+      if (id === null) continue;
+      const canonical = canonicalZenRef(id);
+      if (getCliBroker(services, () => undefined).model(canonical)) expanded.add(canonical);
+    }
+    return expanded.size === refs.length
+      ? profile
+      : { ...profile, allowedModelRefs: [...expanded] as ModelRef[] };
+  };
+  /**
+   * The saved profile CLI default for one exact discovered CLI route.
+   *
+   * A saved Zen profile default may keep its original legacy `opencode/<id>` ref, so it is honored:
+   * the exact requested ref (a direct legacy-alias request) wins, then the discovered canonical ref,
+   * then — only when the Zen CLI transport is selected for this surface — the same route's legacy
+   * alias (the Auto fallback). It never names another model/provider's default and never rewrites the
+   * saved ref. Explicit request controls are layered above this by `resolveCliOption`.
+   */
+  const profileCliDefaultFor = (
+    profileRecord: Profile | undefined,
+    canonicalRef: ModelRef,
+    model: CliModelCapabilities,
+    requestedRef?: ModelRef,
+  ): CliOption | undefined => {
+    const defaults = profileRecord?.cliDefaults;
+    if (!defaults) return undefined;
+    if (requestedRef !== undefined && requestedRef !== canonicalRef) {
+      const requested = defaults[requestedRef];
+      if (requested) return requested;
+    }
+    const canonical = defaults[canonicalRef];
+    if (canonical) return canonical;
+    if (gatewayZenCli() && model.upstreamProvider === 'opencode') {
+      const alias = model.upstreamId;
+      if (legacyZenAliasId(alias) !== null) {
+        const aliased = defaults[alias as ModelRef];
+        if (aliased) return aliased;
+      }
+    }
+    return undefined;
+  };
   const routeableCandidates = async (
     key: GatewayKey,
     profileName: string,
@@ -312,10 +696,25 @@ export function createGatewayController(
       const candidates = [...availableModels()];
       const byRef = new Map(candidates.map((model) => [model.ref, model]));
       const visible = new Set(allModels(candidates));
-      return allowedConcrete.flatMap((ref) => {
-        const model = byRef.get(ref as (typeof candidates)[number]['ref']);
-        return model && visible.has(model.ref) ? [model] : [];
-      });
+      const broker = getCliBroker(services, () => undefined);
+      // A picked-only key routes strictly inside its list. A legacy `opencode/<id>` entry resolves to
+      // the discovered canonical CLI route when Zen CLI is selected, else stays the API ref.
+      const picked: ModelInfo[] = [];
+      const seen = new Set<string>();
+      for (const ref of allowedConcrete) {
+        const canonical = canonicalizeAllowedRef(ref);
+        const api = byRef.get(canonical as (typeof candidates)[number]['ref']);
+        let model: ModelInfo | undefined = api && visible.has(api.ref) ? api : undefined;
+        if (!model) {
+          const cli = broker.model(canonical as ModelRef);
+          if (cli?.connection.surfaces.gateway) model = cliModelInfo(cli.connection, cli.model);
+        }
+        if (model && !seen.has(model.ref)) {
+          seen.add(model.ref);
+          picked.push(model);
+        }
+      }
+      return picked;
     }
     const allProfiles = [...BUILTIN_PROFILES];
     const custom = services.settings.get('profiles');
@@ -337,10 +736,11 @@ export function createGatewayController(
         }
       : undefined;
     if (!selected) return [];
-    const effective =
+    const effective = expandZenAliases(
       selected.id === 'profile_builtin_auto_free' && key.paidBackup && (key.budgetUsd ?? 0) > 0
         ? { ...selected, paidAllowed: true, allowedProviders: 'all' as const }
-        : selected;
+        : selected,
+    );
     const runtimeDeps = await import('./session-deps.js');
     const requestDeps = runtimeDeps.createSessionDependencies(services, () => undefined);
     const eligible = requestDeps.gateway.resolveCandidates(
@@ -348,15 +748,44 @@ export function createGatewayController(
       requiresTools ? 'edit' : 'plan',
       inputTokens,
       requiresTools,
+      'gateway',
     );
-    return allowedConcrete.length
-      ? allowedConcrete.flatMap((ref) => {
-          const model = eligible.find((item) => item.ref === ref);
-          return model ? [model] : [];
-        })
-      : eligible;
+    if (!allowedConcrete.length) return eligible;
+    const matched: ModelInfo[] = [];
+    const matchedRefs = new Set<string>();
+    for (const ref of allowedConcrete) {
+      const canonical = canonicalizeAllowedRef(ref);
+      const model =
+        eligible.find((item) => item.ref === canonical) ??
+        eligible.find((item) => allowlistSelectsModel([ref], item));
+      if (model && !matchedRefs.has(model.ref)) {
+        matchedRefs.add(model.ref);
+        matched.push(model);
+      }
+    }
+    return matched;
   };
   const runtime: GatewayRuntime = {
+    normalizeModel(key, requestedRef) {
+      // Admission normalization for an explicit concrete ref. Only when the Zen CLI transport is
+      // selected for the Gateway surface, and the requested ref is exactly the discovered canonical
+      // `opencode-cli/opencode/<id>` route or its legacy `opencode/<id>` alias, map it to the ref this
+      // key's deduplicated `models()` listing admits. Everything else (API-selected Zen, an unknown or
+      // other alias, a disabled surface, another provider/model) is returned unchanged.
+      if (!gatewayZenCli()) return requestedRef;
+      const resolved = getCliBroker(services, () => undefined).model(requestedRef as ModelRef);
+      if (!resolved) return requestedRef;
+      if (resolved.connection.kind !== 'opencode-cli') return requestedRef;
+      if (resolved.model.upstreamProvider !== 'opencode') return requestedRef;
+      if (!resolved.connection.surfaces.gateway) return requestedRef;
+      const canonical = resolved.model.ref;
+      const alias = resolved.model.upstreamId;
+      if (requestedRef !== canonical && requestedRef !== alias) return requestedRef;
+      // The listing exposes the alias only for a key that allows the legacy ref and not the canonical.
+      const admitsAlias =
+        key.allowedModels.includes(alias) && !key.allowedModels.includes(canonical);
+      return admitsAlias ? alias : canonical;
+    },
     async inputTokenBound(key, model) {
       const requested = model.startsWith('@profile:')
         ? model.slice('@profile:'.length)
@@ -524,18 +953,58 @@ export function createGatewayController(
       const eligible = (await routeableCandidates(key, profileName)).filter((model) =>
         assigned.has(model.ref),
       );
+      const broker = getCliBroker(services, () => undefined);
+      const gatewayConnections = broker
+        .connections()
+        .filter((connection) => connection.surfaces.gateway);
+      // A saved legacy `opencode/<id>` key entry selects the same canonical Zen route when the Zen CLI
+      // transport is selected. List the ref the key actually uses (the alias) so an explicit alias
+      // request validates, and never list the alias plus the canonical as two rows for one route.
+      const listedOverrides = new Map<string, string>();
+      for (const connection of gatewayConnections)
+        for (const model of connection.models)
+          if (
+            !model.hidden &&
+            gatewayZenCli() &&
+            model.upstreamProvider === 'opencode' &&
+            key.allowedModels.includes(model.upstreamId) &&
+            !key.allowedModels.includes(model.ref)
+          )
+            listedOverrides.set(model.ref, model.upstreamId);
+      const listedRef = (ref: string): string => listedOverrides.get(ref) ?? ref;
+      // Gateway-eligible installed-CLI models are direct-connection refs. They are listed here (and
+      // pass the explicit-model admission check) once the Gateway surface is opted in; the broker then
+      // enforces verification, identity and billing before any dispatch. They are not exclusive to
+      // explicit selection: the shared resolver also returns eligible CLI routes for Auto.
+      const cliRefs = gatewayConnections.flatMap((connection) =>
+        connection.models
+          .filter(
+            (model) =>
+              !model.hidden &&
+              (key.allowedModels.length === 0 ||
+                key.allowedModels.includes(model.ref) ||
+                // A saved legacy `opencode/<id>` entry selects the same canonical Zen route when the
+                // Zen CLI transport is selected for the Gateway surface. No other alias matches.
+                (gatewayZenCli() &&
+                  model.upstreamProvider === 'opencode' &&
+                  key.allowedModels.includes(model.upstreamId))),
+          )
+          .map((model) => model.ref),
+      );
       const concreteAllowlist = key.allowedModels.filter(
         (model) => model.includes('/') && !model.startsWith('ferry/'),
       );
       if (key.profile === 'none' && concreteAllowlist.length > 0)
-        return eligible.map((model) => model.ref);
+        return [
+          ...new Set([...eligible.map((model) => listedRef(model.ref)), ...cliRefs.map(listedRef)]),
+        ];
       const hasLogicalAllowlist = key.allowedModels.some(
         (model) => !model.includes('/') && !model.startsWith('ferry/'),
       );
       const concreteModels = eligible.filter((model) =>
-        !concreteAllowlist.length && !hasLogicalAllowlist
-          ? true
-          : concreteAllowlist.includes(model.ref),
+        !concreteAllowlist.length
+          ? !hasLogicalAllowlist
+          : allowlistSelectsModel(concreteAllowlist, model),
       );
       const settings = routingSettings(services);
       const catalogMappings = services.catalog.logicalModels ?? [];
@@ -551,7 +1020,13 @@ export function createGatewayController(
         );
         return resolved.length > 0;
       });
-      return [...concreteModels.map((model) => model.ref), ...availableLogical];
+      return [
+        ...new Set([
+          ...concreteModels.map((model) => listedRef(model.ref)),
+          ...availableLogical,
+          ...cliRefs.map(listedRef),
+        ]),
+      ];
     },
     async complete(input) {
       const started = input.receivedAt ? new Date(input.receivedAt) : services.clock.now();
@@ -645,7 +1120,11 @@ export function createGatewayController(
           base.id,
           () => outputState.visible,
         );
-        const usageReported = result.inputTokens > 0 || result.outputTokens > 0;
+        const servedProviderId =
+          result.servedProviderId ??
+          (result.model.includes('/') ? result.model.slice(0, result.model.indexOf('/')) : null);
+        const usageReported =
+          result.usageReported ?? ((result.inputTokens ?? 0) > 0 || (result.outputTokens ?? 0) > 0);
         if (!usageReported) reserveUnreportedTokens();
         logRequest({
           ...base,
@@ -653,12 +1132,16 @@ export function createGatewayController(
           modelRef: result.model,
           servedModel: result.model,
           attempts: result.attempts ?? attemptState.attempts,
-          providerId: result.model.includes('/')
-            ? result.model.slice(0, result.model.indexOf('/'))
-            : null,
+          providerId: servedProviderId,
+          servedProviderId: result.servedProviderId ?? servedProviderId,
+          servedConnectionId: result.servedConnectionId ?? null,
+          servedAccountKey: result.servedAccountKey ?? null,
+          // The exact standard-API quota event id (absent/null for installed-CLI routes) so a native
+          // consumer can re-record the same event with session attribution instead of double counting.
+          upstreamUsageId: result.upstreamUsageId ?? null,
           status: 'ok',
-          inputTokens: result.inputTokens,
-          outputTokens: result.outputTokens,
+          inputTokens: result.inputTokens ?? 0,
+          outputTokens: result.outputTokens ?? 0,
           latencyMs: latencyMs(),
           error: null,
           outcome: 'completed',
@@ -666,6 +1149,12 @@ export function createGatewayController(
           queueWaitMs: input.queueWaitMs ?? 0,
           usageReported,
           cachedTokens: result.cachedTokens ?? 0,
+          reportedUsage: {
+            inputTokens: result.inputTokens ?? null,
+            outputTokens: result.outputTokens ?? null,
+            cachedTokens: result.cachedTokens ?? null,
+            reasoningTokens: result.reasoningTokens ?? null,
+          },
           ...cost(),
           constraints,
         });
@@ -714,9 +1203,48 @@ export function createGatewayController(
     hasVisibleOutput: () => boolean,
   ): ReturnType<GatewayRuntime['complete']> {
     const requestStarted = Date.now();
+    const profileValues = services.settings.get('profiles');
+    const allProfileRecords: Profile[] = [
+      ...BUILTIN_PROFILES,
+      ...(Array.isArray(profileValues) ? (profileValues as Profile[]) : []),
+    ];
     const selectedProfile = input.model.startsWith('@profile:')
       ? input.model.slice('@profile:'.length)
       : input.key.profile;
+    const selectedProfileRecord = allProfileRecords.find(
+      (entry) => entry.id === profileId(selectedProfile),
+    );
+    // An explicit installed-CLI model is a direct connection: same Core broker, same admission
+    // policy and the original caller tool calls returned for execution on the caller side.
+    if (!input.model.startsWith('@profile:')) {
+      const cli = getCliBroker(services, () => undefined).model(input.model as ModelRef);
+      if (cli) {
+        // Prefer the original requested ref (a legacy `opencode/<id>` may have been normalized to the
+        // admitted canonical ref for transport admission) so an exact saved alias default still wins.
+        const requestedDefaultsRef =
+          input.requestedModel !== undefined &&
+          !input.requestedModel.startsWith('ferry/') &&
+          !input.requestedModel.startsWith('@profile:')
+            ? (input.requestedModel as ModelRef)
+            : (input.model as ModelRef);
+        const profileCliDefault = profileCliDefaultFor(
+          selectedProfileRecord,
+          cli.model.ref,
+          cli.model,
+          requestedDefaultsRef,
+        );
+        return await routeCliCompletion(services, input, cli, {
+          ...(profileCliDefault ? { profileCliDefault } : {}),
+        });
+      }
+    }
+    // Fast/priority is not offered in this beta: no standard-API or installed-CLI route can bound its
+    // separately-billed charge with a known price or spending reservation. Reject explicitly before
+    // routing rather than silently ignoring the control or inventing a zero charge.
+    if (input.serviceTier === 'fast')
+      throw unsupportedCli(
+        'Fast/priority service_tier is not supported in this beta: Ferry cannot bound its separately-billed charge with a known price or spending reservation, so it will not be dispatched. Use standard/auto or omit service_tier.',
+      );
     const visibleModels = new Set(allModels());
     const candidates = [...availableModels()].filter((model) => visibleModels.has(model.ref));
     const runtimeDeps = await import('./session-deps.js');
@@ -769,11 +1297,13 @@ export function createGatewayController(
       (model) =>
         keyEligible.has(model.ref) &&
         requestedEligible.has(model.ref) &&
-        (!hasConcreteAllowlist(input.key) || input.key.allowedModels.includes(model.ref)),
+        (!hasConcreteAllowlist(input.key) || allowlistSelectsModel(input.key.allowedModels, model)),
     );
     if (input.requestedModel === 'ferry/auto-free') {
       const providers = requestDeps.providers();
       ordered = ordered.filter((model) => {
+        // Installed-CLI free capacity is classified by its own billing, not an API price lookup.
+        if (model.cliConnectionId) return model.free;
         const provider = providers.find((provider) => provider.id === model.providerId);
         return (
           !!provider &&
@@ -785,8 +1315,28 @@ export function createGatewayController(
       ordered = ordered.filter(
         (model) => model.toolCalling && model.capability?.toolCall !== false,
       );
-    const effort = input.effort;
-    if (effort) ordered = ordered.filter((model) => model.reasoningEfforts?.includes(effort));
+    // A raw native effort token (e.g. `ultra`) is not a standard-API control. Validate it per route:
+    // standard-API routes only accept the narrow API enum, CLI routes accept any advertised token the
+    // bridge can actually run. Never reject the whole request before the CLI pool is considered.
+    const explicitEffort = input.effort;
+    const narrowEffort =
+      explicitEffort === undefined ? undefined : EffortSchema.safeParse(explicitEffort);
+    if (explicitEffort !== undefined && narrowEffort && !narrowEffort.success) {
+      ordered = ordered.filter((model) => Boolean(model.cliConnectionId));
+    } else if (narrowEffort?.success) {
+      const token = narrowEffort.data;
+      ordered = ordered.filter((model) =>
+        model.cliConnectionId
+          ? (model.cliCapabilities?.efforts ?? []).includes(token) &&
+            model.cliCapabilities?.unsupportedEfforts?.[token] === undefined
+          : model.reasoningEfforts?.includes(token),
+      );
+    } else {
+      // No explicit effort: a CLI route the bridge cannot run for its *default* effort is still
+      // eligible (the reported default is used), so no filter is applied here.
+    }
+    // The narrow API effort is the only value a standard-API adapter can honor.
+    const effort = narrowEffort?.success ? narrowEffort.data : undefined;
     const containsImage = input.messages.some(
       (message) =>
         Array.isArray(message.content) &&
@@ -795,22 +1345,19 @@ export function createGatewayController(
         ),
     );
     if (containsImage) {
-      ordered = ordered.filter((candidate) => candidate.capability?.vision === true);
+      // The installed-CLI bridge is text-only; only vision-capable standard-API routes remain.
+      ordered = ordered.filter(
+        (candidate) => !candidate.cliConnectionId && candidate.capability?.vision === true,
+      );
       if (!ordered.length)
         throw Object.assign(new Error('No eligible upstream model supports image input'), {
           name: 'AI_InvalidPromptError',
         });
     }
     const sticky = stickyRoutes.get(input.sessionHint);
-    const profileValues = services.settings.get('profiles');
-    const selectedProfileRecord = [
-      ...BUILTIN_PROFILES,
-      ...(Array.isArray(profileValues) ? (profileValues as typeof BUILTIN_PROFILES) : []),
-    ].find((entry) => entry.id === profileId(selectedProfile));
-    const keyProfileRecord = [
-      ...BUILTIN_PROFILES,
-      ...(Array.isArray(profileValues) ? (profileValues as typeof BUILTIN_PROFILES) : []),
-    ].find((entry) => entry.id === profileId(input.key.profile));
+    const keyProfileRecord = allProfileRecords.find(
+      (entry) => entry.id === profileId(input.key.profile),
+    );
     const tightest = (a: number | null | undefined, b: number | null | undefined) =>
       a == null ? (b ?? null) : b == null ? a : Math.min(a, b);
     const affinityProviderId =
@@ -834,36 +1381,193 @@ export function createGatewayController(
               ...ordered.filter((item) => !matchesAffinity(item) && item.ref !== sticky.modelRef),
             ];
     }
-    if (!ordered.length)
+    // Classify each already-ranked candidate exactly once. The shared resolver placed free API/CLI
+    // routes first and the Included CLI band after; re-band so the global Auto order is
+    // free API/CLI -> Included subscription -> separately authorized paid API backup. There is no
+    // second broker pool: every route comes from the same key-profile ∩ requested-profile candidate
+    // set that already applied all profile provider/model exclusions and the concrete allowlist.
+    const freeOrdered = ordered.filter((model) => model.free);
+    const includedOrdered = ordered.filter((model) => !model.free && model.cliConnectionId);
+    const paidApiOrdered = ordered.filter((model) => !model.free && !model.cliConnectionId);
+    // Profile/Auto routing gets the global banding; a logical alias keeps the shared ranking; an
+    // explicit concrete standard-API model never pulls CLI fallbacks it did not select.
+    const banded = isProfile
+      ? [...freeOrdered, ...includedOrdered, ...paidApiOrdered]
+      : explicit
+        ? ordered.filter((model) => !model.cliConnectionId)
+        : ordered;
+    if (!banded.length)
       throw Object.assign(
         new Error(
-          'No upstream model meets this key, profile and capability policy. Connect a provider or choose a supported request.',
+          explicitEffort !== undefined
+            ? `No eligible route supports the requested reasoning_effort "${explicitEffort}". Pick another effort or a model that advertises it.`
+            : 'No upstream model meets this key, profile and capability policy. Connect a provider or choose a supported request.',
         ),
         { code: 'unsupported_request', statusCode: 400 },
       );
+    interface GatewayRoute {
+      kind: 'api' | 'cli';
+      model: ModelInfo;
+    }
     let lastError: unknown;
     const now = services.clock.now().getTime();
-    const withKeyFallback = ordered.flatMap((model) => {
-      if (permitsKeylessProvider(services, model.providerId)) return [model];
-      const count = services.providerKeyEntries
-        .list(model.providerId)
-        .filter(
-          (key) =>
-            key.enabled &&
-            key.status !== 'invalid' &&
-            (key.status !== 'disabled' ||
-              Boolean(key.cooldownUntil && Date.parse(key.cooldownUntil) <= now)) &&
-            (key.status !== 'rate_limited' ||
-              !key.cooldownUntil ||
-              Date.parse(key.cooldownUntil) <= now),
-        ).length;
-      return Array.from({ length: Math.max(1, count) }, () => model);
-    });
+    // A CLI route dispatches through the shared broker (never an API adapter) and is a single
+    // attempt; an API route keeps the existing per-key fallback expansion.
+    const routes: GatewayRoute[] = [];
+    for (const model of banded) {
+      if (model.cliConnectionId) {
+        routes.push({ kind: 'cli', model });
+        continue;
+      }
+      const usableKeys = permitsKeylessProvider(services, model.providerId)
+        ? 1
+        : services.providerKeyEntries
+            .list(model.providerId)
+            .filter(
+              (key) =>
+                key.enabled &&
+                key.status !== 'invalid' &&
+                (key.status !== 'disabled' ||
+                  Boolean(key.cooldownUntil && Date.parse(key.cooldownUntil) <= now)) &&
+                (key.status !== 'rate_limited' ||
+                  !key.cooldownUntil ||
+                  Date.parse(key.cooldownUntil) <= now),
+            ).length;
+      for (let attempt = 0; attempt < Math.max(1, usableKeys); attempt += 1)
+        routes.push({ kind: 'api', model });
+    }
     const lastAttemptHistory: GatewayAttempt[] = [];
-    for (const model of withKeyFallback.slice(0, 5)) {
+    // Abortable short wait: a cancellation or an expired deadline wakes the sleep immediately instead
+    // of parking until the retry timer elapses.
+    const waitAbortable = (ms: number): Promise<void> =>
+      new Promise<void>((resolve, reject) => {
+        const abortError = (): Error =>
+          input.signal.reason instanceof Error
+            ? input.signal.reason
+            : new Error('Request cancelled.');
+        if (input.signal.aborted) {
+          reject(abortError());
+          return;
+        }
+        const onAbort = (): void => {
+          clearTimeout(timer);
+          reject(abortError());
+        };
+        const timer = setTimeout(() => {
+          input.signal.removeEventListener('abort', onAbort);
+          resolve();
+        }, ms);
+        input.signal.addEventListener('abort', onAbort, { once: true });
+      });
+    const attemptCliRoute = async (resolved: {
+      connection: CliConnection;
+      model: CliModelCapabilities;
+    }): Promise<GatewayCompletion> => {
+      const attemptStarted = Date.now();
+      lastAttemptHistory.push({ model: resolved.model.ref, status: 'started' });
+      input.onAttempt?.({ servedModel: resolved.model.ref, attempts: [...lastAttemptHistory] });
+      try {
+        const profileCliDefault = profileCliDefaultFor(
+          selectedProfileRecord,
+          resolved.model.ref,
+          resolved.model,
+        );
+        const completion = await routeCliCompletion(services, input, resolved, {
+          ...(profileCliDefault ? { profileCliDefault } : {}),
+          onAttempt: () => undefined,
+        });
+        lastAttemptHistory[lastAttemptHistory.length - 1] = {
+          model: resolved.model.ref,
+          status: 'served',
+          durationMs: Date.now() - attemptStarted,
+          ...(completion.inputTokens == null ? {} : { inputTokens: completion.inputTokens }),
+          ...(completion.outputTokens == null ? {} : { outputTokens: completion.outputTokens }),
+          ...(completion.cachedTokens == null ? {} : { cachedTokens: completion.cachedTokens }),
+          providerId: completion.servedProviderId ?? null,
+          connectionId: completion.servedConnectionId ?? null,
+          accountKey: completion.servedAccountKey ?? null,
+        };
+        input.onAttempt?.({ servedModel: completion.model, attempts: [...lastAttemptHistory] });
+        return completion;
+      } catch (error) {
+        const details =
+          error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+        lastAttemptHistory[lastAttemptHistory.length - 1] = {
+          model: resolved.model.ref,
+          status: 'failed',
+          reason: error instanceof Error ? error.message : 'Installed-CLI route failed.',
+          durationMs: Date.now() - attemptStarted,
+          providerId: resolved.connection.providerId,
+          connectionId: resolved.connection.kind,
+          ...(typeof details.accountKey === 'string' || details.accountKey === null
+            ? { accountKey: details.accountKey }
+            : {}),
+          ...(typeof details.bucketId === 'string' || details.bucketId === null
+            ? { bucketId: details.bucketId }
+            : {}),
+          ...(typeof details.resetAt === 'string' || details.resetAt === null
+            ? { resetAt: details.resetAt }
+            : {}),
+          ...(typeof details.retryAfterMs === 'number' || details.retryAfterMs === null
+            ? { retryAfterMs: details.retryAfterMs }
+            : {}),
+        };
+        input.onAttempt?.({ servedModel: resolved.model.ref, attempts: [...lastAttemptHistory] });
+        throw error;
+      }
+    };
+    for (const route of routes.slice(0, routes.some((item) => item.kind === 'cli') ? 8 : 5)) {
       input.signal.throwIfAborted();
       const remainingMs = 150_000 - (Date.now() - requestStarted);
       if (remainingMs <= 0) throw new GatewayTimeoutError('Gateway request deadline reached.');
+      if (route.kind === 'cli') {
+        const resolved = getCliBroker(services, () => undefined).model(route.model.ref);
+        if (!resolved) {
+          lastAttemptHistory.push({
+            model: route.model.ref,
+            status: 'skipped',
+            reason: 'Installed-CLI model is no longer available.',
+          });
+          input.onAttempt?.({ servedModel: route.model.ref, attempts: [...lastAttemptHistory] });
+          continue;
+        }
+        try {
+          const completion = await attemptCliRoute(resolved);
+          return { ...completion, attempts: [...lastAttemptHistory] };
+        } catch (error) {
+          if (input.signal.aborted || hasVisibleOutput()) throw error;
+          const details =
+            error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+          const retryWait =
+            details.cliKind === 'temporary_rate_limit'
+              ? shortWaitMs(
+                  {
+                    kind: 'temporary_rate_limit',
+                    retryAfterMs:
+                      typeof details.retryAfterMs === 'number' ? details.retryAfterMs : null,
+                  },
+                  150_000 - (Date.now() - requestStarted),
+                  30_000,
+                )
+              : null;
+          if (retryWait !== null) {
+            await waitAbortable(retryWait);
+            input.signal.throwIfAborted();
+            if (hasVisibleOutput()) throw error;
+            try {
+              const completion = await attemptCliRoute(resolved);
+              return { ...completion, attempts: [...lastAttemptHistory] };
+            } catch (retryError) {
+              if (hasVisibleOutput()) throw retryError;
+              lastError = retryError;
+              continue;
+            }
+          }
+          lastError = error;
+          continue;
+        }
+      }
+      const model = route.model;
       if (services.providers.get(model.providerId)?.enabled === false) {
         lastAttemptHistory.push({
           model: model.ref,
@@ -881,8 +1585,10 @@ export function createGatewayController(
         });
         continue;
       }
-      const cliTransport = providerId === 'opencode' && model.free && zenCliMode(services);
-      const entries = cliTransport ? [] : services.providerKeyEntries.list(providerId);
+      // Every standard-API route is dispatched through the API adapters. The obsolete synthetic
+      // `ZEN_CLI_BASE_URL`/`zenFerryKey` transport is removed: installed-CLI (including Zen CLI)
+      // routes dispatch through the shared broker above, and an API-selected Zen model stays API.
+      const entries = services.providerKeyEntries.list(providerId);
       if (!entries.length && !health.tracker.available(providerId, model.ref, providerId)) continue;
       const stickyKeyId = stickyRoutes.get(input.sessionHint)?.providerKeyId;
       const preferredKeyId =
@@ -902,13 +1608,11 @@ export function createGatewayController(
       );
       const oauth = oauthModelCatalog.some((entry) => entry.ref === model.ref);
       const legacyKeyRef = services.providerKeys.get(providerId)?.keyringRef;
-      const key = cliTransport
-        ? await zenFerryKey(services)
-        : providerKey
-          ? await services.secrets.get(providerKey.keyringRef)
-          : services.providerKeyEntries.list(providerId).length === 0 && legacyKeyRef
-            ? await services.secrets.get(legacyKeyRef)
-            : undefined;
+      const key = providerKey
+        ? await services.secrets.get(providerKey.keyringRef)
+        : services.providerKeyEntries.list(providerId).length === 0 && legacyKeyRef
+          ? await services.secrets.get(legacyKeyRef)
+          : undefined;
       input.signal.throwIfAborted();
       if (!key && !permitsKeylessProvider(services, providerId) && !oauth) {
         lastError = Object.assign(
@@ -917,10 +1621,7 @@ export function createGatewayController(
         );
         continue;
       }
-      const baseUrl =
-        providerId === 'opencode' && model.free && zenCliMode(services)
-          ? ZEN_CLI_BASE_URL
-          : providerBaseUrl(services, providerId);
+      const baseUrl = providerBaseUrl(services, providerId);
       const attemptStarted = Date.now();
       const attempts = lastAttemptHistory;
       attempts.push({ model: model.ref, status: 'started' });
@@ -1028,7 +1729,7 @@ export function createGatewayController(
             const chatInput = {
               model: model.ref,
               modelInfo: model,
-              ...(input.effort ? { effort: input.effort } : {}),
+              ...(effort ? { effort } : {}),
               apiKey: key ?? '',
               sessionId: input.sessionHint,
               messages: routedMessages,
@@ -1153,8 +1854,11 @@ export function createGatewayController(
                   },
                   model,
                 );
+        // The exact, nonsecret standard-API quota usage event id. Prefer the spend reservation's id;
+        // otherwise use a unique per-request id (never a timestamp-only key that could collide).
+        const upstreamUsageId = reservation?.id ?? `gateway:${ledgerRequestId}`;
         services.quota.recordUsage({
-          id: reservation?.id ?? `gateway:${input.key.id}:${timestamp}`,
+          id: upstreamUsageId,
           costUsd: chargedUsd,
           providerId,
           modelRef: model.ref,
@@ -1184,9 +1888,10 @@ export function createGatewayController(
         };
         input.onAttempt?.({ servedModel: model.ref, attempts: [...attempts] });
         return {
-          id: `gw-${String(Date.now())}`,
+          id: gatewayCompletionId('gw'),
           model: model.ref,
           ...result,
+          upstreamUsageId,
           ...(input.traceId ? { traceId: input.traceId } : {}),
           attempts,
         };

@@ -37,7 +37,11 @@ describe('canonical protocol conversions', () => {
     expect(
       openAiChatToCanonical({ model: 'custom/model', messages: [], reasoning_effort: 'invalid' })
         .effort,
-    ).toBeUndefined();
+    ).toBe('invalid');
+    expect(
+      openAiChatToCanonical({ model: 'custom/model', messages: [], reasoning_effort: 'ultra' })
+        .effort,
+    ).toBe('ultra');
   });
   it('normalizes OpenAI Chat, Anthropic Messages, Responses, and Gemini requests', () => {
     const chat = openAiChatToCanonical(golden.chat as Record<string, unknown>);

@@ -63,6 +63,7 @@ import {
   type ModelInfo,
   type ModelRef,
   type ProviderFailureFamily,
+  type ProviderId,
   type Profile,
   type Session,
   type TaskRecord,
@@ -142,6 +143,32 @@ export interface ModelToolCall {
   input: unknown;
   providerOptions?: Record<string, Record<string, unknown>>;
 }
+/**
+ * Actual usage a provider/CLI reported for one step. A dimension the source did not report is
+ * `null`; a reported zero stays `0`. Kept separate from Ferry's token estimates so missing usage is
+ * never recorded as a zero.
+ */
+export interface ReportedStepUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  reasoningTokens: number | null;
+}
+/**
+ * Authoritative generation/dispatch-captured provenance for a step, returned by the generator.
+ *
+ * The values reflect what actually produced the step at dispatch time (a native CLI account or a
+ * Gateway outcome), captured before any `await` — never looked up afterwards, so an account that
+ * changes underneath the connection does not rewrite a completed step's attribution. `accountKey` is
+ * opaque, non-secret metadata (for example `<kind>:<fingerprint>`); it is never credentials.
+ */
+export interface StepProducer {
+  modelRef: ModelRef;
+  providerId: ProviderId;
+  connectionId: string | null;
+  accountKey: string | null;
+  requestedModelRef?: ModelRef;
+}
 export interface GeneratedStep {
   text?: string;
   reasoning?: string;
@@ -152,6 +179,10 @@ export interface GeneratedStep {
   toolCalls?: ModelToolCall[];
   inputTokens?: number;
   outputTokens?: number;
+  /** Reported usage with nullable dimensions; absent for providers that only estimate. */
+  reportedUsage?: ReportedStepUsage;
+  /** Actual producer captured at generation time; absent for ordinary API providers. */
+  producer?: StepProducer;
   finishReason?: string;
   responseModel?: string;
 }
@@ -2297,29 +2328,44 @@ export class AgentLoop {
           }
         }
         this.activeMessageParts.delete(sessionId);
+        // Actual producer captured by the generator at dispatch time. Ordinary API providers leave
+        // it unset and keep the routed model; a logical `gateway/<keyId>` is never an LLM producer.
+        const producer = generated.producer;
+        const producedByRef: ModelRef | undefined =
+          producer?.modelRef ?? (isLogicalGatewayRef(model.ref) ? undefined : model.ref);
+        // Prefer a source-reported usage value: a reported zero is kept as 0, an unreported
+        // dimension is omitted (never coerced to 0) so the durable aggregate can show "Not reported".
+        // A known generator token count is a legacy estimate; a missing one stays omitted.
+        const reported = generated.reportedUsage;
+        const reportedInput = reported ? reported.inputTokens : (generated.inputTokens ?? null);
+        const reportedOutput = reported ? reported.outputTokens : (generated.outputTokens ?? null);
+        const reportedReasoning = reported ? reported.reasoningTokens : generated.reasoningTokens;
+        const reportedCached = reported?.cachedTokens;
         this.options.onUsage?.({
           id: pendingPaidUsageId ?? newId('usage'),
-          providerId: model.providerId,
-          modelRef: model.ref,
+          providerId: producer?.providerId ?? model.providerId,
+          modelRef: producer?.modelRef ?? model.ref,
           occurredAt: new Date().toISOString(),
           sessionId,
           stepKind,
-          inputTokens: generated.inputTokens ?? 0,
-          outputTokens: generated.outputTokens ?? 0,
-          ...(generated.reasoningTokens === undefined
-            ? {}
-            : { reasoningTokens: generated.reasoningTokens }),
+          // Connection/account come from the captured producer only; never a logical Gateway key.
+          ...(producer
+            ? { connectionId: producer.connectionId, accountKey: producer.accountKey }
+            : {}),
+          ...(producer?.requestedModelRef ? { requestedModelRef: producer.requestedModelRef } : {}),
+          ...(reportedInput === null ? {} : { inputTokens: reportedInput }),
+          ...(reportedOutput === null ? {} : { outputTokens: reportedOutput }),
+          ...(reportedReasoning == null ? {} : { reasoningTokens: reportedReasoning }),
+          ...(reportedCached == null ? {} : { cachedTokens: reportedCached }),
           latencyMs: stepDurationMs,
           status: 'success',
         });
         this.emitStructuredEvent(sessionId, {
           id: newId('event'),
           type: 'usage',
-          inputTokens: generated.inputTokens ?? 0,
-          outputTokens: generated.outputTokens ?? 0,
-          ...(generated.reasoningTokens === undefined
-            ? {}
-            : { reasoningTokens: generated.reasoningTokens }),
+          ...(reportedInput === null ? {} : { inputTokens: reportedInput }),
+          ...(reportedOutput === null ? {} : { outputTokens: reportedOutput }),
+          ...(reportedReasoning == null ? {} : { reasoningTokens: reportedReasoning }),
           durationMs: stepDurationMs,
           timestamp: new Date().toISOString(),
         });
@@ -2348,7 +2394,7 @@ export class AgentLoop {
               type: 'reasoning',
               id: PartIdSchema.parse(newId('part')),
               text: generated.reasoning ?? '',
-              producedBy: model.ref,
+              ...(producedByRef ? { producedBy: producedByRef } : {}),
               ...(generated.reasoningProviderMetadata
                 ? { providerMetadata: generated.reasoningProviderMetadata }
                 : {}),
@@ -2356,12 +2402,23 @@ export class AgentLoop {
           ];
         if (generated.text && streamedText)
           parts = parts.map((part) =>
-            part.id === streamedTextPartId ? { ...part, text: generated.text ?? '' } : part,
+            part.id === streamedTextPartId
+              ? {
+                  ...part,
+                  text: generated.text ?? '',
+                  ...(producedByRef ? { producedBy: producedByRef } : {}),
+                }
+              : part,
           );
         else if (generated.text)
           parts = [
             ...parts,
-            { type: 'text', id: PartIdSchema.parse(newId('part')), text: generated.text },
+            {
+              type: 'text',
+              id: PartIdSchema.parse(newId('part')),
+              text: generated.text,
+              ...(producedByRef ? { producedBy: producedByRef } : {}),
+            },
           ];
         assistant = {
           ...assistant,
@@ -2534,7 +2591,7 @@ export class AgentLoop {
             id: PartIdSchema.parse(newId('part')),
             ...(call.toolCallId || call.id ? { toolCallId: call.toolCallId ?? call.id } : {}),
             ...(call.providerOptions ? { providerOptions: call.providerOptions } : {}),
-            producedBy: model.ref,
+            ...(producedByRef ? { producedBy: producedByRef } : {}),
             tool: call.name,
             title: definition.title,
             args: parsed.value as Record<string, unknown>,
@@ -3715,6 +3772,11 @@ export function createStepGenerator(
   };
 }
 
+/** A logical Gateway key ref (`gateway/<keyId>`) routes a request but is never itself an LLM. */
+function isLogicalGatewayRef(ref: string): boolean {
+  return ref.startsWith('gateway/');
+}
+
 function toolSchemaForEstimate(schema: z.ZodType): unknown {
   try {
     return z.toJSONSchema(schema);
@@ -4318,10 +4380,26 @@ function errorInput(error: unknown, now = Date.now()): Parameters<typeof classif
     headers instanceof Headers || (headers && typeof headers === 'object')
       ? retryDelayFromHeaders(headers as Headers | Record<string, string | undefined>, now)
       : null;
+  // A shared CLI transport error carries its own `kind` (exhausted_capacity/temporary_rate_limit/
+  // authentication/timeout). Map it onto the same HTTP-shaped classification the router already
+  // applies, so native CLI failures reuse the existing quota/rate-limit/auth families — no second
+  // policy is introduced.
+  const cliKind = typeof candidate.kind === 'string' ? candidate.kind : undefined;
+  const cliStatus =
+    cliKind === 'exhausted_capacity' || cliKind === 'temporary_rate_limit'
+      ? 429
+      : cliKind === 'authentication'
+        ? 401
+        : cliKind === 'timeout'
+          ? 408
+          : undefined;
   return {
-    status: candidate.status,
-    statusCode: candidate.statusCode ?? candidate.response?.status,
-    code: candidate.code ?? candidate.data?.error?.code,
+    status: candidate.status ?? cliStatus,
+    statusCode: candidate.statusCode ?? candidate.response?.status ?? cliStatus,
+    code:
+      candidate.code ??
+      candidate.data?.error?.code ??
+      (cliKind === 'exhausted_capacity' ? 'quota_exhausted' : undefined),
     type: candidate.type ?? candidate.data?.error?.type,
     message: candidate.data?.error?.message ?? candidate.message,
     responseBody: candidate.data ? JSON.stringify(candidate.data) : candidate.responseBody,

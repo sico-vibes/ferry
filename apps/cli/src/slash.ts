@@ -29,6 +29,7 @@ export const SLASH_COMMANDS = [
   { name: '/model', usage: '[number|ref]', description: 'Choose a verified model or Gateway key' },
   { name: '/profile', usage: '[name]', description: 'Choose a routing profile' },
   { name: '/effort', description: 'Choose supported reasoning effort' },
+  { name: '/speed', usage: '[standard|fast]', description: 'Choose native CLI standard or fast' },
   { name: '/sessions', description: 'Search project chats and Recents, then resume' },
   { name: '/project', description: 'Switch project or choose No project' },
   { name: '/settings', description: 'Change saved Ferry settings' },

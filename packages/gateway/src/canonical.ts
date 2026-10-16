@@ -1,5 +1,5 @@
 import type { GatewayMessage } from './index.js';
-import { EffortSchema, type Effort } from '@ferry/shared';
+import { CliEffortSchema, type CliEffort } from '@ferry/shared';
 
 export type CanonicalPart =
   | { type: 'text'; text: string }
@@ -33,29 +33,55 @@ export interface CanonicalRequest {
   toolChoice?: unknown;
   maxTokens?: number;
   temperature?: number;
-  effort?: Effort;
+  /** Raw reasoning-effort token, preserved verbatim (native CLI tokens included, not enum-coerced). */
+  effort?: CliEffort;
   stream: boolean;
 }
-function canonicalReasoningEffort(input: Record<string, unknown>): { effort?: Effort } {
+/**
+ * An explicit reasoning control that is not a valid effort token is a 400, never silently dropped.
+ * (Whether a valid token is *supported* is checked against the resolved model at dispatch time.)
+ */
+function malformedEffort(value: unknown): never {
+  throw Object.assign(
+    new Error(
+      `Unsupported reasoning effort ${JSON.stringify(value)}. Provide a lowercase effort token such as low, medium, high, xhigh, max, none, or a token advertised by the target model.`,
+    ),
+    { code: 'unsupported_request', statusCode: 400 },
+  );
+}
+/**
+ * Preserve the caller's raw reasoning-effort token. Advertised native tokens (e.g. `ultra`, `none`)
+ * are kept instead of being collapsed into the legacy six-value API enum.
+ */
+function canonicalReasoningEffort(input: Record<string, unknown>): { effort?: CliEffort } {
   const nested =
     input.reasoning && typeof input.reasoning === 'object'
       ? (input.reasoning as Record<string, unknown>).effort
       : undefined;
-  const parsed = EffortSchema.safeParse(input.reasoning_effort ?? nested);
-  return parsed.success ? { effort: parsed.data } : {};
+  const raw = input.reasoning_effort ?? nested;
+  if (raw === undefined || raw === null) return {};
+  const parsed = CliEffortSchema.safeParse(raw);
+  if (!parsed.success) malformedEffort(raw);
+  return { effort: parsed.data };
 }
-export function anthropicReasoningEffort(input: Record<string, unknown>): { effort?: Effort } {
-  const thinking =
-    input.thinking && typeof input.thinking === 'object'
-      ? (input.thinking as Record<string, unknown>)
-      : undefined;
-  if (!thinking || thinking.type === 'disabled') return {};
+export function anthropicReasoningEffort(input: Record<string, unknown>): { effort?: CliEffort } {
   const output =
     input.output_config && typeof input.output_config === 'object'
       ? (input.output_config as Record<string, unknown>)
       : undefined;
-  const effort = EffortSchema.safeParse(output?.effort);
-  if (effort.success) return { effort: effort.data };
+  const rawEffort = output?.effort;
+  let explicit: CliEffort | undefined;
+  if (rawEffort !== undefined && rawEffort !== null) {
+    const parsed = CliEffortSchema.safeParse(rawEffort);
+    if (!parsed.success) malformedEffort(rawEffort);
+    explicit = parsed.data;
+  }
+  const thinking =
+    input.thinking && typeof input.thinking === 'object'
+      ? (input.thinking as Record<string, unknown>)
+      : undefined;
+  if (!thinking || thinking.type === 'disabled') return explicit ? { effort: explicit } : {};
+  if (explicit !== undefined) return { effort: explicit };
   if (thinking.type === 'adaptive') return { effort: 'high' };
   if (thinking.type === 'enabled') {
     const budget = Number(thinking.budget_tokens);

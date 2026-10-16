@@ -2,6 +2,7 @@ import type { FerryEvents } from '../events.js';
 import type { SessionId, Message, MessagePart } from '@ferry/shared';
 import type { Clock } from './clock.js';
 import type { MockStore } from './types.js';
+import { usageAttribution } from './usage-producer.js';
 export interface ScenarioRunner {
   run(ctx: {
     sessionId: SessionId;
@@ -55,5 +56,18 @@ export const echoRunner: ScenarioRunner = {
     };
     store.messages.get(sessionId)?.push(message);
     emit('session.message', { sessionId, message });
+    if (session.modelRef)
+      store.recordUsage({
+        eventId: store.nextId('usage'),
+        sessionId,
+        ...usageAttribution(session.modelRef),
+        connectionId: null,
+        accountKey: null,
+        inputTokens: null,
+        outputTokens: null,
+        cachedTokens: null,
+        reasoningTokens: null,
+        occurredAt: clock.now().toISOString(),
+      });
   },
 };

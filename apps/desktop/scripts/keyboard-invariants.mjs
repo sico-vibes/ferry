@@ -101,6 +101,24 @@ export async function keyboardJourneys(browser, url, options) {
     const allow = page.getByRole('button', { name: 'Allow once', exact: true });
     await activate(page, allow);
     await allow.waitFor({ state: 'hidden' });
+    const conversationUrl = page.url();
+    const modelUsage = page.getByRole('button', { name: /^Model usage for / }).first();
+    await activate(page, modelUsage);
+    await page.getByRole('dialog', { name: 'Conversation usage' }).waitFor();
+    assert.equal(page.url(), conversationUrl, 'Opening usage navigated away from the conversation');
+    await page.keyboard.press('Escape');
+    await page.getByRole('dialog', { name: 'Conversation usage' }).waitFor({ state: 'hidden' });
+    // Dialog teardown restores focus asynchronously after its content is removed.
+    await page.waitForFunction(
+      (element) => element === document.activeElement,
+      await modelUsage.elementHandle(),
+      { timeout: 2000 },
+    );
+    assert.equal(
+      await modelUsage.evaluate((element) => element === document.activeElement),
+      true,
+      'Conversation usage did not restore focus to its model icon',
+    );
     // No endlessly running motion survives the reduced-motion preference.
     assert.equal(
       await page.evaluate(

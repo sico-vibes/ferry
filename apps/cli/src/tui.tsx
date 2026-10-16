@@ -2,8 +2,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import Spinner from 'ink-spinner';
 import type { FerryClient } from '@ferry/client';
-import { ModelRefSchema } from '@ferry/shared';
+import { ModelRefSchema, redactKnownSecretText } from '@ferry/shared';
 import type {
+  CliBilling,
+  CliConnection,
+  CliConnectionSettings,
+  CliModelCapabilities,
+  CliOption,
+  CliSpeed,
   Effort,
   Message,
   Profile,
@@ -16,10 +22,11 @@ import type {
 import { bad, good, gradient, muted, warn } from './format.js';
 import { executeSlashCommand, parseSlashCommand } from './slash.js';
 import { controlCPresses } from './interrupt.js';
-import { Picker, type PickerOption } from './components/picker.js';
+import { Picker, type PickerFilterMode, type PickerOption } from './components/picker.js';
 import { Composer } from './components/composer.js';
 import { SettingsPanel } from './components/settings-panel.js';
 import { ConnectPanel } from './components/connect-panel.js';
+import { CliOptionsPanel } from './components/cli-options-panel.js';
 import { StatusBar } from './components/status-bar.js';
 import { Transcript, type TranscriptEntry } from './components/transcript.js';
 import {
@@ -30,6 +37,21 @@ import {
   sessionOptions,
 } from './picker-options.js';
 import { fileMentions, readAttachments } from './attachments.js';
+import {
+  cliBrandName,
+  cliEffortOptionRows,
+  cliModelSelectability,
+  cliSpeedOptionRows,
+  connectionOptionLayer,
+  decodeCliModelValue,
+  findCliModel,
+  findConnection,
+  mergeCliOptionDraft,
+  resolveCliModelStatus,
+  resolveCliModelRoute,
+  resolveCliOptions,
+  type CliOptionLayers,
+} from './cli-connections.js';
 
 /* Ink callbacks intentionally return void; failures are rendered in the transcript. */
 /* eslint-disable @typescript-eslint/no-confusing-void-expression */
@@ -68,6 +90,22 @@ export function Chat({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [freeOnly, setFreeOnly] = useState(false);
+  const [modelFilter, setModelFilter] = useState<PickerFilterMode>('all');
+  const [cliInventory, setCliInventory] = useState<CliConnection[]>([]);
+  const [optionsPanel, setOptionsPanel] = useState<{
+    connection: CliConnection;
+    model: CliModelCapabilities;
+    options: CliOption;
+  } | null>(null);
+  const cliOptionsDraft = useRef<{ modelRef: string; options: Partial<CliOption> } | null>(null);
+  const cliOptionOverrides = useRef<Record<string, Partial<CliOption>>>({});
+  const cliOptionRequest = useRef(0);
+  const [cliSettings, setCliSettings] = useState<Record<string, CliConnectionSettings>>({});
+  const [zenCliAliases, setZenCliAliases] = useState(false);
+  const [cliBilling, setCliBilling] = useState<CliBilling | null>(null);
+  const [cliSpeed, setCliSpeed] = useState<CliSpeed | null>(null);
+  const [cliEffort, setCliEffort] = useState<string | null>(null);
+  const [cliModelRef, setCliModelRef] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [limits, setLimits] = useState<ProviderLimits[]>([]);
   const [health, setHealth] = useState<ProviderHealthSnapshot[]>([]);
@@ -144,12 +182,19 @@ export function Chat({
   }, []);
   useEffect(() => {
     let active = true;
-    void Promise.all([client.quota.limits(), client.providers.health(), client.cloud.status()])
-      .then(([quota, providers, cloud]) => {
+    void Promise.all([
+      client.quota.limits(),
+      client.providers.health(),
+      client.cloud.status(),
+      client.settings.get(),
+    ])
+      .then(([quota, providers, cloud, settings]) => {
         if (!active) return;
         setLimits(quota);
         setHealth(providers);
         setCloudEmail(cloud.auth.signedIn ? cloud.auth.email : null);
+        setCliSettings(settings.cliConnections);
+        setZenCliAliases(settings.opencodeZenTransport === 'cli');
       })
       .catch(showError);
     const off = [
@@ -247,6 +292,22 @@ export function Chat({
     if (initialSession) void loadSession(initialSession.id).catch(showError);
   }, []);
   useEffect(() => {
+    // Refresh the CLI inventory only while the model/options panels are visible. The chat screen
+    // never starts discovery on load and never polls while hidden.
+    if (panel?.name !== '/model' && !optionsPanel) return;
+    const off = client.on('cliConnections.updated', (connection) => {
+      setCliInventory((old) => [...old.filter((row) => row.kind !== connection.kind), connection]);
+      if (panel?.name === '/model') {
+        void modelOptions(client)
+          .then((options) =>
+            setPanel((old) => (old?.name === '/model' ? { ...old, options } : old)),
+          )
+          .catch(showError);
+      }
+    });
+    return off;
+  }, [client, panel, optionsPanel]);
+  useEffect(() => {
     const match = /(?:^|\s)@([^\s]*)$/.exec(input);
     if (!match || !project || passwordEmail !== null) {
       setFiles([]);
@@ -269,7 +330,7 @@ export function Chat({
       for (let index = 0; index < interrupts; index++) pressCtrlC();
       return;
     }
-    if (panel || settingsOpen || connectOpen) return;
+    if (panel || settingsOpen || connectOpen || optionsPanel) return;
     if (key.escape && running && sessionRef.current)
       void client.sessions.cancel(sessionRef.current).catch(showError);
     if (key.pageUp) setOffset((old) => Math.min(entries.length, old + 10));
@@ -301,6 +362,18 @@ export function Chat({
         sessionRef.current = next.id;
         if (model !== 'auto') await client.models.select(next.id, ModelRefSchema.parse(model));
         if (effort) await client.sessions.setEffort(next.id, effort);
+        const draft = cliOptionsDraft.current;
+        if (draft) {
+          await client.sessions.updateCliOptions(next.id, {
+            modelRef: ModelRefSchema.parse(draft.modelRef),
+            options: draft.options,
+          });
+          cliOptionOverrides.current[draft.modelRef] = {
+            ...(cliOptionOverrides.current[draft.modelRef] ?? {}),
+            ...draft.options,
+          };
+          cliOptionsDraft.current = null;
+        }
         return next.id;
       })
       .catch((error: unknown) => {
@@ -328,11 +401,17 @@ export function Chat({
     });
     sessionRef.current = next.id;
     creation.current = null;
+    cliOptionsDraft.current = null;
+    cliOptionOverrides.current = {};
     setProject(nextProject);
     setEntries([]);
     setModel('auto');
     setServedModel(null);
     setEffort(null);
+    setCliBilling(null);
+    setCliSpeed(null);
+    setCliEffort(null);
+    setCliModelRef(null);
     setContextTokens(null);
     setReplyTokens(null);
     setOffset(0);
@@ -344,15 +423,39 @@ export function Chat({
   }
   async function loadSession(id: SessionId) {
     const detail = await client.sessions.get(id);
-    const projects = await client.workspaces.list();
+    const [projects, profiles, connections, settings] = await Promise.all([
+      client.workspaces.list(),
+      client.profiles.list(),
+      client.cliConnections.list(),
+      client.settings.get(),
+    ]);
     sessionRef.current = id;
     creation.current = null;
+    cliOptionsDraft.current = null;
+    cliOptionOverrides.current = { ...(detail.session.cliOptions ?? {}) };
+    setCliInventory(connections);
+    setCliSettings(settings.cliConnections);
+    setZenCliAliases(settings.opencodeZenTransport === 'cli');
     setProject(projects.find((row) => row.id === detail.session.workspaceId) ?? null);
-    const profiles = await client.profiles.list();
-    setActiveProfile(profiles.find((row) => row.id === detail.session.profileId));
-    setModel(detail.session.pinnedModelRef ?? 'auto');
+    const profile = profiles.find((row) => row.id === detail.session.profileId);
+    setActiveProfile(profile);
+    const requested = detail.session.pinnedModelRef ?? 'auto';
+    setModel(requested);
     setServedModel(detail.session.modelRef);
     setEffort(detail.session.effort ?? null);
+    const activeRef = requested === 'auto' ? detail.session.modelRef : requested;
+    const status = resolveCliModelStatus(
+      activeRef,
+      connections,
+      settings.cliConnections,
+      profile,
+      activeRef ? cliOptionOverrides.current[activeRef] : undefined,
+      settings.opencodeZenTransport === 'cli',
+    );
+    setCliModelRef(status?.ref ?? null);
+    setCliBilling(status?.billing ?? null);
+    setCliEffort(status?.effort ?? null);
+    setCliSpeed(status?.speed ?? null);
     setEntries(
       detail.messages.flatMap((message) =>
         message.parts.map((part, index) => ({
@@ -383,14 +486,19 @@ export function Chat({
   async function openPanel(name: string) {
     const request = ++panelRequest.current;
     let options: PickerOption[] = [];
-    if (name === '/model') options = await modelOptions(client);
+    if (name === '/model') {
+      options = await modelOptions(client);
+      setCliInventory(await client.cliConnections.list());
+    }
     if (name === '/profile') options = profileOptions(await client.profiles.list());
     if (name === '/effort') {
-      options = effortOptions(
-        (await client.models.list()).find(
-          (row) => row.ref === (model === 'auto' ? servedModel : model),
-        ),
-      );
+      const activeRef = model === 'auto' ? servedModel : model;
+      const active = activeCli();
+      if (active) {
+        options = cliEffortOptionRows(active.model);
+      } else {
+        options = effortOptions((await client.models.list()).find((row) => row.ref === activeRef));
+      }
       if (!options.length) {
         notice(
           'The active model does not support reasoning effort. Select a supported model with /model.',
@@ -400,6 +508,16 @@ export function Chat({
     }
     if (name === '/project' || name === '/new')
       options = projectOptions(await client.workspaces.list());
+    if (name === '/speed') {
+      const active = activeCli();
+      options = active ? cliSpeedOptionRows(active.model) : [];
+      if (!options.length) {
+        notice(
+          'Speed applies to opted-in native CLI models that advertise fast mode. Select one with /model.',
+        );
+        return;
+      }
+    }
     if (name === '/sessions') {
       const [sessions, projects] = await Promise.all([
         client.sessions.search(),
@@ -413,6 +531,109 @@ export function Chat({
         title: name === '/new' ? 'New chat / choose project' : name.slice(1),
         options,
       });
+  }
+  function activeCli(): {
+    connection: CliConnection;
+    model: CliModelCapabilities;
+    ref: string;
+  } | null {
+    const activeRef = model === 'auto' ? servedModel : model;
+    if (!activeRef) return null;
+    const route = resolveCliModelRoute(cliInventory, activeRef, zenCliAliases);
+    return route ? { ...route, ref: activeRef } : null;
+  }
+  function cliLayersFor(ref: string): CliOptionLayers {
+    const route = resolveCliModelRoute(cliInventory, ref, zenCliAliases);
+    const saved = route ? cliSettings[route.connection.kind] : undefined;
+    const refKey = ref as CliModelCapabilities['ref'];
+    return {
+      conversation:
+        cliOptionOverrides.current[ref] ??
+        (route ? cliOptionOverrides.current[route.model.ref] : undefined),
+      profile:
+        activeProfile?.cliDefaults?.[refKey] ??
+        (route ? activeProfile?.cliDefaults?.[route.model.ref] : undefined),
+      connection: connectionOptionLayer(saved, route?.model.ref ?? refKey),
+    };
+  }
+  async function persistCliOptions(ref: string, patch: Partial<CliOption>) {
+    if (sessionRef.current) {
+      await client.sessions.updateCliOptions(sessionRef.current, {
+        modelRef: ModelRefSchema.parse(ref),
+        options: patch,
+      });
+    } else {
+      cliOptionsDraft.current = mergeCliOptionDraft(cliOptionsDraft.current, ref, patch);
+    }
+    cliOptionOverrides.current[ref] = { ...(cliOptionOverrides.current[ref] ?? {}), ...patch };
+  }
+  async function applyEffort(token: string) {
+    const active = activeCli();
+    if (active) {
+      const choice = cliEffortOptionRows(active.model).find((row) => row.value === token);
+      if (!choice) {
+        notice(`Unknown effort ${token} for ${active.model.name}.`);
+        return;
+      }
+      if (choice.disabled) {
+        notice(
+          `${token} is unavailable for ${active.model.name}: ${choice.reason ?? 'not supported'}`,
+        );
+        return;
+      }
+      await createSession();
+      await persistCliOptions(active.ref, { effort: token === '' ? null : token });
+      setCliEffort(token === '' ? null : token);
+      notice(`Effort set to ${token || 'Default'} for ${active.model.name}.`);
+      return;
+    }
+    if (!['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(token)) {
+      notice(`Unknown effort ${token}. Use /model to choose a model with reasoning effort.`);
+      return;
+    }
+    const id = await createSession();
+    await client.sessions.setEffort(id, token as Effort);
+    setEffort(token as Effort);
+    notice(`Effort set to ${token}.`);
+  }
+  async function applySpeed(value: string) {
+    if (value !== 'standard' && value !== 'fast') {
+      notice('Usage: /speed standard|fast');
+      return;
+    }
+    const active = activeCli();
+    if (!active) {
+      notice('Speed applies to opted-in native CLI models only.');
+      return;
+    }
+    if (value === 'fast' && !active.model.speeds.includes('fast')) {
+      notice(`Fast is not advertised by ${active.model.name}.`);
+      return;
+    }
+    if (value === 'fast') {
+      notice(
+        'Fast mode is unavailable in this beta: its separately billed charge cannot be bounded.',
+      );
+      return;
+    }
+    await createSession();
+    await persistCliOptions(active.ref, { speed: value });
+    setCliSpeed(value);
+    notice('Speed set to Standard.');
+  }
+  function openCliOptions(connection: CliConnection, cliModel: CliModelCapabilities, ref: string) {
+    // Reopening the current model keeps its compatible conversation/profile/connection choices;
+    // switching models resolves fresh against the new model's reported effort and standard speed.
+    const resolved = resolveCliOptions(cliModel, cliLayersFor(ref));
+    setModel(ref);
+    setServedModel(null);
+    setEffort(null);
+    setCliBilling(cliModel.billing);
+    setCliSpeed(resolved.speed);
+    setCliEffort(resolved.effort);
+    setCliModelRef(ref);
+    closePanel();
+    setOptionsPanel({ connection, model: cliModel, options: resolved });
   }
   async function selectOption(value: string) {
     if (!panel) return;
@@ -434,6 +655,42 @@ export function Chat({
     }
     const id = await createSession();
     if (panel.name === '/model') {
+      const decoded = decodeCliModelValue(value);
+      if (decoded) {
+        const connection = findConnection(cliInventory, decoded.kind);
+        const cliModel = findCliModel(connection, decoded.ref);
+        if (!connection || !cliModel) {
+          closePanel();
+          notice('That CLI model is no longer available. Reopen /model or refresh /connect.');
+          return;
+        }
+        const selectability = cliModelSelectability(connection, cliModel);
+        if (!selectability.selectable) {
+          closePanel();
+          notice(selectability.reason ?? 'This CLI model is not selectable yet.');
+          return;
+        }
+        try {
+          await client.models.select(id, ModelRefSchema.parse(cliModel.ref));
+        } catch (error) {
+          // Leave the previous model, status, and options untouched and surface the real, redacted
+          // provider error with the next action instead of continuing as if the switch succeeded.
+          closePanel();
+          const detail = redactKnownSecretText(
+            error instanceof Error ? error.message : String(error),
+          );
+          notice(
+            bad(
+              `Could not select ${cliModel.name}: ${detail} Refresh or verify ${cliBrandName(connection.kind)} in /connect, then try again.`,
+            ),
+          );
+          return;
+        }
+        openCliOptions(connection, cliModel, cliModel.ref);
+        notice(`Selected ${cliModel.name} · configure its options.`);
+        return;
+      }
+      cliOptionsDraft.current = null;
       if (value === 'no-profile') {
         const profile = (await client.profiles.list()).find((row) => row.name === 'No profile');
         if (!profile) throw new Error('No profile option is unavailable.');
@@ -445,6 +702,10 @@ export function Chat({
         setModel(value);
         setServedModel(null);
         setEffort(null);
+        setCliBilling(null);
+        setCliSpeed(null);
+        setCliEffort(null);
+        setCliModelRef(null);
       }
     }
     if (panel.name === '/profile') {
@@ -455,8 +716,21 @@ export function Chat({
       }
     }
     if (panel.name === '/effort') {
-      await client.sessions.setEffort(id, (value || null) as Effort | null);
-      setEffort((value || null) as Effort | null);
+      const active = activeCli();
+      if (active) {
+        await persistCliOptions(active.ref, { effort: value === '' ? null : value });
+        setCliEffort(value === '' ? null : value);
+      } else {
+        await client.sessions.setEffort(id, (value || null) as Effort | null);
+        setEffort((value || null) as Effort | null);
+      }
+    }
+    if (panel.name === '/speed') {
+      const active = activeCli();
+      if (active) {
+        await persistCliOptions(active.ref, { speed: value === 'fast' ? 'fast' : 'standard' });
+        setCliSpeed(value === 'fast' ? 'fast' : 'standard');
+      }
     }
     const selected = panel.options.find((row) => row.value === value);
     closePanel();
@@ -488,10 +762,20 @@ export function Chat({
       else setPasswordEmail(email);
       return;
     }
+    if (parsed.name === '/effort' && parsed.args.length) {
+      await applyEffort(parsed.args[0] ?? '');
+      return;
+    }
+    if (parsed.name === '/speed' && parsed.args.length) {
+      await applySpeed(parsed.args[0] ?? '');
+      return;
+    }
     if (
       text.startsWith('/') &&
       !parsed.args.length &&
-      ['/model', '/profile', '/effort', '/sessions', '/project', '/new'].includes(parsed.name)
+      ['/model', '/profile', '/effort', '/speed', '/sessions', '/project', '/new'].includes(
+        parsed.name,
+      )
     ) {
       await openPanel(parsed.name);
       return;
@@ -531,7 +815,10 @@ export function Chat({
             onCompact: notice,
             onClear: () => newChat(project),
             freeOnly,
-            onFreeOnly: setFreeOnly,
+            onFreeOnly: (value) => {
+              setFreeOnly(value);
+              setModelFilter(value ? 'free' : 'all');
+            },
           },
           text,
         ),
@@ -560,7 +847,7 @@ export function Chat({
       <Transcript
         entries={entries}
         offset={offset}
-        enabled={!panel && !settingsOpen && !connectOpen && !approval}
+        enabled={!panel && !settingsOpen && !connectOpen && !optionsPanel && !approval}
       />
       {approval ? <ApprovalPrompt summary={approval.summary} detail={approval.detail} /> : null}
       {running || busy ? (
@@ -570,6 +857,29 @@ export function Chat({
       ) : null}
       {connectOpen ? (
         <ConnectPanel client={client} onClose={() => setConnectOpen(false)} />
+      ) : optionsPanel ? (
+        <CliOptionsPanel
+          model={optionsPanel.model}
+          options={optionsPanel.options}
+          onClose={() => setOptionsPanel(null)}
+          onChange={async (patch) => {
+            const request = ++cliOptionRequest.current;
+            try {
+              await persistCliOptions(optionsPanel.model.ref, patch);
+            } catch (error) {
+              // Only the latest request owns the panel message; a stale failure is dropped so it
+              // cannot overwrite a newer confirmed change.
+              if (request === cliOptionRequest.current) throw error;
+              return;
+            }
+            if (request !== cliOptionRequest.current) return;
+            setOptionsPanel((prev) =>
+              prev ? { ...prev, options: { ...prev.options, ...patch } } : prev,
+            );
+            if (patch.effort !== undefined) setCliEffort(patch.effort);
+            if (patch.speed !== undefined) setCliSpeed(patch.speed);
+          }}
+        />
       ) : panel ? (
         <Picker
           key={panel.name}
@@ -579,7 +889,9 @@ export function Chat({
           onSelect={(value) => {
             void selectOption(value).catch(showError);
           }}
-          {...(panel.name === '/model' ? { freeOnly, onFreeOnly: setFreeOnly } : {})}
+          {...(panel.name === '/model'
+            ? { filter: { mode: modelFilter, onChange: setModelFilter } }
+            : {})}
           {...(panel.name === '/sessions'
             ? {
                 onQuery: (query: string) => {
@@ -624,7 +936,9 @@ export function Chat({
         model={servedModel ?? model}
         requestedModel={model}
         paidAllowed={activeProfile?.paidAllowed ?? false}
-        effort={effort}
+        effort={cliModelRef ? cliEffort : effort}
+        cliBilling={cliBilling}
+        cliSpeed={cliSpeed}
         contextTokens={contextTokens}
         contextWindow={contextWindow}
         replyTokens={replyTokens}

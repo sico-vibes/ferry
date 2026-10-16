@@ -16,6 +16,7 @@ import { ProjectConfigSchema } from '@ferry/config';
 import type { AgentTool, ToolSource as AgentToolSource } from '@ferry/agent';
 import type { ToolSource as ExtensionToolSource } from '@ferry/extensions';
 import {
+  CliOptionPatchSchema,
   DIRECT_PROFILE_ID,
   EffortSchema,
   MessageSchema,
@@ -34,7 +35,15 @@ import {
   readOutputPage,
   isProtectedWorkspacePath,
 } from '@ferry/shared';
-import type { MessagePart, ModelInfo, Profile, Provider, Session, SessionId } from '@ferry/shared';
+import type {
+  Message,
+  MessagePart,
+  ModelInfo,
+  Profile,
+  Provider,
+  Session,
+  SessionId,
+} from '@ferry/shared';
 import {
   BUILTIN_PROFILES,
   chainForProfile,
@@ -69,6 +78,13 @@ import {
 } from '../request-failures.js';
 import { canonicalPathKey } from '@ferry/shared/node-paths';
 import { getGatewayController } from '../gateway.js';
+import { cliOptionError, getCliBroker, mergeCliOption } from '../cli-broker.js';
+import {
+  pendingApprovalSummary,
+  sessionModelUsage,
+  sessionSummariesWithLastReplyBackfilled,
+  sessionSummaryWithLastReply,
+} from '../session-insights.js';
 
 const CreateSchema = z.object({
   workspaceId: z.string().min(1).nullable().optional(),
@@ -218,6 +234,51 @@ export function register(host: CoreHost, services: FerryServices): void {
     host.emit('session.status', updated);
     return updated;
   };
+  /**
+   * Publishes the current actionable pending-approval snapshot after the set of pending approvals may
+   * have changed. `pendingApprovalSummary` reads only awaiting sessions through the indexed message
+   * lookup; a genuine storage failure propagates instead of being masked as an empty list.
+   */
+  const refreshPendingApprovals = () => {
+    host.emit('approvals.pending.updated', pendingApprovalSummary(services));
+  };
+  /**
+   * Indexed, per-session message lookup only for sessions whose `lastReplyModelRef` has never been
+   * resolved. Once resolved the value is persisted, so later lists read no transcripts at all.
+   */
+  const lastReplyMessagesFor = (sessions: readonly Session[]): Map<string, Message[]> => {
+    const needing = sessions.filter((session) => session.lastReplyModelRef === undefined);
+    const bySession = new Map<string, Message[]>();
+    if (needing.length === 0) return bySession;
+    for (const message of services.messages.listForSessions(needing.map((session) => session.id))) {
+      const group = bySession.get(message.sessionId);
+      if (group) group.push(message);
+      else bySession.set(message.sessionId, [message]);
+    }
+    return bySession;
+  };
+  /**
+   * Resolves `lastReplyModelRef` for summaries that predate the field and persists a value once, so a
+   * session is never re-scanned on later lists. `updatedAt` is deliberately untouched so a read
+   * summary never reorders the conversation list, and no event is emitted for a passive backfill.
+   */
+  const resolveLastReplySummaries = (sessions: readonly Session[]): Session[] => {
+    const summarized = sessionSummariesWithLastReplyBackfilled(
+      sessions,
+      lastReplyMessagesFor(sessions),
+    );
+    for (const summary of summarized) {
+      if (summary.lastReplyModelRef === undefined) continue;
+      // Merge onto the latest stored row rather than overwriting it, so a concurrent run's status or
+      // report write is never clobbered by a stale read snapshot. Re-check under the current value.
+      const current = services.sessions.get(summary.id);
+      if (!current || current.lastReplyModelRef !== undefined) continue;
+      services.sessions.put(
+        SessionSchema.parse({ ...current, lastReplyModelRef: summary.lastReplyModelRef ?? null }),
+      );
+    }
+    return summarized;
+  };
   /** Messages each session received while a run was active, until a run has seen them. */
   const queuedMessageIds = new Map<SessionId, Set<string>>();
   /** Messages sent while the agent was working that its last step never saw get their own run. */
@@ -253,6 +314,7 @@ export function register(host: CoreHost, services: FerryServices): void {
     services.tasks.delete(id);
     services.sessions.delete(id);
     host.emit('session.removed', { id });
+    refreshPendingApprovals();
   };
 
   const cleanEmptySessions = () => {
@@ -301,6 +363,8 @@ export function register(host: CoreHost, services: FerryServices): void {
       if (latest && (latest.status !== 'interrupted' || latest.inFlight))
         updateSession({ ...latest, status: 'interrupted', runPhase: undefined, inFlight: false });
     }
+    // Pending approvals denied above are no longer actionable; publish the reduced snapshot.
+    refreshPendingApprovals();
   });
   const listSessions = (rawQuery?: unknown) => {
     const query = z
@@ -311,7 +375,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       })
       .parse(rawQuery ?? {});
     const needle = query.query?.toLocaleLowerCase();
-    return services.sessions
+    const filtered = services.sessions
       .list()
       .filter(
         (session) =>
@@ -320,8 +384,10 @@ export function register(host: CoreHost, services: FerryServices): void {
             (session.workspaceId ?? null) === query.workspaceId) &&
           (!needle || `${session.title} ${session.preview}`.toLocaleLowerCase().includes(needle)),
       )
-      .map((session) => SessionSchema.parse(session))
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      .map((session) => SessionSchema.parse(session));
+    return resolveLastReplySummaries(filtered).sort((a, b) =>
+      b.updatedAt.localeCompare(a.updatedAt),
+    );
   };
 
   // The provider stream is process-local. A durable run marker survives status writes made by
@@ -417,7 +483,11 @@ export function register(host: CoreHost, services: FerryServices): void {
       const id = SessionIdSchema.parse(rawId);
       const detail = store.load(id);
       if (!detail) throw rpcDomainError(-32044, 'not_found', `Session not found: ${id}`);
-      return SessionDetailSchema.parse(detail);
+      const [session] = resolveLastReplySummaries([detail.session]);
+      return SessionDetailSchema.parse({ ...detail, ...(session ? { session } : {}) });
+    },
+    modelUsage(rawId: unknown) {
+      return sessionModelUsage(services, SessionIdSchema.parse(rawId));
     },
     async readOutput(rawInput: unknown) {
       const input = ReadOutputInputSchema.parse(rawInput);
@@ -692,6 +762,7 @@ export function register(host: CoreHost, services: FerryServices): void {
           agentEventHandler(event);
         },
         traceContext,
+        { profile },
       );
       let revokeGatewayTokens: () => void = () => undefined;
       const watchdog = setTimeout(() => {
@@ -775,6 +846,25 @@ export function register(host: CoreHost, services: FerryServices): void {
               (id) => services.catalog.providers.find((item) => item.provider === id)?.free_plan,
             );
             if (gatewayModel) availableModels.push(gatewayModel);
+            // Installed-CLI models reach the agent only when a manual pin selects one, or an explicit
+            // profile opt-in includes verified native-eligible subscription capacity for Auto. The
+            // default Auto behaviour never silently adds CLI subscription capacity.
+            const cliBroker = getCliBroker(services, (method, payload) => {
+              host.emit(method, payload);
+            });
+            // Native Auto pool: free verified CLI capacity is always eligible; included-subscription
+            // capacity only when the profile opts in; metered/unknown never. A manual pin always
+            // reaches the runner (dispatch re-checks admission), independent of the Auto switch.
+            const autoPool = cliBroker.eligibleModels({
+              surface: 'native',
+              profile,
+              requiresTools: true,
+            });
+            const autoRefs = new Set(autoPool.map((model) => model.ref));
+            for (const cliModel of cliBroker.models()) {
+              const isPinned = session.pinnedModelRef === cliModel.ref;
+              if (isPinned || autoRefs.has(cliModel.ref)) availableModels.push(cliModel);
+            }
             const preflightCapacity = preflight.capacity();
             const verifiedModelRefs = preflightCapacity.providers.flatMap((provider) =>
               provider.modelsVerifiedAt && provider.availableModels
@@ -948,13 +1038,17 @@ export function register(host: CoreHost, services: FerryServices): void {
               } else if (event.type === 'session.part') {
                 if (event.part.type === 'error') transcriptFailureRecorded = true;
                 host.emit('session.part', event);
-                if (event.part.type === 'approval_request' && event.part.state === 'pending')
+                if (event.part.type === 'approval_request' && event.part.state === 'pending') {
                   host.emit('approval.request', event);
+                  refreshPendingApprovals();
+                }
               } else if (event.type === 'session.message')
                 host.emit('session.message', { sessionId: session.id, message: event.message });
               else if (event.type === 'session.updated') {
                 host.emit('session.updated', event.session);
                 host.emit('session.status', event.session);
+                // Entering or leaving `awaiting_approval` changes the actionable pending set.
+                refreshPendingApprovals();
               } else if (event.type === 'task.updated') host.emit('task.updated', event.task);
               else if (event.type === 'quota.updated')
                 host.emit('quota.updated', services.quota.capacitySummary());
@@ -1502,10 +1596,12 @@ export function register(host: CoreHost, services: FerryServices): void {
                   });
                   const current = services.sessions.get(session.id);
                   if (current) updateSession({ ...current, status: 'awaiting_approval' });
+                  refreshPendingApprovals();
                   const decision = await pendingDecision;
                   const currentAfterApproval = services.sessions.get(session.id);
                   if (currentAfterApproval?.status === 'awaiting_approval')
                     updateSession({ ...currentAfterApproval, status: 'running' });
+                  refreshPendingApprovals();
                   if (decision === 'denied') {
                     if (reservationId) paidReservations.delete(reservationId);
                     return {
@@ -1849,11 +1945,15 @@ export function register(host: CoreHost, services: FerryServices): void {
                       : latest.status === 'running'
                         ? 'idle'
                         : latest.status;
+                // The trailing assistant reply is finalized here, so this is where the conversation's
+                // responsive logo is (re)written from the actual producer. A non-terminal status keeps
+                // the prior value instead of showing a half-streamed reply as the responder.
+                const finalized = sessionSummaryWithLastReply(
+                  { ...latest, status, runPhase: undefined, inFlight: false },
+                  store.load(session.id)?.messages ?? [],
+                );
                 updateSession({
-                  ...latest,
-                  status,
-                  runPhase: undefined,
-                  inFlight: false,
+                  ...finalized,
                   runReport: terminalReport(
                     latest,
                     status === 'error'
@@ -1863,6 +1963,8 @@ export function register(host: CoreHost, services: FerryServices): void {
                         : 'completed',
                   ),
                 });
+                // A run that ended while awaiting approval resolves/abandons its pending parts here.
+                refreshPendingApprovals();
               }
             }
             resolveRun();
@@ -1936,6 +2038,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const run = runPromises.get(session.id);
       if (!run) {
         updateSession({ ...session, status: 'idle', runPhase: undefined, inFlight: false });
+        refreshPendingApprovals();
         return;
       }
       controllers.get(session.id)?.abort();
@@ -1944,6 +2047,7 @@ export function register(host: CoreHost, services: FerryServices): void {
         const latest = services.sessions.get(session.id);
         if (latest) updateSession({ ...latest, status: 'idle' });
       }
+      refreshPendingApprovals();
     },
     rename(rawId: unknown, rawTitle: unknown) {
       const session = requireSession(rawId);
@@ -1960,6 +2064,32 @@ export function register(host: CoreHost, services: FerryServices): void {
     setEffort(rawId: unknown, rawEffort: unknown) {
       const session = requireSession(rawId);
       return updateSession({ ...session, effort: EffortSchema.nullable().parse(rawEffort) });
+    },
+    /**
+     * Persist per-conversation CLI options for one selected model. Explicit effort/speed values are
+     * validated against the model's cached discovery and rejected when unsupported; an absent field
+     * preserves the stored override and an explicit `null` effort clears it. Raw effort tokens are
+     * preserved verbatim (e.g. `ultra` is stored, then refused at dispatch with a reason).
+     */
+    updateCliOptions(rawId: unknown, rawInput: unknown) {
+      const session = requireSession(rawId);
+      const input = z
+        .object({ modelRef: ModelRefSchema, options: CliOptionPatchSchema })
+        .parse(rawInput);
+      const discovered = getCliBroker(services, (method, payload) => {
+        host.emit(method, payload);
+      }).model(input.modelRef);
+      // CLI options only apply to a discovered CLI model; reject unknown or non-CLI refs rather than
+      // persisting arbitrary options for a model that will never consume them.
+      if (!discovered)
+        throw rpcDomainError(-32010, 'validation', `Unknown CLI model: ${input.modelRef}.`);
+      const error = cliOptionError(input.modelRef, discovered.model, input.options);
+      if (error) throw rpcDomainError(-32010, 'validation', error);
+      const merged = mergeCliOption(session.cliOptions?.[input.modelRef], input.options);
+      return updateSession({
+        ...session,
+        cliOptions: { ...(session.cliOptions ?? {}), [input.modelRef]: merged },
+      });
     },
     archive(rawId: unknown, rawArchived: unknown) {
       return updateSession({
@@ -2004,6 +2134,9 @@ export function register(host: CoreHost, services: FerryServices): void {
   });
 
   host.registerDomain('approvals', {
+    pending() {
+      return pendingApprovalSummary(services);
+    },
     respond(rawSessionId: unknown, rawPartId: unknown, rawDecision: unknown) {
       const sessionId = SessionIdSchema.parse(rawSessionId);
       const partId = PartIdSchema.parse(rawPartId);
@@ -2049,6 +2182,7 @@ export function register(host: CoreHost, services: FerryServices): void {
       const updated = store.replacePart(sessionId, updatedPart);
       if (updated)
         host.emit('session.part', { sessionId, messageId: message.id, part: updatedPart });
+      refreshPendingApprovals();
       approvals.get(`${sessionId}:${partId}`)?.(state);
       approvals.delete(`${sessionId}:${partId}`);
     },

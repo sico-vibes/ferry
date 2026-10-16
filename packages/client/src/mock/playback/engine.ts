@@ -4,6 +4,8 @@ import type { ScenarioRunner } from '../scenario.js';
 import type { MockStore } from '../types.js';
 import type { Clock } from '../clock.js';
 import type { Scenario, Step } from './script.js';
+import { emitPendingApprovals } from '../domains/approvals.js';
+import { usageAttribution } from '../usage-producer.js';
 import scenariosDefault from './scenarios/index.js';
 
 const fallback = (() => {
@@ -264,12 +266,14 @@ export function createPlaybackRunner(
             session.status = 'awaiting_approval';
             session.updatedAt = clock.now().toISOString();
             emit('session.updated', session);
+            emitPendingApprovals(emit, store, clock);
             const decision = await waitApproval(store, sessionId, id, signal);
             if (!decision) return false;
             part.state = decision;
             session.status = 'running';
             session.updatedAt = clock.now().toISOString();
             emit('session.updated', session);
+            emitPendingApprovals(emit, store, clock);
             if (!(await play(decision === 'denied' ? step.ifDenied : step.then))) return false;
             continue;
           }
@@ -291,11 +295,13 @@ export function createPlaybackRunner(
             addPart(part);
             session.status = 'awaiting_approval';
             emit('session.updated', session);
+            emitPendingApprovals(emit, store, clock);
             const decision = await waitApproval(store, sessionId, id, signal);
             if (!decision) return false;
             part.state = decision;
             session.status = 'running';
             emit('session.updated', session);
+            emitPendingApprovals(emit, store, clock);
             if (decision === 'denied') continue;
             const run = await store.startDelegation(sessionId, step.lane, step.brief);
             addPart({ type: 'delegation', id: newId('part') as PartId, runId: run.id });
@@ -357,11 +363,28 @@ export function createPlaybackRunner(
           if (provider?.dailyStepBudget !== undefined) store.consumeSteps(provider.id, 1);
         }
       };
+      let completed = false;
       try {
-        await play(scenario.steps);
+        completed = await play(scenario.steps);
       } catch (error) {
         if (!signal.aborted) throw error;
       }
+      // Retain one request per finalized reply attributed to the actual model that finished it. A
+      // logical Gateway key has no evidenced upstream model, so it is recorded as unknown rather than
+      // mislabelled. The mock has no provider-reported token counts, so dimensions stay unreported.
+      if (completed && session.modelRef)
+        store.recordUsage({
+          eventId: store.nextId('usage'),
+          sessionId,
+          ...usageAttribution(session.modelRef),
+          connectionId: null,
+          accountKey: null,
+          inputTokens: null,
+          outputTokens: null,
+          cachedTokens: null,
+          reasoningTokens: null,
+          occurredAt: clock.now().toISOString(),
+        });
       if (signal.aborted && runningTool) {
         runningTool.status = 'failed';
         runningTool.output = {

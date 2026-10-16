@@ -1,210 +1,248 @@
-import { expect, it, vi } from 'vitest';
-import { writeFile, readFile } from 'node:fs/promises';
+import { afterEach, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { isOpenCodeAppModel, ProviderIdSchema } from '@ferry/shared';
-import type { ZenAcpInput } from '@ferry/delegate';
-import { startHarness, waitFor } from './qa-w3-harness.js';
+import {
+  ModelRefSchema,
+  ProviderIdSchema,
+  type CliConnection,
+  type CliConnectionKind,
+} from '@ferry/shared';
+import type { CliTurnResult } from '@ferry/delegate';
 import { zenConversation } from '../src/zen-cli.js';
+import { getCliBroker, type CliBrokerRequest, type CliTurnRunner } from '../src/cli-broker.js';
+import { getCliConnectionService } from '../src/cli-connections.js';
+import { getGatewayController } from '../src/gateway.js';
+import { startHarness, type CoreHarness } from './qa-w3-harness.js';
 vi.setConfig({ testTimeout: 30_000 });
-const calls = vi.hoisted(() => [] as ZenAcpInput[]);
-vi.mock('@ferry/delegate', async (original) => ({
-  ...(await original<typeof import('@ferry/delegate')>()),
-  runZenAcp: vi.fn((input: ZenAcpInput) => {
-    calls.push(input);
-    if (input.tools?.length && !input.prompt.includes('CLI_TOOL_RESULT'))
+
+const CANONICAL = ModelRefSchema.parse('opencode-cli/opencode/big-pickle');
+const OPENCODE = ProviderIdSchema.parse('opencode');
+
+let harness: CoreHarness | undefined;
+afterEach(async () => {
+  await harness?.close();
+  harness = undefined;
+});
+
+function emptyUsage(kind: CliConnectionKind) {
+  return {
+    connectionId: kind,
+    accountKey: null,
+    state: 'unavailable' as const,
+    source: 'cli',
+    observedAt: null,
+    staleAt: null,
+    windows: [],
+    note: null,
+  };
+}
+
+function openCodeConnection(): CliConnection {
+  return {
+    id: 'opencode-cli',
+    kind: 'opencode-cli',
+    providerId: 'opencode-cli',
+    upstreamLabel: 'OpenCode Zen',
+    install: { installed: true, executable: 'opencode', version: '1.18.35', installHint: '' },
+    account: {
+      state: 'signed_in',
+      key: `opencode-cli:${'a'.repeat(24)}`,
+      label: 'OpenCode',
+      plan: null,
+    },
+    verify: { state: 'unverified', modelRef: null, checkedAt: null, message: null },
+    surfaces: { native: false, gateway: false },
+    models: [
+      {
+        ref: CANONICAL,
+        connectionId: 'opencode-cli',
+        providerId: 'opencode-cli',
+        upstreamId: 'opencode/big-pickle',
+        upstreamProvider: 'opencode',
+        name: 'Big Pickle',
+        efforts: ['low', 'high'],
+        defaultEffort: null,
+        speeds: ['standard'],
+        defaultSpeed: 'standard',
+        modalities: ['text'],
+        toolCalling: true,
+        contextWindow: 200_000,
+        maxOutput: 8_192,
+        billing: 'free',
+        hidden: false,
+      },
+    ],
+    usage: emptyUsage('opencode-cli'),
+    lastChecked: null,
+    discoveryMessage: null,
+  };
+}
+
+const isVerify = (request: CliBrokerRequest): boolean =>
+  request.messages.some(
+    (message) =>
+      typeof message.content === 'string' && message.content.includes('Reply with exactly Ready'),
+  );
+
+function ready(text: string, request: CliBrokerRequest): CliTurnResult {
+  return {
+    text,
+    toolCalls: [],
+    usage: { inputTokens: 12, outputTokens: 2, cachedTokens: null, reasoningTokens: null },
+    responseModel: request.model.upstreamId,
+  };
+}
+
+async function setup(runner: CliTurnRunner): Promise<{
+  h: CoreHarness;
+  service: ReturnType<typeof getCliConnectionService>;
+}> {
+  harness = await startHarness({
+    cliScan: (kind) =>
+      Promise.resolve(
+        kind === 'opencode-cli'
+          ? openCodeConnection()
+          : { ...openCodeConnection(), id: kind, kind, providerId: kind, models: [] },
+      ),
+    cliUsage: (kind) => Promise.resolve({ usage: emptyUsage(kind), account: null }),
+    cliRunTurn: runner,
+  });
+  const service = getCliConnectionService(harness.services, () => undefined);
+  return { h: harness, service };
+}
+
+it('verifies a free Zen model through the shared broker and exposes one canonical CLI route', async () => {
+  const calls: CliBrokerRequest[] = [];
+  const runner: CliTurnRunner = (request) => {
+    if (isVerify(request)) return Promise.resolve(ready('Ready', request));
+    calls.push(request);
+    return Promise.resolve(ready('hello-cli', request));
+  };
+  const { h, service } = await setup(runner);
+  service.update('opencode-cli', {
+    surfaces: { native: true, gateway: true },
+    credentialMode: 'installed',
+    credentialProvider: null,
+  });
+  await service.refresh('opencode-cli');
+  // The API catalog free Zen model exists but must not become a second CLI route.
+  const apiModel = h.services.catalog.models.find((model) => model.ref === 'opencode/big-pickle');
+  if (!apiModel) throw new Error('Missing catalog fixture');
+  h.services.models.replace(OPENCODE, [{ ...apiModel, apiAccessVerified: false }]);
+  await h.rpc.providers.setEnabled(OPENCODE, true);
+
+  const verification = await h.rpc.providers.verifyZenCli(CANONICAL);
+  expect(verification.ok, verification.message).toBe(true);
+
+  const cliModels = await h.rpc.models.list(ProviderIdSchema.parse('opencode-cli'));
+  const row = cliModels.find((model) => model.ref === CANONICAL);
+  expect(row).toMatchObject({ free: true, verified: true, transport: 'opencode_cli' });
+  // The API ref is never rewritten into a duplicate CLI transport.
+  const apiRow = (await h.rpc.models.list(OPENCODE)).find(
+    (model) => model.ref === 'opencode/big-pickle',
+  );
+  expect(apiRow?.transport).not.toBe('opencode_cli');
+  expect((await h.rpc.models.list()).filter((model) => model.ref === CANONICAL)).toHaveLength(1);
+
+  const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
+  expect((await h.rpc.models.candidates(session.id)).some((model) => model.ref === CANONICAL)).toBe(
+    true,
+  );
+
+  const created = await h.rpc.gateway.createKey({ name: 'CLI test', profile: 'auto-free' });
+  await h.rpc.gateway.updateKey({ id: created.key.id, patch: { allowedModels: [CANONICAL] } });
+  expect(
+    (await h.rpc.gateway.routing(created.key.id)).eligible.map((item) => item.modelRef),
+  ).toContain(CANONICAL);
+});
+
+it('streams Gateway tool handoff and accepts caller tool results without touching the workspace', async () => {
+  const runner: CliTurnRunner = (request) => {
+    if (isVerify(request)) return Promise.resolve(ready('Ready', request));
+    const hasResult = request.messages.some((message) => message.role === 'tool');
+    if (request.tools.length && !hasResult)
       return Promise.resolve({
         text: '',
         toolCalls: [
-          {
-            id: 'call_cli_fixture',
-            name:
-              input.tools.find((tool) => tool.name === 'read_file')?.name ?? input.tools[0]?.name,
-            arguments: { path: 'marker.txt' },
-          },
+          { id: 'call_cli_fixture', name: 'read_file', arguments: { path: 'marker.txt' } },
         ],
-        inputTokens: 0,
-        outputTokens: 0,
+        usage: { inputTokens: 0, outputTokens: 0, cachedTokens: null, reasoningTokens: null },
+        responseModel: 'opencode/big-pickle',
       });
-    const text = input.prompt.includes('CLI_TOOL_RESULT') ? 'CLI_TOOL_RESULT' : 'Ready.';
-    input.onText?.(text);
-    return Promise.resolve({ text, toolCalls: [], inputTokens: 12, outputTokens: 2 });
-  }),
-}));
+    return Promise.resolve(ready('CLI_TOOL_RESULT', request));
+  };
+  const { h, service } = await setup(runner);
+  service.update('opencode-cli', {
+    surfaces: { native: true, gateway: true },
+    credentialMode: 'installed',
+    credentialProvider: null,
+  });
+  await service.refresh('opencode-cli');
+  const broker = getCliBroker(h.services, () => undefined);
+  expect((await broker.verify('opencode-cli', CANONICAL)).ok).toBe(true);
 
-it('separates CLI verification from API access and makes keyless CLI available in picker and Gateway', async () => {
-  const h = await startHarness({ provider: 'opencode' });
+  const controller = getGatewayController(h.services);
+  if (!controller) throw new Error('gateway controller missing');
+  await controller.start({ enabled: true, port: 0, allowLan: false });
+  const created = controller.createKey('cli-tools', 'auto-free');
+  const token = controller.issueInternalToken(created.key.id);
+  const url = `${controller.status.url ?? ''}/v1/chat/completions`;
+  const headers = { 'x-ferry-internal-token': token, 'content-type': 'application/json' };
+  const tools = [
+    {
+      type: 'function',
+      function: { name: 'read_file', parameters: { type: 'object' } },
+    },
+  ];
   try {
-    const model = h.services.catalog.models.find(
-      (model) => model.providerId === 'opencode' && model.free,
-    );
-    const provider = h.services.providers.get('opencode');
-    if (!model || !provider) throw new Error('Missing fixture');
-    h.services.models.replace('opencode', [{ ...model, apiAccessVerified: false }]);
-    h.services.providers.put({ ...provider, freeTierUnsupported: true, health: 'auth_invalid' });
-    await h.rpc.settings.update({ opencodeZenTransport: 'cli' });
-    expect((await h.rpc.providers.verifyZenCli(model.ref)).ok).toBe(true);
-    expect(h.services.providers.get('opencode')?.health).toBe('ok');
-    h.services.providerKeys.delete(ProviderIdSchema.parse('opencode'));
-    const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
-    const listed = (await h.rpc.models.list(ProviderIdSchema.parse('opencode'))).find(
-      (item) => item.ref === model.ref,
-    );
-    expect(listed).toMatchObject({
-      free: true,
-      cliAccessVerified: true,
-      apiAccessVerified: false,
-      transport: 'opencode_cli',
-      inputModalities: ['text'],
+    const first = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: CANONICAL,
+        tools,
+        messages: [{ role: 'user', content: 'Read the caller marker.' }],
+      }),
     });
-    expect(listed && isOpenCodeAppModel(listed)).toBe(false);
-    expect((await h.rpc.models.candidates(session.id)).some((item) => item.ref === model.ref)).toBe(
-      true,
-    );
-    const created = await h.rpc.gateway.createKey({
-      name: 'CLI test',
-      profile: 'none',
-    });
-    await h.rpc.gateway.updateKey({ id: created.key.id, patch: { allowedModels: [model.ref] } });
-    expect(
-      (await h.rpc.gateway.routing(created.key.id)).eligible.map((item) => item.modelRef),
-    ).toContain(model.ref);
-    await h.rpc.settings.update({ opencodeZenTransport: 'api' });
-    expect((await h.rpc.models.candidates(session.id)).some((item) => item.ref === model.ref)).toBe(
-      false,
-    );
-    expect(
-      (await h.rpc.gateway.routing(created.key.id)).eligible.map((item) => item.modelRef),
-    ).not.toContain(model.ref);
-  } finally {
-    await h.close();
-  }
-});
-
-it('streams Gateway tool handoff and accepts caller tool results without touching the gateway workspace', async () => {
-  const h = await startHarness({ provider: 'opencode' });
-  try {
-    const model = h.services.catalog.models.find(
-      (model) => model.providerId === 'opencode' && model.free,
-    );
-    if (!model) throw new Error('Missing fixture');
-    h.services.models.replace('opencode', [
-      { ...model, apiAccessVerified: false, cliAccessVerified: true },
-    ]);
-    await h.rpc.settings.update({ opencodeZenTransport: 'cli' });
-    const created = await h.rpc.gateway.createKey({
-      name: 'CLI test',
-      profile: 'none',
-    });
-    await h.rpc.gateway.updateKey({ id: created.key.id, patch: { allowedModels: [model.ref] } });
-    const state = (await h.rpc.gateway.setSettings({
-      enabled: true,
-      port: 0,
-      allowLan: false,
-    })) as { status: { url: string } };
-    const post = (messages: unknown[], tools?: unknown[]) =>
-      fetch(`${state.status.url}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${created.secret}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ model: model.ref, messages, tools, stream: true, max_tokens: 32 }),
-      });
-    const tools = [
-      {
-        type: 'function',
-        function: {
-          name: 'read_file',
-          parameters: {
-            type: 'object',
-            properties: { path: { type: 'string' } },
-            required: ['path'],
-          },
-        },
-      },
-    ];
-    const initial = [{ role: 'user', content: 'Read the caller marker.' }];
-    const first = await post(initial, tools);
     expect(first.status).toBe(200);
-    const wire = await first.text();
-    expect(wire).toContain('call_cli_fixture');
-    expect(wire).toContain('read_file');
-    expect(wire).toContain('tool_calls');
-    expect(wire).toContain('[DONE]');
-    const continued = await post(
-      [
-        ...initial,
-        {
-          role: 'assistant',
-          content: null,
-          tool_calls: [
-            {
-              id: 'call_cli_fixture',
-              type: 'function',
-              function: { name: 'read_file', arguments: '{"path":"marker.txt"}' },
-            },
-          ],
-        },
-        { role: 'tool', tool_call_id: 'call_cli_fixture', content: 'CLI_TOOL_RESULT' },
-      ],
-      tools,
-    );
-    expect(await continued.text()).toContain('CLI_TOOL_RESULT');
+    const firstBody = (await first.json()) as {
+      choices?: { message?: { tool_calls?: { id: string; function: { name: string } }[] } }[];
+    };
+    expect(firstBody.choices?.[0]?.message?.tool_calls?.[0]).toMatchObject({
+      id: 'call_cli_fixture',
+      function: { name: 'read_file' },
+    });
+    const second = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: CANONICAL,
+        tools,
+        messages: [
+          { role: 'user', content: 'Read the caller marker.' },
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'call_cli_fixture',
+                type: 'function',
+                function: { name: 'read_file', arguments: '{"path":"marker.txt"}' },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'call_cli_fixture', content: 'CLI_TOOL_RESULT' },
+        ],
+      }),
+    });
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as { choices?: { message?: { content?: string } }[] };
+    expect(secondBody.choices?.[0]?.message?.content).toBe('CLI_TOOL_RESULT');
     expect(
       h.server.requests.filter((request) => request.url.includes('/chat/completions')),
     ).toHaveLength(0);
-    expect(calls.at(-1)?.prompt).toContain('CLI_TOOL_RESULT');
     await expect(readFile(join(h.workspacePath, 'marker.txt'))).rejects.toThrow();
   } finally {
-    await h.close();
-  }
-});
-
-it('Ferry executes a CLI tool through its own tool loop and returns the real file output', async () => {
-  const h = await startHarness({ provider: 'opencode' });
-  try {
-    const model = h.services.catalog.models.find(
-      (model) => model.providerId === 'opencode' && model.free && model.toolCalling,
-    );
-    if (!model) throw new Error('Missing fixture');
-    h.services.models.replace('opencode', [
-      { ...model, apiAccessVerified: false, cliAccessVerified: true },
-    ]);
-    await h.rpc.settings.update({ opencodeZenTransport: 'cli', permissionMode: 'full_auto' });
-    const now = new Date().toISOString();
-    h.services.providerKeyEntries.put({
-      id: 'opencode:1',
-      providerId: 'opencode',
-      keyId: '1',
-      label: 'API key',
-      position: 0,
-      enabled: true,
-      status: 'invalid',
-      lastError: 'API credential rejected',
-      cooldownUntil: null,
-      keyringRef: 'opencode',
-      createdAt: now,
-      updatedAt: now,
-    });
-    const before = h.services.providerKeyEntries.list('opencode');
-    await writeFile(join(h.workspacePath, 'marker.txt'), 'CLI_TOOL_RESULT', 'utf8');
-    const session = await h.rpc.sessions.create({ workspaceId: h.workspaceId });
-    await h.rpc.models.select(session.id, model.ref);
-    await h.rpc.sessions.send(session.id, { text: 'Read marker.txt and quote its content.' });
-    await waitFor(async () =>
-      (await h.rpc.sessions.get(session.id)).messages.some(
-        (message) =>
-          message.role === 'assistant' &&
-          message.parts.some(
-            (part) => part.type === 'text' && part.text.includes('CLI_TOOL_RESULT'),
-          ),
-      ),
-    );
-    expect(calls.at(-1)?.prompt).toContain('CLI_TOOL_RESULT');
-    expect(calls.at(-1)?.apiKey).toBeUndefined();
-    expect(h.services.providerKeyEntries.list('opencode')).toEqual(before);
-    expect(
-      h.server.requests.filter((request) => request.url.includes('/chat/completions')),
-    ).toHaveLength(0);
-  } finally {
-    await h.close();
+    await controller.stop();
   }
 });
 

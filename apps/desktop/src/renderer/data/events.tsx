@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type {
+  CliConnection,
   MessageId,
   MessagePart,
   PartId,
@@ -48,6 +49,30 @@ export function useFerryEvents(): void {
       return parts ? [...parts.values()] : [];
     };
     const off = [
+      client.on('cliConnections.updated', (connection) => {
+        const previous = cache.getQueryData<CliConnection[]>(['cli-connections']);
+        const old = previous?.find((item) => item.id === connection.id);
+        if (previous)
+          cache.setQueryData(
+            ['cli-connections'],
+            previous.some((item) => item.id === connection.id)
+              ? previous.map((item) => (item.id === connection.id ? connection : item))
+              : [...previous, connection],
+          );
+        const eligibilityChanged =
+          old?.account.key !== connection.account.key ||
+          old.verify.state !== connection.verify.state ||
+          old.surfaces.native !== connection.surfaces.native ||
+          old.surfaces.gateway !== connection.surfaces.gateway ||
+          JSON.stringify(old.models) !== JSON.stringify(connection.models);
+        if (eligibilityChanged) {
+          for (const key of ['models', 'providers', 'model-candidates', 'gateway-activity'])
+            void cache.invalidateQueries({ queryKey: [key] });
+        }
+      }),
+      client.on('approvals.pending.updated', (pending) =>
+        cache.setQueryData(['pending-approvals'], pending),
+      ),
       client.on('quota.updated', (capacity) => cache.setQueryData(keys.capacity, capacity)),
       client.on('quota.limits.updated', (limits) => cache.setQueryData(keys.limits, limits)),
       client.on('providers.health.updated', (snapshot) =>

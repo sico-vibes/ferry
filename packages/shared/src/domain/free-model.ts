@@ -5,7 +5,7 @@ type FreeModelFacts = Pick<
   'ref' | 'providerId' | 'free' | 'priceInPerM' | 'priceOutPerM'
 >;
 type FreeProviderPlan = Pick<Provider, 'id' | 'tag'> &
-  Partial<Pick<Provider, 'billingEnabled' | 'freePlan' | 'freeTierUnsupported'>>;
+  Partial<Pick<Provider, 'billingEnabled' | 'freePlan' | 'freeTierUnsupported' | 'kind'>>;
 
 function matchesPattern(pattern: string, modelId: string): boolean {
   let escaped = '';
@@ -44,6 +44,11 @@ export function isModelFreeForPlan(
     (model.priceOutPerM !== null && model.priceOutPerM !== 0);
 
   if (provider.freeTierUnsupported) return false;
+  // An installed-CLI provider has no monetary price list to consult: the effective funding class is
+  // the discovery evidence itself. A `free` model is genuinely zero-cost and participates in
+  // free-first routing; an Included-subscription model stays `free: false` and is never treated as
+  // free here (its funding is gated separately by an explicit profile opt-in).
+  if (provider.kind === 'cli') return model.free;
   if (provider.id === 'opencode')
     return isCoveredByFreePlan(provider, model) && !individuallyPriced;
   if (provider.id === 'openrouter') return /:free(?:$|:)/i.test(model.ref) || zeroPriced;

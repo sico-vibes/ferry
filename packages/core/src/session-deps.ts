@@ -1,25 +1,23 @@
 import { providerBaseUrl } from './provider-endpoints.js';
-import {
-  zenCliFetch,
-  zenModel,
-  zenProvider,
-  zenCliMode,
-  zenFerryKey,
-  ZEN_CLI_BASE_URL,
-} from './zen-cli.js';
+import { zenModel, zenProvider } from './zen-cli.js';
 import { isOpenCodeAppModel } from '@ferry/shared';
 import {
   createStepGenerator,
   type AgentEvent,
+  type AgentTool,
   type GeneratedStep,
   type ModelHints,
+  type ReportedStepUsage,
   type StepGeneratorInput,
+  type StepProducer,
 } from '@ferry/agent';
 import type { RawCallObservation } from '@ferry/providers';
-import type { TraceContext } from '@ferry/shared';
+import type { Message, MessagePart, TraceContext } from '@ferry/shared';
+import type { CliCallerTool, CliConversationMessage } from '@ferry/delegate';
 import { ProviderKeyRotation, resolveProviderRequestOverrides } from '@ferry/providers';
 import {
   ProviderIdSchema,
+  ModelRefSchema,
   oauthProviderId,
   providerDefinition,
   ProviderSchema,
@@ -27,7 +25,9 @@ import {
   UsageRecordSchema,
   QuotaObservationSchema,
   newId,
+  type GatewayRequestRecord,
   type ModelInfo,
+  type ModelRef,
   type Profile,
   type Provider,
   type StepKind,
@@ -58,6 +58,7 @@ import {
 import { getGatewayController } from './gateway.js';
 import { observationsFromRateLimitHeaders } from '@ferry/quota';
 import { getProviderHealth } from './provider-health.js';
+import { cliProviderInfo, getCliBroker } from './cli-broker.js';
 
 const providerKeyPresence = new WeakMap<FerryServices, Map<string, boolean>>();
 
@@ -94,6 +95,12 @@ export interface ModelGateway {
     stepKind: StepKind,
     inputTokens?: number,
     requiresTools?: boolean,
+    /**
+     * Installed-CLI funding surface whose opted-in/verified capacity joins the pool. Defaults to
+     * `native` (the native API wrapper); the Gateway owner must pass `gateway` so Gateway Auto only
+     * routes CLI capacity opted in for the gateway surface.
+     */
+    surface?: 'native' | 'gateway',
   ): ModelInfo[];
   recordHandoff(sessionId: string, reason: string): void;
   probeHeuristicCooldowns(): Promise<void>;
@@ -102,10 +109,16 @@ export interface UsageSink {
   record(record: UsageRecord): void;
 }
 
+export interface SessionDependencyContext {
+  /** Active profile, used to apply `cliDefaults` to an installed-CLI dispatch. */
+  profile?: Profile;
+}
+
 export function createSessionDependencies(
   services: FerryServices,
   emit: (event: AgentEvent) => void,
   traceContext?: TraceContext,
+  context: SessionDependencyContext = {},
 ): {
   gateway: ModelGateway;
   usage: UsageSink;
@@ -121,10 +134,12 @@ export function createSessionDependencies(
   associateObservationKey: (providerId: string, keyId: string) => void;
 } {
   const apiKeys: Record<string, string> = {};
-  let providerProgress: (() => void) | undefined;
   const health = getProviderHealth(services);
   const providerHeaders: Record<string, Record<string, string>> = {};
   let lastGatewayServedModel: string | null = null;
+  // The exact API quota event id the Gateway already recorded for the generation in flight. Cleared
+  // before every dispatch so a cancelled/later step can never re-record another step's event.
+  let pendingUpstreamUsageId: string | null = null;
   let gatewayToken: string | undefined;
   const providerKeyRotation = new ProviderKeyRotation();
   const selectedProviderKeys = new Map<string, { providerId: string; keyId: string }>();
@@ -251,6 +266,18 @@ export function createSessionDependencies(
         stepsLeftToday: null,
       });
     }),
+    // Opted-in/verified installed-CLI connections are first-class providers in the routing capacity
+    // view, so a direct CLI selection resolves its `subscription_cli` lane instead of falling back to
+    // the unknown-price metered path. Un-opted-in CLI kinds stay invisible here.
+    ...getCliBroker(services, () => undefined)
+      .connections()
+      .filter(
+        (connection) =>
+          connection.surfaces.native ||
+          connection.surfaces.gateway ||
+          connection.verify.state === 'verified',
+      )
+      .map((connection) => cliProviderInfo(connection)),
   ];
   const capacity = (): CapacityView => ({
     providers: providers(),
@@ -272,25 +299,51 @@ export function createSessionDependencies(
       .safeParse(services.settings.get('routing-reliability')).data ?? [];
   const usage: UsageSink = {
     record(raw) {
-      services.quota.recordUsage(UsageRecordSchema.parse(raw));
+      const parsed = UsageRecordSchema.parse(raw);
+      if (pendingUpstreamUsageId === null) {
+        services.quota.recordUsage(parsed);
+        return;
+      }
+      // A native-through-Gateway API generation was already charged and recorded once by the Gateway
+      // (same event id). Re-record that EXACT id with this conversation's session/actual-producer
+      // attribution so the global provider event stays a single row while the conversation records its
+      // own event.
+      const upstreamUsageId = pendingUpstreamUsageId;
+      pendingUpstreamUsageId = null;
+      const existing = services.quota.getUsage(upstreamUsageId);
+      // The Gateway's record is the sole authority for cost/plan/headers. Drop the conversation's
+      // recomputed cost, plan and cost-estimate headers BEFORE carrying over the retained values, so a
+      // pruned/missing original leaves them absent/unknown rather than inheriting an invented estimate.
+      const {
+        costUsd: _inventedCost,
+        planUnits: _inventedPlan,
+        headers: _inventedHeaders,
+        ...rest
+      } = parsed;
+      services.quota.recordUsage(
+        UsageRecordSchema.parse({
+          ...rest,
+          id: upstreamUsageId,
+          ...(existing?.costUsd === undefined ? {} : { costUsd: existing.costUsd }),
+          ...(existing?.planUnits === undefined ? {} : { planUnits: existing.planUnits }),
+          ...(existing?.headers === undefined ? {} : { headers: existing.headers }),
+        }),
+      );
       // QuotaEngine subscribers publish the authoritative quota.update summary.
     },
   };
-  const providerFetch: typeof globalThis.fetch = zenCliFetch(
-    services,
-    async (input, init) => {
-      const response = await globalThis.fetch(input, init);
-      const requestUrl =
-        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      if (requestUrl.includes('/v1/chat/completions'))
-        lastGatewayServedModel = response.headers.get('x-ferry-served-model');
-      return response;
-    },
-    undefined,
-    () => {
-      providerProgress?.();
-    },
-  );
+  // Installed-CLI generations never travel through this API-shaped fetch: they dispatch through the
+  // shared broker (see `runNativeCliStep`/the legacy alias entry below). Only standard API traffic
+  // reaches it, so there is no synthetic CLI interception left to keep in sync with the broker.
+  const providerFetch: typeof globalThis.fetch = async (input, init) => {
+    const response = await globalThis.fetch(input, init);
+    const requestUrl =
+      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (requestUrl.includes('/v1/chat/completions'))
+      lastGatewayServedModel = response.headers.get('x-ferry-served-model');
+    return response;
+  };
+
   const observe = (observation: RawCallObservation) => {
     const turnId = traceContext?.turnId;
     if (turnId) {
@@ -479,7 +532,13 @@ export function createSessionDependencies(
     async probeHeuristicCooldowns() {
       await health.recover();
     },
-    resolveCandidates(profile, stepKind, inputTokens = 1, requiresTools = true) {
+    resolveCandidates(
+      profile,
+      stepKind,
+      inputTokens = 1,
+      requiresTools = true,
+      surface = 'native',
+    ) {
       const configuredProviders = services.catalog.providers.filter(
         ({ provider, key_required }) => {
           const saved = services.providers.get(provider);
@@ -531,13 +590,35 @@ export function createSessionDependencies(
             return saved?.enabled && saved.keyStatus === 'valid';
           })
         : [];
-      const candidates = [...available, ...oauthModels];
-      const verifiedModelRefs = configuredProviders.flatMap(({ provider }) => {
-        const saved = services.providers.get(provider);
-        return saved?.modelsVerifiedAt && saved.availableModels
-          ? saved.availableModels.map((model) => model.ref)
-          : [];
-      });
+      // Installed-CLI capacity that is genuinely fundable for this profile joins the Auto candidate
+      // pool. `eligibleModels` already applies the exact-model verification receipt, effective
+      // option/capability/tool/context fit, surface opt-in and funding policy. A Long Context step is
+      // never satisfied by the explicit unknown-capacity policy placeholder: only a CLI route that
+      // actually reported a context window competes for it.
+      const cliEligible = getCliBroker(services, () => undefined)
+        .eligibleModels({
+          surface,
+          profile,
+          requiresTools,
+          inputTokens,
+        })
+        .filter((model) => stepKind !== 'long_context' || model.capacityKnown === true);
+      // Only genuinely free CLI capacity joins the primary (free) ranking, where it competes with
+      // free API routes under the premade profile chain, preferences, quality and long-context rules.
+      // Included-subscription capacity is ranked in its own band below and appended strictly after
+      // every free route, so Auto can never prefer Included simply because it came from the CLI pool.
+      const freeCli = cliEligible.filter((model) => model.free);
+      const includedCli = cliEligible.filter((model) => !model.free);
+      const candidates = [...available, ...oauthModels, ...freeCli];
+      const verifiedModelRefs = [
+        ...configuredProviders.flatMap(({ provider }) => {
+          const saved = services.providers.get(provider);
+          return saved?.modelsVerifiedAt && saved.availableModels
+            ? saved.availableModels.map((model) => model.ref)
+            : [];
+        }),
+        ...cliEligible.map((model) => model.ref),
+      ];
       const preferredModelRefs = configuredProviders.flatMap(({ provider, probe_models = [] }) => {
         const providerModels = available.filter((model) => model.providerId === provider);
         const refsById = new Map(
@@ -688,13 +769,58 @@ export function createSessionDependencies(
           );
         }
       }
-      return ordered;
+      // Included-subscription capacity is ranked in its own band (quality/long-context/tier rules
+      // still apply within it) and appended strictly after every free API/CLI route. This is what
+      // keeps global free-first ordering intact: an Included CLI route can never jump ahead of an
+      // eligible free API provider merely because it arrived through the CLI pool.
+      let includedOrdered: ModelInfo[] = [];
+      if (includedCli.length > 0) {
+        const includedByRef = new Map(includedCli.map((model) => [model.ref, model]));
+        includedOrdered = scoreModels({
+          models: includedCli,
+          providers: providers(),
+          capacity: routingCapacity,
+          profile,
+          step: stepKind,
+          estimate: { inputTokens, requiresTools },
+          preferredModelRefs,
+          verifiedModelRefs,
+          routing: routingSettings(),
+          trialOptInProviders: routingSettings().trialOptInProviders,
+          textToolFallbackEnabled: routingSettings().textToolFallbackEnabled,
+          reliability: reliability(),
+          codingObservations: codingObservations(services),
+          stats: modelRoutingStats(services),
+          random: services.random,
+          allowIncludedSubscription: true,
+        }).flatMap(({ ref }) => {
+          const model = includedByRef.get(ref);
+          return model ? [model] : [];
+        });
+      }
+      return [...ordered, ...includedOrdered];
     },
     recordHandoff(sessionId, reason) {
       services.handoffs.put({ id: newId('handoff'), sessionId, reason });
     },
     async streamStep(req, signal) {
       const providerId = req.model.providerId;
+      // Every step starts with no pending correlation, whatever branch it takes: a completed Gateway
+      // generation whose usage consumer never ran can never lend its API event id to a later direct
+      // (or Gateway) generation.
+      pendingUpstreamUsageId = null;
+      // A discovered installed-CLI model dispatches through the shared Core broker on the native
+      // surface. Its original system/messages/tools/delta/progress/signal are preserved verbatim.
+      if (req.model.cliConnectionId) return await runNativeCliStep(services, req, context.profile);
+      // Legacy Zen alias entry: an old persisted `opencode/<id>` free-model ref resolves to the
+      // discovered canonical `opencode-cli/opencode/<id>` and dispatches through the same shared
+      // broker path. When no canonical model is discovered the ref is left to the standard API path;
+      // no model is substituted.
+      if (providerId === 'opencode' && req.model.free) {
+        const alias = getCliBroker(services, () => undefined).model(req.model.ref);
+        if (alias && alias.model.ref !== req.model.ref)
+          return await runNativeCliStep(services, req, context.profile);
+      }
       if (services.providers.get(providerId)?.enabled === false)
         throw Object.assign(
           new Error(`${providerId} is disabled or paused. Choose another provider or resume it.`),
@@ -718,19 +844,46 @@ export function createSessionDependencies(
         providerBaseUrls.gateway = `http://127.0.0.1:${String(status.port)}/v1`;
         providerHeaders.gateway = { 'x-ferry-internal-token': gatewayToken };
         const sessionId = traceContext?.sessionId ?? '';
+        // Per-generation evidence: the Gateway mints a fresh `x-ferry-trace-id` for exactly this one
+        // internal request. Capture it from our own transport response (never an upstream header) so
+        // the recorded completed outcome can be correlated by exact trace id + key id after the stream
+        // finishes. Scoping the capture to this generation means an interleaved key or a cancelled
+        // turn can never reuse another generation's evidence.
+        const evidence: { traceId: string | null } = { traceId: null };
+        const gatewayFetch: typeof globalThis.fetch = async (input, init) => {
+          const response = await providerFetch(input, init);
+          const requestUrl =
+            typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+          if (requestUrl.includes('/v1/chat/completions')) {
+            const traceId = response.headers.get('x-ferry-trace-id');
+            if (traceId) evidence.traceId = traceId;
+          }
+          return response;
+        };
         const generator = createStepGenerator(
           {
             apiKeys,
             providerBaseUrls,
             providerHeaders,
-            providerFetch,
+            providerFetch: gatewayFetch,
             emit,
             onObservation: observe,
           },
           req.model,
           sessionId,
         );
-        return await generator({ ...req, signal });
+        const generated = await generator({ ...req, signal });
+        const attribution = gatewayStepAttribution(
+          controller.requests(),
+          key.id,
+          evidence.traceId,
+          req.model.ref,
+        );
+        // Retain the exact API event id (if any) only for the usage record the agent loop is about to
+        // emit for THIS step; it is consumed once and never reused.
+        pendingUpstreamUsageId = attribution.upstreamUsageId;
+        const { upstreamUsageId: _upstreamUsageId, ...step } = attribution;
+        return { ...generated, ...step };
       }
       if (oauthModelCatalog.some((model) => model.providerId === providerId))
         return await streamOAuthStep(services.secrets, { ...req, signal });
@@ -740,8 +893,8 @@ export function createSessionDependencies(
           new Error(`Provider or model is temporarily unavailable: ${req.model.ref}`),
           { statusCode: 503 },
         );
-      const cliTransport = providerId === 'opencode' && req.model.free && zenCliMode(services);
-      const entries = cliTransport ? [] : services.providerKeyEntries.list(providerId);
+      // Installed-CLI generations are dispatched above; only standard API credentials are read here.
+      const entries = services.providerKeyEntries.list(providerId);
       const stickyRoutes = z
         .record(
           z.string(),
@@ -782,13 +935,11 @@ export function createSessionDependencies(
       if (selectedKey) selectedProviderKeys.set(sessionId, { providerId, keyId: selectedKey.id });
       else selectedProviderKeys.delete(sessionId);
       const legacyKeyRef = services.providerKeys.get(providerId)?.keyringRef;
-      const key = cliTransport
-        ? await zenFerryKey(services)
-        : selectedKey
-          ? await services.secrets.get(selectedKey.keyringRef)
-          : entries.length === 0 && legacyKeyRef
-            ? await services.secrets.get(legacyKeyRef)
-            : undefined;
+      const key = selectedKey
+        ? await services.secrets.get(selectedKey.keyringRef)
+        : entries.length === 0 && legacyKeyRef
+          ? await services.secrets.get(legacyKeyRef)
+          : undefined;
       if (!key && entries.length > 0 && !permitsKeylessProvider(services, providerId))
         throw Object.assign(new Error(`All configured keys for ${providerId} are unavailable.`), {
           statusCode: 429,
@@ -796,10 +947,7 @@ export function createSessionDependencies(
       if (key) apiKeys[providerId] = key;
       else Reflect.deleteProperty(apiKeys, providerId);
       if (providerId === 'opencode') {
-        const base =
-          zenCliMode(services) && req.model.free
-            ? ZEN_CLI_BASE_URL
-            : providerBaseUrl(services, providerId);
+        const base = providerBaseUrl(services, providerId);
         if (base) providerBaseUrls[providerId] = base;
         else Reflect.deleteProperty(providerBaseUrls, providerId);
       }
@@ -1011,8 +1159,9 @@ export function createSessionDependencies(
     },
   };
   return {
-    setProviderProgress(progress) {
-      providerProgress = progress;
+    setProviderProgress() {
+      // Installed-CLI progress and queue waits are reported by the shared broker directly; the
+      // standard API step generator has no progress hook, so this compatibility seam is inert.
     },
     gateway,
     usage,
@@ -1033,6 +1182,224 @@ export function createSessionDependencies(
       selectedProviderKeys.set(traceContext?.sessionId ?? '', { providerId, keyId });
     },
   };
+}
+
+/**
+ * Encode the agent's own system/messages into the caller conversation the CLI transports accept,
+ * preserving roles, real tool-call ids and real tool results. Ferry never invents a tool result.
+ */
+export function encodeCliConversation(
+  system: string,
+  messages: readonly Message[],
+): CliConversationMessage[] {
+  const conversation: CliConversationMessage[] = [];
+  if (system.trim()) conversation.push({ role: 'system', content: system });
+  for (const message of messages) {
+    if (message.role === 'user') {
+      const text = message.parts
+        .filter((part): part is Extract<MessagePart, { type: 'text' }> => part.type === 'text')
+        .map((part) => part.text)
+        .join('\n');
+      if (text) conversation.push({ role: 'user', content: text });
+      continue;
+    }
+    const text = message.parts
+      .filter((part): part is Extract<MessagePart, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n');
+    const calls = message.parts.filter(
+      (part): part is Extract<MessagePart, { type: 'tool_call' }> => part.type === 'tool_call',
+    );
+    if (text || calls.length)
+      conversation.push({
+        role: 'assistant',
+        content: text || null,
+        ...(calls.length
+          ? {
+              tool_calls: calls.map((call) => ({
+                id: call.toolCallId ?? call.id,
+                type: 'function' as const,
+                function: { name: call.tool, arguments: JSON.stringify(call.args) },
+              })),
+            }
+          : {}),
+      });
+    for (const call of calls) {
+      if (call.output)
+        conversation.push({
+          role: 'tool',
+          content: call.output.text,
+          tool_call_id: call.toolCallId ?? call.id,
+        });
+    }
+  }
+  return conversation;
+}
+
+function schemaToParameters(schema: AgentTool['schema']): Record<string, unknown> {
+  try {
+    const json = z.toJSONSchema(schema);
+    return typeof json === 'object' ? json : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Convert the agent's tool registry entries into caller tools the CLI transports advertise. */
+export function encodeCliTools(tools: readonly AgentTool[]): CliCallerTool[] {
+  return tools.map((tool) => ({
+    name: tool.name,
+    ...(tool.title ? { description: tool.title } : {}),
+    parameters: schemaToParameters(tool.schema),
+  }));
+}
+
+function estimateCliInputTokens(
+  system: string,
+  messages: readonly CliConversationMessage[],
+  tools: readonly CliCallerTool[],
+): number {
+  const bytes =
+    Buffer.byteLength(system, 'utf8') +
+    Buffer.byteLength(JSON.stringify(messages), 'utf8') +
+    Buffer.byteLength(JSON.stringify(tools), 'utf8');
+  return Math.ceil(bytes / 4);
+}
+
+/**
+ * Native-surface installed-CLI dispatch: resolve the cached CLI model/provider, apply conversation
+ * and profile option defaults over the connection/model defaults, and run exactly one bounded turn
+ * through the broker. Text streams to the caller's `onDelta`; tool calls are returned to the agent
+ * loop for real execution and approval (the adapter never executes or approves a native tool).
+ */
+/**
+ * An installed-CLI route is text-only. If any durable tool result carries image content (e.g. a
+ * screenshot), the encoder would drop it and the model would answer as if it had seen the image.
+ * Reject explicitly before dispatch instead of silently discarding the attachment.
+ */
+export function unsupportedCliImageMessage(messages: readonly Message[]): string | null {
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === 'tool_call' && part.output?.images && part.output.images.length > 0)
+        return `A tool result for "${part.tool}" contains image content the installed-CLI route cannot send. No image was forwarded; retry without the screenshot or pick a vision-capable API model.`;
+    }
+  }
+  return null;
+}
+
+async function runNativeCliStep(
+  services: FerryServices,
+  req: StepGeneratorInput,
+  profile: Profile | undefined,
+): Promise<GeneratedStep> {
+  const imagesUnsupported = unsupportedCliImageMessage(req.messages);
+  if (imagesUnsupported)
+    throw Object.assign(new Error(imagesUnsupported), { code: 'unsupported_capability' });
+  const modelRef = req.model.ref;
+  const session = services.sessions.get(req.messages.at(-1)?.sessionId ?? '');
+  const conversationOverride = session?.cliOptions?.[modelRef];
+  const profileDefault = profile?.cliDefaults?.[modelRef];
+  const messages = encodeCliConversation(req.system, req.messages);
+  const tools = encodeCliTools(req.tools);
+  const broker = getCliBroker(services, () => undefined);
+  const dispatch = await broker.dispatch({
+    surface: 'native',
+    modelRef,
+    messages,
+    tools,
+    signal: req.signal,
+    ...(req.onProgress ? { onProgress: req.onProgress } : {}),
+    onText: (text) => {
+      req.onDelta(text);
+    },
+    ...(conversationOverride ? { optionOverride: conversationOverride } : {}),
+    ...(profileDefault ? { profileCliDefault: profileDefault } : {}),
+    inputTokens: estimateCliInputTokens(req.system, messages, tools),
+  });
+  const { result, connection, model, accountKey } = dispatch;
+  const reportedUsage: ReportedStepUsage = {
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    cachedTokens: result.usage.cachedTokens,
+    reasoningTokens: result.usage.reasoningTokens,
+  };
+  // Preserve the producer captured by dispatch, including its original requested alias. Looking up
+  // the connection after generation would attribute the reply to an account that may have changed.
+  const producer: StepProducer = {
+    modelRef: model.ref,
+    providerId: ProviderIdSchema.parse(model.providerId),
+    connectionId: connection.kind,
+    accountKey,
+    requestedModelRef: modelRef,
+  };
+  const step: GeneratedStep = {
+    ...(result.text ? { text: result.text } : {}),
+    ...(result.toolCalls.length
+      ? {
+          toolCalls: result.toolCalls.map((call) => ({
+            id: call.id,
+            toolCallId: call.id,
+            name: call.name,
+            input: call.arguments,
+          })),
+        }
+      : {}),
+    responseModel: result.responseModel,
+    finishReason: result.toolCalls.length ? 'tool-calls' : 'stop',
+    reportedUsage,
+    producer,
+  };
+  return step;
+}
+
+/**
+ * Pure half of Gateway step attribution: given the bounded `requests()` snapshot and this
+ * generation's exact trace id + key id, derive the actual producer, authoritative reported usage, and
+ * the exact API quota event id the Gateway already recorded (if any).
+ *
+ * Correlation is by the exact trace id the Gateway minted for this generation's request plus the key
+ * id. When no completed outcome is retained (older record, mismatch, out of retention, or a
+ * non-completed outcome), the producer is absent (honest unknown) and every usage dimension stays
+ * `null` rather than being guessed from the standard-API SDK's parsed stream.
+ *
+ * An outcome that explicitly reports no usage (`usageReported === false`) contributes no reported
+ * tokens: legacy/coalesced API zeros are not real reported usage and stay `null`. A real reported zero
+ * (a CLI route with `usageReported === true`) is preserved as `0`.
+ */
+export function gatewayStepAttribution(
+  requests: readonly GatewayRequestRecord[],
+  keyId: string,
+  traceId: string | null,
+  requestedModelRef: ModelRef,
+): { producer?: StepProducer; reportedUsage: ReportedStepUsage; upstreamUsageId: string | null } {
+  const record = traceId
+    ? requests.find((entry) => entry.traceId === traceId && entry.keyId === keyId)
+    : undefined;
+  const completed = record?.outcome === 'completed' ? record : undefined;
+  const servedModel = ModelRefSchema.safeParse(
+    completed ? (completed.servedModel ?? completed.modelRef) : null,
+  );
+  const servedProviderId = ProviderIdSchema.safeParse(completed?.servedProviderId);
+  const producer: StepProducer | undefined =
+    completed && servedModel.success && servedProviderId.success
+      ? {
+          modelRef: servedModel.data,
+          providerId: servedProviderId.data,
+          connectionId: completed.servedConnectionId ?? null,
+          accountKey: completed.servedAccountKey ?? null,
+          requestedModelRef,
+        }
+      : undefined;
+  // Never surface an explicit "not reported" outcome's coalesced zeros as real tokens.
+  const reported = completed?.usageReported === false ? undefined : completed?.reportedUsage;
+  const reportedUsage: ReportedStepUsage = {
+    inputTokens: reported?.inputTokens ?? null,
+    outputTokens: reported?.outputTokens ?? null,
+    cachedTokens: reported?.cachedTokens ?? null,
+    reasoningTokens: reported?.reasoningTokens ?? null,
+  };
+  const upstreamUsageId = completed?.upstreamUsageId ?? null;
+  return { ...(producer ? { producer } : {}), reportedUsage, upstreamUsageId };
 }
 
 export function modelHintsFromRegistry(model: Pick<ModelInfo, 'capability'>): Partial<ModelHints> {

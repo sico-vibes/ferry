@@ -14,5 +14,8 @@ export const StepKindSchema = z.enum([
 export type StepKind = z.infer<typeof StepKindSchema>;
 export const TierSchema = z.enum(['T1', 'T2', 'T3']);
 export type Tier = z.infer<typeof TierSchema>;
+/** Reasoning effort levels advertised by models. Shared so cli-connection does not depend on provider. */
+export const EffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+export type Effort = z.infer<typeof EffortSchema>;
 export const ThemeSchema = z.enum(['dark', 'light', 'system']);
 export type Theme = z.infer<typeof ThemeSchema>;

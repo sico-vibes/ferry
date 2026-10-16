@@ -12,7 +12,7 @@ The default listener is `127.0.0.1:11435`. If that port is busy, Ferry selects a
 
 ## Control centre and request history
 
-Gateway has Overview, Requests, Routing, Keys, Usage & costs, and Connect tabs. Requests offers search, key/status filters, 24-hour/7-day/30-day ranges and paging. Its drawer shows the requested and serving model, correlation ID, attempt durations, failures/skips, policy constraints and completed/cancelled/partial outcomes. SQLite stores metadata without prompts or response bodies; Core retention applies. Usage groups by key, provider or model, and separates reported tokens and actual/estimated charges. Provider/model costs include charged failed attempts. Unknown metrics explain what was not reported.
+Gateway has Overview, Requests, Routing, Keys, Usage & costs, and Connect tabs. Requests offers search, key/status filters, 24-hour/7-day/30-day ranges and paging. Its drawer shows the requested and serving model, correlation ID, attempt durations, failures/skips, policy constraints and completed/cancelled/partial outcomes. SQLite stores metadata without prompts or response bodies; Core retention applies to these Gateway request records. Session model usage and optimizer recovery blobs have separate lifecycles. Usage groups by key, provider or model, and separates reported tokens and actual/estimated charges. Provider/model costs include charged failed attempts. Unknown metrics explain what was not reported.
 
 Named keys have a client assignment, preset, concrete restrictions, request/token limits, a monthly USD limit and rotation/revocation. Rotation preserves the key ID, policy and accounting while invalidating the old secret. Global accounting covers agent and Gateway spend. Paid backup needs explicit authorization and a positive key limit; unknown metered pricing blocks automatic paid execution.
 
@@ -65,7 +65,7 @@ Continue's OpenAI-compatible provider uses the same base URL, key, and model ID.
 
 ## OpenCode Zen
 
-Use your own OpenCode key for the standard Zen API. Models restricted to the OpenCode app are launched with `ferry run opencode --native` or the delegation lane; they are not Ferry routes.
+Standard OpenCode Zen API access uses your own eligible Zen key. OpenCode-only free models can also use the installed OpenCode CLI transport in Ferry chat, Ferry CLI, and Gateway after a successful access check and the corresponding surface opt-in. The Go credential does not prove Zen access. See [CLI connections](CLI-CONNECTIONS.md) for the credential choices and setup. Unsupported request features still fail validation; Ferry does not silently switch to a paid API model.
 
 ## Claude Code
 
@@ -149,7 +149,7 @@ Set key policy with `ferry gateway keys update <id> --paid-backup true --budget-
 
 Gateway execution uses the routing first-token timeout, the agent step inactivity timeout, a 150-second overall deadline and at most five dispatches. Provider cooldowns and Retry-After remain authoritative. Request history is persisted locally as metadata, with Core retention settings applied at startup and hourly.
 
-OpenCode-only models use the real OpenCode app's own providers and credentials. Launch with `ferry run opencode --native --model opencode/big-pickle`; this path does not create a Gateway key, start the Gateway, or inject Ferry provider configuration.
+The installed OpenCode CLI connection is opt-in separately for Ferry chat and Gateway. When enabled for Gateway, a Ferry Gateway key may route to eligible discovered CLI models through the actual installed OpenCode client; this uses the client's current signed-in account or the explicitly selected Zen credential source. It does not copy Go credentials into Ferry's provider-key database. See [CLI connections](CLI-CONNECTIONS.md) for current setup and limits.
 
 ## Interactive CLI and provider readiness
 

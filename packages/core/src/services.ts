@@ -13,6 +13,7 @@ import {
   redactKnownSecretText,
   resolveCaptureContent,
   SettingsSchema,
+  CliConnectionSettingsSchema,
   ProfileSchema,
   isModelFreeForPlan,
   ProviderIdSchema,
@@ -65,12 +66,25 @@ import {
   type ProviderKeyEntry,
 } from '@ferry/storage';
 import type { TelemetrySink, TraceContext } from '@ferry/shared';
+import type { CliConnection, CliConnectionKind } from '@ferry/shared';
+import type { CliUsageRefresh } from '@ferry/delegate';
+import type { CliTurnRunner } from './cli-broker.js';
 
 export interface FerryClock {
   now(): Date;
 }
 
-export interface ServiceOptions {
+/**
+ * Offline seams for the installed-CLI transport. Production never sets these; integration fixtures
+ * inject a deterministic connection scan, usage probe and turn runner so no real CLI is spawned.
+ */
+export interface CliTransportSeams {
+  cliScan?: (kind: CliConnectionKind) => Promise<CliConnection>;
+  cliUsage?: (kind: CliConnectionKind, connection: CliConnection) => Promise<CliUsageRefresh>;
+  cliRunTurn?: CliTurnRunner;
+}
+
+export interface ServiceOptions extends CliTransportSeams {
   dataDir: string;
   clock?: FerryClock;
   random?: () => number;
@@ -116,6 +130,13 @@ export interface FerryServices {
   readonly telemetry: TelemetrySink;
   readonly activeTraceContexts: Map<string, TraceContext>;
   readonly deviceId: string;
+  /** Offline installed-CLI transport seams; unset in production. */
+  readonly cliScan?: (kind: CliConnectionKind) => Promise<CliConnection>;
+  readonly cliUsage?: (
+    kind: CliConnectionKind,
+    connection: CliConnection,
+  ) => Promise<CliUsageRefresh>;
+  readonly cliRunTurn?: CliTurnRunner;
   emitAppEvent(
     event: string,
     data?: Record<string, unknown>,
@@ -201,6 +222,35 @@ export function recordProviderKeyFailure(
   });
 }
 
+/**
+ * One-time migration of the legacy `opencodeZenTransport: 'cli'` opt-in into the shared OpenCode
+ * installed-CLI connection flags. Runs once; an explicit shared record (including an explicit
+ * false) written afterwards always wins and is never overwritten.
+ */
+export function migrateLegacyZenCliConnection(settings: SettingsRepository): void {
+  const raw = settings.get('global');
+  const parsed = SettingsSchema.safeParse(raw ?? {});
+  if (!parsed.success || parsed.data.zenCliMigratedToShared) return;
+  const data = parsed.data;
+  const base = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  let cliConnections = data.cliConnections;
+  const existing = data.cliConnections['opencode-cli'];
+  if (!existing && data.opencodeZenTransport === 'cli') {
+    cliConnections = {
+      ...data.cliConnections,
+      'opencode-cli': CliConnectionSettingsSchema.parse({
+        native: true,
+        gateway: true,
+        credentialMode: data.opencodeZenCliUseFerryKey ? 'ferry' : 'installed',
+        // Ferry mode uses the saved OpenCode Zen key itself (`opencode`), not an offered Go provider
+        // credential; the legacy Go offer was a migration mistake the resolver rejects.
+        credentialProvider: null,
+      }),
+    };
+  }
+  settings.put('global', { ...base, cliConnections, zenCliMigratedToShared: true });
+}
+
 export async function createServices({
   dataDir,
   clock,
@@ -209,6 +259,9 @@ export async function createServices({
   secrets,
   cloudClientFactory,
   retentionIntervalMs = 60 * 60_000,
+  cliScan,
+  cliUsage,
+  cliRunTurn,
 }: ServiceOptions): Promise<FerryServices> {
   const home = canonicalizePath(dataDir);
   const paths = getDataPaths({ ...env, FERRY_HOME: home });
@@ -269,6 +322,7 @@ export async function createServices({
     }
     settings.put('global', legacySettings);
   }
+  migrateLegacyZenCliConnection(settings);
   const pruneLogs = () => {
     const value = settings.get('global') as { logRetentionDays?: number | null } | undefined;
     const days = value?.logRetentionDays === undefined ? 30 : value.logRetentionDays;
@@ -693,6 +747,9 @@ export async function createServices({
     telemetry,
     activeTraceContexts,
     deviceId,
+    ...(cliScan ? { cliScan } : {}),
+    ...(cliUsage ? { cliUsage } : {}),
+    ...(cliRunTurn ? { cliRunTurn } : {}),
     emitAppEvent,
     cloud: {
       ...(cloudAuth ? { auth: cloudAuth } : {}),

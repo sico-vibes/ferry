@@ -82,6 +82,9 @@ const persistenceSchema = (state: unknown) => {
     ]),
   );
   const selections = new Map(value.selections as [string, string][]);
+  const cliVerifiedModels = new Map(
+    (value.cliVerifiedModels as [string, string[]][] | undefined) ?? [],
+  );
   return {
     ...value,
     requestFailures: ((value.requestFailures as unknown[] | undefined) ?? []).map((row) =>
@@ -103,6 +106,8 @@ const persistenceSchema = (state: unknown) => {
     messages,
     taskRecords,
     selections,
+    cliVerifiedModels,
+    sessionUsage: (value.sessionUsage as MockState['sessionUsage'] | undefined) ?? [],
   } as Partial<MockState>;
 };
 
@@ -146,6 +151,8 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
     mcps: structuredClone(fixtures.mcps),
     delegationRuns: [],
     selections: new Map(),
+    cliVerifiedModels: new Map(),
+    sessionUsage: structuredClone(fixtures.sessionUsage),
   });
   let state = initial();
   try {
@@ -178,6 +185,7 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
         messages: [...state.messages],
         taskRecords: [...state.taskRecords],
         selections: [...state.selections],
+        cliVerifiedModels: [...state.cliVerifiedModels],
         providerKeys: [...state.providerKeys],
       },
     });
@@ -205,6 +213,11 @@ export function createMockStore(options: MockOptions = {}): MockRuntime {
     nextId(prefix) {
       const suffix = Array.from({ length: 20 }, () => rng.int(0, 35).toString(36)).join('');
       return `${prefix}_${suffix}`;
+    },
+    recordUsage(input) {
+      state.sessionUsage = [...state.sessionUsage, input];
+      syncStore();
+      persist();
     },
     startDelegation(sessionId, laneName, brief) {
       const lane = state.lanes.find((candidate) => candidate.name === laneName);

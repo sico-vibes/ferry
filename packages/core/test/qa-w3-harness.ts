@@ -34,6 +34,11 @@ export interface HarnessOptions {
   env?: NodeJS.ProcessEnv;
   provider?: string;
   workspacePath?: string;
+  /** Offline installed-CLI transport seams; unset in production. */
+  cliScan?: import('../src/cli-connections.js').CliConnectionServiceOptions['scan'];
+  /** Non-spending CLI billing, so a metered model never dispatches without authorization. */
+  cliUsage?: import('../src/cli-connections.js').CliConnectionServiceOptions['usage'];
+  cliRunTurn?: import('../src/cli-broker.js').CliTurnRunner;
 }
 
 /** Every core QA harness enables one fake provider through a loopback server. */
@@ -58,6 +63,9 @@ export async function startHarness(options: HarnessOptions = {}): Promise<CoreHa
       [baseName]: `${server.baseUrl}/v1`,
       ...options.env,
     },
+    ...(options.cliScan ? { cliScan: options.cliScan } : {}),
+    ...(options.cliUsage ? { cliUsage: options.cliUsage } : {}),
+    ...(options.cliRunTurn ? { cliRunTurn: options.cliRunTurn } : {}),
   });
   const services = host.options.services;
   if (!services) {

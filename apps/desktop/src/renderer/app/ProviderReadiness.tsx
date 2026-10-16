@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ProfileIdSchema, type Profile, type ProfileId } from '@ferry/shared';
+import { ProfileIdSchema, type Profile } from '@ferry/shared';
 import { UiV2 } from '@ferry/ui';
 import { CheckCircle2 } from 'lucide-react';
 import { ProviderCheckResults } from './ProviderCheckResults';
@@ -20,7 +20,7 @@ export function ProviderReadiness() {
     [built, setBuilt] = useState('');
   const mutation = useRef(false);
   const [applying, setApplying] = useState(false);
-  const [previous, setPrevious] = useState<ProfileId | null>(null),
+  const [undoId, setUndoId] = useState<string | null>(null),
     [applied, setApplied] = useState(false);
   const checks = useQuery({
     queryKey: ['provider-check', id ?? 'latest'],
@@ -92,6 +92,7 @@ export function ProviderReadiness() {
     setError('');
     setPreview(null);
     setApplied(false);
+    setUndoId(null);
     try {
       const result = await client.providers.startChecks(
         paid ? { approvedCostUsd: Number(paidCap) } : undefined,
@@ -249,10 +250,9 @@ export function ProviderReadiness() {
                         )
                     )
                       throw new Error('These recommendations are stale. Check providers again.');
-                    const prior = (await client.settings.get()).activeProfileId;
-                    setPrevious(prior);
-                    await client.profiles.save(preview);
-                    await client.profiles.activate(preview.id);
+                    const result = await client.profiles.applyOptimized(preview);
+                    setPreview(result.profile);
+                    setUndoId(result.undoId);
                     setApplied(true);
                     await cache.invalidateQueries({ queryKey: ['profiles'] });
                     await cache.invalidateQueries({ queryKey: ['settings'] });
@@ -269,7 +269,7 @@ export function ProviderReadiness() {
             >
               {applying && !applied ? 'Applying…' : 'Apply recommendations'}
             </UiV2.Button>
-            {applied && previous && (
+            {applied && undoId && (
               <UiV2.Button
                 variant="ghost"
                 disabled={applying}
@@ -280,8 +280,10 @@ export function ProviderReadiness() {
                     setApplying(true);
                     setError('');
                     try {
-                      await client.profiles.activate(previous);
+                      await client.profiles.undoOptimized(undoId);
                       setApplied(false);
+                      setUndoId(null);
+                      await cache.invalidateQueries({ queryKey: ['profiles'] });
                       await cache.invalidateQueries({ queryKey: ['settings'] });
                     } catch (cause) {
                       setError(cause instanceof Error ? cause.message : 'Could not undo.');

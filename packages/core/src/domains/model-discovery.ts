@@ -53,7 +53,10 @@ export function getModelDiscovery(host: CoreHost, services: FerryServices): Mode
   const queue = createBackgroundQueue();
 
   const refresh = (id: string): Promise<void> => {
-    if (id === 'opencode' && zenCliMode(services)) return Promise.resolve();
+    // The legacy Zen CLI opt-in is surface-aware; skip the API catalogue probe when the installed CLI
+    // transport is selected for either surface, and only then.
+    if (id === 'opencode' && (zenCliMode(services, 'native') || zenCliMode(services, 'gateway')))
+      return Promise.resolve();
     const active = inFlight.get(id);
     if (active) return active;
 

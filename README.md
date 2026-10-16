@@ -6,7 +6,8 @@ Ferry is a Windows-first desktop and CLI coding agent that can route requests ac
 
 - Configure multiple keys per provider, with per-key health, rotation, and automatic disable/re-enable behavior.
 - Use Ferry Gateway with OpenAI Chat and Responses (including Codex CLI), Anthropic Messages, or native Gemini clients.
-- Run the CLI against the local engine; when the desktop core is running, the CLI can share it over the authenticated local control channel. CLI provider and routing commands cover v0.11 settings.
+- Run the CLI against the local engine; when the desktop core is running, the CLI can share it over the authenticated local control channel. CLI commands also manage providers, routing profiles, Gateway keys, and installed CLI connections.
+- Connect installed Codex, Claude Code and OpenCode clients with independent native/Gateway opt-ins. See [CLI connections](docs/CLI-CONNECTIONS.md) for setup, model options and usage.
 
 ![Ferry desktop home](design/screenshots/app/home.png)
 
@@ -20,7 +21,7 @@ Every code merge to `main` publishes a public `0.9.0-beta.N` pre-release. Instal
 
 ## First run
 
-Open **Providers & Keys**, choose a provider, and add your own API key. Ferry stores provider secrets in the operating system keyring; they are not kept in the project files. Some providers need an account, billing setup, phone verification, or an active trial. You are responsible for their terms and charges. Choose a routing profile and start a session.
+Open **Models → Providers**, choose a provider, and add your own API key. Ferry stores provider secrets in the operating system keyring; they are not kept in the project files. Some providers need an account, billing setup, phone verification, or an active trial. You are responsible for their terms and charges. Choose a routing profile and start a session.
 
 Free capacity is modest and volatile. Daily requests (RPD) and per-model limits usually determine practical use before a large token-per-day headline does. Limits may be shared, model-specific, regional, or reduced at any time. Free endpoints can have different data-use terms from paid plans; check each provider’s current policy before sending sensitive content. Ferry does not promise a fixed number of free coding sessions.
 
@@ -34,6 +35,8 @@ ferry run "Explain this project"
 ```
 
 The CLI uses the local engine by default. Add a provider key in the Ferry app or complete `ferry` setup before running a task. Use `--engine mock` only when you explicitly want the demo engine. See [CLI commands and flags](docs/CLI.md), [routing](docs/ROUTING.md), and [troubleshooting](docs/TROUBLESHOOTING.md).
+
+Browse the [documentation index](docs/README.md) for setup, technical references, support evidence, plans, and research.
 
 ## Privacy
 

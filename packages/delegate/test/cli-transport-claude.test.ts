@@ -1,0 +1,611 @@
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it } from 'vitest';
+import type {
+  CliConnection,
+  CliModelCapabilities,
+  CliUsageSnapshot,
+  ModelRef,
+} from '@ferry/shared';
+import {
+  CliTransportError,
+  runClaudeCodeCli,
+  type CliConversationMessage,
+  type CliTransportInput,
+} from '../src/cli-transport/index.js';
+
+const FIXTURE = fileURLToPath(new URL('./fixtures/cli-transport-claude.mjs', import.meta.url));
+const MODEL = 'claude-fixture-model';
+const roots: string[] = [];
+
+async function tempRoot(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'ferry-cli-claude-test-'));
+  roots.push(dir);
+  return dir;
+}
+
+afterEach(async () => {
+  await Promise.all(
+    roots
+      .splice(0)
+      .map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })),
+  );
+});
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+interface ClaudeRecord {
+  argv: string[];
+  cwd?: string;
+  pwd?: string | null;
+  mcp: Record<string, unknown> | null;
+  settings: Record<string, unknown> | null;
+  systemPrompt: string | null;
+  frames: { type: string; message?: Record<string, unknown>; isReplay?: boolean }[];
+  responses: Record<string, unknown>[];
+  mcpTools: string[] | null;
+  userMessages: string[];
+  assistantFrames: number;
+  multiUser: boolean;
+  usedReplay: boolean;
+}
+
+async function readRecord(path: string): Promise<ClaudeRecord> {
+  return JSON.parse(await readFile(path, 'utf8')) as ClaudeRecord;
+}
+
+function claudeModel(overrides: Partial<CliModelCapabilities> = {}): CliModelCapabilities {
+  return {
+    ref: 'claude-code-cli/claude-fixture-model' as ModelRef,
+    connectionId: 'claude-code-cli',
+    providerId: 'claude-code-cli',
+    upstreamId: MODEL,
+    upstreamProvider: 'anthropic',
+    name: 'Fixture Model',
+    efforts: ['low', 'medium', 'high'],
+    defaultEffort: 'medium',
+    speeds: ['standard'],
+    defaultSpeed: 'standard',
+    modalities: ['text'],
+    toolCalling: true,
+    billing: 'included_subscription',
+    hidden: false,
+    ...overrides,
+  };
+}
+
+function claudeConnection(model: CliModelCapabilities): CliConnection {
+  return {
+    id: 'claude-code-cli',
+    kind: 'claude-code-cli',
+    providerId: 'claude-code-cli',
+    upstreamLabel: 'Claude',
+    install: { installed: true, executable: 'claude', version: '2.1.296', installHint: '' },
+    account: {
+      state: 'signed_in',
+      key: 'claude-code-cli:abcdef012345',
+      label: 'fixture@example.com',
+      plan: 'Claude Pro',
+    },
+    verify: { state: 'verified', modelRef: null, checkedAt: null, message: null },
+    surfaces: { native: true, gateway: false },
+    models: [model],
+    usage: {
+      connectionId: 'claude-code-cli',
+      accountKey: null,
+      state: 'unavailable',
+      source: 'test',
+      observedAt: null,
+      staleAt: null,
+      windows: [],
+      note: null,
+    },
+    lastChecked: null,
+    discoveryMessage: null,
+  };
+}
+
+interface ClaudeRunOptions extends Partial<CliTransportInput> {
+  scenario: string;
+  record: string;
+  childPidFile?: string;
+  cwdFile?: string;
+  stageFile?: string;
+  authStatus?: string;
+  /** Inherited PWD that the transport must not forward to the child. */
+  pwd?: string;
+}
+
+function makeInput(options: ClaudeRunOptions): CliTransportInput {
+  const model = options.model ?? claudeModel();
+  const connection = options.connection ?? claudeConnection(model);
+  const input: CliTransportInput = {
+    connection,
+    model,
+    options: options.options ?? { effort: null, speed: 'standard' },
+    messages: options.messages ?? [{ role: 'user', content: 'Say hello' }],
+    tools: options.tools ?? [],
+    signal: options.signal ?? new AbortController().signal,
+    environment: {
+      ...process.env,
+      ...(options.pwd ? { PWD: options.pwd } : {}),
+      FERRY_CLAUDE_SCENARIO: options.scenario,
+      FERRY_CLAUDE_RECORD: options.record,
+      FERRY_CLAUDE_MODEL: model.upstreamId,
+      ...(options.childPidFile ? { FERRY_CLAUDE_CHILD_PID: options.childPidFile } : {}),
+      ...(options.cwdFile ? { FERRY_CLAUDE_CWD_FILE: options.cwdFile } : {}),
+      ...(options.stageFile ? { FERRY_CLAUDE_STAGE_FILE: options.stageFile } : {}),
+      ...(options.authStatus ? { FERRY_CLAUDE_AUTH_STATUS: options.authStatus } : {}),
+    },
+    executable: process.execPath,
+    executableArgs: [FIXTURE],
+    timeoutMs: 20_000,
+  };
+  if (options.onText) input.onText = options.onText;
+  if (options.onProgress) input.onProgress = options.onProgress;
+  if (options.onUsageSnapshot) input.onUsageSnapshot = options.onUsageSnapshot;
+  return input;
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('timed out waiting for condition');
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe('runClaudeCodeCli', () => {
+  it(
+    'streams text, reports usage, forces standard speed and isolates flags',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'record.json');
+      const chunks: string[] = [];
+      const snapshots: CliUsageSnapshot[] = [];
+      const result = await runClaudeCodeCli(
+        makeInput({
+          scenario: 'text',
+          record: recordPath,
+          onText: (text) => chunks.push(text),
+          onUsageSnapshot: (snapshot) => snapshots.push(snapshot),
+        }),
+      );
+
+      expect(result.text).toBe('Hello');
+      expect(chunks.join('')).toBe('Hello');
+      expect(result.toolCalls).toEqual([]);
+      expect(result.usage).toEqual({
+        inputTokens: 12,
+        outputTokens: 5,
+        cachedTokens: 2,
+        reasoningTokens: null,
+      });
+      expect(result.responseModel).toBe(MODEL);
+
+      const record = await readRecord(recordPath);
+      expect(record.argv).toContain('--strict-mcp-config');
+      expect(record.argv).toContain('--disable-slash-commands');
+      expect(record.argv).toContain('--no-session-persistence');
+      expect(record.argv).toContain('--include-partial-messages');
+      expect(record.argv).toContain('--system-prompt-file');
+      expect(record.systemPrompt).toContain('NO native tools');
+      expect(record.userMessages.length).toBe(1);
+      const modelIndex = record.argv.indexOf('--model');
+      expect(record.argv[modelIndex + 1]).toBe(MODEL);
+      expect(record.settings?.fastMode).toBe(false);
+      expect(record.settings?.fastModePerSessionOptIn).toBe(true);
+      expect(record.settings?.disableAllHooks).toBe(true);
+      expect((asRecord(record.settings?.permissions).deny as string[]).includes('Bash')).toBe(true);
+      expect(record.mcp).toEqual({ mcpServers: {} });
+      expect(snapshots[0]?.windows[0]?.utilization).toBeCloseTo(0.65);
+    },
+  );
+
+  it(
+    'hands off caller tools through the MCP bridge and continues from history',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const toolRecord = join(dir, 'tool.json');
+      const tools = [
+        { name: 'read_file', description: 'Read a file', parameters: { type: 'object' } },
+      ];
+      const first = await runClaudeCodeCli(
+        makeInput({
+          scenario: 'tool',
+          record: toolRecord,
+          tools,
+          messages: [{ role: 'user', content: 'Read marker.txt' }],
+        }),
+      );
+      expect(first.toolCalls).toEqual([
+        { id: 'toolu_fixture_1', name: 'read_file', arguments: { path: 'marker.txt' } },
+      ]);
+
+      const toolRecordData = await readRecord(toolRecord);
+      expect(toolRecordData.mcpTools).toContain('tool_0');
+      const server = asRecord(asRecord(toolRecordData.mcp?.mcpServers).ferry_tools);
+      expect(String(asRecord(server.headers).Authorization).startsWith('Bearer ')).toBe(true);
+
+      const continueRecord = join(dir, 'continue.json');
+      const history: CliConversationMessage[] = [
+        { role: 'system', content: 'Be concise.' },
+        { role: 'user', content: 'Read marker.txt' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'toolu_fixture_1',
+              type: 'function',
+              function: { name: 'read_file', arguments: '{"path":"marker.txt"}' },
+            },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'toolu_fixture_1', content: 'file contents' },
+        { role: 'user', content: 'Reply exactly the actual tool result.' },
+      ];
+      await runClaudeCodeCli(
+        makeInput({ scenario: 'text', record: continueRecord, tools, messages: history }),
+      );
+      const record = await readRecord(continueRecord);
+      // Exactly one live user frame: historical user turns must never be re-sent/re-executed.
+      expect(record.userMessages.length).toBe(1);
+      expect(record.multiUser).toBe(false);
+      expect(record.usedReplay).toBe(false);
+      expect(record.assistantFrames).toBe(0);
+      const transcript = record.userMessages[0] ?? '';
+      expect(transcript).toContain('toolu_fixture_1');
+      expect(transcript).toContain('read_file');
+      expect(transcript).toContain('file contents');
+      expect(transcript).toContain('FINAL USER');
+      // Caller system instructions live in a private system-prompt file, not user text.
+      expect(record.systemPrompt).toContain('[system]\nBe concise.');
+      expect(record.systemPrompt).toContain('NO native tools');
+      expect(transcript).not.toContain('Be concise.');
+    },
+  );
+
+  it(
+    'sends exactly one live user frame with full structured history',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'history.json');
+      const tools = [
+        { name: 'read_file', description: 'Read a file', parameters: { type: 'object' } },
+      ];
+      const history: CliConversationMessage[] = [
+        { role: 'developer', content: 'Follow the caller policy.' },
+        { role: 'user', content: '第一回合：读取文件 📁\n' + 'long-line '.repeat(200) },
+        { role: 'assistant', content: '好的' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'toolu_hist_1',
+              type: 'function',
+              function: { name: 'read_file', arguments: '{"path":"long/路径.txt"}' },
+            },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'toolu_hist_1', content: 'TOOL_RESULT::VALUE_路径' },
+        { role: 'user', content: '第二回合并请求：继续' },
+      ];
+      await runClaudeCodeCli(
+        makeInput({ scenario: 'text', record: recordPath, tools, messages: history }),
+      );
+      const record = await readRecord(recordPath);
+      expect(record.userMessages.length).toBe(1);
+      expect(record.multiUser).toBe(false);
+      const transcript = record.userMessages[0] ?? '';
+      expect(transcript).toContain('第一回合：读取文件 📁');
+      expect(transcript).toContain('toolu_hist_1');
+      expect(transcript).toContain('long/路径.txt');
+      expect(transcript).toContain('TOOL_RESULT::VALUE_路径');
+      expect(transcript).toContain('FINAL USER');
+      expect(record.systemPrompt).toContain('[developer]\nFollow the caller policy.');
+      expect(record.systemPrompt).toContain('NO native tools');
+    },
+  );
+
+  it(
+    'never settles on the empty streamed tool block and uses the complete arguments',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const tools = [
+        { name: 'read_file', description: 'Read a file', parameters: { type: 'object' } },
+      ];
+      const result = await runClaudeCodeCli(
+        makeInput({ scenario: 'toolstream', record: join(dir, 'toolstream.json'), tools }),
+      );
+      expect(result.toolCalls).toEqual([
+        { id: 'toolu_stream_1', name: 'read_file', arguments: { value: 'cli_safe😀_"quoted"' } },
+      ]);
+    },
+  );
+
+  it(
+    'handles can_use_tool arriving before block stop with complete input',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const tools = [
+        { name: 'read_file', description: 'Read a file', parameters: { type: 'object' } },
+      ];
+      const result = await runClaudeCodeCli(
+        makeInput({ scenario: 'toolpermission', record: join(dir, 'toolpermission.json'), tools }),
+      );
+      expect(result.toolCalls).toEqual([
+        { id: 'toolu_perm_1', name: 'read_file', arguments: { value: 'permission_complete' } },
+      ]);
+    },
+  );
+
+  it(
+    'pins the advertised default effort and rejects an ultra default before prompting',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'effort.json');
+      const model = claudeModel({ defaultEffort: 'low' });
+      await runClaudeCodeCli(makeInput({ scenario: 'text', record: recordPath, model }));
+      const argv = (await readRecord(recordPath)).argv;
+      expect(argv[argv.indexOf('--effort') + 1]).toBe('low');
+
+      const ultraPath = join(dir, 'ultra.json');
+      const ultra = claudeModel({
+        defaultEffort: 'ultra',
+        efforts: ['low', 'medium', 'high', 'ultra'],
+      });
+      const error = await runClaudeCodeCli(
+        makeInput({ scenario: 'text', record: ultraPath, model: ultra }),
+      ).catch((value: unknown) => value);
+      expect((error as CliTransportError).kind).toBe('unsupported_capability');
+      expect(existsSync(ultraPath)).toBe(false);
+    },
+  );
+
+  it('denies native tool requests and never executes them', { timeout: 30_000 }, async () => {
+    const dir = await tempRoot();
+    const recordPath = join(dir, 'hostile.json');
+    const error = await runClaudeCodeCli(
+      makeInput({ scenario: 'hostile', record: recordPath }),
+    ).catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(CliTransportError);
+    expect((error as CliTransportError).kind).toBe('unsupported_capability');
+    const record = await readRecord(recordPath);
+    const denial = record.responses.find((response) => 'error' in asRecord(response.response));
+    expect(denial).toBeDefined();
+    expect(asRecord(asRecord(denial).response).subtype).toBe('error');
+  });
+
+  it.each([
+    ['exhausted', 'exhausted_capacity'],
+    ['temporary', 'temporary_rate_limit'],
+    ['auth', 'authentication'],
+    ['unavailable', 'unavailable_model'],
+  ])('maps %s failures to %s', { timeout: 30_000 }, async (scenario, kind) => {
+    const dir = await tempRoot();
+    const error = await runClaudeCodeCli(
+      makeInput({ scenario, record: join(dir, `${scenario}.json`) }),
+    ).catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(CliTransportError);
+    expect((error as CliTransportError).kind).toBe(kind);
+  });
+
+  it('reports missing usage as null and keeps reported zeroes', { timeout: 30_000 }, async () => {
+    const dir = await tempRoot();
+    const missing = await runClaudeCodeCli(
+      makeInput({ scenario: 'nousage', record: join(dir, 'nousage.json') }),
+    );
+    expect(missing.usage).toEqual({
+      inputTokens: null,
+      outputTokens: null,
+      cachedTokens: null,
+      reasoningTokens: null,
+    });
+    const zero = await runClaudeCodeCli(
+      makeInput({ scenario: 'zero', record: join(dir, 'zero.json') }),
+    );
+    expect(zero.usage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedTokens: null,
+      reasoningTokens: null,
+    });
+  });
+
+  it(
+    'normalizes Claude input total, cache and reasoning dimensions',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const full = await runClaudeCodeCli(
+        makeInput({ scenario: 'usagefull', record: join(dir, 'usagefull.json') }),
+      );
+      expect(full.usage).toEqual({
+        inputTokens: 4028,
+        outputTokens: 5,
+        cachedTokens: 3000,
+        reasoningTokens: 7,
+      });
+
+      const partial = await runClaudeCodeCli(
+        makeInput({ scenario: 'partial', record: join(dir, 'partial.json') }),
+      );
+      expect(partial.usage).toEqual({
+        inputTokens: 9,
+        outputTokens: 3,
+        cachedTokens: null,
+        reasoningTokens: null,
+      });
+
+      const cumulative = await runClaudeCodeCli(
+        makeInput({ scenario: 'cumulative', record: join(dir, 'cumulative.json') }),
+      );
+      expect(cumulative.usage).toEqual({
+        inputTokens: 3028,
+        outputTokens: 5,
+        cachedTokens: 3000,
+        reasoningTokens: null,
+      });
+    },
+  );
+
+  it('decodes a multibyte character split across stdout chunks', { timeout: 30_000 }, async () => {
+    const dir = await tempRoot();
+    const result = await runClaudeCodeCli(
+      makeInput({ scenario: 'split', record: join(dir, 'split.json') }),
+    );
+    expect(result.text).toBe('😀');
+  });
+
+  it.each([
+    ['logged out', '{"loggedIn":false,"apiProvider":"firstParty"}'],
+    ['cloud provider', '{"loggedIn":true,"apiProvider":"bedrock","subscriptionType":"pro"}'],
+    [
+      'api key source',
+      '{"loggedIn":true,"apiProvider":"firstParty","apiKeySource":"ANTHROPIC_API_KEY","subscriptionType":"pro"}',
+    ],
+    ['plan change', '{"loggedIn":true,"apiProvider":"firstParty","subscriptionType":"team"}'],
+  ])(
+    'rejects %s from auth status before prompting',
+    { timeout: 30_000 },
+    async (_label, authStatus) => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'auth.json');
+      const error = await runClaudeCodeCli(
+        makeInput({ scenario: 'text', record: recordPath, authStatus }),
+      ).catch((value: unknown) => value);
+      expect(error).toBeInstanceOf(CliTransportError);
+      expect((error as CliTransportError).kind).toBe('authentication');
+      expect(existsSync(recordPath)).toBe(false);
+    },
+  );
+
+  it('normalizes streamed rate-limit fractions to utilization', { timeout: 30_000 }, async () => {
+    const dir = await tempRoot();
+    const snapshots: CliUsageSnapshot[] = [];
+    await runClaudeCodeCli(
+      makeInput({
+        scenario: 'ratelimit',
+        record: join(dir, 'ratelimit.json'),
+        onUsageSnapshot: (snapshot) => snapshots.push(snapshot),
+      }),
+    );
+    expect(snapshots.length).toBeGreaterThan(0);
+    expect(snapshots.at(-1)?.windows[0]?.utilization).toBeCloseTo(0.42);
+  });
+
+  it('enables fast mode only when requested and advertised', { timeout: 30_000 }, async () => {
+    const dir = await tempRoot();
+    const fastRecord = join(dir, 'fast.json');
+    const model = claudeModel({ speeds: ['standard', 'fast'] });
+    await runClaudeCodeCli(
+      makeInput({
+        scenario: 'text',
+        record: fastRecord,
+        model,
+        options: { effort: null, speed: 'fast' },
+      }),
+    );
+    const record = await readRecord(fastRecord);
+    expect(record.settings?.fastMode).toBe(true);
+
+    const notAdvertised = claudeModel({ speeds: ['standard'] });
+    const notFastRecord = join(dir, 'notfast.json');
+    const error = await runClaudeCodeCli(
+      makeInput({
+        scenario: 'text',
+        record: notFastRecord,
+        model: notAdvertised,
+        options: { effort: null, speed: 'fast' },
+      }),
+    ).catch((value: unknown) => value);
+    expect((error as CliTransportError).kind).toBe('unsupported_capability');
+    expect(existsSync(notFastRecord)).toBe(false);
+  });
+
+  it.each(['hold', 'holdstartup', 'holdstream', 'holdtool'])(
+    'cancels during %s and terminates the tree and temp dir',
+    { timeout: 30_000 },
+    async (scenario) => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, `${scenario}.json`);
+      const pidPath = join(dir, `${scenario}.pid`);
+      const cwdPath = join(dir, `${scenario}.cwd`);
+      const stagePath = join(dir, `${scenario}.stage`);
+      const controller = new AbortController();
+      const pending = runClaudeCodeCli(
+        makeInput({
+          scenario,
+          record: recordPath,
+          signal: controller.signal,
+          childPidFile: pidPath,
+          cwdFile: cwdPath,
+          stageFile: stagePath,
+        }),
+      );
+      await waitFor(() => existsSync(pidPath) && existsSync(cwdPath) && existsSync(stagePath));
+      expect((await readFile(stagePath, 'utf8')).trim()).toBe(scenario);
+      const childPid = Number((await readFile(pidPath, 'utf8')).trim());
+      const privateCwd = (await readFile(cwdPath, 'utf8')).trim();
+      expect(isAlive(childPid)).toBe(true);
+      controller.abort();
+      const error = await pending.catch((value: unknown) => value);
+      expect(error).toBeInstanceOf(CliTransportError);
+      expect((error as CliTransportError).kind).toBe('cancelled');
+      await waitFor(() => !isAlive(childPid));
+      expect(existsSync(privateCwd)).toBe(false);
+    },
+  );
+
+  it('keeps concurrent contexts isolated', { timeout: 30_000 }, async () => {
+    const dir = await tempRoot();
+    const recordA = join(dir, 'a.json');
+    const recordB = join(dir, 'b.json');
+    const [a, b] = await Promise.all([
+      runClaudeCodeCli(makeInput({ scenario: 'text', record: recordA })),
+      runClaudeCodeCli(makeInput({ scenario: 'ratelimit', record: recordB })),
+    ]);
+    expect(a.text).toBe('Hello');
+    expect(b.text).toBe('Limited');
+    const recordARecord = await readRecord(recordA);
+    const recordBRecord = await readRecord(recordB);
+    expect(recordARecord.argv.join(' ')).not.toBe(recordBRecord.argv.join(' '));
+  });
+
+  it(
+    'pins the private PWD so an inherited project PWD cannot leak',
+    { timeout: 30_000 },
+    async () => {
+      const dir = await tempRoot();
+      const recordPath = join(dir, 'pwd.json');
+      const leaked = join(dir, 'orchestrator-repo');
+      await runClaudeCodeCli(makeInput({ scenario: 'text', record: recordPath, pwd: leaked }));
+      const record = await readRecord(recordPath);
+      expect(record.pwd).toBe(record.cwd);
+      expect(record.pwd).not.toBe(leaked);
+    },
+  );
+});

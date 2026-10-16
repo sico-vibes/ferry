@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DelegationModeSchema, StepKindSchema, TierSchema } from './common.js';
 import { ProviderIdSchema, ProfileIdSchema, ModelRefSchema } from './ids.js';
+import { CliOptionSchema } from './cli-connection.js';
 export const FallbackChainEntrySchema = z.object({
   provider: ProviderIdSchema,
   patterns: z.array(z.string().min(1)),
@@ -34,6 +35,10 @@ export const ProfileSchema = z.object({
       generatedAt: z.iso.datetime(),
       sampleCount: z.number().int().nonnegative(),
       note: z.string(),
+      /** Reserved for managed-profile slot bookkeeping. */
+      managedSlot: z.string().optional(),
+      /** Reserved for managed-profile supersede lineage. */
+      supersededBy: ProfileIdSchema.optional(),
     })
     .optional(),
   affinityMode: z.enum(['soft', 'strict']).default('soft'),
@@ -43,6 +48,10 @@ export const ProfileSchema = z.object({
   allowedModelRefs: z.array(ModelRefSchema).optional(),
   tierByStep: z.record(StepKindSchema, z.array(TierSchema)),
   paidAllowed: z.boolean(),
+  /** Opt-in to include installed-CLI subscription capacity as free routes for this profile. */
+  allowSubscriptionCli: z.boolean().default(false),
+  /** Per-model CLI option defaults for installed-CLI models. */
+  cliDefaults: z.record(ModelRefSchema, CliOptionSchema).default({}),
   paidConfirmation: z
     .object({
       preauthorize: z.boolean().default(false),
@@ -65,4 +74,10 @@ export const ProfileSchema = z.object({
     editorFailureThreshold: 2,
   }),
 });
-export type Profile = z.infer<typeof ProfileSchema>;
+type ParsedProfile = z.infer<typeof ProfileSchema>;
+/**
+ * New CLI fields carry schema defaults but are optional in the exported type so existing
+ * built-in profile literals (owned by the router) remain valid without edits.
+ */
+export type Profile = Omit<ParsedProfile, 'allowSubscriptionCli' | 'cliDefaults'> &
+  Partial<Pick<ParsedProfile, 'allowSubscriptionCli' | 'cliDefaults'>>;

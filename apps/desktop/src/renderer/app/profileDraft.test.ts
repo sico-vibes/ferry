@@ -81,6 +81,29 @@ describe('profile drafts', () => {
     expect(copy).toMatchObject({ id: 'profile_custom_42', name: 'Mine', builtin: false });
   });
 
+  it('preserves optimization evidence while making a copied profile independent of the managed slot', () => {
+    const generated: Profile = {
+      ...base,
+      provenance: {
+        kind: 'provider-check',
+        generatedAt: '2026-10-14T00:00:00.000Z',
+        sampleCount: 3,
+        note: 'Measured response time',
+        managedSlot: 'device-optimized',
+        supersededBy: 'profile_optimized_next' as Profile['id'],
+      },
+    };
+    const copy = newProfileFrom(generated, 'My own routes', 43);
+    expect(copy.provenance).toEqual({
+      kind: 'provider-check',
+      generatedAt: generated.provenance?.generatedAt,
+      sampleCount: 3,
+      note: 'Measured response time',
+    });
+    expect(generated.provenance?.managedSlot).toBe('device-optimized');
+    expect(generated.provenance?.supersededBy).toBe('profile_optimized_next');
+  });
+
   it('is dirty only when a saved profile differs', () => {
     expect(isProfileDirty(base, base)).toBe(false);
     expect(isProfileDirty({ ...base, name: 'Other' }, base)).toBe(true);

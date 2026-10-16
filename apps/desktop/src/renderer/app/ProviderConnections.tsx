@@ -5,6 +5,7 @@ import { ProviderLogo, Select, SkeletonRows, UiV2 } from '@ferry/ui';
 import { useFerryClient } from '../data/client';
 import { ProviderKeyDialog } from './ProviderKeyDialog';
 import { OAuthProviderRows } from './OAuthProviderRows';
+import { InstalledCliConnections } from './InstalledCliConnections';
 
 /** The same key manager and OAuth progress dialog used by Models and Settings. */
 export function ProviderConnections() {
@@ -182,6 +183,7 @@ export function ProviderConnections() {
         Zen’s OpenCode-only free models can use the installed CLI in Ferry. Use your own key for its
         standard API, or <code>ferry run opencode --native</code> for the real app.
       </p>
+      <InstalledCliConnections />
       {error && (
         <p role="alert" className="v2-gateway-error">
           {error}

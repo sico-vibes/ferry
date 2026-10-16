@@ -32,6 +32,11 @@ jobs:
           cache: pnpm
       - uses: ./.github/actions/setup-msvc-node-gyp
       - run: pnpm install --frozen-lockfile
+      - name: Check Windows PowerShell Unicode and input handling
+        run: pnpm --filter @ferry/desktop exec vitest run src/main/powershell-utf8.test.ts
+      - name: Check browser readiness and cleanup
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @ferry/workspace exec vitest run test/page-check.test.ts test/page-check-navigation.test.ts test/page-check-readiness-qa.test.ts
       - name: Verify workspace
         run: pnpm check
         env:
@@ -109,6 +114,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: ${{ env.FERRY_RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
           name: Ferry ${{ env.FERRY_RELEASE_TAG }}
           prerelease: true
           draft: false

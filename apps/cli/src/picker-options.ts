@@ -1,6 +1,7 @@
 import type { FerryClient } from '@ferry/client';
 import type { ModelInfo, Profile, Session, Workspace } from '@ferry/shared';
 import type { PickerOption } from './components/picker.js';
+import { cliModelPickerOptions } from './cli-connections.js';
 
 export function profileOptions(profiles: readonly Profile[]): PickerOption[] {
   return profiles.map((row) => ({ value: row.id, label: row.name, description: row.description }));
@@ -53,10 +54,11 @@ export function effortOptions(model: ModelInfo | undefined): PickerOption[] {
 }
 
 export async function modelOptions(client: FerryClient): Promise<PickerOption[]> {
-  const [providers, models, keys] = await Promise.all([
+  const [providers, models, keys, connections] = await Promise.all([
     client.providers.list(),
     client.models.list(),
     client.gateway.listKeys(),
+    client.cliConnections.list(),
   ]);
   const connected = new Set(
     providers
@@ -64,10 +66,17 @@ export async function modelOptions(client: FerryClient): Promise<PickerOption[]>
       .map((row) => row.id),
   );
   return [
-    { value: 'auto', label: 'Auto', description: 'Route with the active profile' },
-    { value: 'no-profile', label: 'No profile', description: 'Direct model selection' },
+    { value: 'auto', label: 'Auto', description: 'Route with the active profile', pinned: true },
+    {
+      value: 'no-profile',
+      label: 'No profile',
+      description: 'Direct model selection',
+      pinned: true,
+    },
     ...models
-      .filter((row) => row.verified === true && connected.has(row.providerId))
+      .filter(
+        (row) => !row.cliConnectionId && row.verified === true && connected.has(row.providerId),
+      )
       .sort((a, b) => a.providerId.localeCompare(b.providerId) || a.name.localeCompare(b.name))
       .map((row) => ({
         value: row.ref,
@@ -76,6 +85,7 @@ export async function modelOptions(client: FerryClient): Promise<PickerOption[]>
         description: `${row.ref}${row.free ? ' · free' : ''} · ${row.contextWindow.toLocaleString()} context`,
         free: row.free,
       })),
+    ...cliModelPickerOptions(connections),
     ...keys
       .filter((row) => row.revokedAt === null)
       .map((row) => ({

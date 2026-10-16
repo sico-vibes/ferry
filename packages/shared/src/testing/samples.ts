@@ -255,6 +255,8 @@ export const sampleProfile: Profile = {
     long_context: ['T2'],
   },
   paidAllowed: false,
+  allowSubscriptionCli: false,
+  cliDefaults: {},
   paidConfirmation: { preauthorize: false, confirmSubscriptions: false, confirmTrials: false },
   caps: { dailyUsd: null, monthlyUsd: null },
   delegationMode: 'suggest',
@@ -317,6 +319,7 @@ export const sampleOptimizerStats: OptimizerStats = {
 export const sampleSettings: Settings = {
   opencodeZenTransport: 'api',
   opencodeZenCliUseFerryKey: false,
+  zenCliMigratedToShared: true,
   providerEndpoints: {},
   globalOptimizerOverride: false,
   permissionRules: [],
@@ -346,6 +349,7 @@ export const sampleSettings: Settings = {
     verifiedRequestId: null,
   },
   optimizers: sampleOptimizerToggles,
+  cliConnections: {},
   routing: {
     autoPauseAfterFailedRequests: 5,
     stickySessions: true,

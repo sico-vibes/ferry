@@ -53,13 +53,18 @@ export function toggleTier(
 
 /** A new custom profile based on another one, never pinned to built-in status. */
 export function newProfileFrom(source: Profile, name: string, now: number): Profile {
-  return {
+  const profile: Profile = {
     ...structuredClone(source),
     id: `profile_custom_${String(now)}` as Profile['id'],
     name,
     builtin: false,
     pinned: true,
   };
+  if (profile.provenance) {
+    delete profile.provenance.managedSlot;
+    delete profile.provenance.supersededBy;
+  }
+  return profile;
 }
 
 /** The guided creation path always starts free, even when the active profile is paid. */
@@ -70,6 +75,8 @@ export function newGuidedProfile(profiles: readonly Profile[], now: number): Pro
   const profile = newProfileFrom(base, 'New profile', now);
   profile.allowedProviders = 'all_free';
   profile.paidAllowed = false;
+  profile.allowSubscriptionCli = false;
+  profile.cliDefaults = {};
   profile.paidConfirmation = {
     preauthorize: false,
     confirmSubscriptions: false,

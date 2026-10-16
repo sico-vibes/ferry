@@ -47,16 +47,20 @@ export async function openZenToolBridge(tools: readonly ZenTool[]) {
         return;
       }
       try {
+        // Decode incrementally so a multi-byte UTF-8 sequence split across frames is not corrupted.
+        req.setEncoding('utf8');
         let body = '';
         let size = 0;
         for await (const rawChunk of req) {
-          const chunk: unknown = rawChunk;
-          size += Buffer.byteLength(String(chunk));
+          const chunk =
+            typeof rawChunk === 'string' ? rawChunk : Buffer.from(rawChunk).toString('utf8');
+          // `setEncoding` already yields strings; measure real UTF-8 bytes for the size guard.
+          size += Buffer.byteLength(chunk, 'utf8');
           if (size > 1024 * 1024) {
             res.writeHead(413).end();
             return;
           }
-          body += String(chunk);
+          body += chunk;
         }
         const message = schema.parse(JSON.parse(body));
         if (message.id === undefined) {

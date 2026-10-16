@@ -12,12 +12,14 @@ import { z } from 'zod';
 import {
   DEFAULT_ROUTING_SETTINGS,
   ModelInfoSchema,
+  ModelRefSchema,
   ProfileIdSchema,
   ProviderIdSchema,
   ProviderSchema,
   WorkspaceIdSchema,
   newTraceId,
   type Message,
+  type UsageRecord,
   PartIdSchema,
   newId,
 } from '@ferry/shared';
@@ -201,6 +203,231 @@ describe('step usage and thinking timing', () => {
       }
     },
   );
+});
+
+describe('step producer attribution', () => {
+  const ACTUAL_REF = ModelRefSchema.parse('opencode-cli/opencode-go/deepseek-v4.1-flash');
+  const REQUESTED_REF = ModelRefSchema.parse('gateway/key-requested');
+  const CAPTURED_ACCOUNT = 'opencode-cli:abcdef012345';
+
+  it('attributes usage to the dispatch-captured producer, not the account at completion', async () => {
+    const state = await setup();
+    try {
+      const usages: UsageRecord[] = [];
+      let currentAccount = 'opencode-cli:bbbbbbbbbbbb';
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        maxSteps: 1,
+        emit: () => {},
+        onUsage: (usage) => usages.push(usage),
+        generator: async ({ onDelta }) => {
+          const producer = {
+            modelRef: ACTUAL_REF,
+            providerId: ProviderIdSchema.parse('opencode-cli'),
+            connectionId: 'opencode-cli',
+            accountKey: CAPTURED_ACCOUNT,
+            requestedModelRef: REQUESTED_REF,
+          };
+          // The external account changes underneath the connection while the step is awaiting.
+          currentAccount = 'opencode-cli:cccccccccccc';
+          onDelta('Answered by the CLI');
+          return {
+            text: 'Answered by the CLI',
+            inputTokens: 5,
+            outputTokens: 3,
+            producer,
+          };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+
+      expect(usages).toHaveLength(1);
+      expect(usages[0]).toMatchObject({
+        modelRef: ACTUAL_REF,
+        providerId: 'opencode-cli',
+        connectionId: 'opencode-cli',
+        accountKey: CAPTURED_ACCOUNT,
+        requestedModelRef: REQUESTED_REF,
+      });
+      expect(usages[0]?.accountKey).not.toBe(currentAccount);
+
+      const finalMessage = state.store.load(state.session.id)?.messages.at(-1);
+      const textPart = finalMessage?.parts.find((part) => part.type === 'text');
+      expect(textPart?.type === 'text' ? textPart.producedBy : undefined).toBe(ACTUAL_REF);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('keeps a reported zero while omitting an unreported dimension', async () => {
+    const state = await setup();
+    try {
+      const usages: UsageRecord[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        maxSteps: 1,
+        emit: () => {},
+        onUsage: (usage) => usages.push(usage),
+        generator: async () => ({
+          text: 'Reported usage',
+          reportedUsage: {
+            inputTokens: 0,
+            outputTokens: null,
+            cachedTokens: 0,
+            reasoningTokens: null,
+          },
+        }),
+      });
+      await loop.run({ sessionId: state.session.id });
+
+      expect(usages[0]).toMatchObject({ inputTokens: 0, cachedTokens: 0 });
+      expect(usages[0]).not.toHaveProperty('outputTokens');
+      expect(usages[0]).not.toHaveProperty('reasoningTokens');
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('omits usage dimensions that neither the source nor the generator reported', async () => {
+    const state = await setup();
+    try {
+      const usages: UsageRecord[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        maxSteps: 1,
+        emit: () => {},
+        onUsage: (usage) => usages.push(usage),
+        generator: async ({ onDelta }) => {
+          onDelta('No usage reported');
+          return { text: 'No usage reported' };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+
+      // No source usage and no generator estimate: every dimension stays omitted, never coerced to 0.
+      expect(usages[0]).not.toHaveProperty('inputTokens');
+      expect(usages[0]).not.toHaveProperty('outputTokens');
+      expect(usages[0]).not.toHaveProperty('cachedTokens');
+      expect(usages[0]).not.toHaveProperty('reasoningTokens');
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('does not stamp a logical Gateway key as the producing model', async () => {
+    const state = await setup();
+    try {
+      const gatewayModel = ModelInfoSchema.parse({
+        ...state.model,
+        ref: 'gateway/requested-key',
+        providerId: 'gateway',
+        name: 'Gateway key',
+        gateway: { keyId: 'requested-key', keyName: 'Requested key', modelName: 'ferry/auto' },
+      });
+      const gatewayProvider = ProviderSchema.parse({
+        ...state.provider,
+        id: ProviderIdSchema.parse('gateway'),
+        name: 'Gateway',
+      });
+      const usages: UsageRecord[] = [];
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: { ...state.catalog, models: [gatewayModel] },
+        capacity: () => ({ providers: [gatewayProvider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        maxSteps: 1,
+        emit: () => {},
+        onUsage: (usage) => usages.push(usage),
+        generator: async () => ({ text: 'Gateway answered', inputTokens: 1, outputTokens: 1 }),
+      });
+      await loop.run({ sessionId: state.session.id });
+
+      // No actual producer was captured, so no part may claim the logical Gateway key as the LLM.
+      const finalMessage = state.store.load(state.session.id)?.messages.at(-1);
+      const textPart = finalMessage?.parts.find((part) => part.type === 'text');
+      expect(textPart?.type === 'text' ? textPart.producedBy : undefined).toBeUndefined();
+      // The usage keeps the routed model for an ordinary (non-producer) outcome.
+      expect(usages[0]).toMatchObject({ modelRef: 'gateway/requested-key' });
+      expect(usages[0]).not.toHaveProperty('accountKey');
+      expect(usages[0]).not.toHaveProperty('connectionId');
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
+
+  it('records each step usage as its own event instead of folding repeated ones', async () => {
+    const state = await setup();
+    try {
+      const usages: UsageRecord[] = [];
+      const toolSource = {
+        tools: () => [
+          {
+            name: 'record_note',
+            title: 'Record note',
+            schema: z.object({ note: z.string() }),
+            execute: () => 'saved',
+          },
+        ],
+      };
+      let calls = 0;
+      const loop = new AgentLoop({
+        store: state.store,
+        workspace: state.root,
+        dataDir: state.root,
+        profile: BUILTIN_PROFILES[0]!,
+        catalog: state.catalog,
+        capacity: () => ({ providers: [state.provider] }),
+        apiKeys: {},
+        permissionMode: 'full_auto',
+        maxSteps: 3,
+        emit: () => {},
+        toolSources: [toolSource],
+        onUsage: (usage) => usages.push(usage),
+        generator: async () => {
+          calls++;
+          if (calls === 1)
+            return {
+              toolCalls: [{ name: 'record_note', input: { note: 'first' } }],
+              inputTokens: 2,
+              outputTokens: 1,
+            };
+          return { text: 'Two steps done', inputTokens: 3, outputTokens: 2 };
+        },
+      });
+      await loop.run({ sessionId: state.session.id });
+
+      expect(calls).toBe(2);
+      expect(usages).toHaveLength(2);
+      expect(new Set(usages.map((usage) => usage.id)).size).toBe(2);
+    } finally {
+      state.database.close();
+    }
+  }, 30_000);
 });
 
 describe('@ferry/agent', () => {

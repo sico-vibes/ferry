@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import { ModelRefSchema, ProviderIdSchema } from './ids.js';
 import { PausedReasonSchema } from './failures.js';
-import { TierSchema } from './common.js';
+import { EffortSchema, TierSchema } from './common.js';
 import { ProviderErrorKindSchema } from './quota.js';
+import { CliModelCapabilitiesSchema } from './cli-connection.js';
+export { EffortSchema, type Effort } from './common.js';
 export const ProviderTagSchema = z.enum([
   'legit',
   'promo',
@@ -116,14 +118,16 @@ export const ProbeResultSchema = z.object({
   skippedModels: z.array(z.object({ model: z.string(), reason: z.string() })).optional(),
 });
 export type ProbeResult = z.infer<typeof ProbeResultSchema>;
-export const EffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
-export type Effort = z.infer<typeof EffortSchema>;
 export const ModelInfoSchema = z.object({
   /** Successful standard API generation on the saved connection; discovery alone is insufficient. */
   apiAccessVerified: z.boolean().optional(),
   /** Verified through the installed OpenCode client; never substitutes for API verification. */
   cliAccessVerified: z.boolean().optional(),
-  transport: z.enum(['api', 'opencode_cli']).optional(),
+  transport: z.enum(['api', 'opencode_cli', 'codex_cli', 'claude_code_cli']).optional(),
+  /** Stable installed-CLI connection id (`CliConnectionKind`) when this model is served by an installed CLI. */
+  cliConnectionId: z.string().min(1).optional(),
+  /** Discovered capabilities for an installed-CLI transport; absent for API models. */
+  cliCapabilities: z.lazy(() => CliModelCapabilitiesSchema).optional(),
   failing: z.boolean().optional(),
   verified: z.boolean().optional(),
   verifiedAt: z.iso.datetime().nullable().optional(),
@@ -134,6 +138,11 @@ export const ModelInfoSchema = z.object({
   tier: TierSchema,
   contextWindow: z.number().int().positive(),
   maxOutput: z.number().int().positive(),
+  /**
+   * False when the provider never reported a real context/output capacity and the numbers above are
+   * conservative placeholders. UIs must show "Not reported" instead of trusting them.
+   */
+  capacityKnown: z.boolean().optional(),
   toolCalling: z.boolean(),
   reasoning: z.boolean(),
   reasoningEfforts: z.array(EffortSchema).optional(),

@@ -10,6 +10,8 @@ import type { ModelInfo, ModelRef, Profile, Provider } from '@ferry/shared';
 import { ProviderLogo, Select, UiV2 } from '@ferry/ui';
 import { providerAllowed, toggleProvider } from './profileDraft';
 
+import { CliModelDefaults } from './CliModelDefaults';
+
 const steps = ['Purpose', 'Providers', 'Spending', 'Models', 'Optimization', 'Review'];
 const explanations = [
   'Give this profile a name and choose what Ferry should prioritize.',
@@ -48,7 +50,9 @@ export function ProfileSetupWizard({
   const available = models.filter(
     (m) =>
       !isOpenCodeAppModel(m) &&
-      (draft.paidAllowed || m.free) &&
+      (draft.paidAllowed ||
+        m.free ||
+        (draft.allowSubscriptionCli && m.cliCapabilities?.billing === 'included_subscription')) &&
       connected.some((p) => p.id === m.providerId && providerAllowed(draft.allowedProviders, p)),
   );
   const visible = available.filter((m) =>
@@ -205,6 +209,21 @@ export function ProfileSetupWizard({
                       });
                     }}
                   />
+                  <label className="profile-setup-cli-backup">
+                    <UiV2.Checkbox
+                      checked={draft.allowSubscriptionCli ?? false}
+                      onCheckedChange={(checked) => {
+                        patch({ allowSubscriptionCli: checked === true });
+                      }}
+                    />
+                    <span>
+                      Use signed-in CLI subscriptions as backup
+                      <small>
+                        Free models are tried first. Enable and verify connections in Providers
+                        &amp; keys. This does not authorize metered usage or overage.
+                      </small>
+                    </span>
+                  </label>
                   {Array.isArray(draft.allowedProviders) && (
                     <ul className="profile-setup-choices">
                       {providers.map((p) => (
@@ -287,7 +306,12 @@ export function ProfileSetupWizard({
                               <span>
                                 {m.name}
                                 <small>
-                                  {m.providerId} · {m.free ? 'Free' : 'Paid'}
+                                  {m.providerId} ·{' '}
+                                  {m.free
+                                    ? 'Free'
+                                    : m.cliCapabilities?.billing === 'included_subscription'
+                                      ? 'Included subscription'
+                                      : 'Paid'}
                                 </small>
                               </span>
                             </label>
@@ -411,6 +435,15 @@ export function ProfileSetupWizard({
                       />
                     </label>
                   )}
+                  <CliModelDefaults
+                    models={
+                      manual ? available.filter((model) => selected.includes(model.ref)) : available
+                    }
+                    defaults={draft.cliDefaults ?? {}}
+                    onChange={(cliDefaults) => {
+                      patch({ cliDefaults });
+                    }}
+                  />
                 </div>
               )}
               {step === 4 && (

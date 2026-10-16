@@ -35,6 +35,8 @@ import {
   type AllowedProvidersMode,
 } from './profileDraft';
 
+import { CliModelDefaults } from './CliModelDefaults';
+
 const stepRows: { kind: StepKind; label: string; helper: string }[] = [
   { kind: 'plan', label: 'Planning', helper: 'Breaking a task into steps' },
   { kind: 'edit', label: 'Editing code', helper: 'Writing and changing files' },
@@ -243,7 +245,11 @@ export function ProfilesSettings() {
     ...(isNew ? [{ value: draft.id, label: `${draft.name} (unsaved)` }] : []),
     ...profiles.map((profile) => ({
       value: profile.id,
-      label: profile.builtin ? `${profile.name} · built-in` : profile.name,
+      label: profile.builtin
+        ? `${profile.name} · built-in`
+        : profile.provenance?.supersededBy
+          ? `${profile.name} · previous check`
+          : profile.name,
     })),
   ];
   return (
@@ -432,6 +438,37 @@ export function ProfilesSettings() {
         >
           {settings.activeProfileId === draft.id ? 'Active preset' : 'Apply preset'}
         </UiV2.Button>
+      </section>
+
+      <section className="cli-model-defaults">
+        <label className="profile-setup-cli-backup">
+          <UiV2.Checkbox
+            checked={draft.allowSubscriptionCli ?? false}
+            disabled={locked}
+            onCheckedChange={(checked) => {
+              patch('allowSubscriptionCli', checked === true);
+            }}
+          />
+          <span>
+            Use signed-in CLI subscriptions as backup
+            <small>
+              Free routes first, then verified included capacity. Metered usage and overage follow
+              spending permissions.
+            </small>
+          </span>
+        </label>
+        <CliModelDefaults
+          models={
+            draft.allowedModelRefs
+              ? models.filter((model) => draft.allowedModelRefs?.includes(model.ref))
+              : models
+          }
+          defaults={draft.cliDefaults ?? {}}
+          disabled={locked}
+          onChange={(defaults) => {
+            patch('cliDefaults', defaults);
+          }}
+        />
       </section>
 
       <details

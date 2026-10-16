@@ -27,13 +27,46 @@ export const GatewayRequestRecordSchema = z.object({
         inputTokens: z.number().int().nonnegative().optional(),
         outputTokens: z.number().int().nonnegative().optional(),
         cachedTokens: z.number().int().nonnegative().optional(),
+        /** Actual producer/connection/account evidence captured before the attempt resolves. */
+        providerId: z.string().nullable().optional(),
+        connectionId: z.string().nullable().optional(),
+        accountKey: z.string().nullable().optional(),
+        bucketId: z.string().nullable().optional(),
+        resetAt: z.iso.datetime().nullable().optional(),
+        retryAfterMs: z.number().nonnegative().nullable().optional(),
       }),
     )
     .optional(),
   providerId: z.string().nullable(),
+  /**
+   * Actual upstream producer/connection/account captured before any queue wait. Nonsecret evidence
+   * for the history view; the opaque account key never contains credentials.
+   */
+  servedProviderId: z.string().nullable().optional(),
+  servedConnectionId: z.string().nullable().optional(),
+  servedAccountKey: z.string().nullable().optional(),
+  /**
+   * Nonsecret id of the exact standard-API quota usage event this completion recorded. Absent/null
+   * for installed-CLI routes, which record no standard-API quota event. A native consumer can
+   * re-record that same id with session attribution without double counting.
+   */
+  upstreamUsageId: z.string().nullable().optional(),
   status: z.enum(['ok', 'error']),
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
+  /**
+   * Authoritative per-dimension usage evidence captured from the producer. A genuinely unreported
+   * dimension is `null` (shown as "Not reported"); a reported `0` stays `0`. Backward-compatible:
+   * older records omit this object and consumers fall back to the numeric counters above.
+   */
+  reportedUsage: z
+    .object({
+      inputTokens: z.number().int().nonnegative().nullable(),
+      outputTokens: z.number().int().nonnegative().nullable(),
+      cachedTokens: z.number().int().nonnegative().nullable(),
+      reasoningTokens: z.number().int().nonnegative().nullable(),
+    })
+    .optional(),
   latencyMs: z.number().int().nonnegative(),
   error: z.string().nullable(),
   outcome: z.enum(['completed', 'cancelled', 'failed', 'partial']).optional(),

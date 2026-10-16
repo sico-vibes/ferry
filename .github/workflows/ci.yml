@@ -27,6 +27,11 @@ jobs:
       - if: runner.os == 'Windows'
         uses: ./.github/actions/setup-msvc-node-gyp
       - run: pnpm install --frozen-lockfile
+      - name: Check browser readiness and cleanup
+        run: pnpm --filter @ferry/workspace exec vitest run test/page-check.test.ts test/page-check-navigation.test.ts test/page-check-readiness-qa.test.ts
+      - name: Check Windows PowerShell Unicode and input handling
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        run: pnpm --filter @ferry/desktop exec vitest run src/main/powershell-utf8.test.ts
       - run: pnpm run check:tasks
       - if: ${{ !cancelled() }}
         run: pnpm exec tsc --noEmit -p scripts/tsconfig.json

@@ -1,6 +1,6 @@
 # Routing
 
-Routing implementation is evolving; see settings and `ferry doctor --providers` for current account state. Provider-specific behavior marked below is (updating) where parallel work may change it.
+Ferry applies the active profile, key policy, provider state, model capabilities, quota data, and user spending rules to each route. Provider health and account capacity can change; inspect them in Models → Providers or with `ferry doctor --providers`. The current release candidate and its unfinished work are tracked in [STATUS](STATUS.md).
 
 ## Auto-Free selection
 
@@ -15,14 +15,14 @@ ferry profiles chain set Auto-Free gemini=gemini-3.8-flash,gemini-3.*-flash groq
 
 ## Planner/editor roles
 
-Auto-Free and Best Available enable a planner/editor split by default. Planning uses the strongest
+Planner/editor roles are optional and off by default on built-in profiles. Enable them per profile in **Profiles → Planner and editor**. When enabled, planning uses the strongest
 eligible model by catalog quality prior and context fit. Editing favors fast, tool-capable models
 with good observed tool reliability. A planner returns a structured list of files, intent, and
 concrete changes; the editor receives that contract and uses its own registry edit format and tool
 protocol. A single eligible model or repeated editor failures falls back to planner-led editing.
 Planner/editor role changes do not create a provider-failure handoff marker.
 
-Choose roles per profile in Settings, or with the CLI:
+You can also inspect and change roles with the CLI:
 
 ```sh
 ferry profiles roles show Auto-Free
@@ -32,27 +32,28 @@ ferry profiles roles set Auto-Free on planner=auto editor=auto
 The live evaluation harness accepts `--roles on|off` for paired comparisons. Suggested role pairs
 and their rationale are in `packages/router/data/role-pairs.yaml`.
 
-## Advanced → Routing
+## Routing settings
 
-Defaults are off unless noted; these switches opt into specific behavior. Actual defaults are shown by the current Settings screen (updating).
+These switches appear under **Settings → Routing**. For a new settings record, the seven listed routing features default on; text tool-call fallback defaults off. Existing saved settings keep their stored values.
 
-| Toggle | Effect | Trade-off |
-|---|---|---|
-| Sticky sessions | Reuse a session's selected model while its sticky route is valid | More consistent tool behavior; can keep using a model after another becomes preferable. |
-| Smart reliability | Include observed success/failure reliability in model ranking | Learns from outcomes; early/limited observations are noisy. |
-| Quota reservations | Reserve quota for in-flight calls to reduce concurrent oversubscription | Better coordination; can temporarily leave unused reserved capacity. |
-| Cooldown reasons | Track cooldown provenance (heuristic, authoritative, credit, tier) | Avoids treating all cooldowns alike; provider signals can be incomplete. |
-| Gentle quota ramp | Reduce selection weight as remaining quota approaches depletion | Preserves headroom; may avoid a preferred model while some quota remains. |
-| Tool-rejection memory | Defer a model after repeated distinct tool-call rejections | Avoids repeated incompatible calls; may overreact to transient tool errors. |
-| Careful model retirement | Retire confirmed retired models; corroborate ambiguous 404s | Reduces false retirements; may take another failure to confirm. |
+| Toggle | Default | Effect | Trade-off |
+|---|---|---|---|
+| Sticky sessions | On | Reuse a session's selected model while its sticky route is valid | More consistent tool behavior; can keep using a model after another becomes preferable. |
+| Smart reliability | On | Include observed success/failure reliability in model ranking | Learns from outcomes; early/limited observations are noisy. |
+| Quota reservations | On | Reserve quota for in-flight calls to reduce concurrent oversubscription | Better coordination; can temporarily leave unused reserved capacity. |
+| Cooldown reasons | On | Track cooldown provenance and re-probe heuristic pauses early when safe | Probes can use a request; authoritative provider limits are not probed early. |
+| Gentle quota ramp | On | Reduce selection weight as remaining quota approaches depletion | Preserves headroom; may avoid a preferred model while some quota remains. |
+| Tool-rejection memory | On | Temporarily defer models after repeated distinct tool-call rejections | Avoids repeated incompatible calls; may overreact to transient tool errors. |
+| Careful model retirement | On | Confirm retirement before acting on ambiguous model-not-found responses | Reduces false retirements; may take another failure to confirm. |
+| Text tool-call fallback | Off | Allow a supplied adapter to use XML/ReAct text-format tool calls | Only useful when a compatible fallback adapter is available. |
 
-Cooldown scope, persistence, and TTL are (updating). A cooldown can reflect rate limits, exhausted credits, account/tier restrictions, or a local heuristic; it is not necessarily a provider outage.
+A cooldown can reflect a rate limit, exhausted credits, account/tier restriction, or a local heuristic; it is not necessarily a provider outage. Expiry follows the provider signal or Ferry's local cooldown policy. The cooldown-reason setting controls whether provenance such as authoritative versus heuristic is shown.
 
 ## Handoffs and errors
 
-If a request switches models, Ferry emits a handoff marker/briefing so the next model can continue with context. Review the visible target and reason before treating the handoff as a clean continuation. (updating)
+If a request switches models, Ferry emits a handoff marker/briefing so the next model can continue with context. Review the visible target and reason before treating the handoff as a clean continuation.
 
-Error cards summarize the request failure and may include model attempts. Common meanings: rate limit/quota exhausted means wait for the indicated reset or choose another eligible model; invalid key means re-enter/check the credential; unsupported free tier means the provider rejected the access path; context/request too large means reduce input or choose a larger-context model; provider/network failure may be transient. In verbose CLI mode, routing exclusions and attempt details are printed to stderr. (updating)
+Error cards summarize the request failure and may include model attempts. Common meanings: rate limit/quota exhausted means wait for the indicated reset or choose another eligible model; invalid key means re-enter/check the credential; unsupported free tier means the provider rejected the access path; context/request too large means reduce input or choose a larger-context model; provider/network failure may be transient. In verbose CLI mode, routing exclusions and attempt details are printed to stderr.
 
 Run `ferry doctor --providers` to inspect provider health, key status, enablement, cooldown expiry, and model count. `--json` emits machine-readable output; credentials and response bodies are excluded.
 

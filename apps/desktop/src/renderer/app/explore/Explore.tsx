@@ -4,14 +4,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { ArrowDown, ArrowUp, ArrowUpRight, Check, Plus, Search, X } from 'lucide-react';
-import type { OAuthProvider, Provider } from '@ferry/shared';
+import type { ModelInfo, OAuthProvider, Provider } from '@ferry/shared';
 import {
   EmptyState,
   ErrorState,
   ProviderLogo,
-  DataUseBadge,
-  dataUseStatus,
-  TagBadge,
   Section,
   SegmentedControl,
   Skeleton,
@@ -19,6 +16,8 @@ import {
   PageHeader,
 } from '@ferry/ui';
 import { ProvidersTable } from '../ProvidersTable';
+import { ModelTableName } from '../ModelTableName';
+import { InstalledCliConnections } from '../InstalledCliConnections';
 import { useFerryClient } from '../../data/client';
 import { useToasts } from '../../state/toasts';
 import { useUI } from '../../state/ui';
@@ -39,10 +38,16 @@ type ModelSort =
   | 'free'
   | 'priceInPerM'
   | 'priceOutPerM';
+const modelNumberFormat = new Intl.NumberFormat();
 const modelFilters = ['All tiers', 'T1', 'T2', 'T3'] as const;
 const freeFilters = ['All', 'Free', 'Paid'] as const;
 const compact = (value: number | null) =>
   value === null ? '—' : value === 0 ? 'Free' : `$${value.toFixed(2)}`;
+const unitPrice = (model: ModelInfo, value: number | null) =>
+  model.cliCapabilities &&
+  ['included_subscription', 'unknown'].includes(model.cliCapabilities.billing)
+    ? '—'
+    : compact(value);
 
 export function ModelsCanvas() {
   const client = useFerryClient();
@@ -183,6 +188,7 @@ export function ModelsCanvas() {
         (provider.keyStatus === 'valid' || provider.keyStatus === 'not_applicable'));
     return (
       provider.tag !== 'subscription_oauth' &&
+      provider.kind !== 'cli' &&
       matchesFilter &&
       (!query || provider.name.toLowerCase().includes(query) || provider.id.includes(query))
     );
@@ -194,6 +200,19 @@ export function ModelsCanvas() {
     ...pinnedProviders,
     ...visibleProviders.filter((provider) => !isPriority(provider)),
   ];
+  const providerById = useMemo(
+    () => new Map(providers.map((provider) => [provider.id, provider])),
+    [providers],
+  );
+  const oauthRiskProviders = useMemo(
+    () =>
+      new Set(
+        oauthProviders
+          .filter((provider) => provider.riskLevel === 'high')
+          .map((provider) => provider.id),
+      ),
+    [oauthProviders],
+  );
   const visibleModels = models;
 
   const openAdd = () => {
@@ -433,6 +452,7 @@ export function ModelsCanvas() {
                 }}
               />
             )}
+            <InstalledCliConnections />
             <Section title="Subscription sign-ins">
               <ZenSetupPrompt />
               <OAuthProviderRows
@@ -515,7 +535,7 @@ export function ModelsCanvas() {
                   ) : modelTotal === 0 ? (
                     '0 models'
                   ) : (
-                    `${String(modelOffset + 1)}–${String(Math.min(modelOffset + effectiveModelLimit, modelTotal))} of ${new Intl.NumberFormat().format(modelTotal)}`
+                    `${modelNumberFormat.format(modelOffset + 1)}–${modelNumberFormat.format(Math.min(modelOffset + effectiveModelLimit, modelTotal))} of ${modelNumberFormat.format(modelTotal)}`
                   )}
                 </span>
                 <span className="flex items-center gap-2 text-ui-meta text-muted-foreground">
@@ -556,76 +576,14 @@ export function ModelsCanvas() {
                   <tbody>
                     {visibleModels.map((model) => (
                       <tr
-                        className="h-10 border-b border-border last:border-0 hover:bg-muted/50"
+                        className="h-16 border-b border-border last:border-0 hover:bg-muted/50"
                         key={model.ref}
                       >
-                        <td
-                          className="max-w-56 truncate px-3 font-medium text-foreground"
-                          title={model.name}
-                        >
-                          <ProviderLogo
-                            className="mr-2 align-[-3px]"
-                            model={`${model.ref} ${model.name}`}
-                            name={model.name}
-                            providerId={model.providerId}
-                            size={16}
-                          />
-                          <span>{model.name}</span>
-                          <small className="block text-ui-meta text-muted-foreground">
-                            {model.apiAccessVerified
-                              ? 'Verified on this account'
-                              : model.verified
-                                ? 'Discovered on this connection'
-                                : 'Catalogued; access not checked'}
-                            {model.verifiedAt
-                              ? ` · ${new Date(model.verifiedAt).toLocaleDateString()}`
-                              : ''}
-                          </small>
-                          {model.failing && (
-                            <UiV2.Badge variant="destructive" className="ml-2">
-                              Failing
-                            </UiV2.Badge>
-                          )}
-                          {providers.find((provider) => provider.id === model.providerId)?.tag ===
-                            'promo' && (
-                            <span
-                              className="ml-2 rounded-full bg-warning/10 px-2 py-0.5 text-ui-meta text-warning"
-                              title="Promotional — may end without notice"
-                            >
-                              Promo
-                            </span>
-                          )}
-                          {providers.find((provider) => provider.id === model.providerId)?.tag ===
-                            'trial' && <TagBadge className="ml-2" kind="trial" />}
-                          {model.quality !== null && model.quality !== undefined && (
-                            <span className="ml-2 text-ui-meta text-muted-foreground">
-                              Quality {Math.round(model.quality * 100)}%
-                            </span>
-                          )}
-                          {dataUseStatus(
-                            providers.find((provider) => provider.id === model.providerId)?.dataUse,
-                          ) === 'training' && (
-                            <span className="ml-2 inline-block align-middle">
-                              <DataUseBadge
-                                dataUse={
-                                  providers.find((provider) => provider.id === model.providerId)
-                                    ?.dataUse
-                                }
-                              />
-                            </span>
-                          )}
-                          {oauthProviders.some(
-                            (provider) =>
-                              model.providerId === provider.id && provider.riskLevel === 'high',
-                          ) && (
-                            <span
-                              className="ml-2 rounded-full bg-warning/10 px-2 py-0.5 text-ui-meta text-warning"
-                              title="Unofficial subscription access may lead to account suspension"
-                            >
-                              Subscription OAuth · risk
-                            </span>
-                          )}
-                        </td>
+                        <ModelTableName
+                          model={model}
+                          provider={providerById.get(model.providerId)}
+                          oauthRisk={oauthRiskProviders.has(model.providerId)}
+                        />
                         <td className="px-3 text-muted-foreground">
                           <span className="inline-flex items-center gap-2">
                             <ProviderLogo
@@ -642,7 +600,9 @@ export function ModelsCanvas() {
                           </span>
                         </td>
                         <td className="px-3 tabular-nums text-muted-foreground">
-                          {new Intl.NumberFormat().format(model.contextWindow)}
+                          {model.capacityKnown === false
+                            ? 'Not reported'
+                            : modelNumberFormat.format(model.contextWindow)}
                         </td>
                         <td className="px-3">
                           {model.toolCalling ? (
@@ -657,29 +617,26 @@ export function ModelsCanvas() {
                         </td>
                         <td className="px-3 text-muted-foreground">
                           {isOpenCodeAppModel(model) ? (
-                            <span className="grid gap-1">
-                              <span>Verify Zen API or CLI access</span>
-                              <a
-                                className="text-link underline"
-                                href="https://opencode.ai/docs/"
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                Configure OpenCode
-                              </a>
-                              <code>ferry run opencode --native</code>
-                            </span>
+                            <span>Free · check access</span>
                           ) : model.free ? (
                             'Free'
+                          ) : model.cliCapabilities ? (
+                            model.cliCapabilities.billing === 'included_subscription' ? (
+                              'Included'
+                            ) : model.cliCapabilities.billing === 'metered' ? (
+                              'Metered'
+                            ) : (
+                              'Unknown'
+                            )
                           ) : (
                             'Paid'
                           )}
                         </td>
                         <td className="px-3 tabular-nums text-muted-foreground">
-                          {compact(model.priceInPerM)}
+                          {unitPrice(model, model.priceInPerM)}
                         </td>
                         <td className="px-3 tabular-nums text-muted-foreground">
-                          {compact(model.priceOutPerM)}
+                          {unitPrice(model, model.priceOutPerM)}
                         </td>
                       </tr>
                     ))}

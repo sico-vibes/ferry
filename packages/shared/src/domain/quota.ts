@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ProviderIdSchema } from './ids.js';
+import { ModelRefSchema, ProviderIdSchema } from './ids.js';
 
 export const ProviderLimitWindowSchema = z.object({
   metric: z.enum(['requests', 'tokens', 'usd', 'credits']),
@@ -91,6 +91,12 @@ export const UsageRecordSchema = z.object({
   taskId: z.string().nullable().optional(),
   stepId: z.string().nullable().optional(),
   stepKind: z.string().nullable().optional(),
+  /** The provider connection that actually served the step, when generation captured one. */
+  connectionId: z.string().nullable().optional(),
+  /** Opaque, non-secret account identity of the connection that served the step; never credentials. */
+  accountKey: z.string().nullable().optional(),
+  /** The model originally requested before native/Gateway routing resolved an actual producer. */
+  requestedModelRef: ModelRefSchema.nullable().optional(),
   inputTokens: z.number().nonnegative().optional(),
   outputTokens: z.number().nonnegative().optional(),
   cachedTokens: z.number().nonnegative().optional(),

@@ -32,6 +32,15 @@ afterEach(() => {
 });
 
 describe('SettingsCanvas', () => {
+  it('opens the shared installed CLI manager from Delegation', async () => {
+    useUI.setState({ settingsSection: 'Delegation' });
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage CLI connections' }));
+    expect(await screen.findByRole('region', { name: 'Installed CLIs' })).toBeTruthy();
+    expect(await screen.findByRole('switch', { name: 'Use Codex CLI in Ferry' })).toBeTruthy();
+    expect(useUI.getState().settingsSection).toBe('Providers & keys');
+  });
+
   it('renders a searchable section list and each section as a second-level heading', async () => {
     const sections = [
       ['General', 'General'],

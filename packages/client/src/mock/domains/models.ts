@@ -1,12 +1,41 @@
 import { mockFailures } from '../failures.js';
-import { isOpenCodeAppModel } from '@ferry/shared';
+import { isOpenCodeAppModel, type ModelInfo } from '@ferry/shared';
 import { MockNotFoundError } from '../errors.js';
 import type { FerryClient } from '../../ferry-client.js';
 import type { MockDeps } from './deps.js';
-import type { MockStore } from '../types.js';
+import type { MockState, MockStore } from '../types.js';
+import {
+  mockCliModelRows,
+  mockZenCliTransportSelected,
+  resolveMockCliModel,
+} from '../cli-inventory.js';
+
+const ZEN_LEGACY_PREFIX = 'opencode/';
+
+/**
+ * Collapse a persisted legacy `opencode/<id>` API row onto the discovered canonical
+ * `opencode-cli/opencode/<id>` CLI row so the same Zen model is never listed twice. Applies only
+ * while the Zen CLI transport is selected; a genuine Zen API row stays a distinct legitimate choice
+ * (e.g. when the OpenCode CLI is enabled only for Go).
+ */
+function dedupeLegacyZenRoutes(state: MockState, models: ModelInfo[]): ModelInfo[] {
+  if (!mockZenCliTransportSelected(state)) return models;
+  const canonical = new Set<string>(
+    models.filter((model) => model.cliConnectionId === 'opencode-cli').map((model) => model.ref),
+  );
+  if (canonical.size === 0) return models;
+  return models.filter((model) => {
+    if (model.cliConnectionId) return true;
+    if (model.providerId !== 'opencode' || !model.ref.startsWith(ZEN_LEGACY_PREFIX)) return true;
+    return !canonical.has(`opencode-cli/opencode/${model.ref.slice(ZEN_LEGACY_PREFIX.length)}`);
+  });
+}
 
 export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClient['models'] {
   const { state, before, persist, session, updateSession } = deps;
+  // Installed-CLI rows are discovered from the live connection state so Verify/opt-ins react.
+  const allModels = () =>
+    dedupeLegacyZenRoutes(state, [...state.models, ...mockCliModelRows(state)]);
   return {
     async list(providerId) {
       await before();
@@ -15,7 +44,7 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
           provider.models.filter((model) => model.failing).map((model) => model.modelRef),
         ),
       );
-      return state.models
+      return allModels()
         .filter((model) => providerId === undefined || model.providerId === providerId)
         .map((model) =>
           structuredClone({
@@ -41,7 +70,7 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
         ),
       );
       const needle = search.trim().toLocaleLowerCase();
-      const filtered = state.models
+      const filtered = allModels()
         .filter((model) => !filters.providerId || model.providerId === filters.providerId)
         .filter((model) => !filters.tier || model.tier === filters.tier)
         .filter((model) => filters.free === undefined || model.free === filters.free)
@@ -73,12 +102,18 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
     },
     async candidates(sessionId) {
       await before();
+      // Selectable installed-CLI rows: verified + opted-in + tool-capable, free routes ranked first
+      // (a manual pin may select an included/metered model; Auto funding is gated separately).
+      const cliChoices = mockCliModelRows(state).filter(
+        (model) => model.verified === true && model.toolCalling,
+      );
       const choices = state.models
         .filter((model) => !isOpenCodeAppModel(model))
         .filter((m) => {
           const p = state.providers.find((x) => x.id === m.providerId);
           return p?.enabled && p.keyStatus === 'valid';
         })
+        .concat(cliChoices)
         .sort(
           (a, b) =>
             Number(b.free) - Number(a.free) ||
@@ -101,11 +136,14 @@ export function createModelsDomain(_store: MockStore, deps: MockDeps): FerryClie
     async select(sessionId, ref) {
       await before();
       const s = session(sessionId);
-      const model = state.models.find((model) => model.ref === ref);
+      const model = allModels().find((model) => model.ref === ref);
       if (model && isOpenCodeAppModel(model))
         throw new Error('Available in the OpenCode app. Use ferry run opencode --native.');
-      if (ref !== 'auto' && !state.models.some((m) => m.ref === ref))
-        throw new MockNotFoundError('Model', ref);
+      // A persisted legacy `opencode/<id>` alias resolves to the discovered canonical CLI model only
+      // while the Zen CLI transport is selected; the caller's original ref is stored unchanged.
+      const aliasResolves =
+        ref !== 'auto' && resolveMockCliModel(state, 'opencode-cli', ref) !== undefined;
+      if (ref !== 'auto' && !model && !aliasResolves) throw new MockNotFoundError('Model', ref);
       if (ref === 'auto') state.selections.delete(sessionId);
       else state.selections.set(sessionId, ref);
       s.pinnedModelRef = ref === 'auto' ? null : ref;

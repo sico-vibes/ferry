@@ -1,5 +1,6 @@
-import { SkeletonRows } from '@ferry/ui';
-import { useMemo, useState } from 'react';
+import { SkeletonRows, ProviderLogo } from '@ferry/ui';
+import { listAllModels } from '@ferry/client';
+import { useMemo, useRef, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { HoverCard } from 'radix-ui';
@@ -24,7 +25,15 @@ import {
   X,
 } from 'lucide-react';
 import { UiV2 } from '@ferry/ui';
-import type { Session, SessionId, SessionStatus, Workspace, WorkspaceId } from '@ferry/shared';
+import type {
+  ModelInfo,
+  Provider,
+  Session,
+  SessionId,
+  SessionStatus,
+  Workspace,
+  WorkspaceId,
+} from '@ferry/shared';
 import { useFerryClient } from '../data/client';
 import { openProjectFolder } from '../data/projects';
 import { keys, useWorkspaces } from '../data/queries';
@@ -32,6 +41,7 @@ import { useProjectDialogs } from '../state/projectDialogs';
 import { useToasts } from '../state/toasts';
 import { useUI } from '../state/ui';
 import { ConfirmDialog } from './ConfirmDialog';
+import { ConversationUsageDialog } from './ConversationUsageDialog';
 
 const {
   DropdownMenu,
@@ -80,6 +90,27 @@ export function SidebarProjects({
     queryFn: () => client.sessions.list(),
   });
   const { data: workspaces = [], isPending: workspacesPending } = useWorkspaces();
+  const { data: models = [] } = useQuery({
+    queryKey: ['models'],
+    queryFn: () => listAllModels(client),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const { data: providers = [] } = useQuery({
+    queryKey: ['providers'],
+    queryFn: () => client.providers.list(),
+    staleTime: 60_000,
+  });
+  const modelByRef = useMemo(
+    () => new Map<string, ModelInfo>(models.map((model) => [model.ref, model])),
+    [models],
+  );
+  const providerById = useMemo(
+    () => new Map<string, Provider>(providers.map((provider) => [provider.id, provider])),
+    [providers],
+  );
+  const [usageSession, setUsageSession] = useState<Session | null>(null);
+  const usageTrigger = useRef<HTMLButtonElement | null>(null);
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [collapsedProjects, setCollapsedProjects] = useState(readCollapsed);
   const [expandedLists, setExpandedLists] = useState<Set<string>>(new Set());
@@ -89,12 +120,14 @@ export function SidebarProjects({
   const [archiveProject, setArchiveProject] = useState<Workspace | null>(null);
   const [removeProject, setRemoveProject] = useState<Workspace | null>(null);
 
-  const active = sessions.filter((session) => !session.archived);
+  const active = useMemo(() => sessions.filter((session) => !session.archived), [sessions]);
   const chatsByProject = useMemo(() => {
     const map = new Map<string, Session[]>();
     for (const session of active) {
       const key = session.workspaceId ?? '';
-      map.set(key, [...(map.get(key) ?? []), session]);
+      const bucket = map.get(key);
+      if (bucket) bucket.push(session);
+      else map.set(key, [session]);
     }
     for (const list of map.values()) list.sort(byActivity);
     return map;
@@ -147,6 +180,23 @@ export function SidebarProjects({
             key={session.id}
             session={session}
             nested={nested}
+            modelName={
+              session.lastReplyModelRef
+                ? (modelByRef.get(session.lastReplyModelRef)?.name ?? session.lastReplyModelRef)
+                : null
+            }
+            connectionName={
+              session.lastReplyModelRef
+                ? (providerById.get(modelByRef.get(session.lastReplyModelRef)?.providerId ?? '')
+                    ?.name ??
+                  session.lastReplyModelRef.split('/')[0] ??
+                  '')
+                : null
+            }
+            onUsage={(trigger) => {
+              usageTrigger.current = trigger;
+              setUsageSession(session);
+            }}
             active={pathname === `/s/${session.id}`}
             projects={projects}
             onOpen={() => {
@@ -263,7 +313,11 @@ export function SidebarProjects({
                             toggleProject(project.id);
                           }}
                         >
-                          {open ? <FolderOpen aria-hidden="true" /> : <Folder aria-hidden="true" />}
+                          {open ? (
+                            <FolderOpen className="v2-project-folder" aria-hidden="true" />
+                          ) : (
+                            <Folder className="v2-project-folder" aria-hidden="true" />
+                          )}
                           <span>{project.name}</span>
                           {project.pinned && <Pin aria-label="Pinned" role="img" size={12} />}
                         </button>
@@ -397,6 +451,24 @@ export function SidebarProjects({
         )}
       </section>
 
+      {usageSession && (
+        <ConversationUsageDialog
+          session={sessions.find((item) => item.id === usageSession.id) ?? usageSession}
+          projectName={
+            projects.find((project) => project.id === usageSession.workspaceId)?.name ?? null
+          }
+          models={modelByRef}
+          providers={providerById}
+          onRestoreFocus={() => {
+            if (!usageTrigger.current?.isConnected) return false;
+            usageTrigger.current.focus();
+            return true;
+          }}
+          onClose={() => {
+            setUsageSession(null);
+          }}
+        />
+      )}
       <UiV2.Dialog
         open={renameChat !== null}
         onOpenChange={(open) => {
@@ -523,6 +595,9 @@ function ChatRow({
   active,
   projects,
   onOpen,
+  onUsage,
+  modelName,
+  connectionName,
   onRename,
   onPin,
   onMove,
@@ -534,6 +609,9 @@ function ChatRow({
   active: boolean;
   projects: Workspace[];
   onOpen: () => void;
+  onUsage: (trigger: HTMLButtonElement) => void;
+  modelName: string | null;
+  connectionName: string | null;
   onRename: () => void;
   onPin: () => void;
   onMove: (workspaceId: WorkspaceId | null) => void;
@@ -543,6 +621,37 @@ function ChatRow({
   const status = statusLabels[session.status];
   return (
     <div className={`v2-chat-row ${nested ? 'is-nested' : ''}`} data-active={active}>
+      <UiV2.Tooltip>
+        <UiV2.TooltipTrigger asChild>
+          <button
+            type="button"
+            className="v2-chat-model"
+            aria-label={`Model usage for ${session.title}`}
+            onClick={(event) => {
+              onUsage(event.currentTarget);
+            }}
+          >
+            {session.lastReplyModelRef ? (
+              <ProviderLogo
+                model={`${session.lastReplyModelRef} ${modelName ?? ''}`}
+                name={modelName ?? session.lastReplyModelRef}
+                providerId={session.lastReplyModelRef.slice(
+                  0,
+                  session.lastReplyModelRef.indexOf('/'),
+                )}
+                size={16}
+              />
+            ) : (
+              <MessageSquare size={16} strokeWidth={1.75} aria-hidden="true" />
+            )}
+          </button>
+        </UiV2.TooltipTrigger>
+        <UiV2.TooltipContent side="right">
+          {modelName
+            ? `Last reply: ${modelName} · ${connectionName ?? ''}`
+            : 'Reply model not recorded · conversation usage'}
+        </UiV2.TooltipContent>
+      </UiV2.Tooltip>
       <button
         aria-current={active ? 'page' : undefined}
         className="v2-chat-open"

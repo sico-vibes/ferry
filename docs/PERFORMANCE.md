@@ -2,6 +2,8 @@
 
 Scope: original B10 + A5.4 baseline, the v0.10 Wave P performance baseline and the P1 Explore large-list probe. `pnpm perf` runs the startup, idle CPU/RSS, 10k transcript, 50k workspace, renderer chunk, DB query, and React Profiler measurements, then updates this document and `docs/perf-results.json`.
 
+The measurements and pending follow-ups below are a historical report, with runs dated in 2026-09. They are not the current release gate; see [current status](STATUS.md) for the latest UI and release checks.
+
 ## Budgets
 
 | Area | Target | Measurement |
